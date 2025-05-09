@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import CoreData
 
 struct RecordingView: View {
     let prompt: MemoryPrompt
@@ -7,7 +8,8 @@ struct RecordingView: View {
     var namespace: Namespace.ID
 
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var viewModel = MemoryEntryViewModel()
+    @Environment(\.managedObjectContext) private var context
+    @EnvironmentObject var profileVM: ProfileViewModel
 
     @State private var typedText: String = ""
     @State private var audioRecorder: AVAudioRecorder?
@@ -34,66 +36,78 @@ struct RecordingView: View {
                 overlayBlack.ignoresSafeArea()
 
                 VStack(spacing: 32) {
-                    // Prompt Bubble
-                    Text(prompt.text)
-                        .matchedGeometryEffect(id: prompt.id, in: namespace)
-                        .font(.system(size: 16, weight: .semibold))
+                    Spacer(minLength: geo.size.height * 0.12)
+
+                    VStack(spacing: 24) {
+                        Text(prompt.text)
+                            .matchedGeometryEffect(id: prompt.id, in: namespace)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 10)
+                            .background(terracotta)
+                            .clipShape(Capsule())
+
+                        HStack(spacing: 12) {
+                            ForEach(0..<3) { i in
+                                Circle()
+                                    .fill(terracotta)
+                                    .frame(width: 12 + CGFloat(i * 2), height: 12 + CGFloat(i * 2))
+                                    .scaleEffect(CGFloat(1 + (powerLevel * Float(i + 1))))
+                                    .animation(.easeInOut(duration: 0.2), value: powerLevel)
+                            }
+                        }
+
+                        HStack(spacing: 40) {
+                            controlButton(icon: "gobackward", label: "Restart") { clearRecording() }
+                            controlButton(icon: isPaused ? "play.fill" : "pause.fill", label: isPaused ? "Resume" : "Pause") {
+                                isPaused ? resumeRecording() : pauseRecording()
+                            }
+                            controlButton(icon: "square.and.arrow.down", label: "Save") {
+                                stopRecording()
+                                saveMemory()
+                            }
+                        }
+                    }
+                    .frame(maxWidth: geo.size.width * 0.9)
+                    .multilineTextAlignment(.center)
+
+                    Text("Or")
                         .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 10)
-                        .background(terracotta)
-                        .clipShape(Capsule())
-                        .padding(.top, 60)
+                        .font(.caption)
 
-                    // Pulsing Dots from Audio Levels
-                    HStack(spacing: 12) {
-                        ForEach(0..<3) { i in
-                            Circle()
-                                .fill(terracotta)
-                                .frame(width: 12 + CGFloat(i * 2), height: 12 + CGFloat(i * 2))
-                                .scaleEffect(CGFloat(1 + (powerLevel * Float(i + 1))))
-                                .animation(.easeInOut(duration: 0.2), value: powerLevel)
-                        }
-                    }
-
-                    // Control Buttons
-                    HStack(spacing: 40) {
-                        Button(action: clearRecording) {
-                            controlIcon("gobackward")
+                    ZStack(alignment: .topLeading) {
+                        if typedText.isEmpty {
+                            Text("Type your answer...")
+                                .foregroundColor(.gray)
+                                .padding(.top, 12)
+                                .padding(.leading, 36)
                         }
 
-                        Button(action: {
-                            isPaused ? resumeRecording() : pauseRecording()
-                        }) {
-                            controlIcon(isPaused ? "play.fill" : "pause.fill")
-                        }
+                        TextEditor(text: $typedText)
+                            .font(.system(size: 14))
+                            .foregroundColor(.black)
+                            .frame(minHeight: 60, maxHeight: 120)
+                            .padding(.top, 8)
+                            .padding(.leading, 32)
+                            .scrollContentBackground(.hidden)
+                            .background(softCream)
 
-                        Button(action: {
-                            stopRecording()
-                            saveMemory()
-                        }) {
-                            controlIcon("square.and.arrow.down")
-                        }
-                    }
-
-                    Spacer()
-
-                    // Text Field
-                    HStack(spacing: 12) {
                         Image(systemName: "pencil")
                             .foregroundColor(.gray)
-                        TextField("Type your answer...", text: $typedText)
-                            .font(.system(size: 14))
+                            .padding(.top, 14)
+                            .padding(.leading, 10)
                     }
-                    .padding()
                     .background(softCream)
-                    .cornerRadius(16)
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 40)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .shadow(color: .black.opacity(0.03), radius: 2, x: 0, y: 1)
+                    .padding(.horizontal, geo.size.width * 0.08)
 
-                // Back Button
+                    Spacer()
+                }
+                .frame(maxWidth: geo.size.width)
+                .position(x: geo.size.width / 2, y: geo.size.height / 2)
+
                 VStack {
                     HStack {
                         Button(action: {
@@ -117,7 +131,6 @@ struct RecordingView: View {
                 .padding(.horizontal)
                 .padding(.top, 16)
 
-                // Saved Toast
                 if showSaveToast {
                     VStack {
                         Spacer()
@@ -130,12 +143,11 @@ struct RecordingView: View {
                             .padding(.bottom, 60)
                             .transition(.opacity)
                     }
+                    .frame(maxWidth: .infinity)
                 }
             }
             .confirmationDialog("Exit without saving?", isPresented: $showExitConfirm) {
-                Button("Discard and Exit", role: .destructive) {
-                    dismiss()
-                }
+                Button("Discard and Exit", role: .destructive) { dismiss() }
                 Button("Cancel", role: .cancel) {}
             }
             .onAppear(perform: setupRecorder)
@@ -143,13 +155,20 @@ struct RecordingView: View {
         }
     }
 
-    func controlIcon(_ systemName: String) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: 20, weight: .bold))
-            .foregroundColor(.white)
-            .padding(20)
-            .background(terracotta)
-            .clipShape(Circle())
+    func controlButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        VStack(spacing: 6) {
+            Button(action: action) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(20)
+                    .background(terracotta)
+                    .clipShape(Circle())
+            }
+            Text(label)
+                .foregroundColor(.white)
+                .font(.caption)
+        }
     }
 
     func setupRecorder() {
@@ -178,7 +197,8 @@ struct RecordingView: View {
         timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
             guard let recorder = audioRecorder else { return }
             recorder.updateMeters()
-            powerLevel = max(0.05, min(1.0, pow(10, recorder.averagePower(forChannel: 0) / 20)))
+            let level = max(0.05, min(1.0, pow(10, recorder.averagePower(forChannel: 0) / 20)))
+            powerLevel = level
         }
     }
 
@@ -208,15 +228,37 @@ struct RecordingView: View {
     }
 
     func saveMemory() {
-        viewModel.addEntry(prompt: prompt.text, text: typedText.isEmpty ? nil : typedText, audioURL: audioURL)
-        withAnimation {
-            showSaveToast = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        let profileID = profileVM.selectedProfile.id
+        print("📝 Saving Memory for Profile ID: \(profileID)")
+        print("📝 Prompt: \(prompt.text)")
+        print("📝 Chapter: \(chapterTitle)")
+        print("📝 Typed Text: \(typedText.isEmpty ? "None" : typedText)")
+        print("📝 Audio URL: \(audioURL?.absoluteString ?? "None")")
+
+        let newEntry = MemoryEntry(context: context)
+        newEntry.id = UUID()
+        newEntry.prompt = prompt.text
+        newEntry.text = typedText.isEmpty ? nil : typedText
+        newEntry.audioFileURL = audioURL?.absoluteString
+        newEntry.createdAt = Date()
+        newEntry.chapter = chapterTitle
+        newEntry.profileID = profileID
+
+        do {
+            try context.save()
+            NotificationCenter.default.post(name: .memorySaved, object: nil)
+            print("✅ Memory Saved Successfully.")
             withAnimation {
-                showSaveToast = false
-                dismiss()
+                showSaveToast = true
             }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                withAnimation {
+                    showSaveToast = false
+                    dismiss()
+                }
+            }
+        } catch {
+            print("❌ Error saving Memory: \(error)")
         }
     }
 

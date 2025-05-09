@@ -1,36 +1,52 @@
-//
-//  MainTabView.swift
-//  MemoirAI
-//
-//  Created by user941803 on 4/6/25.
-//
-
 import SwiftUI
 
 struct MainTabView: View {
     @State private var selectedTab = 0
+    @StateObject private var profileVM = ProfileViewModel()
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            HomepageView()
-                .tabItem {
-                    Image(systemName: "house.fill")
-                    Text("Home")
-                }
-                .tag(0)
+        ZStack {
+            // Soft background base
+            Color(red: 0.98, green: 0.94, blue: 0.86)
+                .ignoresSafeArea()
 
-            RecentMemoriesView()
-                .tabItem {
-                    Image(systemName: "clock.fill")
-                    Text("Recent")
-                }
-                .tag(1)
+            TabView(selection: $selectedTab) {
+                HomepageView()
+                    .environmentObject(profileVM)
+                    .tabItem {
+                        Image(systemName: "house.fill")
+                        Text("Home")
+                    }
+                    .tag(0)
+                    .onAppear {
+                        UITabBar.appearance().isHidden = false
+                    }
+
+                RecentMemoriesView()
+                    .environmentObject(profileVM)
+                    .tabItem {
+                        Image(systemName: "clock.fill")
+                        Text("Recent")
+                    }
+                    .tag(1)
+                    .onAppear {
+                        UITabBar.appearance().isHidden = true
+                    }
+            }
+            .accentColor(.black)
+            .background(.ultraThinMaterial) // This makes the whole TabView translucent
+            .onAppear {
+                // Optional visual polish for TabBar
+                let cream = UIColor(red: 0.98, green: 0.94, blue: 0.86, alpha: 0.6)
+                UITabBar.appearance().backgroundColor = cream
+                UITabBar.appearance().barTintColor = cream
+            }
         }
-        .accentColor(.black)
+        .navigationBarHidden(true)
+        .statusBarHidden(true)
     }
 }
 
 #Preview {
     MainTabView()
-        .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
 }

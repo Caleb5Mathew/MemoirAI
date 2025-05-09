@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreData
 
 // MARK: - Custom Serif Font Fallback
 extension Font {
@@ -16,29 +17,52 @@ extension Font {
     }
 }
 
-// MARK: - Updated Color Theme (from final screenshot palette)
+// MARK: - Updated Color Theme
 struct ColorTheme {
-    let softCream = Color(red: 253/255, green: 234/255, blue: 198/255)       // #fdeac6
-    let terracotta = Color(red: 210/255, green: 112/255, blue: 45/255)       // #d2702d
-    let warmGreen = Color(red: 169/255, green: 175/255, blue: 133/255)       // reused
-    let deepGreen = Color(red: 39/255, green: 60/255, blue: 34/255)          // #273c22
-    let fadedGray = Color(red: 233/255, green: 204/255, blue: 158/255)       // #e9cc9e
-    let lockGray = Color(red: 233/255, green: 204/255, blue: 158/255)        // reused
-    let tileBackground = Color(red: 255/255, green: 241/255, blue: 213/255)  // #fff1d5
+    let softCream = Color(red: 253/255, green: 234/255, blue: 198/255)
+    let terracotta = Color(red: 210/255, green: 112/255, blue: 45/255)
+    let warmGreen = Color(red: 169/255, green: 175/255, blue: 133/255)
+    let deepGreen = Color(red: 39/255, green: 60/255, blue: 34/255)
+    let fadedGray = Color(red: 233/255, green: 204/255, blue: 158/255)
+    let lockGray = Color(red: 233/255, green: 204/255, blue: 158/255)
+    let tileBackground = Color(red: 255/255, green: 241/255, blue: 213/255)
 }
 
 struct MemoirView: View {
     let colors = ColorTheme()
-    @State private var currentChapter = 3
-    @State private var completedChapters = 3
-    @State private var totalChapters = 10
+
+    @EnvironmentObject var profileVM: ProfileViewModel // Added to access selected profile
+
+    private let totalChapters = allChapters.count
+
+    @State private var entries: [MemoryEntry] = [] // Use @State for manually fetched entries
+
+    // Fetch entries for the selected profile
+    private func fetchEntries() {
+        let fetchRequest: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
+        
+        // Safely unwrap the profile ID and set predicate
+        let profileID = profileVM.selectedProfile.id
+        fetchRequest.predicate = NSPredicate(format: "profileID == %@", profileID as CVarArg)
+
+
+        fetchRequest.sortDescriptors = []
+        do {
+            entries = try PersistenceController.shared.container.viewContext.fetch(fetchRequest)
+        } catch {
+            print("Failed to fetch entries: \(error)")
+        }
+    }
+
+    var firstIncompleteChapter: Chapter? {
+        allChapters.first(where: { entriesForChapter($0).count < $0.prompts.count })
+    }
 
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottom) {
                 ScrollView {
                     VStack(spacing: 24) {
-                        
                         // 🌸 HEADER
                         VStack(spacing: 12) {
                             Image("Flower")
@@ -52,47 +76,47 @@ struct MemoirView: View {
                                 .foregroundColor(colors.deepGreen)
                                 .multilineTextAlignment(.center)
 
-                            Text("\(completedChapters) of \(totalChapters) chapters completed")
-                                .font(.subheadline)
-                                .foregroundColor(colors.deepGreen)
-
-                            Text("2 of 4 memories recorded")
+                            Text("\(completedChaptersCount()) of \(totalChapters) chapters completed")
                                 .font(.subheadline)
                                 .foregroundColor(colors.deepGreen)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.top, 32)
 
-                        // 📘 CURRENT CHAPTER CARD
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "heart.fill")
-                                    .foregroundColor(colors.terracotta)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Chapter 3 – Falling in Love")
-                                        .font(.headline)
-                                        .foregroundColor(colors.deepGreen)
-                                    Text("2 of 4 memories recorded")
-                                        .font(.subheadline)
-                                        .foregroundColor(colors.deepGreen)
+                        // 📘 CURRENT CHAPTER CARD (dynamic)
+                        if let chapter = firstIncompleteChapter {
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "heart.fill")
+                                        .foregroundColor(colors.terracotta)
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Chapter \(chapter.number) – \(chapter.title)")
+                                            .font(.headline)
+                                            .foregroundColor(colors.deepGreen)
+
+                                        Text("\(entriesForChapter(chapter).count) of \(chapter.prompts.count) memories recorded")
+                                            .font(.subheadline)
+                                            .foregroundColor(colors.deepGreen)
+                                    }
+                                }
+
+                                NavigationLink(destination: ChapterJourneyView(chapter: getMockChapter(chapter.number))) {
+                                    Text("Continue Chapter")
+                                        .foregroundColor(.white)
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .padding(.vertical, 12)
+                                        .frame(maxWidth: .infinity)
+                                        .background(colors.terracotta)
+                                        .clipShape(Capsule())
                                 }
                             }
-
-                            NavigationLink(destination: ChapterJourneyView(chapter: testChapter)) {
-                                Text("Continue Chapter")
-                                    .foregroundColor(.white)
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .padding(.vertical, 12)
-                                    .frame(maxWidth: .infinity)
-                                    .background(colors.terracotta)
-                                    .clipShape(Capsule())
-                            }
+                            .padding()
+                            .background(colors.tileBackground)
+                            .cornerRadius(32)
+                            .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 6)
+                            .padding(.horizontal)
                         }
-                        .padding()
-                        .background(colors.tileBackground)
-                        .cornerRadius(32)
-                        .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 6)
-                        .padding(.horizontal)
 
                         // 📚 SECTION TITLE
                         Text("All Chapters")
@@ -103,14 +127,18 @@ struct MemoirView: View {
 
                         // 📚 ALL CHAPTERS GRID
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-                            ForEach(1...10, id: \.self) { index in
-                                NavigationLink(destination: ChapterJourneyView(chapter: getMockChapter(index))) {
+                            ForEach(allChapters, id: \.number) { chapter in
+                                let entryCount = entriesForChapter(chapter).count
+                                let isCompleted = entryCount >= chapter.prompts.count
+
+                                NavigationLink(destination: ChapterJourneyView(chapter: getMockChapter(chapter.number)).environmentObject(profileVM))
+                                {
                                     ChapterTileView(
-                                        chapterNumber: index,
-                                        title: getChapterTitle(index),
-                                        isLocked: index > completedChapters + 1,
-                                        isCurrent: index == currentChapter,
-                                        isCompleted: index <= completedChapters && index != currentChapter,
+                                        chapterNumber: chapter.number,
+                                        title: chapter.title,
+                                        isLocked: false, // ✅ all chapters unlocked
+                                        isCurrent: false, // ✅ simplified
+                                        isCompleted: isCompleted,
                                         colors: colors
                                     )
                                 }
@@ -120,56 +148,39 @@ struct MemoirView: View {
                         .padding(.bottom, 100)
                     }
                 }
-
-                // 🎙️ STICKY MIC BUTTON
-                Button(action: {
-                    // Start new memory
-                }) {
-                    HStack {
-                        Image(systemName: "mic.fill")
-                        Text("Tell a Story")
-                            .bold()
-                    }
-                    .foregroundColor(.white)
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(colors.terracotta)
-                    .clipShape(Capsule())
-                    .shadow(color: Color.black.opacity(0.1), radius: 6, x: 0, y: 4)
-                    .padding(.horizontal)
-                }
-                .padding(.bottom, 20)
             }
             .background(colors.softCream.ignoresSafeArea())
+            .onAppear {
+                fetchEntries() // Fetch entries when the view appears
+            }
         }
     }
 
+    // MARK: - Helpers
 
-    // Chapter Titles
-    func getChapterTitle(_ index: Int) -> String {
-        let titles = [
-            "Childhood", "First Job", "Falling in Love", "Parenthood",
-            "Life Lessons", "Faith and Doubts", "Career Journey",
-            "Hard Times", "Triumphs", "Legacy"
-        ]
-        return titles.indices.contains(index - 1) ? titles[index - 1] : "Chapter \(index)"
+    func completedChaptersCount() -> Int {
+        allChapters.filter { entriesForChapter($0).count >= $0.prompts.count }.count
     }
+
+    func entriesForChapter(_ chapter: Chapter) -> [MemoryEntry] {
+        return entries.filter {
+            ($0.chapter ?? "") == chapter.title &&
+            chapter.prompts.map { $0.text }.contains($0.prompt ?? "")
+        }
+    }
+
     func getMockChapter(_ index: Int) -> Chapter {
-        let samplePrompts = [
-            ("How did you meet?", 0.88, 0.80),
-            ("What drew you to them?",               0.55, 0.63),
-            ("What was your first date story?",         0.85, 0.43),
-            ("When did you know it was love?",              0.68, 0.28)
+        let chapter = allChapters.first { $0.number == index }!
+        let coordinates: [(CGFloat, CGFloat)] = [
+            (0.88, 0.80), (0.55, 0.63), (0.85, 0.43), (0.68, 0.28)
         ]
 
-        return Chapter(
-            number: index,
-            title: getChapterTitle(index),
-            prompts: samplePrompts.map { MemoryPrompt(text: $0.0, x: $0.1, y: $0.2) }
-        )
+        let prompts = zip(chapter.prompts, coordinates).map { prompt, coord in
+            MemoryPrompt(text: prompt.text, x: coord.0, y: coord.1)
+        }
+
+        return Chapter(number: chapter.number, title: chapter.title, prompts: prompts)
     }
-
-
 }
 
 // MARK: - Chapter Tile View
@@ -195,7 +206,7 @@ struct ChapterTileView: View {
 
                     Text(title)
                         .font(.caption)
-                        .foregroundColor(isLocked ? colors.lockGray : colors.deepGreen)
+                        .foregroundColor(colors.deepGreen)
                 }
             }
         }
@@ -207,15 +218,12 @@ struct ChapterTileView: View {
     }
 
     private var iconName: String {
-        if isLocked { return "lock.fill" }
-        if isCurrent { return "circle.fill" }
         if isCompleted { return "checkmark" }
         return "book"
     }
 
     private var iconColor: Color {
-        if isLocked { return colors.lockGray }
-        if isCurrent { return colors.warmGreen }
+        if isCompleted { return colors.deepGreen }
         return colors.deepGreen
     }
 }

@@ -4,6 +4,7 @@ import AVFoundation
 struct RecordMemoryView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var context
+    @EnvironmentObject var profileVM: ProfileViewModel
     @StateObject private var viewModel = MemoryEntryViewModel()
 
     @State private var selectedPrompt: String? = nil
@@ -319,7 +320,13 @@ struct RecordMemoryView: View {
         if !hasUnsavedData() { return }
 
         let promptToSave = selectedPrompt ?? "Untitled Prompt"
-        viewModel.addEntry(prompt: promptToSave, text: typedText.isEmpty ? nil : typedText, audioURL: audioURL)
+        viewModel.addEntry(
+            prompt: promptToSave,
+            text: typedText.isEmpty ? nil : typedText,
+            audioURL: audioURL,
+            profileID: profileVM.selectedProfile.id
+        )
+
 
         // Mark prompt of the day as completed
         if promptToSave == passedPrompt {

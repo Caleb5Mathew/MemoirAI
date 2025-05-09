@@ -1,3 +1,4 @@
+
 //
 //  MemoryPromptNodeView.swift
 //  MemoirAI
@@ -33,7 +34,6 @@ let testChapter = Chapter(
 )
 
 
-
 import SwiftUI
 
 struct MemoryPromptNodeView: View {
@@ -42,38 +42,66 @@ struct MemoryPromptNodeView: View {
     let isLocked: Bool
     let isSelected: Bool
 
+    let greenColor = Color.green
+    let micColor = Color(red: 0.88, green: 0.52, blue: 0.28)
+    let brownBorder = Color(red: 101/255, green: 69/255, blue: 44/255) // warm brown
+
     var body: some View {
         ZStack {
+            // Background Circle
             Circle()
                 .fill(circleColor)
                 .frame(width: 60, height: 60)
                 .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
 
+            // Icon
             Image(systemName: iconName)
                 .font(.system(size: 22, weight: .semibold))
-                .foregroundColor(.white)
+                .foregroundColor(iconColor)
         }
         .overlay(
             Circle()
-                .stroke(isSelected ? Color.orange : Color.clear, lineWidth: 3)
+                .stroke(borderColor, lineWidth: 3)
                 .frame(width: 72, height: 72)
         )
-        .animation(.easeInOut, value: isSelected)
+        .animation(.easeInOut(duration: 0.2), value: isSelected || isCompleted)
     }
 
+    // Background color of the circle
     var circleColor: Color {
         if isLocked {
             return Color.gray.opacity(0.3)
         } else if isCompleted {
-            return Color.green
+            return greenColor
         } else {
-            return Color(red: 0.88, green: 0.52, blue: 0.28) // warm orange
+            return micColor
         }
     }
 
+    // Icon inside the circle
     var iconName: String {
-        if isLocked { return "lock.fill" }
-        if isCompleted { return "checkmark" }
-        return "mic.fill"
+        if isLocked {
+            return "lock.fill"
+        } else if isCompleted {
+            return "checkmark"
+        } else {
+            return "mic.fill"
+        }
+    }
+
+    // Icon color
+    var iconColor: Color {
+        return .white
+    }
+
+    // Border color
+    var borderColor: Color {
+        if isCompleted {
+            return brownBorder
+        } else if isSelected {
+            return Color.orange
+        } else {
+            return Color.clear
+        }
     }
 }

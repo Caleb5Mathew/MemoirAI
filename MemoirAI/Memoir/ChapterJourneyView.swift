@@ -2,25 +2,46 @@ import SwiftUI
 
 struct ChapterJourneyView: View {
     let chapter: Chapter
+
     @Environment(\.dismiss) var dismiss
+    @Environment(\.managedObjectContext) var context
+    @EnvironmentObject var profileVM: ProfileViewModel
+
+    @FetchRequest(
+        entity: MemoryEntry.entity(),
+        sortDescriptors: []
+    ) var allEntries: FetchedResults<MemoryEntry>
 
     @State private var selectedPrompt: MemoryPrompt?
-    @State private var completedPromptIDs: Set<UUID> = []
-    @Namespace private var zoomNamespace // Shared animation namespace
+    @State private var refreshID = UUID() // Forces full rerender
+    @Namespace private var zoomNamespace
 
-    let highlightColor = Color(red: 254/255, green: 242/255, blue: 215/255) // #fef2d7
-    let deepGreen = Color(red: 39/255, green: 60/255, blue: 34/255)         // #273c22
+    let highlightColor = Color(red: 254/255, green: 242/255, blue: 215/255)
+    let deepGreen = Color(red: 39/255, green: 60/255, blue: 34/255)
+
+    var completedPromptIDs: Set<UUID> {
+        let entriesForCurrentProfile = allEntries.filter { $0.profileID == profileVM.selectedProfile.id }
+        let savedPromptPairs = entriesForCurrentProfile.map { ($0.prompt ?? "", $0.chapter ?? "") }
+
+        return Set(
+            chapter.prompts
+                .filter { prompt in
+                    savedPromptPairs.contains(where: { $0 == (prompt.text, chapter.title) })
+                }
+                .map { $0.id }
+        )
+    }
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                // 🌄 Background image
+                // Background
                 Image(chapter.title.lowercased())
                     .resizable()
                     .scaledToFill()
                     .ignoresSafeArea()
 
-                // 🎤 Microphone prompt buttons
+                // Prompt Nodes
                 ForEach(chapter.prompts) { prompt in
                     let isCompleted = completedPromptIDs.contains(prompt.id)
 
@@ -42,25 +63,35 @@ struct ChapterJourneyView: View {
                     }
                 }
 
-                // 📝 Centered title and subtitle at top
-                VStack(spacing: 8) {
-                    Text("Chapter \(chapter.number) – \(chapter.title)")
-                        .font(.customSerifFallback(size: 28))
-                        .foregroundColor(deepGreen)
-                        .multilineTextAlignment(.center)
+                // Title
+                ZStack {
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(Color.white.opacity(0.35))
+                        .padding(.horizontal, 24)
+                        .frame(height: 80)
 
-                    Text("\(completedPromptIDs.count) of \(chapter.prompts.count) memories recorded")
-                        .font(.subheadline)
-                        .foregroundColor(deepGreen)
-                        .multilineTextAlignment(.center)
+                    VStack(spacing: 8) {
+                        Text("Chapter \(chapter.number) – \(chapter.title)")
+                            .font(.customSerifFallback(size: 28))
+                            .foregroundColor(deepGreen)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text("\(completedPromptIDs.count) of \(chapter.prompts.count) memories recorded")
+                            .font(.subheadline)
+                            .foregroundColor(deepGreen)
+                    }
+                    .padding(.horizontal, 24)
                 }
-                .frame(maxWidth: .infinity)
                 .padding(.top, 50)
                 .offset(x: -geo.size.width * 0.085)
-                .frame(maxHeight: .infinity, alignment: .top)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-                // 🔙 Back button top-left
-                Button(action: { dismiss() }) {
+                // Back Button
+                Button(action: {
+                    dismiss()
+                }) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 18, weight: .medium))
                         .foregroundColor(.black)
@@ -68,11 +99,10 @@ struct ChapterJourneyView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-                // 💬 Floating prompt quote
+                // Floating Prompt Quote
                 if let selectedPrompt = selectedPrompt {
                     HStack {
                         Spacer(minLength: 24)
-
                         Text("\"\(selectedPrompt.text)\"")
                             .font(.system(size: 17, weight: .medium))
                             .multilineTextAlignment(.center)
@@ -81,7 +111,6 @@ struct ChapterJourneyView: View {
                             .background(highlightColor)
                             .cornerRadius(20)
                             .shadow(radius: 4)
-
                         Spacer(minLength: 24)
                     }
                     .padding(.bottom, 24)
@@ -90,13 +119,21 @@ struct ChapterJourneyView: View {
                     .frame(maxHeight: .infinity, alignment: .bottom)
                 }
             }
+            .onAppear {
+                // No longer hiding TabBar here
+            }
             .navigationBarBackButtonHidden(true)
             .fullScreenCover(item: $selectedPrompt) { prompt in
                 RecordingView(prompt: prompt, chapterTitle: chapter.title, namespace: zoomNamespace)
+                    .environmentObject(profileVM) // Inject profileVM here
+                    .id(prompt.id) // Keeps animations fresh
+                    .onDisappear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            refreshID = UUID()
+                        }
+                    }
             }
         }
-        .onAppear {
-            completedPromptIDs = Set() // All prompts unlocked
-        }
+        .id(refreshID) // Forces a re-render when refreshed
     }
 }

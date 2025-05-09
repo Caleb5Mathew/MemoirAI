@@ -1,16 +1,35 @@
+// HomepageView.swift
+// MemoirAI
+
 import SwiftUI
+import PhotosUI
 
-
+// Wrapper to allow Data to be used with .sheet(item:)
+struct IdentifiableData: Identifiable {
+    let id = UUID()
+    let data: Data
+}
 
 struct HomepageView: View {
     @State private var selectedTab = 0
     let promptOfTheDay = "Tell me about your first job."
     @State private var promptCompleted: Bool = false
 
+    // Profile Logic
+    @EnvironmentObject var profileVM: ProfileViewModel
+    @State private var isShowingPhotoPicker = false
+    @State private var photoSelection: PhotosPickerItem? = nil
+    @State private var selectedPhotoData: IdentifiableData? = nil
+
+    // Control for the wiggle-animation on the edit icon
+    @State private var disableCameraWiggle = false
+    // NEW: control presentation of AddProfileView
+    @State private var showingAddProfile = false
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // TOP BAR
+                // TOP BAR – Title, Go Pro, Profile icon
                 HStack {
                     Text("MemoirAI")
                         .font(.customSerifFallback(size: 22))
@@ -38,7 +57,9 @@ struct HomepageView: View {
                             .shadow(color: Color.orange.opacity(0.3), radius: 6, x: 0, y: 3)
                     }
 
-                    Button(action: {}) {
+                    Button(action: {
+                        // Could open settings/profile management
+                    }) {
                         Image(systemName: "person.circle.fill")
                             .resizable()
                             .frame(width: 28, height: 28)
@@ -47,24 +68,20 @@ struct HomepageView: View {
                     }
                 }
                 .padding(.horizontal)
-                .padding(.top, 16)
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 24) {
-                        // Illustration
-                        ZStack {
-                            Image("grandparent-illustration")
-                                .resizable()
-                                .scaledToFit()
-                                .scaleEffect(1.03)
-                                .frame(maxWidth: .infinity)
-                                .padding(.horizontal, 4)
+                        // PROFILE PHOTO VIEW (wiggles until tapped)
+                        ProfilePhotoView(
+                            viewModel: profileVM,
+                            disableWiggle: $disableCameraWiggle
+                        ) {
+                            // REPLACE camera action with opening AddProfileView:
+                            showingAddProfile = true
+                            disableCameraWiggle = true
                         }
-                        .frame(height: 180)
-                        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                        .padding(.horizontal)
 
-                        // Title
+                        // TITLE
                         VStack(spacing: 10) {
                             Text("Your voice.\nYour legacy.")
                                 .font(.customSerifFallback(size: 30))
@@ -78,8 +95,8 @@ struct HomepageView: View {
                                 .padding(.horizontal)
                         }
 
-                        // Start Recording
-                        NavigationLink(destination: RecordMemoryView()) {
+                        // START RECORDING
+                        NavigationLink(destination: RecordMemoryView().environmentObject(profileVM)) {
                             Text("Start Recording")
                                 .font(.system(size: 18, weight: .semibold))
                                 .foregroundColor(.white)
@@ -93,9 +110,8 @@ struct HomepageView: View {
                                 .shadow(color: Color.orange.opacity(0.25), radius: 6, x: 0, y: 3)
                         }
 
-                        // Prompt of the Day + Timeline
+                        // PROMPT OF THE DAY & STORY PAGE
                         HStack(spacing: 12) {
-                            // Prompt of the Day Card
                             NavigationLink(destination: RecordMemoryView(promptOfTheDay: promptOfTheDay)) {
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack(spacing: 6) {
@@ -103,7 +119,6 @@ struct HomepageView: View {
                                             .font(.footnote)
                                             .fontWeight(.bold)
                                             .foregroundColor(.black)
-
                                         if promptCompleted {
                                             Image(systemName: "checkmark.circle.fill")
                                                 .foregroundColor(.green)
@@ -113,12 +128,10 @@ struct HomepageView: View {
                                                 .animation(.spring(response: 0.4, dampingFraction: 0.6), value: promptCompleted)
                                         }
                                     }
-
                                     Text(promptOfTheDay)
                                         .font(.subheadline)
                                         .foregroundColor(.black.opacity(0.85))
                                         .multilineTextAlignment(.leading)
-                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                                 .padding()
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -129,18 +142,15 @@ struct HomepageView: View {
                                 .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
                             }
 
-                            // Timeline Card → Navigates to MemoryView
-                            NavigationLink(destination: MemoryView()) {
+                            NavigationLink(destination: StoryPage()) {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text("Your Memory Timeline")
+                                    Text("Your StoryPage")
                                         .font(.footnote)
                                         .fontWeight(.bold)
                                         .foregroundColor(.black)
-
                                     Text("A Summer Vacation")
                                         .font(.subheadline)
                                         .foregroundColor(.black.opacity(0.85))
-
                                     HStack {
                                         Text("2 min")
                                         Spacer()
@@ -158,22 +168,19 @@ struct HomepageView: View {
                         }
                         .padding(.horizontal)
 
-                        // Memoir Section → Navigates to MemoirView
-                        NavigationLink(destination: MemoirView()) {
+                        // CONTINUE YOUR MEMOIR
+                        NavigationLink(destination: MemoirView().environmentObject(profileVM)) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Continue Your Memoir")
                                         .font(.footnote)
                                         .fontWeight(.bold)
                                         .foregroundColor(.black)
-
                                     Text("Chapter 3 of 10 Completed")
                                         .font(.subheadline)
                                         .foregroundColor(.black.opacity(0.7))
                                 }
-
                                 Spacer()
-
                                 Image(systemName: "chevron.right")
                                     .foregroundColor(.gray)
                             }
@@ -191,46 +198,62 @@ struct HomepageView: View {
                 .onAppear {
                     resetDailyPromptIfNeeded()
                 }
-
-
             }
             .background(Color(red: 0.98, green: 0.94, blue: 0.86).ignoresSafeArea())
         }
+        // NEW: Present AddProfileView modally
+        .sheet(isPresented: $showingAddProfile) {
+            AddProfileView()
+                .environmentObject(profileVM)
+        }
+        // Photo picker wiring (currently unused once AddProfileView handles photo)
+        .photosPicker(isPresented: $isShowingPhotoPicker, selection: $photoSelection, matching: .images)
+        .onChange(of: photoSelection) { newValue in
+            if let newItem = newValue {
+                loadPhotoData(newItem)
+            }
+        }
+        .sheet(item: $selectedPhotoData) { wrapper in
+            CropSheetView(photoData: wrapper.data) { croppedData in
+                let newProfile = Profile(name: "Unnamed", photoData: croppedData)
+                profileVM.addProfile(newProfile)
+            }
+        }
+        .navigationBarHidden(true)
+        .statusBarHidden(true)
     }
 
-    // MARK: - Check if Daily Prompt Needs Reset
+    private func loadPhotoData(_ newItem: PhotosPickerItem) {
+        Task {
+            do {
+                if let data = try await newItem.loadTransferable(type: Data.self) {
+                    selectedPhotoData = IdentifiableData(data: data)
+                }
+            } catch {
+                print("Failed to load transferable data: \(error)")
+            }
+        }
+    }
+
     private func resetDailyPromptIfNeeded() {
         let today = Calendar.current.startOfDay(for: Date())
         let lastDate = UserDefaults.standard.object(forKey: "PromptCompletedDate") as? Date
 
-        if lastDate == nil || Calendar.current.compare(today, to: lastDate!, toGranularity: .day) != .orderedSame {
+        if lastDate == nil ||
+           Calendar.current.compare(today, to: lastDate!, toGranularity: .day) != .orderedSame {
             UserDefaults.standard.set(false, forKey: promptOfTheDay)
             UserDefaults.standard.set(today, forKey: "PromptCompletedDate")
         }
 
         promptCompleted = UserDefaults.standard.bool(forKey: promptOfTheDay)
     }
-
-    // MARK: - Bottom Tab Item
-    private func bottomTabItem(icon: String, title: String, isSelected: Bool) -> some View {
-        VStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.system(size: 20, weight: .regular))
-            Text(title)
-                .font(.caption2)
-        }
-        .foregroundColor(isSelected ? .black : .gray)
-        .padding(.vertical, 6)
-        .padding(.horizontal, 10)
-        .background(isSelected ? Color.black.opacity(0.05) : Color.clear)
-        .cornerRadius(12)
-    }
 }
 
-// MARK: - Preview
 struct HomepageView_Previews: PreviewProvider {
     static var previews: some View {
         HomepageView()
+            .environmentObject(ProfileViewModel())
             .previewDevice("iPhone 15 Pro")
     }
 }
+
