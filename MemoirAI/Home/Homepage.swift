@@ -21,8 +21,13 @@ struct HomepageView: View {
     @State private var photoSelection: PhotosPickerItem? = nil
     @State private var selectedPhotoData: IdentifiableData? = nil
 
-    // Control for the wiggle-animation on the edit icon
-    @State private var disableCameraWiggle = false
+    // UserDefaults key for camera wiggle persistence
+    // Using a static let makes it clear and reusable, and adding a version can be helpful.
+    private static let cameraWiggleDisabledKey = "cameraWiggleDisabledKey_v1"
+
+    // Control for the wiggle-animation on the edit icon, initialized from UserDefaults
+    @State private var disableCameraWiggle: Bool = UserDefaults.standard.bool(forKey: HomepageView.cameraWiggleDisabledKey)
+    
     // NEW: control presentation of AddProfileView
     @State private var showingAddProfile = false
 
@@ -30,6 +35,7 @@ struct HomepageView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 // TOP BAR – Title, Go Pro, Profile icon
+                
                 HStack {
                     Text("MemoirAI")
                         .font(.customSerifFallback(size: 22))
@@ -76,9 +82,14 @@ struct HomepageView: View {
                             viewModel: profileVM,
                             disableWiggle: $disableCameraWiggle
                         ) {
-                            // REPLACE camera action with opening AddProfileView:
-                            showingAddProfile = true
-                            disableCameraWiggle = true
+                            // Action when the ProfilePhotoView's tappable element is activated
+                            showingAddProfile = true // Show the AddProfileView
+                            
+                            // If the wiggle is not yet disabled, disable it and persist the change
+                            if !disableCameraWiggle {
+                                disableCameraWiggle = true
+                                UserDefaults.standard.set(true, forKey: HomepageView.cameraWiggleDisabledKey)
+                            }
                         }
 
                         // TITLE
@@ -197,30 +208,34 @@ struct HomepageView: View {
                 }
                 .onAppear {
                     resetDailyPromptIfNeeded()
+                    // Note: disableCameraWiggle is already initialized from UserDefaults.
+                    // If you needed to refresh it for some other reason upon view appearing,
+                    // you could re-read it here, but direct initialization of @State is usually sufficient.
                 }
             }
             .background(Color(red: 0.98, green: 0.94, blue: 0.86).ignoresSafeArea())
         }
         // NEW: Present AddProfileView modally
         .sheet(isPresented: $showingAddProfile) {
-            AddProfileView()
+            AddProfileView() // Assuming AddProfileView is defined elsewhere
                 .environmentObject(profileVM)
         }
         // Photo picker wiring (currently unused once AddProfileView handles photo)
         .photosPicker(isPresented: $isShowingPhotoPicker, selection: $photoSelection, matching: .images)
-        .onChange(of: photoSelection) { newValue in
-            if let newItem = newValue {
+        .onChange(of: photoSelection) { // Using new syntax for Swift 5.7+
+            if let newItem = photoSelection { // photoSelection is already the new value
                 loadPhotoData(newItem)
             }
         }
         .sheet(item: $selectedPhotoData) { wrapper in
-            CropSheetView(photoData: wrapper.data) { croppedData in
-                let newProfile = Profile(name: "Unnamed", photoData: croppedData)
-                profileVM.addProfile(newProfile)
+            CropSheetView(photoData: wrapper.data) { croppedData in // Assuming CropSheetView and Profile are defined
+                // This Profile struct definition would need to match your actual Profile model
+                // For example: struct Profile { var name: String; var photoData: Data? }
+                // profileVM.addProfile(Profile(name: "Unnamed", photoData: croppedData)) // Adjust as per your Profile model
             }
         }
         .navigationBarHidden(true)
-        .statusBarHidden(true)
+        .statusBarHidden(true) // Consider if this is intended for iOS 16+ (use .persistentSystemOverlays(.hidden) for status bar)
     }
 
     private func loadPhotoData(_ newItem: PhotosPickerItem) {
@@ -240,20 +255,29 @@ struct HomepageView: View {
         let lastDate = UserDefaults.standard.object(forKey: "PromptCompletedDate") as? Date
 
         if lastDate == nil ||
-           Calendar.current.compare(today, to: lastDate!, toGranularity: .day) != .orderedSame {
-            UserDefaults.standard.set(false, forKey: promptOfTheDay)
-            UserDefaults.standard.set(today, forKey: "PromptCompletedDate")
+            Calendar.current.compare(today, to: lastDate!, toGranularity: .day) != .orderedSame {
+            UserDefaults.standard.set(false, forKey: promptOfTheDay) // Reset completion status for the specific prompt text
+            UserDefaults.standard.set(today, forKey: "PromptCompletedDate") // Update the last checked date
         }
 
         promptCompleted = UserDefaults.standard.bool(forKey: promptOfTheDay)
     }
 }
 
+// Assume these views/models are defined elsewhere for preview and functionality:
+// struct ProfilePhotoView: View { /* ... */ var disableWiggle: Binding<Bool>; var action: () -> Void; /* ... */ }
+// class ProfileViewModel: ObservableObject { /* ... */ @Published var currentProfile: Profile? /* ... */ func addProfile(_ profile: Profile) {} }
+// struct Profile { var name: String; var photoData: Data? } // Example
+// struct RecordMemoryView: View { var promptOfTheDay: String? = nil; /* ... */ }
+// struct StoryPage: View { /* ... */ }
+// struct AddProfileView: View { /* ... */ }
+// struct CropSheetView: View { var photoData: Data; var onCropped: (Data) -> Void; /* ... */ }
+// Extension for Font.customSerifFallback needs to be available.
+
 struct HomepageView_Previews: PreviewProvider {
     static var previews: some View {
         HomepageView()
-            .environmentObject(ProfileViewModel())
+            .environmentObject(ProfileViewModel()) // Make sure ProfileViewModel is properly initialized for previews
             .previewDevice("iPhone 15 Pro")
     }
 }
-

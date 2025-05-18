@@ -1,6 +1,8 @@
 import SwiftUI
 import AVFoundation
 import CoreData
+import PhotosUI
+import Speech
 
 struct RecordingView: View {
     let prompt: MemoryPrompt
@@ -21,24 +23,34 @@ struct RecordingView: View {
     @State private var powerLevel: Float = 0.0
     @State private var timer: Timer?
 
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var selectedImagesData: [Data] = []
+
+    // Colors
     let terracotta = Color(red: 210/255, green: 112/255, blue: 45/255)
     let softCream = Color(red: 253/255, green: 234/255, blue: 198/255)
     let overlayBlack = Color.black.opacity(0.4)
 
+    // Grid layout for up to 8 images (4 columns)
+    private var columns: [GridItem] {
+        Array(repeating: .init(.flexible(), spacing: 8), count: 4)
+    }
+
     var body: some View {
         GeometryReader { geo in
             ZStack {
+                // Background image + overlay
                 Image(chapterTitle.lowercased())
                     .resizable()
                     .scaledToFill()
                     .ignoresSafeArea()
-
                 overlayBlack.ignoresSafeArea()
 
-                VStack(spacing: 32) {
-                    Spacer(minLength: geo.size.height * 0.12)
+                VStack(spacing: 24) {
+                    Spacer(minLength: geo.size.height * 0.08)
 
-                    VStack(spacing: 24) {
+                    // Prompt & audio controls
+                    VStack(spacing: 20) {
                         Text(prompt.text)
                             .matchedGeometryEffect(id: prompt.id, in: namespace)
                             .font(.system(size: 16, weight: .semibold))
@@ -60,7 +72,8 @@ struct RecordingView: View {
 
                         HStack(spacing: 40) {
                             controlButton(icon: "gobackward", label: "Restart") { clearRecording() }
-                            controlButton(icon: isPaused ? "play.fill" : "pause.fill", label: isPaused ? "Resume" : "Pause") {
+                            controlButton(icon: isPaused ? "play.fill" : "pause.fill",
+                                          label: isPaused ? "Resume" : "Pause") {
                                 isPaused ? resumeRecording() : pauseRecording()
                             }
                             controlButton(icon: "square.and.arrow.down", label: "Save") {
@@ -76,6 +89,7 @@ struct RecordingView: View {
                         .foregroundColor(.white)
                         .font(.caption)
 
+                    // Text entry
                     ZStack(alignment: .topLeading) {
                         if typedText.isEmpty {
                             Text("Type your answer...")
@@ -83,7 +97,6 @@ struct RecordingView: View {
                                 .padding(.top, 12)
                                 .padding(.leading, 36)
                         }
-
                         TextEditor(text: $typedText)
                             .font(.system(size: 14))
                             .foregroundColor(.black)
@@ -92,7 +105,6 @@ struct RecordingView: View {
                             .padding(.leading, 32)
                             .scrollContentBackground(.hidden)
                             .background(softCream)
-
                         Image(systemName: "pencil")
                             .foregroundColor(.gray)
                             .padding(.top, 14)
@@ -101,13 +113,83 @@ struct RecordingView: View {
                     .background(softCream)
                     .clipShape(RoundedRectangle(cornerRadius: 16))
                     .shadow(color: .black.opacity(0.03), radius: 2, x: 0, y: 1)
-                    .padding(.horizontal, geo.size.width * 0.08)
+                    .padding(.horizontal, geo.size.width * 0.05)
+
+                    Text("Add Memory Pictures Here!")
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                        .padding(.top, 8)
+
+                    let gridWidth = geo.size.width * 0.9
+                    let thumbSize = (gridWidth - 3 * 8) / 4
+
+                    // Photo picker / grid preview
+                    PhotosPicker(
+                        selection: $photoItems,
+                        maxSelectionCount: 8,
+                        matching: .images,
+                        photoLibrary: .shared()
+                    ) {
+                        if selectedImagesData.isEmpty {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(softCream)
+                                    .frame(height: 120)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.black, style: StrokeStyle(lineWidth: 2, dash: [5]))
+                                    )
+                                VStack {
+                                    Image(systemName: "photo.on.rectangle.angled")
+                                    Text("Tap to upload")
+                                }
+                                .foregroundColor(.gray)
+                            }
+                        } else {
+                            LazyVGrid(columns: columns, spacing: 8) {
+                                ForEach(0..<8, id: \.self) { idx in
+                                    ZStack {
+                                        if idx < selectedImagesData.count,
+                                           let ui = UIImage(data: selectedImagesData[idx]) {
+                                            Image(uiImage: ui)
+                                                .resizable()
+                                                .aspectRatio(contentMode: .fill)
+                                                .frame(width: thumbSize, height: thumbSize)
+                                                .clipped()
+                                                .cornerRadius(8)
+                                        } else {
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(softCream)
+                                                .frame(width: thumbSize, height: thumbSize)
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(Color.black, style: StrokeStyle(lineWidth: 2, dash: [5]))
+                                                .frame(width: thumbSize, height: thumbSize)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, geo.size.width * 0.05)
+                            .frame(height: thumbSize * 2 + 8)
+                        }
+                    }
+                    .padding(.horizontal, geo.size.width * 0.05)
+                    .onChange(of: photoItems) { newItems in
+                        selectedImagesData.removeAll()
+                        for item in newItems {
+                            Task {
+                                if let data = try? await item.loadTransferable(type: Data.self) {
+                                    selectedImagesData.append(data)
+                                }
+                            }
+                        }
+                    }
 
                     Spacer()
                 }
                 .frame(maxWidth: geo.size.width)
                 .position(x: geo.size.width / 2, y: geo.size.height / 2)
 
+                // Back button
                 VStack {
                     HStack {
                         Button(action: {
@@ -131,6 +213,7 @@ struct RecordingView: View {
                 .padding(.horizontal)
                 .padding(.top, 16)
 
+                // Save toast
                 if showSaveToast {
                     VStack {
                         Spacer()
@@ -155,6 +238,7 @@ struct RecordingView: View {
         }
     }
 
+    // MARK: - Control Button Helper
     func controlButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
         VStack(spacing: 6) {
             Button(action: action) {
@@ -171,10 +255,13 @@ struct RecordingView: View {
         }
     }
 
+    // MARK: - Recorder Lifecycle
     func setupRecorder() {
         let filename = UUID().uuidString + ".m4a"
-        let path = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(filename)
-        let settings = [
+        let path = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(filename)
+        let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
             AVSampleRateKey: 44100,
             AVNumberOfChannelsKey: 1,
@@ -197,7 +284,9 @@ struct RecordingView: View {
         timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
             guard let recorder = audioRecorder else { return }
             recorder.updateMeters()
-            let level = max(0.05, min(1.0, pow(10, recorder.averagePower(forChannel: 0) / 20)))
+            let level = max(0.05,
+                            min(1.0,
+                                pow(10, recorder.averagePower(forChannel: 0) / 20)))
             powerLevel = level
         }
     }
@@ -225,16 +314,12 @@ struct RecordingView: View {
         stopRecording()
         audioURL = nil
         typedText = ""
+        selectedImagesData.removeAll()
+        photoItems.removeAll()
     }
 
     func saveMemory() {
         let profileID = profileVM.selectedProfile.id
-        print("📝 Saving Memory for Profile ID: \(profileID)")
-        print("📝 Prompt: \(prompt.text)")
-        print("📝 Chapter: \(chapterTitle)")
-        print("📝 Typed Text: \(typedText.isEmpty ? "None" : typedText)")
-        print("📝 Audio URL: \(audioURL?.absoluteString ?? "None")")
-
         let newEntry = MemoryEntry(context: context)
         newEntry.id = UUID()
         newEntry.prompt = prompt.text
@@ -244,26 +329,53 @@ struct RecordingView: View {
         newEntry.chapter = chapterTitle
         newEntry.profileID = profileID
 
+        // Create Photo entities and add to the relationship
+        for imgData in selectedImagesData {
+            let photo = Photo(context: context)
+            photo.id = UUID()
+            photo.data = imgData
+            photo.memoryEntry = newEntry
+            // The line above replaces the addToPhotos call
+        }
+
         do {
             try context.save()
             NotificationCenter.default.post(name: .memorySaved, object: nil)
-            print("✅ Memory Saved Successfully.")
-            withAnimation {
-                showSaveToast = true
+
+            // Kick off background transcription
+            if let urlString = newEntry.audioFileURL,
+               let fileURL = URL(string: urlString) {
+                SFSpeechRecognizer.requestAuthorization { status in
+                    guard status == .authorized else { return }
+                    let request = SFSpeechURLRecognitionRequest(url: fileURL)
+                    SFSpeechRecognizer()?.recognitionTask(with: request) { result, error in
+                        if let r = result, r.isFinal {
+                            let transcription = r.bestTranscription.formattedString
+                            context.perform {
+                                newEntry.text = transcription
+                                try? context.save()
+                            }
+                        }
+                    }
+                }
             }
+
+            withAnimation { showSaveToast = true }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 withAnimation {
                     showSaveToast = false
                     dismiss()
                 }
             }
+
         } catch {
             print("❌ Error saving Memory: \(error)")
         }
     }
 
+    // MARK: - Unsaved Data Check & Cleanup
     func hasUnsavedData() -> Bool {
-        return !typedText.isEmpty || audioURL != nil
+        !typedText.isEmpty || audioURL != nil || !selectedImagesData.isEmpty
     }
 
     func cleanup() {

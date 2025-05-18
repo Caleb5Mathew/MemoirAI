@@ -33,13 +33,14 @@ struct MainTabView: View {
                         UITabBar.appearance().isHidden = true
                     }
             }
+            .ignoresSafeArea(edges: .bottom)      // ← collapse the home‐indicator inset
             .accentColor(.black)
-            .background(.ultraThinMaterial) // This makes the whole TabView translucent
+            .background(.ultraThinMaterial)        // make TabView translucent
             .onAppear {
                 // Optional visual polish for TabBar
                 let cream = UIColor(red: 0.98, green: 0.94, blue: 0.86, alpha: 0.6)
                 UITabBar.appearance().backgroundColor = cream
-                UITabBar.appearance().barTintColor = cream
+                UITabBar.appearance().barTintColor    = cream
             }
         }
         .navigationBarHidden(true)

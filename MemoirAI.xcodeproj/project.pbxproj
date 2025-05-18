@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		84B2696B2DD8D7080031EACD /* ReceiptParser in Frameworks */ = {isa = PBXBuildFile; productRef = 84B2696A2DD8D7080031EACD /* ReceiptParser */; };
+		84B2696D2DD8D7080031EACD /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 84B2696C2DD8D7080031EACD /* RevenueCat */; };
+		84B2696F2DD8D7080031EACD /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = 84B2696E2DD8D7080031EACD /* RevenueCatUI */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		844EFACF2DA3416F00620E37 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -65,6 +71,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				84B2696D2DD8D7080031EACD /* RevenueCat in Frameworks */,
+				84B2696B2DD8D7080031EACD /* ReceiptParser in Frameworks */,
+				84B2696F2DD8D7080031EACD /* RevenueCatUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -125,6 +134,9 @@
 			);
 			name = MemoirAI;
 			packageProductDependencies = (
+				84B2696A2DD8D7080031EACD /* ReceiptParser */,
+				84B2696C2DD8D7080031EACD /* RevenueCat */,
+				84B2696E2DD8D7080031EACD /* RevenueCatUI */,
 			);
 			productName = MemoirAI;
 			productReference = 844EFABD2DA3416E00620E37 /* MemoirAI.app */;
@@ -208,6 +220,9 @@
 			);
 			mainGroup = 844EFAB42DA3416E00620E37;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 844EFABE2DA3416E00620E37 /* Products */;
 			projectDirPath = "";
@@ -424,7 +439,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.7;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Buildr.MemoirAI;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -464,7 +479,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.7;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Buildr.MemoirAI;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -606,6 +621,35 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.24.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		84B2696A2DD8D7080031EACD /* ReceiptParser */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */;
+			productName = ReceiptParser;
+		};
+		84B2696C2DD8D7080031EACD /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */;
+			productName = RevenueCat;
+		};
+		84B2696E2DD8D7080031EACD /* RevenueCatUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */;
+			productName = RevenueCatUI;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 844EFAB52DA3416E00620E37 /* Project object */;
 }
