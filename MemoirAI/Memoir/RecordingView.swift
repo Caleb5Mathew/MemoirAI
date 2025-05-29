@@ -5,6 +5,7 @@ import PhotosUI
 import Speech
 
 struct RecordingView: View {
+    @State private var debugBanner: String?
     let prompt: MemoryPrompt
     let chapterTitle: String
     var namespace: Namespace.ID
@@ -55,10 +56,14 @@ struct RecordingView: View {
                             .matchedGeometryEffect(id: prompt.id, in: namespace)
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(.white)
+                            .multilineTextAlignment(.center)    // center and wrap long text
+                            .fixedSize(horizontal: false, vertical: true)  // allow vertical expansion
+                            .lineLimit(nil)                      // no limit on lines
                             .padding(.horizontal, 24)
-                            .padding(.vertical, 10)
+                            .padding(.vertical, 12)
                             .background(terracotta)
-                            .clipShape(Capsule())
+                            .cornerRadius(16)                    // rounded rect instead of capsule
+
 
                         HStack(spacing: 12) {
                             ForEach(0..<3) { i in
@@ -257,28 +262,54 @@ struct RecordingView: View {
 
     // MARK: - Recorder Lifecycle
     func setupRecorder() {
-        let filename = UUID().uuidString + ".m4a"
-        let path = FileManager.default
+        // Generate a unique filename with a CAF extension for uncompressed PCM
+        let filename = UUID().uuidString + ".caf"
+        let fileURL = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(filename)
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44100,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-
+        
+        // 1. Configure your audio session for full mic gain and speaker playback
+        let session = AVAudioSession.sharedInstance()
         do {
-            audioRecorder = try AVAudioRecorder(url: path, settings: settings)
+            try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setMode(.default)
+            try session.setActive(true)
+            // If possible, bump the input gain all the way up
+            if session.isInputGainSettable {
+                try session.setInputGain(1.0)
+            }
+        } catch {
+            print("⚠️ Audio session setup error: \(error)")
+        }
+        
+        // 2. Use uncompressed Linear PCM so you capture full dynamic range
+        let settings: [String: Any] = [
+            AVFormatIDKey:               kAudioFormatLinearPCM,
+            AVSampleRateKey:             44_100,
+            AVNumberOfChannelsKey:       1,
+            AVLinearPCMBitDepthKey:      16,
+            AVLinearPCMIsFloatKey:       false,
+            AVLinearPCMIsBigEndianKey:   false
+        ]
+        
+        do {
+            audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
             audioRecorder?.isMeteringEnabled = true
+            audioRecorder?.prepareToRecord()
             audioRecorder?.record()
-            audioURL = path
+            
+            // Save state for UI/debugging
+            audioURL = fileURL
             isRecording = true
             startMonitoringLevels()
+            
+            debugBanner = "Recording started with PCM @44.1kHz"
         } catch {
             print("⚠️ Error starting recorder: \(error.localizedDescription)")
+            debugBanner = "Recorder error: \(error.localizedDescription)"
         }
     }
+
 
     func startMonitoringLevels() {
         timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in

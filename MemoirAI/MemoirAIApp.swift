@@ -14,7 +14,7 @@ import RevenueCat
 struct MemoirAIApp: App {
   init() {
     // Replace with your RevenueCat public API key
-    Purchases.configure(withAPIKey: "APIKEY")
+    Purchases.configure(withAPIKey: "revapi")
   }
 
   var body: some Scene {
