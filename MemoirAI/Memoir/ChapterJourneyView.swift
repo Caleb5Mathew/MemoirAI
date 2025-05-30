@@ -41,124 +41,14 @@ struct ChapterJourneyView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                // Background image
-                Image(chapter.title.lowercased())
-                    .resizable()
-                    .scaledToFill()
-                    .ignoresSafeArea()
-
-                // Prompt nodes
-                ForEach(chapter.prompts) { prompt in
-                    let isCompleted = completedPromptIDs.contains(prompt.id)
-
-                    MemoryPromptNodeView(
-                        prompt: prompt,
-                        isCompleted: isCompleted,
-                        isLocked: false,
-                        isSelected: prompt.id == selectedPrompt?.id
-                    )
-                    .matchedGeometryEffect(id: prompt.id, in: zoomNamespace)
-                    .position(
-                        x: prompt.x * geo.size.width,
-                        y: prompt.y * geo.size.height
-                    )
-                    .onTapGesture {
-                        if isCompleted {
-                            // select existing entry to push detail
-                            if let entry = allEntries.first(where: {
-                                $0.profileID == profileVM.selectedProfile.id &&
-                                $0.chapter == chapter.title &&
-                                $0.prompt == prompt.text
-                            }) {
-                                selectedEntry = entry
-                            }
-                        } else {
-                            // start a new recording
-                            withAnimation(.spring()) {
-                                selectedPrompt = prompt
-                            }
-                        }
-                    }
-                }
-
-                // Title bar
-                ZStack {
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(Color.white.opacity(0.35))
-                        .padding(.horizontal, 24)
-                        .frame(height: 80)
-
-                    VStack(spacing: 8) {
-                        Text("Chapter \(chapter.number) – \(chapter.title)")
-                            .font(.customSerifFallback(size: 28))
-                            .foregroundColor(deepGreen)
-                            .multilineTextAlignment(.center)
-                            .lineLimit(2)
-
-                        Text("\(completedPromptIDs.count) of \(chapter.prompts.count) memories recorded")
-                            .font(.subheadline)
-                            .foregroundColor(deepGreen)
-                    }
-                    .padding(.horizontal, 24)
-                }
-                .padding(.top, 50)
-                .offset(x: -geo.size.width * 0.085)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-
-                // Custom back button
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundColor(.black)
-                        .padding(20)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-                // Floating quote for new recording
-                if let prompt = selectedPrompt {
-                    HStack {
-                        Spacer(minLength: 24)
-                        Text("“\(prompt.text)”")
-                            .font(.system(size: 17, weight: .medium))
-                            .multilineTextAlignment(.center)
-                            .padding(.vertical, 12)
-                            .padding(.horizontal, 20)
-                            .background(highlightColor)
-                            .cornerRadius(20)
-                            .shadow(radius: 4)
-                        Spacer(minLength: 24)
-                    }
-                    .padding(.bottom, 24)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .transition(.move(edge: .bottom))
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                }
-
-                // Hidden navigation link for detail push
-                NavigationLink(
-                    destination: MemoryDetailView(memory: selectedEntry!)
-                        .environmentObject(profileVM)
-                        .onDisappear {
-                            // clear & refresh when popping back
-                            selectedEntry = nil
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                refreshID = UUID()
-                            }
-                        },
-                    isActive: Binding(
-                        get: { selectedEntry != nil },
-                        set: { newValue in
-                            if !newValue { selectedEntry = nil }
-                        }
-                    ),
-                    label: { EmptyView() }
-                )
-                .hidden()
+                backgroundImageView
+                promptNodesView(geo: geo)
+                titleBarView(geo: geo)
+                backButtonView
+                floatingQuoteView
+                hiddenNavigationLink
             }
             .navigationBarBackButtonHidden(true)
-            // still keep recording as fullScreenCover
             .fullScreenCover(item: $selectedPrompt) { prompt in
                 RecordingView(prompt: prompt, chapterTitle: chapter.title, namespace: zoomNamespace)
                     .environmentObject(profileVM)
@@ -172,4 +62,140 @@ struct ChapterJourneyView: View {
         }
         .id(refreshID)
     }
-}
+    
+    // MARK: - View Components
+    
+    private var backgroundImageView: some View {
+        Image(chapter.title.lowercased())
+            .resizable()
+            .scaledToFill()
+            .ignoresSafeArea()
+    }
+    
+    private func promptNodesView(geo: GeometryProxy) -> some View {
+        ForEach(chapter.prompts) { prompt in
+            let isCompleted = completedPromptIDs.contains(prompt.id)
+            
+            MemoryPromptNodeView(
+                prompt: prompt,
+                isCompleted: isCompleted,
+                isLocked: false,
+                isSelected: prompt.id == selectedPrompt?.id
+            )
+            .matchedGeometryEffect(id: prompt.id, in: zoomNamespace)
+            .position(
+                x: prompt.x * geo.size.width,
+                y: prompt.y * geo.size.height
+            )
+            .onTapGesture {
+                handlePromptTap(prompt: prompt, isCompleted: isCompleted)
+            }
+        }
+    }
+    
+    private func titleBarView(geo: GeometryProxy) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.white.opacity(0.35))
+                .padding(.horizontal, 24)
+                .frame(height: 80)
+
+            VStack(spacing: 8) {
+                Text("Chapter \(chapter.number) – \(chapter.title)")
+                    .font(.customSerifFallback(size: 28))
+                    .foregroundColor(deepGreen)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+
+                Text("\(completedPromptIDs.count) of \(chapter.prompts.count) memories recorded")
+                    .font(.subheadline)
+                    .foregroundColor(deepGreen)
+            }
+            .padding(.horizontal, 24)
+        }
+        .padding(.top, 50)
+        .offset(x: -geo.size.width * 0.085)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+    
+    private var backButtonView: some View {
+        Button {
+            dismiss()
+        } label: {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundColor(.black)
+                .padding(20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    
+    @ViewBuilder
+    private var floatingQuoteView: some View {
+        if let prompt = selectedPrompt {
+            HStack {
+                Spacer(minLength: 24)
+                Text("\"\(prompt.text)\"")
+                    .font(.system(size: 17, weight: .medium))
+                    .multilineTextAlignment(.center)
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 20)
+                    .background(highlightColor)
+                    .cornerRadius(20)
+                    .shadow(radius: 4)
+                Spacer(minLength: 24)
+            }
+            .padding(.bottom, 24)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .transition(.move(edge: .bottom))
+            .frame(maxHeight: .infinity, alignment: .bottom)
+        }
+    }
+    
+    private var hiddenNavigationLink: some View {
+        NavigationLink(
+            destination: Group {
+                if let entry = selectedEntry {
+                    MemoryDetailView(memory: entry)
+                        .environmentObject(profileVM)
+                        .onDisappear {
+                            selectedEntry = nil
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                refreshID = UUID()
+                            }
+                        }
+                } else {
+                    EmptyView()
+                }
+            },
+            isActive: Binding(
+                get: { selectedEntry != nil },
+                set: { newValue in
+                    if !newValue { selectedEntry = nil }
+                }
+            ),
+            label: { EmptyView() }
+        )
+        .hidden()
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func handlePromptTap(prompt: MemoryPrompt, isCompleted: Bool) {
+        if isCompleted {
+            // select existing entry to push detail
+            if let entry = allEntries.first(where: {
+                $0.profileID == profileVM.selectedProfile.id &&
+                $0.chapter == chapter.title &&
+                $0.prompt == prompt.text
+            }) {
+                selectedEntry = entry
+            }
+        } else {
+            // start a new recording
+            withAnimation(.spring()) {
+                selectedPrompt = prompt
+            }
+        }
+    }
+} 

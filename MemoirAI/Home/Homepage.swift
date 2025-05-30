@@ -47,7 +47,7 @@ struct HomepageView: View {
         }.count
     }
 
-    /// The text to show under “Continue Your Memoir”
+    /// The text to show under "Continue Your Memoir"
     private var progressText: String {
         let done = completedChaptersCount()
         if done == 0 {
@@ -64,9 +64,17 @@ struct HomepageView: View {
             VStack(spacing: 0) {
                 // ─── TOP BAR ─────────────────────────────────────
                 HStack {
-                    Text("MemoirAI")
-                        .font(.customSerifFallback(size: 22))
-                        .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Memoir")
+                            .font(.customSerifFallback(size: 22))
+                            .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
+                        
+                        if !profileVM.profiles.isEmpty && !profileVM.selectedProfile.name.isEmpty {
+                            Text("Hello, \(profileVM.selectedProfile.name)")
+                                .font(.subheadline)
+                                .foregroundColor(.black.opacity(0.7))
+                        }
+                    }
                     Spacer()
                 }
                 .padding(.horizontal)

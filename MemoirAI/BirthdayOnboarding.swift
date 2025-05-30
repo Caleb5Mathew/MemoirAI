@@ -10,6 +10,7 @@ import SwiftUI
 struct BirthdayOnboardingFlow: View {
     @AppStorage("userBirthday") private var savedBirthday: Date?
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var notificationManager = NotificationManager.shared
 
     @State private var currentStep: Int = 1
     @State private var selectedYear: Int = Calendar.current.component(.year, from: Date()) - 30
@@ -25,8 +26,10 @@ struct BirthdayOnboardingFlow: View {
         components.year = selectedYear
         components.month = month + 1
         let calendar = Calendar.current
-        let date = calendar.date(from: components)!
-        let range = calendar.range(of: .day, in: .month, for: date)!
+        guard let date = calendar.date(from: components),
+              let range = calendar.range(of: .day, in: .month, for: date) else {
+            return []
+        }
         return Array(range)
     }
 
@@ -45,7 +48,7 @@ struct BirthdayOnboardingFlow: View {
                 Spacer()
 
                 VStack(spacing: 10) {
-                    Text("Let’s personalize")
+                    Text("Let's personalize")
                         .font(.customSerifFallback(size: 26))
                         .accessibilityHeading(.h1)
                     Text("your timeline")
@@ -55,6 +58,43 @@ struct BirthdayOnboardingFlow: View {
                 VStack {
                     switch currentStep {
                     case 1:
+                        VStack(spacing: 20) {
+                            Image(systemName: "bell.fill")
+                                .font(.system(size: 48))
+                                .foregroundColor(.orange)
+                            
+                            Text("Stay Connected")
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                            
+                            Text("Get gentle reminders to record your stories and daily prompts to inspire your memories.")
+                                .font(.body)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            
+                            Button("Enable Notifications") {
+                                notificationManager.requestPermission()
+                                withAnimation {
+                                    currentStep += 1
+                                }
+                            }
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.orange)
+                            .foregroundColor(.white)
+                            .cornerRadius(16)
+                            .padding(.horizontal)
+                            
+                            Button("Skip for now") {
+                                withAnimation {
+                                    currentStep += 1
+                                }
+                            }
+                            .foregroundColor(.gray)
+                        }
+                        
+                    case 2:
                         VStack(spacing: 16) {
                             Text("What year were you born?")
                                 .font(.headline)
@@ -69,7 +109,7 @@ struct BirthdayOnboardingFlow: View {
                             .accessibilityLabel("Year Picker")
                         }
 
-                    case 2:
+                    case 3:
                         VStack(spacing: 16) {
                             Text("Which month?")
                                 .font(.headline)
@@ -96,7 +136,7 @@ struct BirthdayOnboardingFlow: View {
                             .padding(.horizontal)
                         }
 
-                    case 3:
+                    case 4:
                         VStack(spacing: 16) {
                             Text("And the day?")
                                 .font(.headline)
@@ -132,12 +172,15 @@ struct BirthdayOnboardingFlow: View {
                                     .bold()
                                     .transition(.opacity.combined(with: .scale))
 
-                                Button("Save") {
+                                Button("Save & Start Recording") {
                                     let generator = UIImpactFeedbackGenerator(style: .medium)
                                     generator.impactOccurred()
 
                                     withAnimation {
                                         savedBirthday = date
+                                        // Schedule notifications
+                                        notificationManager.scheduleDailyPrompt()
+                                        notificationManager.scheduleWeeklyReminder()
                                         dismiss()
                                     }
                                 }
@@ -148,7 +191,7 @@ struct BirthdayOnboardingFlow: View {
                                 .foregroundColor(.white)
                                 .cornerRadius(16)
                                 .padding(.horizontal)
-                                .accessibilityLabel("Save birthdate")
+                                .accessibilityLabel("Save birthdate and start using the app")
                             }
                         }
                     }
@@ -171,21 +214,21 @@ struct BirthdayOnboardingFlow: View {
 
                     Spacer()
 
-                    Button(currentStep < 4 ? "Next" : "Done") {
+                    Button(currentStep < 5 ? "Next" : "Done") {
                         withAnimation {
-                            if currentStep < 4 {
+                            if currentStep < 5 {
                                 currentStep += 1
                             }
                         }
                     }
                     .disabled(
-                        (currentStep == 2 && selectedMonth == nil) ||
-                        (currentStep == 3 && selectedDay == nil)
+                        (currentStep == 3 && selectedMonth == nil) ||
+                        (currentStep == 4 && selectedDay == nil)
                     )
                     .frame(width: 80, height: 44)
                     .background(
-                        (currentStep == 2 && selectedMonth == nil) ||
-                        (currentStep == 3 && selectedDay == nil)
+                        (currentStep == 3 && selectedMonth == nil) ||
+                        (currentStep == 4 && selectedDay == nil)
                             ? Color.gray.opacity(0.3)
                             : Color.orange
                     )

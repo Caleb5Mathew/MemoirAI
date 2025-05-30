@@ -14,7 +14,11 @@ extension View {
   func snapshot(width: CGFloat, height: CGFloat) -> UIImage {
     // 1. Host the view
     let controller = UIHostingController(rootView: self)
-    let view = controller.view!
+    guard let view = controller.view else {
+        // Return a blank image if view creation fails
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: width, height: height))
+        return renderer.image { _ in }
+    }
 
     // 2. Set size
     view.bounds = CGRect(x: 0, y: 0, width: width, height: height)

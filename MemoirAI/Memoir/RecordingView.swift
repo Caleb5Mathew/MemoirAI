@@ -13,6 +13,7 @@ struct RecordingView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var context
     @EnvironmentObject var profileVM: ProfileViewModel
+    @StateObject private var audioMonitor = AudioLevelMonitor()
 
     @State private var typedText: String = ""
     @State private var audioRecorder: AVAudioRecorder?
@@ -23,6 +24,8 @@ struct RecordingView: View {
     @State private var showSaveToast = false
     @State private var powerLevel: Float = 0.0
     @State private var timer: Timer?
+    @State private var recordingTime: TimeInterval = 0
+    @State private var recordingTimer: Timer?
 
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var selectedImagesData: [Data] = []
@@ -31,6 +34,11 @@ struct RecordingView: View {
     let terracotta = Color(red: 210/255, green: 112/255, blue: 45/255)
     let softCream = Color(red: 253/255, green: 234/255, blue: 198/255)
     let overlayBlack = Color.black.opacity(0.4)
+    let accent = Color(red: 0.10, green: 0.22, blue: 0.14)
+
+    // Haptic feedback generators
+    private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+    private let selectionFeedback = UISelectionFeedbackGenerator()
 
     // Grid layout for up to 8 images (4 columns)
     private var columns: [GridItem] {
@@ -56,34 +64,78 @@ struct RecordingView: View {
                             .matchedGeometryEffect(id: prompt.id, in: namespace)
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(.white)
-                            .multilineTextAlignment(.center)    // center and wrap long text
-                            .fixedSize(horizontal: false, vertical: true)  // allow vertical expansion
-                            .lineLimit(nil)                      // no limit on lines
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(nil)
                             .padding(.horizontal, 24)
                             .padding(.vertical, 12)
                             .background(terracotta)
-                            .cornerRadius(16)                    // rounded rect instead of capsule
+                            .cornerRadius(16)
 
-
-                        HStack(spacing: 12) {
-                            ForEach(0..<3) { i in
-                                Circle()
-                                    .fill(terracotta)
-                                    .frame(width: 12 + CGFloat(i * 2), height: 12 + CGFloat(i * 2))
-                                    .scaleEffect(CGFloat(1 + (powerLevel * Float(i + 1))))
-                                    .animation(.easeInOut(duration: 0.2), value: powerLevel)
+                        // Main Recording Button (replaces auto-start)
+                        if !isRecording && !isPaused && audioURL == nil {
+                            Button(action: startRecording) {
+                                VStack(spacing: 8) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(terracotta)
+                                            .frame(width: 80, height: 80)
+                                            .shadow(color: .orange.opacity(0.3), radius: 8, x: 0, y: 4)
+                                        
+                                        Image(systemName: "mic.fill")
+                                            .font(.system(size: 32))
+                                            .foregroundColor(.white)
+                                    }
+                                    
+                                    Text("Tap to Record")
+                                        .font(.caption)
+                                        .foregroundColor(.white)
+                                }
                             }
                         }
 
-                        HStack(spacing: 40) {
-                            controlButton(icon: "gobackward", label: "Restart") { clearRecording() }
-                            controlButton(icon: isPaused ? "play.fill" : "pause.fill",
-                                          label: isPaused ? "Resume" : "Pause") {
-                                isPaused ? resumeRecording() : pauseRecording()
+                        // Real-time Waveform Visualization
+                        RealTimeWaveformView(
+                            audioMonitor: audioMonitor,
+                            isRecording: isRecording,
+                            isPaused: isPaused
+                        )
+                        .frame(maxWidth: geo.size.width * 0.8)
+
+                        // Recording Timer Display
+                        if isRecording || isPaused {
+                            VStack(spacing: 4) {
+                                Text(formatTime(recordingTime))
+                                    .font(.system(size: 20, weight: .medium, design: .monospaced))
+                                    .foregroundColor(.white)
+                                
+                                Text(isPaused ? "Recording Paused" : "Recording...")
+                                    .font(.caption)
+                                    .foregroundColor(isPaused ? .white.opacity(0.7) : terracotta)
                             }
-                            controlButton(icon: "square.and.arrow.down", label: "Save") {
-                                stopRecording()
-                                saveMemory()
+                        }
+
+                        // Recording Controls (only show when recording or paused)
+                        if isRecording || isPaused || audioURL != nil {
+                            HStack(spacing: 40) {
+                                controlButton(icon: "arrow.counterclockwise", label: "Clear") { 
+                                    triggerHaptic(.impact(.medium))
+                                    clearRecording() 
+                                }
+                                
+                                if isRecording || isPaused {
+                                    controlButton(icon: isPaused ? "play.fill" : "pause.fill",
+                                                  label: isPaused ? "Resume" : "Pause") {
+                                        triggerHaptic(.impact(.light))
+                                        isPaused ? resumeRecording() : pauseRecording()
+                                    }
+                                }
+                                
+                                controlButton(icon: "checkmark.circle.fill", label: "Save") {
+                                    triggerHaptic(.impact(.heavy))
+                                    stopRecording()
+                                    saveMemory()
+                                }
                             }
                         }
                     }
@@ -110,6 +162,9 @@ struct RecordingView: View {
                             .padding(.leading, 32)
                             .scrollContentBackground(.hidden)
                             .background(softCream)
+                            .onTapGesture {
+                                triggerHaptic(.selection)
+                            }
                         Image(systemName: "pencil")
                             .foregroundColor(.gray)
                             .padding(.top, 14)
@@ -179,6 +234,7 @@ struct RecordingView: View {
                     }
                     .padding(.horizontal, geo.size.width * 0.05)
                     .onChange(of: photoItems) { newItems in
+                        triggerHaptic(.selection)
                         selectedImagesData.removeAll()
                         for item in newItems {
                             Task {
@@ -198,6 +254,7 @@ struct RecordingView: View {
                 VStack {
                     HStack {
                         Button(action: {
+                            triggerHaptic(.impact(.light))
                             if hasUnsavedData() {
                                 showExitConfirm = true
                             } else {
@@ -238,7 +295,7 @@ struct RecordingView: View {
                 Button("Discard and Exit", role: .destructive) { dismiss() }
                 Button("Cancel", role: .cancel) {}
             }
-            .onAppear(perform: setupRecorder)
+            .onAppear(perform: setupAudioSession)
             .onDisappear(perform: cleanup)
         }
     }
@@ -253,6 +310,8 @@ struct RecordingView: View {
                     .padding(20)
                     .background(terracotta)
                     .clipShape(Circle())
+                    .scaleEffect(1.0)
+                    .animation(.easeInOut(duration: 0.1), value: isRecording)
             }
             Text(label)
                 .foregroundColor(.white)
@@ -260,29 +319,67 @@ struct RecordingView: View {
         }
     }
 
+    // MARK: - Haptic Feedback
+    enum HapticType {
+        case impact(UIImpactFeedbackGenerator.FeedbackStyle)
+        case selection
+    }
+    
+    func triggerHaptic(_ type: HapticType) {
+        switch type {
+        case .impact(let style):
+            let generator = UIImpactFeedbackGenerator(style: style)
+            generator.impactOccurred()
+        case .selection:
+            selectionFeedback.selectionChanged()
+        }
+    }
+
+    // MARK: - Time Formatting
+    func formatTime(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    // MARK: - Recording Timer
+    func startRecordingTimer() {
+        recordingTime = 0
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            recordingTime += 1
+        }
+    }
+    
+    func stopRecordingTimer() {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+    }
+
     // MARK: - Recorder Lifecycle
-    func setupRecorder() {
-        // Generate a unique filename with a CAF extension for uncompressed PCM
-        let filename = UUID().uuidString + ".caf"
-        let fileURL = FileManager.default
-            .urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent(filename)
-        
-        // 1. Configure your audio session for full mic gain and speaker playback
+    func setupAudioSession() {
+        // Only set up the audio session, don't start recording automatically
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])
             try session.setMode(.default)
             try session.setActive(true)
-            // If possible, bump the input gain all the way up
             if session.isInputGainSettable {
                 try session.setInputGain(1.0)
             }
         } catch {
             print("⚠️ Audio session setup error: \(error)")
         }
+    }
+
+    func startRecording() {
+        triggerHaptic(.impact(.medium))
         
-        // 2. Use uncompressed Linear PCM so you capture full dynamic range
+        // Generate a unique filename with a CAF extension for uncompressed PCM
+        let filename = UUID().uuidString + ".caf"
+        let fileURL = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(filename)
+        
         let settings: [String: Any] = [
             AVFormatIDKey:               kAudioFormatLinearPCM,
             AVSampleRateKey:             44_100,
@@ -298,11 +395,16 @@ struct RecordingView: View {
             audioRecorder?.prepareToRecord()
             audioRecorder?.record()
             
-            // Save state for UI/debugging
             audioURL = fileURL
             isRecording = true
-            startMonitoringLevels()
+            isPaused = false
             
+            // Start audio level monitoring
+            if let recorder = audioRecorder {
+                audioMonitor.startMonitoring(recorder: recorder)
+            }
+            
+            startRecordingTimer()
             debugBanner = "Recording started with PCM @44.1kHz"
         } catch {
             print("⚠️ Error starting recorder: \(error.localizedDescription)")
@@ -310,40 +412,32 @@ struct RecordingView: View {
         }
     }
 
-
-    func startMonitoringLevels() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
-            guard let recorder = audioRecorder else { return }
-            recorder.updateMeters()
-            let level = max(0.05,
-                            min(1.0,
-                                pow(10, recorder.averagePower(forChannel: 0) / 20)))
-            powerLevel = level
-        }
-    }
-
     func pauseRecording() {
         audioRecorder?.pause()
         isPaused = true
-        isRecording = false
+        recordingTimer?.invalidate()
     }
 
     func resumeRecording() {
         audioRecorder?.record()
         isPaused = false
-        isRecording = true
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            recordingTime += 1
+        }
     }
 
     func stopRecording() {
         audioRecorder?.stop()
         isRecording = false
         isPaused = false
-        timer?.invalidate()
+        stopRecordingTimer()
+        audioMonitor.stopMonitoring()
     }
 
     func clearRecording() {
         stopRecording()
         audioURL = nil
+        recordingTime = 0
         typedText = ""
         selectedImagesData.removeAll()
         photoItems.removeAll()
@@ -366,7 +460,6 @@ struct RecordingView: View {
             photo.id = UUID()
             photo.data = imgData
             photo.memoryEntry = newEntry
-            // The line above replaces the addToPhotos call
         }
 
         do {
@@ -410,6 +503,7 @@ struct RecordingView: View {
     }
 
     func cleanup() {
-        timer?.invalidate()
+        recordingTimer?.invalidate()
+        audioMonitor.stopMonitoring()
     }
 }

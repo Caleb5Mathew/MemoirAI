@@ -7,6 +7,8 @@ struct RecordMemoryView: View {
     @Environment(\.managedObjectContext) private var context
     @EnvironmentObject var profileVM: ProfileViewModel
     @StateObject private var viewModel = MemoryEntryViewModel()
+    @StateObject private var usageTracker = UsageTracker.shared
+    @StateObject private var audioMonitor = AudioLevelMonitor()
     
     @State private var selectedPrompt: String? = nil
     @State private var showTextEntry: Bool = false
@@ -18,6 +20,8 @@ struct RecordMemoryView: View {
     @State private var showExitConfirm = false
     @FocusState private var isTextFocused: Bool
     @State private var answeredPrompts: [String] = []
+    @State private var recordingTime: TimeInterval = 0
+    @State private var recordingTimer: Timer?
     
     private let passedPrompt: String?
     private let promptKey = "PromptOfTheDayCompleted"
@@ -85,18 +89,23 @@ struct RecordMemoryView: View {
                             .foregroundColor(accent.opacity(0.6))
                     }
                     
-                    // Mic Button
+                    // Mic Button with enhanced visual feedback
                     ZStack {
-                        // ↑↑ replace with this ↑↑
+                        // Animated rings for recording state
                         if isRecording || isPaused {
                             ForEach(0..<3, id: \.self) { i in
                                 Circle()
-                                    .stroke(micColor.opacity(0.2), lineWidth: 2)
+                                    .stroke(
+                                        audioMonitor.isVoiceActive ? 
+                                            accent.opacity(0.2) : 
+                                            micColor.opacity(0.2), 
+                                        lineWidth: 2
+                                    )
                                     .frame(width: CGFloat(140 + i * 20),
                                            height: CGFloat(140 + i * 20))
-                                    .scaleEffect(1.2)
+                                    .scaleEffect(audioMonitor.isVoiceActive ? 1.3 : 1.2)
                                     .animation(
-                                        Animation.easeOut(duration: 1.5)
+                                        Animation.easeOut(duration: audioMonitor.isVoiceActive ? 1.0 : 1.5)
                                             .repeatForever()
                                             .delay(Double(i) * 0.3),
                                         value: isRecording || isPaused
@@ -104,36 +113,58 @@ struct RecordMemoryView: View {
                             }
                         }
                         
-                        // Your base mic circle + icon here
+                        // Main mic button with level-responsive scaling
                         Circle()
-                            .fill(micColor)
+                            .fill(
+                                isRecording && !isPaused && audioMonitor.isVoiceActive ? 
+                                    accent : micColor
+                            )
                             .frame(width: 120, height: 120)
+                            .scaleEffect(
+                                isRecording && !isPaused ? 
+                                    (1.0 + audioMonitor.getSmoothedLevel() * 0.1) : 1.0
+                            )
                             .shadow(color: Color.orange.opacity(0.25),
                                     radius: 10, x: 0, y: 4)
+                            .animation(.easeOut(duration: 0.1), value: audioMonitor.getSmoothedLevel())
+                            .animation(.easeInOut(duration: 0.3), value: audioMonitor.isVoiceActive)
                         
-                        // inside your mic-button ZStack—swap in this instead:
-                        
-                        // ① Update the icon to reflect “active recording” vs. idle
+                        // Mic icon
                         Image(systemName: (isRecording && !isPaused) ? "pause.fill" : "mic.fill")
                             .font(.system(size: 36))
                             .foregroundColor(.white)
-                        // (If you prefer a “play” icon when paused, swap "mic.fill" for "play.fill" above)
-                        
-                        // ② Handle tap to pause, resume, or start
                     }
-                        .onTapGesture {
-                            if isRecording && !isPaused {
-                                // currently recording → pause
-                                pauseRecording()
-                            } else if isPaused {
-                                // was paused → resume
-                                resumeRecording()
-                            } else {
-                                // idle → start fresh
-                                startRecording()
-                            }
+                    .onTapGesture {
+                        if isRecording && !isPaused {
+                            pauseRecording()
+                        } else if isPaused {
+                            resumeRecording()
+                        } else {
+                            startRecording()
                         }
-
+                    }
+                    
+                    // Real-time Waveform Visualization
+                    RealTimeWaveformView(
+                        audioMonitor: audioMonitor,
+                        isRecording: isRecording,
+                        isPaused: isPaused
+                    )
+                    .padding(.horizontal)
+                    
+                    // Recording Timer Display
+                    if isRecording || isPaused {
+                        VStack(spacing: 8) {
+                            Text(formatTime(recordingTime))
+                                .font(.system(size: 24, weight: .medium, design: .monospaced))
+                                .foregroundColor(accent)
+                            
+                            Text(isPaused ? "Recording Paused" : "Recording...")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(isPaused ? accent.opacity(0.6) : micColor)
+                        }
+                        .padding(.top, 16)
+                    }
                     
                     // Recording Controls
                     if isRecording || isPaused {
@@ -188,7 +219,6 @@ struct RecordMemoryView: View {
                         .padding(.horizontal)
                     }
                     
-                    
                     // Text Input
                     if showTextEntry && !isRecording {
                         VStack(spacing: 12) {
@@ -223,7 +253,7 @@ struct RecordMemoryView: View {
                             
                             ForEach(unansweredPrompts().prefix(3), id: \.self) { suggestion in
                                 Text(suggestion)
-                                    .foregroundColor(.black)      // ← ensure text is always black
+                                    .foregroundColor(.black)
                                     .padding()
                                     .frame(maxWidth: .infinity,
                                            alignment: .leading)
@@ -249,7 +279,6 @@ struct RecordMemoryView: View {
                                     }
                                     .padding(.horizontal)
                             }
-                            
                         }
                     }
                 }
@@ -311,7 +340,7 @@ struct RecordMemoryView: View {
             .padding(.vertical, 10)
             .padding(.horizontal, 14)
             .background(
-                Color(red: 1.0, green: 0.96, blue: 0.89)   // ← updated here
+                Color(red: 1.0, green: 0.96, blue: 0.89)
             )
             .cornerRadius(12)
             .shadow(color: .black.opacity(0.06), radius: 4, x: 0, y: 2)
@@ -330,6 +359,27 @@ struct RecordMemoryView: View {
     
     func hasMeaningfulData() -> Bool {
         !typedText.isEmpty || audioURL != nil
+    }
+    
+    // Format time for display (MM:SS)
+    func formatTime(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+    
+    // Start recording timer
+    func startRecordingTimer() {
+        recordingTime = 0
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            recordingTime += 1
+        }
+    }
+    
+    // Stop recording timer
+    func stopRecordingTimer() {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
     }
     
     // MARK: - Recording
@@ -368,6 +418,13 @@ struct RecordMemoryView: View {
             audioURL = fileURL
             isRecording = true
             isPaused = false
+            
+            // Start audio level monitoring
+            if let recorder = audioRecorder {
+                audioMonitor.startMonitoring(recorder: recorder)
+            }
+            
+            startRecordingTimer()
         } catch {
             print("❌ Failed to start recording: \(error.localizedDescription)")
         }
@@ -376,22 +433,37 @@ struct RecordMemoryView: View {
     func pauseRecording() {
         audioRecorder?.pause()
         isPaused = true
+        recordingTimer?.invalidate() // Pause the timer
+        
+        // Note: We keep audio monitoring active during pause so user can see
+        // that audio input is still being detected, just not recorded
     }
     
     func resumeRecording() {
         audioRecorder?.record()
         isPaused = false
+        // Resume timer from current time
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            recordingTime += 1
+        }
     }
     
     func stopRecording() {
         audioRecorder?.stop()
         isRecording = false
         isPaused = false
+        stopRecordingTimer() // Stop the timer
+        
+        // Stop audio level monitoring
+        audioMonitor.stopMonitoring()
     }
     
     func clearRecording() {
         stopRecording()
         audioURL = nil
+        recordingTime = 0 // Reset timer
+        
+        // Audio monitor is already stopped in stopRecording()
     }
     // MARK: – Save & Transcribe
     func saveMemory() {
@@ -411,6 +483,9 @@ struct RecordMemoryView: View {
         do {
             try context.save()
             NotificationCenter.default.post(name: .memorySaved, object: nil)
+            
+            // Track successful recording for review prompts
+            usageTracker.recordingCompleted()
         } catch {
             print("❌ Error saving MemoryEntry:", error)
         }

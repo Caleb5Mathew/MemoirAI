@@ -1,1 +1,50 @@
-////  ImageGalleryViewModel.swift//  MemoirAI////  Created by user941803 on 5/10/25.//import SwiftUI// For a more structured logging approach in a production app, consider using OSLog.// import os.log // Uncomment if you want to use OSLog@MainActorclass ImageGalleryViewModel: ObservableObject {    // private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ImageGalleryViewModel") // Example for OSLog    /// The array of AI-generated images to display    @Published var images: [UIImage]    /// The image currently selected for full-screen preview    @Published var selectedImage: UIImage? = nil    init(images: [UIImage]) {        print("[ImageGalleryViewModel DEBUG] Initializing...")        print("[ImageGalleryViewModel DEBUG] init - Received \(images.count) images.")        // You could log more details about the images if needed, e.g., their sizes        // images.enumerated().forEach { index, img in        //     print("[ImageGalleryViewModel DEBUG] init - Image \(index) size: \(img.size)")        // }        self.images = images        print("[ImageGalleryViewModel DEBUG] init - 'images' property set with \(self.images.count) images.")        print("[ImageGalleryViewModel DEBUG] init - 'selectedImage' is initially \(self.selectedImage == nil ? "nil" : "set").")        print("[ImageGalleryViewModel DEBUG] Initialization complete.")    }    /// Show a given image in the full-screen overlay    func select(_ image: UIImage) {        print("[ImageGalleryViewModel DEBUG] select(image:) called.")        // It can be useful to identify the image being selected, e.g., by its size or hashValue        print("[ImageGalleryViewModel DEBUG] select - Attempting to select image with size: \(image.size), hashValue: \(image.hashValue)")        print("[ImageGalleryViewModel DEBUG] select - 'selectedImage' current value BEFORE update: \(self.selectedImage == nil ? "nil" : "set (size: \(self.selectedImage?.size ?? CGSize.zero), hash: \(self.selectedImage?.hashValue ?? 0))").")                selectedImage = image                print("[ImageGalleryViewModel DEBUG] select - 'selectedImage' AFTER update: \(self.selectedImage == nil ? "nil" : "set (size: \(self.selectedImage!.size), hash: \(self.selectedImage!.hashValue))").")        if self.selectedImage == image {            print("[ImageGalleryViewModel DEBUG] select - Successfully set selectedImage to the provided image.")        } else {            print("[ImageGalleryViewModel WARNING] select - selectedImage might not have been set as expected or is a different instance.")        }    }    /// Dismiss the full-screen overlay    func deselect() {        print("[ImageGalleryViewModel DEBUG] deselect() called.")        print("[ImageGalleryViewModel DEBUG] deselect - 'selectedImage' current value BEFORE clearing: \(self.selectedImage == nil ? "nil" : "set (size: \(self.selectedImage?.size ?? CGSize.zero), hash: \(self.selectedImage?.hashValue ?? 0))").")                selectedImage = nil                print("[ImageGalleryViewModel DEBUG] deselect - 'selectedImage' AFTER clearing: \(self.selectedImage == nil ? "nil" : "set").")        if self.selectedImage == nil {            print("[ImageGalleryViewModel DEBUG] deselect - Successfully cleared selectedImage (set to nil).")        } else {            print("[ImageGalleryViewModel WARNING] deselect - selectedImage was not cleared as expected.")        }    }    // If you add methods to modify the 'images' array, add debugging there too.    // For example:    // func updateImages(_ newImages: [UIImage]) {    //     print("[ImageGalleryViewModel DEBUG] updateImages called with \(newImages.count) new images.")    //     print("[ImageGalleryViewModel DEBUG] updateImages - 'images' count BEFORE update: \(self.images.count).")    //     self.images = newImages    //     print("[ImageGalleryViewModel DEBUG] updateImages - 'images' count AFTER update: \(self.images.count).")    // }    //    // func addImage(_ image: UIImage) {    //     print("[ImageGalleryViewModel DEBUG] addImage called for image with size: \(image.size).")    //     print("[ImageGalleryViewModel DEBUG] addImage - 'images' count BEFORE adding: \(self.images.count).")    //     self.images.append(image)    //     print("[ImageGalleryViewModel DEBUG] addImage - 'images' count AFTER adding: \(self.images.count).")    // }}
+//
+//  ImageGalleryViewModel.swift
+//  MemoirAI
+//
+//  Created by user941803 on 5/10/25.
+//
+
+import SwiftUI
+// For a more structured logging approach in a production app, consider using OSLog.
+// import os.log // Uncomment if you want to use OSLog
+
+@MainActor
+class ImageGalleryViewModel: ObservableObject {
+    // private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ImageGalleryViewModel") // Example for OSLog
+
+    /// The array of AI-generated images to display
+    @Published var images: [UIImage]
+    /// The image currently selected for full-screen preview
+    @Published var selectedImage: UIImage?
+
+    init(images: [UIImage]) {
+        self.images = images
+    }
+
+    /// Show a given image in the full-screen overlay
+    func select(_ image: UIImage) {
+        selectedImage = image
+    }
+
+    /// Dismiss the full-screen overlay
+    func deselect() {
+        selectedImage = nil
+    }
+
+    // If you add methods to modify the 'images' array, add debugging there too.
+    // For example:
+    // func updateImages(_ newImages: [UIImage]) {
+    //     print("[ImageGalleryViewModel DEBUG] updateImages called with \(newImages.count) new images.")
+    //     print("[ImageGalleryViewModel DEBUG] updateImages - 'images' count BEFORE update: \(self.images.count).")
+    //     self.images = newImages
+    //     print("[ImageGalleryViewModel DEBUG] updateImages - 'images' count AFTER update: \(self.images.count).")
+    // }
+    //
+    // func addImage(_ image: UIImage) {
+    //     print("[ImageGalleryViewModel DEBUG] addImage called for image with size: \(image.size).")
+    //     print("[ImageGalleryViewModel DEBUG] addImage - 'images' count BEFORE adding: \(self.images.count).")
+    //     self.images.append(image)
+    //     print("[ImageGalleryViewModel DEBUG] addImage - 'images' count AFTER adding: \(self.images.count).")
+    // }
+}

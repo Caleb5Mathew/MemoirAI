@@ -1,0 +1,76 @@
+# Xcode
+*.xcuserdata
+*.xcuserdatad
+.DS_Store
+build/
+DerivedData/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+*.xcworkspace
+!default.xcworkspace
+
+# Swift Package Manager
+.swiftpm/
+Package.resolved
+*.xcworkspace
+
+# CocoaPods
+Pods/
+*.podfile.lock
+
+# Carthage
+Carthage/Build/
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Code Injection
+iOSInjectionProject/
+
+# API Keys & Secrets
+.env
+secrets.plist
+Config.plist
+APIKeys.plist
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Personal notes
+TODO.md
+NOTES.md
+
+# RevenueCat
+.revenuecat_cache
+
+# OpenAI API responses cache
+openai_cache/
+
+# Local audio recordings (if storing test files)
+recordings/
+*.m4a
+*.wav
+*.mp3
+
+# Core Data
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Generated files
+*.generated.swift 

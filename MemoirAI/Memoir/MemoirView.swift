@@ -101,7 +101,8 @@ struct MemoirView: View {
                                     }
                                 }
 
-                                NavigationLink(destination: ChapterJourneyView(chapter: getMockChapter(chapter.number))) {
+                                NavigationLink(destination: ChapterJourneyView(chapter: getMockChapter(chapter.number)).environmentObject(profileVM))
+                                {
                                     Text("Continue Chapter")
                                         .foregroundColor(.white)
                                         .font(.system(size: 16, weight: .semibold))
@@ -170,7 +171,11 @@ struct MemoirView: View {
     }
 
     func getMockChapter(_ index: Int) -> Chapter {
-        let chapter = allChapters.first { $0.number == index }!
+        guard let chapter = allChapters.first(where: { $0.number == index }) else {
+            // Return a default chapter if not found
+            return Chapter(number: index, title: "Unknown Chapter", prompts: [])
+        }
+        
         let coordinates: [(CGFloat, CGFloat)] = [
             (0.88, 0.80), (0.55, 0.63), (0.85, 0.43), (0.68, 0.28)
         ]
