@@ -3,6 +3,7 @@
 import AVFoundation
 import SwiftUI
 import CoreData
+import Mixpanel
 
 struct ChapterJourneyView: View {
     let chapter: Chapter
@@ -188,6 +189,14 @@ struct ChapterJourneyView: View {
                 selectedEntry = entry
             }
         } else {
+            // Track prompt opened
+            Mixpanel.mainInstance().track(event: "Opened Prompt", properties: [
+                "chapter_number": chapter.number,
+                "chapter_title": chapter.title,
+                "prompt_text": prompt.text,
+                "is_completed": isCompleted
+            ])
+            
             // start a new recording
             withAnimation(.spring()) {
                 selectedPrompt = prompt

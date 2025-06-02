@@ -390,7 +390,7 @@ struct RecordMemoryView: View {
             try session.setMode(.default)
             try session.setActive(true)
             if session.isInputGainSettable {
-                try session.setInputGain(1.0)
+                try session.setInputGain(2.0)
             }
         } catch {
             print("🔴 Audio session setup error: \(error.localizedDescription)")

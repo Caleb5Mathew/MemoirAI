@@ -3,6 +3,7 @@ import AVFoundation
 import CoreData
 import PhotosUI
 import Speech
+import Mixpanel
 
 struct RecordingView: View {
     @State private var debugBanner: String?
@@ -118,9 +119,9 @@ struct RecordingView: View {
                         // Recording Controls (only show when recording or paused)
                         if isRecording || isPaused || audioURL != nil {
                             HStack(spacing: 40) {
-                                controlButton(icon: "arrow.counterclockwise", label: "Clear") { 
+                                controlButton(icon: "arrow.counterclockwise", label: "Clear") {
                                     triggerHaptic(.impact(.medium))
-                                    clearRecording() 
+                                    clearRecording()
                                 }
                                 
                                 if isRecording || isPaused {
@@ -142,14 +143,14 @@ struct RecordingView: View {
                     .frame(maxWidth: geo.size.width * 0.9)
                     .multilineTextAlignment(.center)
 
-                    // — replace your existing “Or” + button HStack with this —
+                    // — replace your existing "Or" + button HStack with this —
                     ZStack {
-                        // centered “Or”
+                        // centered "Or"
                         Text("Or")
                             .font(.caption)
                             .foregroundColor(.white)
 
-                        // trailing “Save Memory”
+                        // trailing "Save Memory"
                         HStack {
                             Spacer()
                             Button(action: {
@@ -388,7 +389,7 @@ struct RecordingView: View {
             try session.setMode(.default)
             try session.setActive(true)
             if session.isInputGainSettable {
-                try session.setInputGain(1.0)
+                try session.setInputGain(2.0)
             }
         } catch {
             print("⚠️ Audio session setup error: \(error)")
@@ -422,6 +423,12 @@ struct RecordingView: View {
             audioURL = fileURL
             isRecording = true
             isPaused = false
+            
+            // Track recording started
+            Mixpanel.mainInstance().track(event: "Started Recording", properties: [
+                "chapter_title": chapterTitle,
+                "prompt_text": prompt.text
+            ])
             
             // Start audio level monitoring
             if let recorder = audioRecorder {
@@ -469,9 +476,19 @@ struct RecordingView: View {
     // MARK: – Save & Transcribe (background + disk photos)
     // MARK: – Save & Transcribe (background + external-storage blobs)
     func saveMemory() {
-        // 0️⃣ Don’t do anything if there’s nothing to save
+        // 0️⃣ Don't do anything if there's nothing to save
         guard hasUnsavedData() else { return }
         isSaving = true       // you can overlay a ProgressView if desired
+
+        // Track memory saved
+        Mixpanel.mainInstance().track(event: "Saved Memory", properties: [
+            "chapter_title": chapterTitle,
+            "prompt_text": prompt.text,
+            "has_audio": audioURL != nil,
+            "has_text": !typedText.isEmpty,
+            "has_photos": !selectedImagesData.isEmpty,
+            "recording_duration": recordingTime
+        ])
 
         // 1️⃣ Spin up a private background context so we never block the UI
         let bgContext = PersistenceController.shared.container.newBackgroundContext()

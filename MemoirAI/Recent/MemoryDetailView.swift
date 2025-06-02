@@ -3,6 +3,7 @@ import UIKit
 import AVFoundation
 import PhotosUI
 import CoreData
+import Mixpanel
 
 struct MemoryDetailView: View {
     @Environment(\.presentationMode) private var presentationMode
@@ -196,6 +197,19 @@ struct MemoryDetailView: View {
             Button("OK") { }
         } message: {
             Text("Your memory has been shared with \(familyManager.currentFamily?.name ?? "your family"). They can now see and react to it!")
+        }
+        .onAppear {
+            // Track memory viewed
+            Mixpanel.mainInstance().track(event: "Viewed Memory", properties: [
+                "chapter_title": memory.chapter ?? "",
+                "prompt_text": memory.prompt ?? "",
+                "has_audio": memory.audioFileURL != nil,
+                "has_text": !(memory.text?.isEmpty ?? true),
+                "has_photos": !(memory.photos?.allObjects.isEmpty ?? true),
+                "created_at": memory.createdAt?.timeIntervalSince1970 ?? 0
+            ])
+            
+            loadPhotosFromRelationship()
         }
     }
     

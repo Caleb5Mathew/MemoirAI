@@ -37,7 +37,7 @@ struct RecentMemoriesView: View {
                                 .font(.customSerifFallback(size: 24))
                                 .foregroundColor(.black.opacity(0.8))
 
-                            Text("Start recording or writing your stories. They’ll appear here.")
+                            Text("Start recording or writing your stories. They'll appear here.")
                                 .font(.subheadline)
                                 .foregroundColor(.gray)
                                 .multilineTextAlignment(.center)
@@ -73,6 +73,7 @@ struct RecentMemoriesView: View {
                 }
                 .navigationTitle("Recent Memories")
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbarColorScheme(.dark, for: .navigationBar)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button { showSortOptions.toggle() } label: {

@@ -8,6 +8,7 @@
 
 import SwiftUI
 import CoreData
+import Mixpanel
 
 // MARK: - Custom Serif Font Fallback
 extension Font {
@@ -51,12 +52,16 @@ struct MemoirView: View {
                 .padding(.bottom, 100)
             }
             .background(colors.softCream.ignoresSafeArea())
-            .onAppear { fetchEntries() }
+            .onAppear {
+                fetchEntries()
+                // Track app launch
+                Mixpanel.mainInstance().track(event: "App Launched")
+            }
             // Keep the nav-bar soft-cream:
             .toolbarBackground(colors.softCream, for: .navigationBar)
             .toolbarBackground(.visible,       for: .navigationBar)
         }
-        // ★ HERE: force all nav-bar items (including “Back”) to tint in black
+        // ★ HERE: force all nav-bar items (including "Back") to tint in black
         .tint(.black)
     }
 
@@ -113,6 +118,14 @@ struct MemoirView: View {
                     .background(colors.terracotta)
                     .clipShape(Capsule())
             }
+            .onTapGesture {
+                // Track chapter opened from current chapter card
+                Mixpanel.mainInstance().track(event: "Opened Chapter", properties: [
+                    "chapter_number": chapter.number,
+                    "chapter_title": chapter.title,
+                    "source": "current_chapter"
+                ])
+            }
         }
         .padding()
         .background(colors.tileBackground)
@@ -147,6 +160,14 @@ struct MemoirView: View {
                         isCompleted: isDone,
                         colors: colors
                     )
+                }
+                .onTapGesture {
+                    // Track chapter opened from grid
+                    Mixpanel.mainInstance().track(event: "Opened Chapter", properties: [
+                        "chapter_number": chapter.number,
+                        "chapter_title": chapter.title,
+                        "source": "chapters_grid"
+                    ])
                 }
             }
         }
