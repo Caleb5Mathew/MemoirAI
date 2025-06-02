@@ -59,7 +59,7 @@ struct PromptReviewView: View {
                     }
                 }
                 .listStyle(PlainListStyle())
-                
+
                 Button(action: {
                     generateAndNavigate()
                 }) {
@@ -74,7 +74,7 @@ struct PromptReviewView: View {
                 .disabled(viewModel.isLoading)
                 .padding(.horizontal)
                 .padding(.bottom)
-                
+
                 // Hidden nav link to ImageGalleryView
                 NavigationLink(
                     destination: ImageGalleryView(images: viewModel.images),
@@ -82,14 +82,16 @@ struct PromptReviewView: View {
                 ) {
                     EmptyView()
                 }
+            }
         }
         .navigationTitle("Review Prompts")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // Initial setup if needed
+            // Optional: additional setup
         }
-    }
+    
 
+    }
     private func generateAndNavigate() {
         Task {
             await viewModel.generateAndRender(
@@ -108,11 +110,7 @@ struct PromptReviewView: View {
 
 // Assuming ImagePrompt structure for compilation
 /// After
-struct ImagePrompt: Identifiable, Codable {
-  let id = UUID()
-  let text: String
-  let referenceImageIDs: [String]
-}
+
 
 
 

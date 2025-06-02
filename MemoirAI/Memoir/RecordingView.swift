@@ -9,7 +9,7 @@ struct RecordingView: View {
     let prompt: MemoryPrompt
     let chapterTitle: String
     var namespace: Namespace.ID
-
+    @State private var isSaving = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var context
     @EnvironmentObject var profileVM: ProfileViewModel
@@ -142,9 +142,33 @@ struct RecordingView: View {
                     .frame(maxWidth: geo.size.width * 0.9)
                     .multilineTextAlignment(.center)
 
-                    Text("Or")
-                        .foregroundColor(.white)
-                        .font(.caption)
+                    // — replace your existing “Or” + button HStack with this —
+                    ZStack {
+                        // centered “Or”
+                        Text("Or")
+                            .font(.caption)
+                            .foregroundColor(.white)
+
+                        // trailing “Save Memory”
+                        HStack {
+                            Spacer()
+                            Button(action: {
+                                triggerHaptic(.impact(.heavy))
+                                if isRecording { stopRecording() }
+                                saveMemory()
+                            }) {
+                                Text("Save Memory")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, 16)
+                                    .background(terracotta)
+                                    .cornerRadius(12)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, geo.size.width * 0.05)
+                    .offset(y: -12)   // tweak this value to move it up/down
 
                     // Text entry
                     ZStack(alignment: .topLeading) {
@@ -442,60 +466,99 @@ struct RecordingView: View {
         selectedImagesData.removeAll()
         photoItems.removeAll()
     }
-
+    // MARK: – Save & Transcribe (background + disk photos)
+    // MARK: – Save & Transcribe (background + external-storage blobs)
     func saveMemory() {
-        let profileID = profileVM.selectedProfile.id
-        let newEntry = MemoryEntry(context: context)
-        newEntry.id = UUID()
-        newEntry.prompt = prompt.text
-        newEntry.text = typedText.isEmpty ? nil : typedText
-        newEntry.audioFileURL = audioURL?.absoluteString
-        newEntry.createdAt = Date()
-        newEntry.chapter = chapterTitle
-        newEntry.profileID = profileID
+        // 0️⃣ Don’t do anything if there’s nothing to save
+        guard hasUnsavedData() else { return }
+        isSaving = true       // you can overlay a ProgressView if desired
 
-        // Create Photo entities and add to the relationship
-        for imgData in selectedImagesData {
-            let photo = Photo(context: context)
-            photo.id = UUID()
-            photo.data = imgData
-            photo.memoryEntry = newEntry
-        }
+        // 1️⃣ Spin up a private background context so we never block the UI
+        let bgContext = PersistenceController.shared.container.newBackgroundContext()
+        bgContext.perform {
+            // 2️⃣ Create the MemoryEntry in the background
+            let entry = MemoryEntry(context: bgContext)
+            entry.id           = UUID()
+            entry.prompt       = prompt.text
+            entry.text         = typedText.isEmpty ? nil : typedText
+            entry.audioFileURL = audioURL?.absoluteString
+            entry.createdAt    = Date()
+            entry.chapter      = chapterTitle
+            entry.profileID    = profileVM.selectedProfile.id
 
-        do {
-            try context.save()
-            NotificationCenter.default.post(name: .memorySaved, object: nil)
+            // 3️⃣ Persist each selected image—Core Data will externalize large blobs
+            for data in selectedImagesData {
+                let photo = Photo(context: bgContext)
+                photo.id           = UUID()
+                photo.data         = data
+                photo.memoryEntry  = entry
+            }
 
-            // Kick off background transcription
-            if let urlString = newEntry.audioFileURL,
+            // 4️⃣ Save the background context
+            do {
+                try bgContext.save()
+            } catch {
+                print("❌ BG save failed:", error)
+            }
+
+            // 5️⃣ Immediately notify that a new memory was saved (even if no audio)
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .memorySaved, object: nil)
+            }
+
+            // 6️⃣ Kick off speech-to-text if we have an audio URL
+            if let urlString = entry.audioFileURL,
                let fileURL = URL(string: urlString) {
                 SFSpeechRecognizer.requestAuthorization { status in
                     guard status == .authorized else { return }
                     let request = SFSpeechURLRecognitionRequest(url: fileURL)
-                    SFSpeechRecognizer()?.recognitionTask(with: request) { result, error in
+                    SFSpeechRecognizer()?.recognitionTask(with: request) { result, _ in
                         if let r = result, r.isFinal {
-                            let transcription = r.bestTranscription.formattedString
-                            context.perform {
-                                newEntry.text = transcription
-                                try? context.save()
+                            let transcript = r.bestTranscription.formattedString
+                            bgContext.perform {
+                                entry.text = transcript
+                                try? bgContext.save()
+                                // 7️⃣ Post again once transcription finishes (optional)
+                                DispatchQueue.main.async {
+                                    NotificationCenter.default.post(name: .memorySaved, object: nil)
+                                }
                             }
                         }
                     }
                 }
             }
 
-            withAnimation { showSaveToast = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                withAnimation {
+            // 8️⃣ Back on the main thread: show toast, then dismiss
+            DispatchQueue.main.async {
+                isSaving = false
+                showSaveToast = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     showSaveToast = false
                     dismiss()
                 }
             }
-
-        } catch {
-            print("❌ Error saving Memory: \(error)")
         }
     }
+
+
+    // Helper – writes image data to disk, returns URL
+    func writeImageDataToDisk(data: Data) -> URL? {
+        let fileName = UUID().uuidString + ".jpg"
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory,
+                                           in: .userDomainMask)[0]
+            .appendingPathComponent("Photos", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir,
+                                                 withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(fileName)
+        do {
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            print("❌ Could not write image: \(error)")
+            return nil
+        }
+    }
+
 
     // MARK: - Unsaved Data Check & Cleanup
     func hasUnsavedData() -> Bool {

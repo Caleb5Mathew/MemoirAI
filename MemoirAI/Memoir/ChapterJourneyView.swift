@@ -1,6 +1,6 @@
 // ChapterJourneyView.swift
 // MemoirAI
-
+import AVFoundation
 import SwiftUI
 import CoreData
 
@@ -46,19 +46,27 @@ struct ChapterJourneyView: View {
                 titleBarView(geo: geo)
                 backButtonView
                 floatingQuoteView
-                hiddenNavigationLink
+                playerOverlay
             }
-            .navigationBarBackButtonHidden(true)
+//            .navigationBarBackButtonHidden(true)
             .fullScreenCover(item: $selectedPrompt) { prompt in
-                RecordingView(prompt: prompt, chapterTitle: chapter.title, namespace: zoomNamespace)
-                    .environmentObject(profileVM)
-                    .id(prompt.id)
-                    .onDisappear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            refreshID = UUID()
-                        }
+                RecordingView(
+                    prompt:        prompt,
+                    chapterTitle:  chapter.title,
+                    namespace:     zoomNamespace
+                )
+                .environmentObject(profileVM)                                    // existing line
+                .environment(\.managedObjectContext,                             // 👈 the new line
+                             PersistenceController.shared.container.viewContext)
+                .id(prompt.id)
+                .onDisappear {
+                    // force ChapterJourneyView to refresh
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        refreshID = UUID()
                     }
+                }
             }
+
         }
         .id(refreshID)
     }
@@ -114,9 +122,11 @@ struct ChapterJourneyView: View {
             .padding(.horizontal, 24)
         }
         .padding(.top, 50)
-        .offset(x: -geo.size.width * 0.085)
+        // Remove the fixed offset so it stays centered
+         .offset(x: -geo.size.width * 0.140)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
+
     
     private var backButtonView: some View {
         Button {
@@ -152,32 +162,18 @@ struct ChapterJourneyView: View {
         }
     }
     
-    private var hiddenNavigationLink: some View {
-        NavigationLink(
-            destination: Group {
-                if let entry = selectedEntry {
-                    MemoryDetailView(memory: entry)
-                        .environmentObject(profileVM)
-                        .onDisappear {
-                            selectedEntry = nil
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                refreshID = UUID()
-                            }
-                        }
-                } else {
-                    EmptyView()
-                }
-            },
-            isActive: Binding(
-                get: { selectedEntry != nil },
-                set: { newValue in
-                    if !newValue { selectedEntry = nil }
-                }
-            ),
-            label: { EmptyView() }
-        )
-        .hidden()
+    // MARK: – Simple dark overlay that auto-plays the memory and can be closed
+    @ViewBuilder
+    private var playerOverlay: some View {
+        if let entry = selectedEntry {
+            MemoryPlayerOverlay(entry: entry) {            // ✱ callback to clear selection
+                selectedEntry = nil
+            }
+            .transition(.opacity)                          // nice fade-in/out
+            .zIndex(10)                                    // float above everything
+        }
     }
+
     
     // MARK: - Helper Methods
     
@@ -198,4 +194,54 @@ struct ChapterJourneyView: View {
             }
         }
     }
-} 
+}
+struct MemoryPlayerOverlay: View {
+    let entry: MemoryEntry
+    let onClose: () -> Void
+
+    @State private var player: AVAudioPlayer?
+
+    var body: some View {
+        ZStack {
+            // 1️⃣ Dim background
+            Color.black.opacity(0.55)
+                .ignoresSafeArea()
+
+            // 2️⃣ Centered VStack with text + close button
+            VStack(spacing: 24) {
+                Text("Playing memory…")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(.white)
+
+                Button {
+                    player?.stop()
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(12)
+                        .background(Color.black.opacity(0.8))
+                        .clipShape(Circle())
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .offset(x: -40)   // ◀️ nudge left or right as needed
+        }
+        .onAppear(perform: startPlayback)
+    }
+
+    private func startPlayback() {
+        guard
+            let urlString = entry.audioFileURL,
+            let url = URL(string: urlString)
+        else { return }
+
+        do {
+            player = try AVAudioPlayer(contentsOf: url)
+            player?.play()
+        } catch {
+            print("⚠️ Could not play audio:", error)
+        }
+    }
+}

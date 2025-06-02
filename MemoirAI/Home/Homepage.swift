@@ -145,7 +145,9 @@ struct HomepageView: View {
                         }
 
                         // YOUR BOOK
-                        NavigationLink(destination: StoryPage()) {
+                        NavigationLink(destination: StoryPage()
+                            .environmentObject(profileVM) // ← Injecting ProfileViewModel here
+                        ) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Your Book")
@@ -195,7 +197,7 @@ struct HomepageView: View {
                     // profileVM.addProfile(...) as needed
                 }
             }
-            .navigationBarHidden(true)
+//            .navigationBarHidden(true)
             .statusBarHidden(true)
         }
     }

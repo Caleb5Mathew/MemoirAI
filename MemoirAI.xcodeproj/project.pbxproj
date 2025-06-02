@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		845BE2C12DED4D1800ECD629 /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = 845BE2C02DED4D1800ECD629 /* Mixpanel */; };
 		84B2696B2DD8D7080031EACD /* ReceiptParser in Frameworks */ = {isa = PBXBuildFile; productRef = 84B2696A2DD8D7080031EACD /* ReceiptParser */; };
 		84B2696D2DD8D7080031EACD /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 84B2696C2DD8D7080031EACD /* RevenueCat */; };
 		84B2696F2DD8D7080031EACD /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = 84B2696E2DD8D7080031EACD /* RevenueCatUI */; };
@@ -40,16 +41,28 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				"Story/String+Pagnation.swift",
 			);
 			target = 844EFABC2DA3416E00620E37 /* MemoirAI */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		845471B32DE9F36F00435321 /* Exceptions for "MemoirAI" folder in "Copy Bundle Resources" phase from "MemoirAI" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = 844EFABB2DA3416E00620E37 /* Resources */;
+			membershipExceptions = (
+				"Story/String+Pagnation.swift",
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		844EFABF2DA3416E00620E37 /* MemoirAI */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				84A6BBD82DC7F227002E7430 /* Exceptions for "MemoirAI" folder in "MemoirAI" target */,
+				845471B32DE9F36F00435321 /* Exceptions for "MemoirAI" folder in "Copy Bundle Resources" phase from "MemoirAI" target */,
 			);
 			path = MemoirAI;
 			sourceTree = "<group>";
@@ -73,6 +86,7 @@
 			files = (
 				84B2696D2DD8D7080031EACD /* RevenueCat in Frameworks */,
 				84B2696B2DD8D7080031EACD /* ReceiptParser in Frameworks */,
+				845BE2C12DED4D1800ECD629 /* Mixpanel in Frameworks */,
 				84B2696F2DD8D7080031EACD /* RevenueCatUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -137,6 +151,7 @@
 				84B2696A2DD8D7080031EACD /* ReceiptParser */,
 				84B2696C2DD8D7080031EACD /* RevenueCat */,
 				84B2696E2DD8D7080031EACD /* RevenueCatUI */,
+				845BE2C02DED4D1800ECD629 /* Mixpanel */,
 			);
 			productName = MemoirAI;
 			productReference = 844EFABD2DA3416E00620E37 /* MemoirAI.app */;
@@ -222,6 +237,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */,
+				845BE2BF2DED4D1800ECD629 /* XCRemoteSwiftPackageReference "mixpanel-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 844EFABE2DA3416E00620E37 /* Products */;
@@ -623,6 +639,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		845BE2BF2DED4D1800ECD629 /* XCRemoteSwiftPackageReference "mixpanel-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mixpanel/mixpanel-swift";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
 		84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/RevenueCat/purchases-ios";
@@ -634,6 +658,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		845BE2C02DED4D1800ECD629 /* Mixpanel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 845BE2BF2DED4D1800ECD629 /* XCRemoteSwiftPackageReference "mixpanel-swift" */;
+			productName = Mixpanel;
+		};
 		84B2696A2DD8D7080031EACD /* ReceiptParser */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */;

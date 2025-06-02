@@ -5,30 +5,35 @@
 //  Created by user941803 on 4/6/25.
 //
 
-
-
 import SwiftUI
 import RevenueCat
+import Mixpanel
 
 @main
 struct MemoirAIApp: App {
   init() {
-    // RevenueCat configuration
-    // TODO: Add your RevenueCat API key to Info.plist with key "REVENUECAT_API_KEY"
-    if let apiKey = Bundle.main.object(forInfoDictionaryKey: "REVENUECAT_API_KEY") as? String,
+    // RevenueCat configuration …
+    if let apiKey = Bundle.main.object(forInfoDictionaryKey: "") as? String,
        !apiKey.isEmpty,
        !apiKey.contains("YOUR_API") {
-        Purchases.configure(withAPIKey: apiKey)
+      Purchases.configure(withAPIKey: apiKey)
     } else {
-        print("⚠️ RevenueCat not configured - using development mode")
-        // For development/testing without RevenueCat
+      print("⚠️ RevenueCat not configured ‒ using development mode")
     }
+
+    // Mixpanel configuration
+      Mixpanel.initialize(token: "6437139af64d0541c2a8a8e5157ae72f", trackAutomaticEvents: true)
   }
 
   var body: some Scene {
     WindowGroup {
       ContentView()
         .environmentObject(RCSubscriptionManager.shared)
+        // ← Here is the crucial line:
+        .environment(
+          \.managedObjectContext,
+          PersistenceController.shared.container.viewContext
+        )
     }
   }
 }
