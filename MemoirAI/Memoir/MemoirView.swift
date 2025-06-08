@@ -8,7 +8,8 @@
 
 import SwiftUI
 import CoreData
-import Mixpanel
+import RevenueCat
+import RevenueCatUI
 
 // MARK: - Custom Serif Font Fallback
 extension Font {
@@ -36,8 +37,10 @@ struct ColorTheme {
 struct MemoirView: View {
     let colors = ColorTheme()
     @EnvironmentObject var profileVM: ProfileViewModel
-
+    @StateObject private var subscriptionManager = RCSubscriptionManager.shared
+    @State private var showPaywall = false
     @State private var entries: [MemoryEntry] = []
+    @State private var navigateToChapter: Int? = nil
     private let totalChapters = allChapters.count
 
     var body: some View {
@@ -54,15 +57,19 @@ struct MemoirView: View {
             .background(colors.softCream.ignoresSafeArea())
             .onAppear {
                 fetchEntries()
-                // Track app launch
-                Mixpanel.mainInstance().track(event: "App Launched")
             }
-            // Keep the nav-bar soft-cream:
             .toolbarBackground(colors.softCream, for: .navigationBar)
-            .toolbarBackground(.visible,       for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .navigationDestination(item: $navigateToChapter) { chapterNumber in
+                ChapterJourneyView(chapter: getMockChapter(chapterNumber))
+                    .environmentObject(profileVM)
+                    .navigationBarHidden(true)
+            }
         }
-        // ★ HERE: force all nav-bar items (including "Back") to tint in black
         .tint(.black)
+        .fullScreenCover(isPresented: $showPaywall) {
+            PaywallView(displayCloseButton: true)
+        }
     }
 
     // MARK: — UI sections
@@ -104,12 +111,13 @@ struct MemoirView: View {
                 }
             }
 
-            // When pushing ChapterJourneyView, hide its system bar:
-            NavigationLink {
-                ChapterJourneyView(chapter: getMockChapter(chapter.number))
-                    .environmentObject(profileVM)
-                    .navigationBarHidden(true)
-            } label: {
+            Button(action: {
+                if chapter.number == 1 || isSubscribed {
+                    navigateToChapter = chapter.number
+                } else {
+                    showPaywall = true
+                }
+            }) {
                 Text("Continue Chapter")
                     .foregroundColor(.white)
                     .font(.system(size: 16, weight: .semibold))
@@ -117,14 +125,6 @@ struct MemoirView: View {
                     .frame(maxWidth: .infinity)
                     .background(colors.terracotta)
                     .clipShape(Capsule())
-            }
-            .onTapGesture {
-                // Track chapter opened from current chapter card
-                Mixpanel.mainInstance().track(event: "Opened Chapter", properties: [
-                    "chapter_number": chapter.number,
-                    "chapter_title": chapter.title,
-                    "source": "current_chapter"
-                ])
             }
         }
         .padding()
@@ -144,30 +144,28 @@ struct MemoirView: View {
 
     private var chaptersGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-            ForEach(allChapters, id: \.number) { chapter in
-                let isDone = entriesForChapter(chapter).count >= chapter.prompts.count
+            ForEach(1...10, id: \.self) { chapterNumber in
+                if let chapter = allChapters.first(where: { $0.number == chapterNumber }) {
+                    let isDone = entriesForChapter(chapter).count >= chapter.prompts.count
+                    let isLocked = chapterNumber > 1 && !isSubscribed
 
-                NavigationLink {
-                    ChapterJourneyView(chapter: getMockChapter(chapter.number))
-                        .environmentObject(profileVM)
-                        .navigationBarHidden(true)
-                } label: {
-                    ChapterTileView(
-                        chapterNumber: chapter.number,
-                        title: chapter.title,
-                        isLocked: false,
-                        isCurrent: false,
-                        isCompleted: isDone,
-                        colors: colors
-                    )
-                }
-                .onTapGesture {
-                    // Track chapter opened from grid
-                    Mixpanel.mainInstance().track(event: "Opened Chapter", properties: [
-                        "chapter_number": chapter.number,
-                        "chapter_title": chapter.title,
-                        "source": "chapters_grid"
-                    ])
+                    Button(action: {
+                        if chapterNumber == 1 || isSubscribed {
+                            navigateToChapter = chapterNumber
+                        } else {
+                            showPaywall = true
+                        }
+                    }) {
+                        ChapterTileView(
+                            chapterNumber: chapterNumber,
+                            title: chapter.title,
+                            isLocked: isLocked,
+                            isCurrent: false,
+                            isCompleted: isDone,
+                            colors: colors
+                        )
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
             }
         }
@@ -207,6 +205,11 @@ struct MemoirView: View {
         }
         return .init(number: base.number, title: base.title, prompts: prompts)
     }
+
+    // Check if user has subscription
+    private var isSubscribed: Bool {
+        subscriptionManager.activeTier != nil
+    }
 }
 
 // MARK: — ChapterTileView (unchanged)
@@ -240,4 +243,9 @@ struct ChapterTileView: View {
         .cornerRadius(20)
         .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 2)
     }
+}
+
+// Make Int conform to Identifiable for navigation
+extension Int: Identifiable {
+    public var id: Int { self }
 }

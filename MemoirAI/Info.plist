@@ -42,7 +42,7 @@
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>We need to transcribe your audio recordings into text for you to read later.</string>
 	<key>OPENAI_API_KEY</key>
-	<string></string>
+	<string>key</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -65,6 +65,8 @@
 	</dict>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
+	<key>RevenueCatAPIKey</key>
+	<string>appl_HTtNKyhVPddJOKrcqGCnWtvZcto</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

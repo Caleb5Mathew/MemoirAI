@@ -1,4 +1,4 @@
-//
+///
 //  MemoirAIApp.swift
 //  MemoirAI
 //
@@ -12,13 +12,14 @@ import Mixpanel
 @main
 struct MemoirAIApp: App {
   init() {
-    // RevenueCat configuration …
-    if let apiKey = Bundle.main.object(forInfoDictionaryKey: "") as? String,
-       !apiKey.isEmpty,
-       !apiKey.contains("YOUR_API") {
+    // RevenueCat configuration from Info.plist
+    if let apiKey = Bundle.main.object(forInfoDictionaryKey: "RevenueCatAPIKey") as? String,
+       !apiKey.isEmpty {
       Purchases.configure(withAPIKey: apiKey)
+      Purchases.logLevel = .debug
+      print("✅ RevenueCat configured successfully")
     } else {
-      print("⚠️ RevenueCat not configured ‒ using development mode")
+      print("⚠️ RevenueCat not configured - API key not found in Info.plist")
     }
 
     // Mixpanel configuration
