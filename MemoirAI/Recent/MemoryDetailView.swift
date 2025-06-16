@@ -41,12 +41,15 @@ struct MemoryDetailView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
 
+                // --- CORRECTED CONTENT BLOCK ---
                 VStack(spacing: 20) {
                     if let date = memory.createdAt {
                         Text(dateFormatted(date))
                             .font(.custom("Georgia-Bold", size: 22))
                             .foregroundColor(.black)
                     }
+
+                    // 1. Display the audio player if an audio file exists.
                     if let urlString = memory.audioFileURL,
                        let url = URL(string: urlString) {
                         Button(action: { togglePlayback(url: url) }) {
@@ -59,16 +62,20 @@ struct MemoryDetailView: View {
                             .font(.custom("Georgia", size: 16))
                             .foregroundColor(.black)
                         Divider()
-                        if let saved = memory.text, !saved.isEmpty {
-                            Text(saved)
-                                .font(.custom("Georgia", size: 18))
-                                .multilineTextAlignment(.leading)
-                                .foregroundColor(.black)
-                                .lineSpacing(4)
-                                .padding(.vertical, 8)
-                        }
+                    }
+                    
+                    // 2. Display the saved text if it exists.
+                    if let saved = memory.text, !saved.isEmpty {
+                        Text(saved)
+                            .font(.custom("Georgia", size: 18))
+                            .multilineTextAlignment(.leading)
+                            .foregroundColor(.black)
+                            .lineSpacing(4)
+                            .padding(.vertical, 8)
                         Divider()
                     }
+
+                    // 3. Display the text editor if in editing mode.
                     if isEditing {
                         TextEditor(text: $draftText)
                             .font(.custom("Georgia", size: 18))
@@ -86,6 +93,7 @@ struct MemoryDetailView: View {
                 .cornerRadius(32)
                 .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 4)
                 .padding(.horizontal, 24)
+                // --- END CORRECTED CONTENT BLOCK ---
 
                 // Family Sharing Section
                 if familyManager.currentFamily != nil {
@@ -162,7 +170,6 @@ struct MemoryDetailView: View {
                 }
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                // Family share button (only show if user has a family)
                 if familyManager.currentFamily != nil {
                     Button(action: shareWithFamily) {
                         Image(systemName: "person.3.fill")
@@ -176,7 +183,6 @@ struct MemoryDetailView: View {
                 
                 Button(action: {
                     if isEditing {
-                        // User just tapped "Done" — write back and save
                         memory.text = draftText
                         do {
                             try context.save()
@@ -184,7 +190,6 @@ struct MemoryDetailView: View {
                             print("Failed to save edited text:", error)
                         }
                     } else {
-                        // User just tapped "Edit" — seed the editor
                         draftText = memory.text ?? ""
                     }
                     isEditing.toggle()
@@ -199,7 +204,6 @@ struct MemoryDetailView: View {
             Text("Your memory has been shared with \(familyManager.currentFamily?.name ?? "your family"). They can now see and react to it!")
         }
         .onAppear {
-            // Track memory viewed
             Mixpanel.mainInstance().track(event: "Viewed Memory", properties: [
                 "chapter_title": memory.chapter ?? "",
                 "prompt_text": memory.prompt ?? "",
@@ -245,7 +249,6 @@ struct MemoryDetailView: View {
                 }
             }
             
-            // Show family member avatars
             if !familyManager.familyMembers.isEmpty {
                 HStack {
                     Text("Family members:")
@@ -286,20 +289,17 @@ struct MemoryDetailView: View {
     private func shareWithFamily() {
         guard let familyId = familyManager.currentFamily?.id else { return }
         
-        // Check if already shared
         let alreadyShared = familyManager.sharedStories.contains { story in
             story.memoryEntryId == memory.id && story.familyGroupId == familyId
         }
         
         if alreadyShared {
-            // Could show "Already shared" message
             return
         }
         
         familyManager.shareStory(memory, with: familyId)
         showFamilyShareSuccess = true
         
-        // Add haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
         impactFeedback.impactOccurred()
     }

@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.3</string>
+	<string>1.5</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -42,8 +42,7 @@
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>We need to transcribe your audio recordings into text for you to read later.</string>
 	<key>OPENAI_API_KEY</key>
-	<string>key</string>
-	<key>UIApplicationSceneManifest</key>
+	<string></key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<true/>

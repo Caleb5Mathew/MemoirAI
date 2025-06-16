@@ -155,6 +155,7 @@ extension Font {
 }
 
 struct StoryPage: View {
+    @State private var userGender: String = ""
     @State private var headshotImage: UIImage?            // stores the picked headshot
     @State private var grandparentName: String = ""       // stores the typed-in name
     @State private var showProfileSetup: Bool = false     // toggles the sheet
@@ -163,8 +164,9 @@ struct StoryPage: View {
     
     @State private var headshotPickerItem: PhotosPickerItem?
     
+    @State private var gender: String = ""
     @EnvironmentObject var profileVM: ProfileViewModel // Ensure this is passed in
-    
+    @State private var userRace: String = "" // <-- ADD THIS LINE
     // Access the shared instance of RCSubscriptionManager
     @StateObject private var subscriptionManager = RCSubscriptionManager.shared
     
@@ -378,8 +380,13 @@ struct StoryPage: View {
                 print("StoryPage: Usage limit hit/no plan. Tier: \(subscriptionManager.activeTier?.displayName ?? "None"), Rem: \(subscriptionManager.remainingAllowance), Req: \(pagesToAttempt)")
                 vm.isLoading = false
                 hasRequestedGeneration = false
-                showSubscriptionSheet = true
+
+                Task {
+                    await subscriptionManager.loadOfferings()
+                    showSubscriptionSheet = true
+                }
             }
+
         }
         
         private func startActualGenerationProcess(pagesExpected: Int) {
@@ -515,17 +522,22 @@ struct StoryPage: View {
                     .environmentObject(profileVM)
                     .environmentObject(subscriptionManager)
             }
-            .sheet(isPresented: $showSubscriptionSheet) {
+            .sheet(isPresented: Binding(
+                get: { showSubscriptionSheet && subscriptionManager.offerings?.current != nil },
+                set: { showSubscriptionSheet = $0 }
+            )) {
                 PaywallViewRepresentable()
                     .environmentObject(subscriptionManager)
-                    .onAppear { Task { await subscriptionManager.loadOfferings() } }
             }
+
             .sheet(isPresented: $showProfileSetup, onDismiss: {
                 generateStorybookWithPaywallCheck()
             }) {
                 ProfileSetupView(
                     headshotImage: $headshotImage,
                     name: $grandparentName,
+                    race: $userRace, // <-- ADD THIS LINE TO FIX THE ERROR
+                    gender: $userGender, // <--- ADD THIS LINE
                     onGenerate: { }                // ← added; does nothing for now
                 )
                 .environmentObject(profileVM)
@@ -750,6 +762,13 @@ struct IllustrationPage: View {
     }
 }
 
+
+
+
+// Updated SwiftUI Views for a more book-like presentation
+
+// Updated SwiftUI Views for a more distinct, book-like presentation
+
 struct TextPageView: View {
     let index: Int
     let total: Int
@@ -757,9 +776,19 @@ struct TextPageView: View {
     let frameWidth: CGFloat
     let frameHeight: CGFloat
 
+    // We'll use the memory's "Untitled Prompt" as a chapter title.
+    private var memoryTitle: String {
+        // A real implementation might pass the actual title in.
+        // For now, we'll hardcode this for the design.
+        return "A Memory"
+    }
+    
+    // Define a specific font size that scales with the view height.
+    private var bodyFontSize: CGFloat { frameHeight * 0.038 }
+
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            // ▪︎ Background “page” styling (paper + border)
+        ZStack(alignment: .bottom) {
+            // ▪︎ Background “page” styling
             RoundedRectangle(cornerRadius: 10)
                 .fill(StoryPageLocalColors().softCream.opacity(0.92))
                 .overlay(
@@ -769,68 +798,81 @@ struct TextPageView: View {
 
             // ▪︎ Scrollable text content
             ScrollView {
-                Text(text)
-                    // ↓ “Light serif” at ~1/3 the previous size:
-                    .font(.system(
-                        size: frameHeight * 0.045,
-                        weight: .light,
-                        design: .serif
-                    ))
-                    .lineSpacing(2)
-                    .multilineTextAlignment(.leading)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 16)
-                    .padding(.bottom, 40)
+                VStack(alignment: .leading, spacing: 20) {
+                    // 1. A "Chapter Title" for the memory
+                    Text(memoryTitle)
+                        .font(.custom("NewYork-Medium", size: bodyFontSize * 1.5))
+                        .foregroundColor(StoryPageLocalColors().terracotta)
+                        .padding(.bottom, 10)
+                        .frame(maxWidth: .infinity, alignment: .center)
+
+                    // 2. The body text with the new font
+                    Text(text)
+                        .font(.custom("NewYork-Regular", size: bodyFontSize))
+                        .lineSpacing(5)
+                        .multilineTextAlignment(.leading)
+                }
+                .padding(.horizontal, frameWidth * 0.1) // Generous margins
+                .padding(.vertical, frameHeight * 0.08)
             }
             
-            // ▪︎ Page index in top‐left corner
-            Text("\(index)/\(total)")
-                .font(.system(size: 12, weight: .regular, design: .serif))
-                .foregroundColor(StoryPageLocalColors().defaultGray)
-                .padding(8)
+            // ▪︎ Page number at the bottom center
+            Text("\(index)")
+                .font(.custom("NewYork-Regular", size: 12))
+                .foregroundColor(StoryPageLocalColors().defaultGray.opacity(0.8))
+                .padding(.bottom, 12)
         }
         .frame(width: frameWidth, height: frameHeight)
     }
 }
+
 struct QRCodePage: View {
     let url: URL
-    let frameWidth:  CGFloat
+    let frameWidth: CGFloat
     let frameHeight: CGFloat
-
+    
     private let colors = StoryPageLocalColors()
-
+    private var qrSide: CGFloat { min(frameWidth, frameHeight) * 0.35 }
+    
     var body: some View {
-        VStack(spacing: 12) {
-            // ▪︎ Title at top:
-            Text("Hear or see your memory here")
-                .font(.system(size: 16, weight: .semibold, design: .serif))
-                .foregroundColor(colors.terracotta)
-                .multilineTextAlignment(.center)
-                .padding(.top, 8)
-
-            // ▪︎ QR code in the middle; 40% of frameWidth
-            Image(uiImage: .qrCode(
-                from: url.absoluteString,
-                size: frameWidth * 0.4
-            ))
-            .interpolation(.none)
-            .resizable()
-            .scaledToFit()
-            .frame(width: frameWidth * 0.4, height: frameWidth * 0.4)
-            .shadow(radius: 4)
-            .padding(.vertical, 8)
-
-            // ▪︎ URL text at bottom:
-//            Text(url.absoluteString)
-//                .font(.caption2)
-//                .foregroundColor(colors.defaultGray)
-//                .lineLimit(1)
-//                .truncationMode(.middle)
-//                .padding(.bottom, 8)
+        ZStack {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(colors.softCream.opacity(0.92))
+            
+            VStack(spacing: 25) {
+                // A classic book-style ornament instead of an icon
+                Text("· ⏅ ·")
+                    .font(.custom("NewYork-Regular", size: 20))
+                    .foregroundColor(colors.terracotta)
+                
+                // The QR Code, framed
+                Image(uiImage: .qrCode(from: url.absoluteString, size: qrSide))
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: qrSide, height: qrSide)
+                    .padding(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(colors.defaultGray.opacity(0.3), lineWidth: 1)
+                    )
+                
+                // A refined call to action
+                VStack {
+                    Text("Revisit This Memory")
+                        .font(.custom("NewYork-Medium", size: 17))
+                        .foregroundColor(colors.defaultGray)
+                    
+                    Text("Scan with your camera to open this memory in the MemoirAI app.")
+                        .font(.custom("NewYork-Regular", size: 13))
+                        .italic()
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(colors.defaultGray.opacity(0.8))
+                        .padding(.top, 2)
+                }
+                .padding(.horizontal, 40)
+            }
         }
         .frame(width: frameWidth, height: frameHeight)
-        .background(colors.softCream.opacity(0.92))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
                 .stroke(colors.bookFrameStroke, lineWidth: 0.8)

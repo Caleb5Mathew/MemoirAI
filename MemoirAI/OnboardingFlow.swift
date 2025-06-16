@@ -1,7 +1,13 @@
 import SwiftUI
 import PhotosUI
+import SwiftUI
+import PhotosUI
+import RevenueCat
+import RevenueCatUI
 
-// MARK: - Color Theme (matching app)
+// ... inside the OnboardingFlow struct
+
+
 struct OnboardingColorTheme {
     let softCream = Color(red: 253/255, green: 234/255, blue: 198/255)
     let terracotta = Color(red: 210/255, green: 112/255, blue: 45/255)
@@ -12,6 +18,7 @@ struct OnboardingColorTheme {
 }
 
 struct OnboardingFlow: View {
+    @State private var showPaywall = false// MARK: - Color Theme (matching app)
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @Environment(\.dismiss) private var dismiss
     @StateObject private var notificationManager = NotificationManager.shared
@@ -57,6 +64,18 @@ struct OnboardingFlow: View {
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
                 .animation(.easeInOut(duration: 0.5), value: currentScreen)
+            }
+        }
+        .fullScreenCover(isPresented: $showPaywall) {
+            GeometryReader { geo in        // ← add this wrapper
+                PaywallView(displayCloseButton: true)
+                    .frame(maxWidth: .infinity) // <<< ADD THIS LINE
+                    .ignoresSafeArea()          // <<< ADD THIS LINE
+                    .onDisappear {
+                        // This now runs after the paywall closes
+                        hasCompletedOnboarding = true
+                        dismiss()
+                    }
             }
         }
         .onAppear {
@@ -505,6 +524,7 @@ struct OnboardingFlow: View {
                 title: "Start My Memoir",
                 action: {
                     completeOnboarding()
+                    showPaywall = true
                 }
             )
         }
@@ -669,11 +689,11 @@ struct OnboardingFlow: View {
         notificationManager.scheduleDailyPrompt()
         notificationManager.scheduleWeeklyReminder()
         
-        // Mark onboarding as completed
-        hasCompletedOnboarding = true
-        
-        // Dismiss onboarding
-        dismiss()
+//        // Mark onboarding as completed
+//        hasCompletedOnboarding = true
+//        
+//        // Dismiss onboarding
+//        dismiss()
     }
 }
 

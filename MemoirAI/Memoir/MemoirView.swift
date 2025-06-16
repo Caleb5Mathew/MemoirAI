@@ -68,7 +68,12 @@ struct MemoirView: View {
         }
         .tint(.black)
         .fullScreenCover(isPresented: $showPaywall) {
-            PaywallView(displayCloseButton: true)
+            GeometryReader { geo in        // ← add this wrapper
+                PaywallView(displayCloseButton: true)
+                    .frame(maxWidth: .infinity) // <<< ADD THIS
+                    .ignoresSafeArea()          // <<< ADD THIS
+                    .edgesIgnoringSafeArea(.all)   // ✨ kills the double inset
+            }
         }
     }
 
