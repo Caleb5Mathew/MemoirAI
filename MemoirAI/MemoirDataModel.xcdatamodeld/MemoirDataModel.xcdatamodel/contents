@@ -3,6 +3,7 @@
     <entity name="MemoryEntry" representedClassName="MemoryEntry" syncable="YES" codeGenerationType="class">
         <attribute name="audioFileURL" optional="YES" attributeType="String"/>
         <attribute name="chapter" optional="YES" attributeType="String"/>
+        <attribute name="characterDetails" optional="YES" attributeType="String"/>
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="profileID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>

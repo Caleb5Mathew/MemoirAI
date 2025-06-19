@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		84063F072E00E29200218E1F /* FacebookAEM in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F062E00E29200218E1F /* FacebookAEM */; };
+		84063F092E00E29200218E1F /* FacebookBasics in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F082E00E29200218E1F /* FacebookBasics */; };
+		84063F0B2E00E29200218E1F /* FacebookCore in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F0A2E00E29200218E1F /* FacebookCore */; };
+		84063F0D2E00E29200218E1F /* FacebookGamingServices in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F0C2E00E29200218E1F /* FacebookGamingServices */; };
+		84063F0F2E00E29200218E1F /* FacebookLogin in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F0E2E00E29200218E1F /* FacebookLogin */; };
+		84063F112E00E29200218E1F /* FacebookShare in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F102E00E29200218E1F /* FacebookShare */; };
 		845BE2C12DED4D1800ECD629 /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = 845BE2C02DED4D1800ECD629 /* Mixpanel */; };
 		84B2696B2DD8D7080031EACD /* ReceiptParser in Frameworks */ = {isa = PBXBuildFile; productRef = 84B2696A2DD8D7080031EACD /* ReceiptParser */; };
 		84B2696D2DD8D7080031EACD /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 84B2696C2DD8D7080031EACD /* RevenueCat */; };
@@ -85,9 +91,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				84B2696D2DD8D7080031EACD /* RevenueCat in Frameworks */,
+				84063F072E00E29200218E1F /* FacebookAEM in Frameworks */,
+				84063F0B2E00E29200218E1F /* FacebookCore in Frameworks */,
 				84B2696B2DD8D7080031EACD /* ReceiptParser in Frameworks */,
+				84063F092E00E29200218E1F /* FacebookBasics in Frameworks */,
+				84063F0F2E00E29200218E1F /* FacebookLogin in Frameworks */,
 				845BE2C12DED4D1800ECD629 /* Mixpanel in Frameworks */,
 				84B2696F2DD8D7080031EACD /* RevenueCatUI in Frameworks */,
+				84063F112E00E29200218E1F /* FacebookShare in Frameworks */,
+				84063F0D2E00E29200218E1F /* FacebookGamingServices in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -152,6 +164,12 @@
 				84B2696C2DD8D7080031EACD /* RevenueCat */,
 				84B2696E2DD8D7080031EACD /* RevenueCatUI */,
 				845BE2C02DED4D1800ECD629 /* Mixpanel */,
+				84063F062E00E29200218E1F /* FacebookAEM */,
+				84063F082E00E29200218E1F /* FacebookBasics */,
+				84063F0A2E00E29200218E1F /* FacebookCore */,
+				84063F0C2E00E29200218E1F /* FacebookGamingServices */,
+				84063F0E2E00E29200218E1F /* FacebookLogin */,
+				84063F102E00E29200218E1F /* FacebookShare */,
 			);
 			productName = MemoirAI;
 			productReference = 844EFABD2DA3416E00620E37 /* MemoirAI.app */;
@@ -238,6 +256,7 @@
 			packageReferences = (
 				84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */,
 				845BE2BF2DED4D1800ECD629 /* XCRemoteSwiftPackageReference "mixpanel-swift" */,
+				84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 844EFABE2DA3416E00620E37 /* Products */;
@@ -639,6 +658,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/facebook/facebook-ios-sdk.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 14.1.0;
+			};
+		};
 		845BE2BF2DED4D1800ECD629 /* XCRemoteSwiftPackageReference "mixpanel-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/mixpanel/mixpanel-swift";
@@ -658,6 +685,36 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		84063F062E00E29200218E1F /* FacebookAEM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */;
+			productName = FacebookAEM;
+		};
+		84063F082E00E29200218E1F /* FacebookBasics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */;
+			productName = FacebookBasics;
+		};
+		84063F0A2E00E29200218E1F /* FacebookCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */;
+			productName = FacebookCore;
+		};
+		84063F0C2E00E29200218E1F /* FacebookGamingServices */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */;
+			productName = FacebookGamingServices;
+		};
+		84063F0E2E00E29200218E1F /* FacebookLogin */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */;
+			productName = FacebookLogin;
+		};
+		84063F102E00E29200218E1F /* FacebookShare */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */;
+			productName = FacebookShare;
+		};
 		845BE2C02DED4D1800ECD629 /* Mixpanel */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 845BE2BF2DED4D1800ECD629 /* XCRemoteSwiftPackageReference "mixpanel-swift" */;

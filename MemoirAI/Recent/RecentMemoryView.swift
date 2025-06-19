@@ -123,6 +123,7 @@ struct RecentMemoriesView: View {
 // MARK: - MemoryCard Preview
 struct MemoryCard: View {
     let entry: MemoryEntry
+    @State private var showCharacterDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -133,12 +134,48 @@ struct MemoryCard: View {
 
                 Spacer()
 
-                if entry.audioFileURL != nil {
-                    Image(systemName: "waveform.circle.fill")
-                        .foregroundColor(.orange)
-                } else if let text = entry.text, !text.isEmpty {
-                    Image(systemName: "text.alignleft")
-                        .foregroundColor(.blue)
+                HStack(spacing: 6) {
+                    // Show character details status
+                    if entry.isIncomplete {
+                        Button(action: { showCharacterDetails = true }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "person.crop.circle.badge.plus")
+                                    .font(.caption)
+                                Text("Enhance")
+                                    .font(.caption2)
+                            }
+                            .foregroundColor(.orange)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.1))
+                            .cornerRadius(8)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    } else if let details = entry.parsedCharacterDetails, !details.characters.isEmpty {
+                        Button(action: { showCharacterDetails = true }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.caption)
+                                Text("Enhanced")
+                                    .font(.caption2)
+                            }
+                            .foregroundColor(.green)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.1))
+                            .cornerRadius(8)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                    
+                    // Media type indicators
+                    if entry.audioFileURL != nil {
+                        Image(systemName: "waveform.circle.fill")
+                            .foregroundColor(.orange)
+                    } else if let text = entry.text, !text.isEmpty {
+                        Image(systemName: "text.alignleft")
+                            .foregroundColor(.blue)
+                    }
                 }
             }
 
@@ -159,6 +196,9 @@ struct MemoryCard: View {
         .background(Color(red: 0.98, green: 0.93, blue: 0.80))
         .cornerRadius(18)
         .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
+        .sheet(isPresented: $showCharacterDetails) {
+            CharacterDetailsQuestionView(memory: entry)
+        }
     }
 }
 

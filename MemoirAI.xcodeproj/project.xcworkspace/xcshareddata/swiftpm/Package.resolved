@@ -1,6 +1,15 @@
 {
-  "originHash" : "7ff5c1af27701ea1c0dfcdfad13e102ddc888398a287ce5901782697336cce69",
+  "originHash" : "7631d941c158f65b7fc3dc5dfae49a3e7092f4879010d69a9b7465d71b94f4ef",
   "pins" : [
+    {
+      "identity" : "facebook-ios-sdk",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/facebook/facebook-ios-sdk.git",
+      "state" : {
+        "revision" : "c19607d535864533523d1f437c84035e5fb101cf",
+        "version" : "14.1.0"
+      }
+    },
     {
       "identity" : "mixpanel-swift",
       "kind" : "remoteSourceControl",
