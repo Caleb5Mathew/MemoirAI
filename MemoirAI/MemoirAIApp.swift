@@ -48,7 +48,7 @@ struct MemoirAIApp: App {
 
     init() {
         // ─ RevenueCat ─────────────────────────────────────────────
-        if let apiKey = Bundle.main.object(forInfoDictionaryKey: "appl_HTtNKyhVPddJOKrcqGCnWtvZcto") as? String,
+        if let apiKey = Bundle.main.object(forInfoDictionaryKey: "RevenueCatAPIKey") as? String,
            !apiKey.isEmpty {
             Purchases.configure(withAPIKey: apiKey)
             Purchases.logLevel = .debug

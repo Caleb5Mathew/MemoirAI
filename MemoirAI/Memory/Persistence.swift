@@ -35,17 +35,35 @@ struct PersistenceController {
     }()
 
     // MARK: - Core-Data container
-    let container: NSPersistentContainer
+    let container: NSPersistentCloudKitContainer
 
-    init() {
-        container = NSPersistentContainer(name: "MemoirDataModel") // Matches .xcdatamodeld file
-        container.loadPersistentStores { _, error in
-            if let error = error {
-                fatalError("Core Data store failed to load: \(error)")
-            }
+    init(inMemory: Bool = false) {
+        container = NSPersistentCloudKitContainer(name: "MemoirDataModel")
+
+        if inMemory {
+            container.persistentStoreDescriptions.first!.url =
+                URL(fileURLWithPath: "/dev/null")
         }
+
+        // 🌩 ENABLE CLOUDKIT
+        if let desc = container.persistentStoreDescriptions.first {
+            desc.cloudKitContainerOptions =
+                NSPersistentCloudKitContainerOptions(
+                    containerIdentifier: "iCloud.com.buildr.MemoirAI"
+                )
+            desc.setOption(true as NSNumber,
+                           forKey: NSPersistentHistoryTrackingKey)
+            desc.setOption(true as NSNumber,
+                           forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
+        }
+
+        container.loadPersistentStores { _, error in
+            if let error { fatalError("Core Data failed: \(error)") }
+        }
+
         container.viewContext.automaticallyMergesChangesFromParent = true
-        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        container.viewContext.mergePolicy =
+            NSMergeByPropertyObjectTrumpMergePolicy
     }
     
 }

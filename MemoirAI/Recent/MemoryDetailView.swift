@@ -79,8 +79,27 @@ extension MemoryEntry {
     }
     
     var parsedCharacterDetails: CharacterDetails? {
-        guard let detailsString = self.value(forKey: "characterDetails") as? String else { return nil }
-        return MemoryCompletionChecker.shared.parseCharacterDetails(detailsString)
+        // Try primary source first (Core Data)
+        if let detailsString = self.value(forKey: "characterDetails") as? String,
+           !detailsString.isEmpty {
+            if let details = MemoryCompletionChecker.shared.parseCharacterDetails(detailsString) {
+                print("✅ Loaded character details from Core Data")
+                return details
+            }
+        }
+        
+        // Fallback to UserDefaults backup
+        if let memoryId = self.id?.uuidString,
+           let backupString = UserDefaults.standard.string(forKey: "characterDetails_\(memoryId)"),
+           !backupString.isEmpty {
+            if let details = MemoryCompletionChecker.shared.parseCharacterDetails(backupString) {
+                print("✅ Loaded character details from UserDefaults backup")
+                return details
+            }
+        }
+        
+        print("ℹ️ No character details found for memory")
+        return nil
     }
 }
 
@@ -921,15 +940,23 @@ struct CharacterDetailsQuestionView: View {
             saveSuccess = true
         }
         
-        // Encode character details and save using KVC
-        if let encoded = try? JSONEncoder().encode(characterDetails),
-           let jsonString = String(data: encoded, encoding: .utf8) {
-            memory.setValue(jsonString, forKey: "characterDetails")
-            print("✅ Character details encoded and saved using KVC")
-        }
-        
-        // Save to Core Data
+        // Triple-save approach for maximum reliability
         do {
+            // 1. Primary: Encode character details and save using KVC
+            if let encoded = try? JSONEncoder().encode(characterDetails),
+               let jsonString = String(data: encoded, encoding: .utf8) {
+                memory.setValue(jsonString, forKey: "characterDetails")
+                print("✅ Character details encoded and saved using KVC: \(jsonString.prefix(50))...")
+            }
+            
+            // 2. Backup: Save to UserDefaults as failsafe
+            if let encoded = try? JSONEncoder().encode(characterDetails),
+               let jsonString = String(data: encoded, encoding: .utf8) {
+                UserDefaults.standard.set(jsonString, forKey: "characterDetails_\(memory.id?.uuidString ?? "unknown")")
+                print("✅ Character details backed up to UserDefaults")
+            }
+            
+            // 3. Save to Core Data
             try context.save()
             print("✅ Character details saved successfully to Core Data")
             

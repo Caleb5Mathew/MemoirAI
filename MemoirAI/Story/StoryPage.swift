@@ -1,137 +1,10 @@
-//import SwiftUI
-//import Combine // Required for Timer.publish
-//
-//// Define colors directly in this file since ColorTheme is not found
-//struct StoryPageLocalColors { // Renamed to avoid potential conflicts
-//    let softCream = Color(red: 0.98, green: 0.96, blue: 0.89)
-//    let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
-//    let defaultBlack = Color.black
-//    let defaultGray = Color.gray
-//    let defaultRed = Color.red
-//    let defaultWhite = Color.white
-//    let arrowColor = Color.white.opacity(0.9) // For arrows
-//    let subtleControlBackground = Color.black.opacity(0.07) // For button backgrounds
-//    let shadowColor = Color.black.opacity(0.15) // For shadows
-//    let bookFrameFill = Color.white.opacity(0.55) // Slightly more opaque book frame
-//    let bookFrameStroke = Color.gray.opacity(0.4)  // Slightly more opaque stroke
-//    let fullScreenOverlayBackground = Color.black.opacity(0.85) // For full screen image
-//}
-//
-//// Helper for custom serif-like font
-//extension Font {
-//    static func storyPageSerifFont(size: CGFloat) -> Font {
-//        .system(size: size, design: .serif)
-//    }
-//}
-//
-//
-//struct StoryPage: View {
-//    let localColors = StoryPageLocalColors()
-//
-//    var body: some View {
-//        ZStack {
-//            localColors.softCream
-//                .ignoresSafeArea()
-//
-//            VStack(spacing: 8) {
-//                Image(systemName: "book.fill")
-//                    .font(.system(size: 36))
-//                    .foregroundColor(localColors.terracotta.opacity(0.8))
-//
-//                Text("Coming Soon!")
-//                    .font(.title3)                    // smaller than largeTitle
-//                    .fontWeight(.semibold)
-//                    .foregroundColor(localColors.defaultBlack.opacity(0.85))
-//
-//                Text("Stay tuned for updates")
-//                    .font(.footnote)
-//                    .foregroundColor(localColors.defaultGray)
-//                    .opacity(0.7)
-//            }
-//            .padding(.horizontal, 24)
-//            .padding(.vertical, 32)
-//            .background(localColors.defaultWhite.opacity(0.6))
-//            .cornerRadius(12)
-//            .shadow(color: localColors.shadowColor, radius: 6, x: 0, y: 3)
-//        }
-//    }
-//}
-//
-//
-//
-//// ... (FullScreenImageView, StoryPage_Previews, and Placeholder ViewModels remain the same)
-//// Make sure your placeholder ViewModels (StoryPageViewModel, ProfileViewModel, SettingsView) are available
-//// from the previous implementation for the preview to work. I'm assuming they are present below.
-//
-//struct FullScreenImageView: View {
-//    @Binding var selectedImage: UIImage?
-//    let colors: StoryPageLocalColors
-//
-//    var body: some View {
-//        if let image = selectedImage {
-//            ZStack {
-//                colors.fullScreenOverlayBackground
-//                    .ignoresSafeArea()
-//                    .onTapGesture {
-//                        withAnimation(.easeInOut(duration: 0.3)) {
-//                            selectedImage = nil
-//                        }
-//                    }
-//
-//                VStack {
-//                    Spacer()
-//                    Image(uiImage: image)
-//                        .resizable()
-//                        .scaledToFit()
-//                        .cornerRadius(16)
-//                        .padding(30)
-//                        .shadow(color: .black.opacity(0.4), radius: 20, x: 0, y: 10)
-//                    Spacer()
-//                    Button(action: {
-//                        withAnimation(.easeInOut(duration: 0.3)) {
-//                            selectedImage = nil
-//                        }
-//                    }) {
-//                        Text("Close")
-//                            .font(.headline)
-//                            .padding(.horizontal, 24)
-//                            .padding(.vertical, 12)
-//                            .background(Color.white.opacity(0.9))
-//                            .foregroundColor(colors.terracotta)
-//                            .cornerRadius(12)
-//                            .shadow(radius: 3)
-//                    }
-//                    .padding(.bottom, 40)
-//                }
-//            }
-//            .transition(.opacity.combined(with: .scale(scale: 0.95)))
-//            .animation(.easeInOut(duration: 0.3), value: selectedImage != nil)
-//        }
-//    }
-//}
-//
-//
-//struct StoryPage_Previews: PreviewProvider {
-//    static var previews: some View {
-//        let dummyProfileVM = ProfileViewModel()
-//        StoryPage()
-//            .environmentObject(dummyProfileVM)
-//    }
-//}
-
-
-
 import SwiftUI
 import PhotosUI
-import Combine // Required for Timer.publish
-// Import RevenueCat if you need to access its types directly here, though RCSubscriptionManager encapsulates most of it.
-// import RevenueCat
+import Combine
+import RevenueCat
+import RevenueCatUI
 
-// Ensure RCSubscriptionManager is defined and accessible (likely in its own file RCSubscriptionManager.swift)
-// Ensure ProfileViewModel is defined and accessible
-// Ensure StoryPageViewModel is defined and accessible (in StoryPageViewModel.swift)
-
-// MARK: - Color Definitions
+// Enhanced color definitions for book-like appearance
 struct StoryPageLocalColors {
     let softCream = Color(red: 0.98, green: 0.96, blue: 0.89)
     let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
@@ -139,51 +12,87 @@ struct StoryPageLocalColors {
     let defaultGray = Color.gray
     let defaultRed = Color.red
     let defaultWhite = Color.white
-    let arrowColor = Color.white.opacity(0.9) // For arrows
-    let subtleControlBackground = Color.black.opacity(0.07) // For button backgrounds
-    let shadowColor = Color.black.opacity(0.15) // For shadows
-    let bookFrameFill = Color.white.opacity(0.55) // Slightly more opaque book frame
-    let bookFrameStroke = Color.gray.opacity(0.4)  // Slightly more opaque stroke
-    let fullScreenOverlayBackground = Color.black.opacity(0.85) // For full screen image
+    let arrowColor = Color.white.opacity(0.9)
+    let subtleControlBackground = Color.black.opacity(0.07)
+    let shadowColor = Color.black.opacity(0.15)
+    let bookFrameFill = Color.white.opacity(0.95)
+    let bookFrameStroke = Color.gray.opacity(0.3)
+    let fullScreenOverlayBackground = Color.black.opacity(0.85)
+    
+    // Book-specific colors - elegant and clean
+    let bookPageBackground = Color(red: 0.99, green: 0.97, blue: 0.94) // Warm paper white
+    let bookTextColor = Color(red: 0.2, green: 0.2, blue: 0.2) // Soft black for readability
+    let chapterTitleColor = Color(red: 0.4, green: 0.3, blue: 0.2) // Elegant brown
+    let pageNumberColor = Color(red: 0.5, green: 0.5, blue: 0.5) // Subtle gray
+    let decorativeElementColor = Color(red: 0.6, green: 0.4, blue: 0.3) // Warm accent
 }
 
-// MARK: - Font Helper
+// Enhanced font system with distinct styles
 extension Font {
     static func storyPageSerifFont(size: CGFloat) -> Font {
         .system(size: size, design: .serif)
     }
+    
+    // Kids book fonts - clean and readable (1/3 smaller)
+    static func kidsBookTitleFont(size: CGFloat) -> Font {
+        .custom("Georgia-Bold", size: size / 3.0) // Made 1/3 smaller
+    }
+    
+    static func kidsBookBodyFont(size: CGFloat) -> Font {
+        .custom("Georgia", size: size / 3.0) // Made 1/3 smaller
+    }
+    
+    // Professional vertical book fonts - elegant and "liney"
+    static func professionalTitleFont(size: CGFloat) -> Font {
+        .custom("Times New Roman", size: size) // More elegant, traditional book font
+    }
+    
+    static func professionalBodyFont(size: CGFloat) -> Font {
+        .custom("Times New Roman", size: size) // Consistent with title
+    }
+    
+    static func professionalChapterFont(size: CGFloat) -> Font {
+        .custom("Times New Roman", size: size).weight(.medium) // Slightly heavier for headers
+    }
 }
 
+// Main StoryPage implementation
 struct StoryPage: View {
     @State private var userGender: String = ""
-    @State private var headshotImage: UIImage?            // stores the picked headshot
-    @State private var grandparentName: String = ""       // stores the typed-in name
-    @State private var showProfileSetup: Bool = false     // toggles the sheet
+    @State private var headshotImage: UIImage?
+    @State private var grandparentName: String = ""
+    @State private var showProfileSetup: Bool = false
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = StoryPageViewModel()
     
     @State private var headshotPickerItem: PhotosPickerItem?
-    
     @State private var gender: String = ""
-    @EnvironmentObject var profileVM: ProfileViewModel // Ensure this is passed in
-    @State private var userRace: String = "" // <-- ADD THIS LINE
-    // Access the shared instance of RCSubscriptionManager
+    @EnvironmentObject var profileVM: ProfileViewModel
+    @State private var userRace: String = ""
     @StateObject private var subscriptionManager = RCSubscriptionManager.shared
     
-    let localColors = StoryPageLocalColors() // Now this should be found
+    let localColors = StoryPageLocalColors()
     
     @State private var currentPageIndex = 0
-    
     @State private var showSettings = false
     @State private var selectedImageForFullScreen: UIImage? = nil
-    @State private var hasRequestedGeneration = false // To track if user initiated generation
+    @State private var hasRequestedGeneration = false
     
     // Progress simulation
     @State private var fakeProgress: Double = 0
-    @State private var realProgress: Double = 0 // Tracks vm.progress
+    @State private var realProgress: Double = 0
     @State private var cancellableTimer: AnyCancellable?
     
-    @State private var showSubscriptionSheet = false // New state for paywall sheet
+    // NEW: Download and regenerate functionality
+    @State private var showDownloadSuccess = false
+    @State private var showRegenerateConfirmation = false
+    @State private var isDownloading = false
+    
+    // NEW: Paywall state - exactly like MemoirView
+    @State private var showPaywall = false
+    
+    // NEW: Tooltip state for subscription status
+    @State private var showSubscriptionTooltip = false
     
     private var displayProgress: Double {
         if realProgress > 0.05 && realProgress > fakeProgress {
@@ -191,14 +100,17 @@ struct StoryPage: View {
         }
         return max(fakeProgress, realProgress)
     }
+    
+    // NEW: Subscription check - exactly like MemoirView
+    private var isSubscribed: Bool {
+        subscriptionManager.activeTier != nil
+    }
+    
     @ViewBuilder
     private func storybookContentView(
         bookFrameWidth: CGFloat,
         bookContentHeightInsideFrame: CGFloat
     ) -> some View {
-        let stripHeight = bookContentHeightInsideFrame * 0.20
-
-        // LOADING STATE
         if vm.isLoading {
             VStack(spacing: 12) {
                 ProgressView(value: displayProgress)
@@ -213,74 +125,74 @@ struct StoryPage: View {
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundColor(localColors.defaultGray)
             }
-
-        // ERROR STATE
         } else if let error = vm.errorMessage {
             VStack(spacing: 12) {
-                Image(systemName: "exclamationmark.triangle.fill")
+                Image(systemName: error.contains("Maximum images reached") || error.contains("Not enough images") ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.largeTitle)
-                    .foregroundColor(localColors.defaultRed.opacity(0.7))
-                Text("Oh no! \(error)")
+                    .foregroundColor(error.contains("Maximum images reached") || error.contains("Not enough images") ? .orange : localColors.defaultRed.opacity(0.7))
+                
+                Text(error)
                     .font(.storyPageSerifFont(size: 16))
                     .multilineTextAlignment(.center)
-                    .foregroundColor(localColors.defaultRed)
+                    .foregroundColor(error.contains("Maximum images reached") || error.contains("Not enough images") ? .orange : localColors.defaultRed)
                     .padding(.horizontal, 5)
-                Button("Try Creating Again") {
-                    generateStorybookWithPaywallCheck()
+                
+                if error.contains("Maximum images reached") || error.contains("Not enough images") {
+                    // Show subscription status
+                    VStack(spacing: 8) {
+                        Text("Images remaining: \(subscriptionManager.remainingAllowance)/50")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.gray)
+                        
+                        if let tier = subscriptionManager.activeTier {
+                            Text("Subscription: \(tier.displayName)")
+                                .font(.system(size: 12))
+                                .foregroundColor(.gray)
+                        }
+                    }
+                    .padding(.top, 8)
+                } else {
+                    Button("Try Creating Again") {
+                        generateStorybookWithPaywallCheck()
+                    }
+                    .font(.headline)
+                    .foregroundColor(localColors.terracotta)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(localColors.terracotta.opacity(0.15))
+                    .cornerRadius(10)
                 }
-                .font(.headline)
-                .foregroundColor(localColors.terracotta)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
-                .background(localColors.terracotta.opacity(0.15))
-                .cornerRadius(10)
             }
             .padding(20)
-
-        // CONTENT STATE (images + text pages)
         } else if hasRequestedGeneration && !vm.pageItems.isEmpty {
+            // Determine aspect ratio based on art style - FIXED LOGIC
+            let isKidsBook = vm.currentArtStyle == .kidsBook
+            let bookAspectRatio: CGFloat = isKidsBook ? (9.0 / 16.0) : (4.0 / 3.0) // HORIZONTAL for kids (9:16 inverted), VERTICAL for others (4:3)
+            
             ZStack {
                 TabView(selection: $currentPageIndex) {
                     ForEach(vm.pageItems.indices, id: \.self) { idx in
-                        switch vm.pageItems[idx] {
-                        case .illustration(let image, let caption):
-                            IllustrationPage(
-                                image: image,
-                                caption: caption,
+                        pageView(
+                            for: vm.pageItems[idx],
+                            at: idx,
                                 frameWidth: bookFrameWidth * 0.9,
-                                frameHeight: bookContentHeightInsideFrame
+                            frameHeight: (bookFrameWidth * 0.9) * bookAspectRatio
                             )
                             .tag(idx)
                             .onTapGesture {
+                            if case .illustration(let image, _) = vm.pageItems[idx] {
                                 selectedImageForFullScreen = image
                             }
-                        case .textPage(let index, let total, let text):
-                            TextPageView(
-                                index: index,
-                                total: total,
-                                text: text,
-                                frameWidth: bookFrameWidth * 0.9,
-                                frameHeight: bookContentHeightInsideFrame
-                            )
-                            .tag(idx)
-                        case .qrCode(_, let url):
-                            QRCodePage(
-                                url: url,
-                                frameWidth: bookFrameWidth * 0.9,
-                                frameHeight: bookContentHeightInsideFrame
-                            )
-                            .tag(idx)
                         }
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .frame(
                     width: bookFrameWidth * 0.9,
-                    height: bookContentHeightInsideFrame
+                    height: (bookFrameWidth * 0.9) * bookAspectRatio
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                // Page navigation arrows
                 if vm.pageItems.count > 1 {
                     HStack {
                         Button {
@@ -315,10 +227,8 @@ struct StoryPage: View {
             }
             .frame(
                 width: bookFrameWidth * 0.9,
-                height: bookContentHeightInsideFrame
+                height: (bookFrameWidth * 0.9) * bookAspectRatio
             )
-
-        // INITIAL PROMPT STATE
         } else {
             VStack(spacing: 12) {
                 Text("Your storybook awaits!")
@@ -352,20 +262,19 @@ struct StoryPage: View {
     }
 
     private func resetGenerationState() {
-        vm.images = []
+        // Don't clear vm.pageItems or vm.images - let persistence handle this
         vm.errorMessage = nil
-        currentPageIndex = 0        // ← renamed
+        currentPageIndex = 0
         fakeProgress = 0
         realProgress = 0
         vm.progress = 0
         cancellableTimer?.cancel()
         vm.isLoading = false
-        hasRequestedGeneration = false
+        // Don't reset hasRequestedGeneration - let it persist
     }
-
         
         private func generateStorybookWithPaywallCheck() {
-            let pagesToAttempt = vm.expectedPageCount()   // ✅ compiles, no access violation
+        let pagesToAttempt = vm.expectedPageCount()
 
             guard pagesToAttempt > 0 else {
                 print("StoryPage: Attempting to generate 0 pages. Aborting.")
@@ -373,20 +282,36 @@ struct StoryPage: View {
                 return
             }
             
+            // NEW: Check for active subscription first - same logic as MemoirView
+            guard isSubscribed else {
+                print("StoryPage: No active subscription. Showing paywall.")
+                vm.isLoading = false
+                hasRequestedGeneration = false
+                showPaywall = true  // ← Simple paywall trigger like MemoirView
+                return
+            }
+            
+            // NEW: Check if user has reached image limit
+            if subscriptionManager.hasReachedImageLimit {
+                print("StoryPage: Image limit reached. Remaining: \(subscriptionManager.remainingAllowance)")
+                vm.isLoading = false
+                hasRequestedGeneration = false
+                let renewalDate = subscriptionManager.getRenewalDateString()
+                vm.errorMessage = "Maximum images reached (50). Your allowance will reset on \(renewalDate)."
+                return
+            }
+            
+            // Check if user has enough remaining allowance for the requested images
             if subscriptionManager.canGenerate(pages: pagesToAttempt) {
                 print("StoryPage: Check successful. Proceeding with generation of \(pagesToAttempt) pages.")
                 startActualGenerationProcess(pagesExpected: pagesToAttempt)
             } else {
-                print("StoryPage: Usage limit hit/no plan. Tier: \(subscriptionManager.activeTier?.displayName ?? "None"), Rem: \(subscriptionManager.remainingAllowance), Req: \(pagesToAttempt)")
+                print("StoryPage: Insufficient allowance. Remaining: \(subscriptionManager.remainingAllowance), Requested: \(pagesToAttempt)")
                 vm.isLoading = false
                 hasRequestedGeneration = false
-
-                Task {
-                    await subscriptionManager.loadOfferings()
-                    showSubscriptionSheet = true
-                }
+                let renewalDate = subscriptionManager.getRenewalDateString()
+                vm.errorMessage = "Not enough images remaining (\(subscriptionManager.remainingAllowance) left). Your allowance will reset on \(renewalDate)."
             }
-
         }
         
         private func startActualGenerationProcess(pagesExpected: Int) {
@@ -417,10 +342,10 @@ struct StoryPage: View {
                     cancellableTimer?.cancel()
                     
                     if vm.errorMessage == nil && !vm.images.isEmpty {
-                        let actualPagesGenerated = vm.images.count
-                        if actualPagesGenerated > 0 {
-                            subscriptionManager.consume(pages: actualPagesGenerated)
-                            print("StoryPage: Consumed \(actualPagesGenerated) pages.")
+                        let actualImagesGenerated = vm.images.count
+                        if actualImagesGenerated > 0 {
+                            subscriptionManager.consume(pages: actualImagesGenerated)
+                            print("StoryPage: Consumed \(actualImagesGenerated) images.")
                         }
                         self.realProgress = 1.0
                         self.fakeProgress = 1.0
@@ -433,23 +358,15 @@ struct StoryPage: View {
                 }
             }
         }
-    // ← right after your `startActualGenerationProcess` method’s closing `}`
 
     var body: some View {
         NavigationStack {
             ZStack {
                 localColors.softCream
                     .ignoresSafeArea()
-                    .overlay(
-                        Image("paper_texture")
-                            .resizable()
-                            .scaledToFill()
-                            .opacity(0.05)
-                            .ignoresSafeArea()
-                    )
 
                 VStack(spacing: 0) {
-                    // HEADER
+                    // UPDATED HEADER with download button
                     HStack {
                         Button(action: { dismiss() }) {
                             Image(systemName: "chevron.left")
@@ -460,18 +377,62 @@ struct StoryPage: View {
                                 .clipShape(Circle())
                         }
                         Spacer()
-                        Text("Your Storybook")
-                            .font(.storyPageSerifFont(size: 22))
-                            .fontWeight(.medium)
-                            .foregroundColor(localColors.defaultBlack.opacity(0.8))
+                        VStack(spacing: 2) {
+                            Text("Your Storybook")
+                                .font(.storyPageSerifFont(size: 22))
+                                .fontWeight(.medium)
+                                .foregroundColor(localColors.defaultBlack.opacity(0.8))
+                            
+                            // NEW: Clickable subscription status indicator with tooltip
+                            if subscriptionManager.hasActiveSubscription {
+                                Button(action: {
+                                    showSubscriptionTooltip = true
+                                    // Auto-hide after 3 seconds
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                                        showSubscriptionTooltip = false
+                                    }
+                                }) {
+                                    Text("\(subscriptionManager.remainingAllowance)/50 images")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(subscriptionManager.remainingAllowance <= 5 ? .red : .gray)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                        }
                         Spacer()
-                        Button { showSettings = true } label: {
-                            Image(systemName: "gearshape.fill")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundColor(localColors.defaultBlack.opacity(0.7))
-                                .padding(10)
-                                .background(localColors.subtleControlBackground)
-                                .clipShape(Circle())
+                        
+                        HStack(spacing: 12) {
+                            // NEW: Download button (only show when storybook exists)
+                            if hasRequestedGeneration && !vm.pageItems.isEmpty {
+                                Button(action: downloadStorybook) {
+                                    HStack(spacing: 4) {
+                                        if isDownloading {
+                                            ProgressView()
+                                                .scaleEffect(0.8)
+                                                .progressViewStyle(CircularProgressViewStyle(tint: localColors.defaultBlack.opacity(0.7)))
+                                        } else {
+                                            Image(systemName: showDownloadSuccess ? "checkmark.circle.fill" : "arrow.down.circle.fill")
+                                                .font(.system(size: 18, weight: .medium))
+                                        }
+                                    }
+                                    .foregroundColor(showDownloadSuccess ? .green : localColors.defaultBlack.opacity(0.7))
+                                    .padding(10)
+                                    .background(localColors.subtleControlBackground)
+                                    .clipShape(Circle())
+                                }
+                                .disabled(isDownloading)
+                                .scaleEffect(showDownloadSuccess ? 1.1 : 1.0)
+                                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: showDownloadSuccess)
+                            }
+                            
+                            Button { showSettings = true } label: {
+                                Image(systemName: "gearshape.fill")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundColor(localColors.defaultBlack.opacity(0.7))
+                                    .padding(10)
+                                    .background(localColors.subtleControlBackground)
+                                    .clipShape(Circle())
+                            }
                         }
                     }
                     .padding(.horizontal)
@@ -481,8 +442,11 @@ struct StoryPage: View {
                     // STORYBOOK CONTENT
                     GeometryReader { geo in
                         let bookFrameWidth = geo.size.width * 0.92
+                        let isKidsBook = vm.currentArtStyle == .kidsBook
+                        // FIXED: Proper aspect ratio calculation
+                        let bookAspectRatio: CGFloat = isKidsBook ? (9.0 / 16.0) : (4.0 / 3.0) // HORIZONTAL for kids, VERTICAL for others
                         let bookContentAreaWidth = bookFrameWidth * 0.92
-                        let bookContentHeightInsideFrame = bookContentAreaWidth * (9.0 / 16.0)
+                        let bookContentHeightInsideFrame = bookContentAreaWidth * bookAspectRatio
                         let verticalPad: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 30 : 20
                         let bookFrameHeight = bookContentHeightInsideFrame + (verticalPad * 2)
 
@@ -511,6 +475,31 @@ struct StoryPage: View {
                             y: geo.size.height / 2
                         )
                     }
+                    
+                    // NEW: Regenerate button (only show when storybook exists)
+                    if hasRequestedGeneration && !vm.pageItems.isEmpty && !vm.isLoading {
+                        VStack(spacing: 12) {
+                            Button(action: { showRegenerateConfirmation = true }) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 16, weight: .medium))
+                                    Text("Regenerate Storybook")
+                                        .font(.system(size: 16, weight: .medium))
+                                }
+                                .foregroundColor(localColors.terracotta)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 12)
+                                .background(localColors.terracotta.opacity(0.15))
+                                .cornerRadius(12)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(localColors.terracotta.opacity(0.3), lineWidth: 1)
+                                )
+                            }
+                        }
+                        .padding(.horizontal)
+                        .padding(.bottom, 20)
+                    }
                 }
                 .safeAreaInset(edge: .bottom) {
                     Color.clear.frame(height: 5)
@@ -522,23 +511,15 @@ struct StoryPage: View {
                     .environmentObject(profileVM)
                     .environmentObject(subscriptionManager)
             }
-            .sheet(isPresented: Binding(
-                get: { showSubscriptionSheet && subscriptionManager.offerings?.current != nil },
-                set: { showSubscriptionSheet = $0 }
-            )) {
-                PaywallViewRepresentable()
-                    .environmentObject(subscriptionManager)
-            }
-
             .sheet(isPresented: $showProfileSetup, onDismiss: {
                 generateStorybookWithPaywallCheck()
             }) {
                 ProfileSetupView(
                     headshotImage: $headshotImage,
                     name: $grandparentName,
-                    race: $userRace, // <-- ADD THIS LINE TO FIX THE ERROR
-                    gender: $userGender, // <--- ADD THIS LINE
-                    onGenerate: { }                // ← added; does nothing for now
+                    race: $userRace,
+                    gender: $userGender,
+                    onGenerate: { }
                 )
                 .environmentObject(profileVM)
             }
@@ -548,15 +529,37 @@ struct StoryPage: View {
                     colors: localColors
                 )
             )
+            .alert("Download Successful!", isPresented: $showDownloadSuccess) {
+                Button("OK") { }
+            } message: {
+                Text("Your storybook has been saved to your device.")
+            }
+            .alert("Regenerate Storybook?", isPresented: $showRegenerateConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Regenerate", role: .destructive) {
+                    regenerateStorybook()
+                }
+            } message: {
+                Text("This will clear your current storybook and create a new one. This action cannot be undone.")
+            }
+            .fullScreenCover(isPresented: $showPaywall) {
+                GeometryReader { geo in
+                    PaywallView(displayCloseButton: true)
+                        .frame(maxWidth: .infinity)
+                        .ignoresSafeArea()
+                        .edgesIgnoringSafeArea(.all)
+                }
+            }
             .onAppear {
-                // seed test head-shot
+                // Load persisted storybook when view appears
+                vm.loadStorybookForProfile(profileVM.selectedProfile.id)
+                
                 if headshotImage == nil,
                    let test = UIImage(named: "old") {
                     headshotImage = test
-                    vm.subjectPhoto = test          // Published write
+                    vm.subjectPhoto = test
                 }
 
-                // seed default style-tile (safe write on MainActor)
                 Task { @MainActor in
                     if vm.styleTilePublic == nil,
                        let style = UIImage(named: "kidsref") {
@@ -566,28 +569,469 @@ struct StoryPage: View {
 
                 Task { await subscriptionManager.refreshCustomerInfo() }
             }
-
-
-            .onChange(of: profileVM.selectedProfile.id) { _ in
-                resetGenerationState()
+            .onChange(of: profileVM.selectedProfile.id) { newProfileID in
+                // Load storybook for new profile, don't reset
+                vm.loadStorybookForProfile(newProfileID)
+                
+                // Update hasRequestedGeneration based on whether we have content
+                hasRequestedGeneration = vm.hasGeneratedStorybook
             }
             .onChange(of: vm.progress) { newApiProgress in
-                // your existing progress-tracking logic
+                // existing progress-tracking logic
             }
             .onChange(of: vm.isLoading) { isLoading in
-                // your existing loading-state logic
+                // existing loading-state logic
             }
-            .onChange(of: headshotImage) { newShot in        // ← <<< NEW
+            .onChange(of: headshotImage) { newShot in
                 vm.subjectPhoto = newShot
-            }        }
+            }
+        }
+        .overlay(
+            // NEW: Subscription tooltip overlay
+            Group {
+                if showSubscriptionTooltip {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Image Generation Limit")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.white)
+                                
+                                Text("Each subscription includes 50 AI-generated images per billing period. This counter shows how many you have remaining.")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.white.opacity(0.9))
+                                    .multilineTextAlignment(.leading)
+                            }
+                            .padding(12)
+                            .background(Color.black.opacity(0.85))
+                            .cornerRadius(8)
+                            .shadow(radius: 4)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 80) // Position below header
+                        
+                        Spacer()
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    .animation(.easeInOut(duration: 0.3), value: showSubscriptionTooltip)
+                }
+            }
+        )
     }
+    
+    // NEW: Download functionality
+    private func downloadStorybook() {
+        isDownloading = true
+        
+        Task {
+            if let pdfURL = vm.downloadStorybook() {
+                // Share the PDF
+                await MainActor.run {
+                    let activityVC = UIActivityViewController(activityItems: [pdfURL], applicationActivities: nil)
+                    
+                    if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let window = scene.windows.first,
+                       let rootVC = window.rootViewController {
+                        
+                        // Handle iPad presentation
+                        if let popover = activityVC.popoverPresentationController {
+                            popover.sourceView = window
+                            popover.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 0, height: 0)
+                            popover.permittedArrowDirections = []
+                        }
+                        
+                        rootVC.present(activityVC, animated: true)
+                    }
+                    
+                    isDownloading = false
+                    showDownloadSuccess = true
+                    
+                    // Reset success state after delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        showDownloadSuccess = false
+                    }
+                }
+            } else {
+                await MainActor.run {
+                    isDownloading = false
+                    // Could show error alert here
+                }
+            }
+        }
+    }
+    
+    // NEW: Regenerate functionality
+    private func regenerateStorybook() {
+        vm.clearCurrentStorybook()
+        hasRequestedGeneration = false
+        showSettings = true // Open settings so user can adjust parameters
+    }
+}
 
-} // ← Make sure this single brace closes `struct StoryPage`
+// MARK: - Page View Selection Logic
+extension StoryPage {
+    @ViewBuilder
+    private func pageView(for item: StoryPageViewModel.PageItem, at index: Int, frameWidth: CGFloat, frameHeight: CGFloat) -> some View {
+        let isKidsBook = vm.currentArtStyle == .kidsBook
+        
+        switch item {
+        case .illustration(let image, let caption):
+            if isKidsBook {
+                // Kids book layout - horizontal/landscape
+                KidsBookIllustrationPage(
+                    image: image,
+                    caption: caption,
+                    frameWidth: frameWidth,
+                    frameHeight: frameHeight,
+                    pageNumber: index + 1
+                )
+            } else {
+                // Vertical book layout (realistic, custom, cartoon) - exactly like reference image
+                VerticalBookIllustrationPage(
+                    image: image,
+                    caption: caption,
+                    frameWidth: frameWidth,
+                    frameHeight: frameHeight,
+                    pageNumber: index + 1,
+                    totalPages: vm.pageItems.count
+                )
+            }
+            
+        case .textPage(let pageIndex, let total, let text):
+            if isKidsBook {
+                // Kids book text page - horizontal
+                KidsBookTextPage(
+                    index: pageIndex,
+                    total: total,
+                    text: text,
+                    frameWidth: frameWidth,
+                    frameHeight: frameHeight,
+                    pageNumber: index + 1
+                )
+            } else {
+                // Vertical book text page
+                VerticalBookTextPage(
+                    index: pageIndex,
+                    total: total,
+                    text: text,
+                    frameWidth: frameWidth,
+                    frameHeight: frameHeight,
+                    pageNumber: index + 1
+                )
+            }
+            
+        case .qrCode(_, let url):
+            EnhancedQRCodePage(
+                url: url,
+                frameWidth: frameWidth,
+                frameHeight: frameHeight,
+                pageNumber: index + 1,
+                isKidsBook: isKidsBook
+            )
+        }
+    }
+}
 
-    // MARK: - FullScreenImageView (Ensure this is defined)
+// MARK: - Kids Book Style Pages (Landscape/Horizontal) - FIXED FONTS
+struct KidsBookIllustrationPage: View {
+    let image: UIImage
+    let caption: String
+    let frameWidth: CGFloat
+    let frameHeight: CGFloat
+    let pageNumber: Int
+    
+    private let colors = StoryPageLocalColors()
+    
+    var body: some View {
+        ZStack {
+            // Clean book page background
+            colors.bookPageBackground
+            
+            // Full page image - clean and simple
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: frameWidth, height: frameHeight)
+                .clipped()
+        }
+        .frame(width: frameWidth, height: frameHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            // Subtle page number at bottom - 1/3 smaller font
+            VStack {
+                Spacer()
+                Text("\(pageNumber)")
+                    .font(.kidsBookBodyFont(size: frameHeight * 0.09)) // Using the 1/3 smaller font function
+                    .foregroundColor(colors.pageNumberColor.opacity(0.6))
+                    .padding(.bottom, frameHeight * 0.02)
+            }
+        )
+    }
+}
+
+struct KidsBookTextPage: View {
+    let index: Int
+    let total: Int
+    let text: String
+    let frameWidth: CGFloat
+    let frameHeight: CGFloat
+    let pageNumber: Int
+    
+    private let colors = StoryPageLocalColors()
+    
+    var body: some View {
+        ZStack {
+            // Clean book page background
+            colors.bookPageBackground
+            
+            VStack(spacing: frameHeight * 0.04) {
+                // Simple, elegant header - 1/3 smaller font
+                Text("Memory")
+                    .font(.kidsBookTitleFont(size: frameHeight * 0.24)) // Using the 1/3 smaller font function
+                    .foregroundColor(colors.chapterTitleColor)
+                    .padding(.top, frameHeight * 0.06)
+                
+                // Text content with elegant typography - 1/3 smaller font
+                ScrollView {
+                    Text(text)
+                        .font(.kidsBookBodyFont(size: frameHeight * 0.15)) // Using the 1/3 smaller font function
+                        .lineSpacing(frameHeight * 0.015)
+                        .multilineTextAlignment(.leading)
+                        .foregroundColor(colors.bookTextColor)
+                        .padding(.horizontal, frameWidth * 0.08)
+                }
+                .frame(maxHeight: frameHeight * 0.75)
+                
+                Spacer()
+                
+                // Clean page number - 1/3 smaller font
+                Text("\(pageNumber)")
+                    .font(.kidsBookBodyFont(size: frameHeight * 0.09)) // Using the 1/3 smaller font function
+                    .foregroundColor(colors.pageNumberColor)
+                    .padding(.bottom, frameHeight * 0.03)
+            }
+        }
+        .frame(width: frameWidth, height: frameHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Vertical Book Style Pages (Realistic/Custom/Cartoon) - Professional and elegant
+struct VerticalBookIllustrationPage: View {
+    let image: UIImage
+    let caption: String
+    let frameWidth: CGFloat
+    let frameHeight: CGFloat
+    let pageNumber: Int
+    let totalPages: Int
+    
+    private let colors = StoryPageLocalColors()
+    
+    var body: some View {
+        ZStack {
+            // Book page background - exactly like reference
+            colors.bookPageBackground
+            
+            VStack(spacing: 0) {
+                // Top section with title and QR code - exactly like reference image
+                HStack(alignment: .top) {
+                    // Left side - Title section
+                    VStack(alignment: .leading, spacing: frameHeight * 0.008) {
+                        Text("Memories of Achievement:")
+                            .font(.professionalChapterFont(size: frameHeight * 0.025)) // Smaller, more elegant
+                            .foregroundColor(colors.chapterTitleColor)
+                        
+                        Text("A Special Memory")
+                            .font(.professionalBodyFont(size: frameHeight * 0.02)) // Professional book size
+                            .foregroundColor(colors.bookTextColor)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    Spacer()
+                    
+                    // Right side - QR code (small, top right)
+                    VStack {
+                        Image(uiImage: .qrCode(from: "https://memoirai.com", size: frameHeight * 0.06))
+                            .interpolation(.none)
+                            .resizable()
+                            .frame(width: frameHeight * 0.06, height: frameHeight * 0.06)
+                    }
+                }
+                .padding(.horizontal, frameWidth * 0.06)
+                .padding(.top, frameHeight * 0.04)
+                
+                // Main image - positioned exactly like reference
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxHeight: frameHeight * 0.45)
+                    .padding(.horizontal, frameWidth * 0.06)
+                    .padding(.top, frameHeight * 0.02)
+                
+                // Caption text below image - exactly like reference layout with smaller font
+                VStack(alignment: .leading, spacing: frameHeight * 0.01) {
+                    Text(caption)
+                        .font(.professionalBodyFont(size: frameHeight * 0.018)) // Real book size - small and elegant
+                        .lineSpacing(frameHeight * 0.005)
+                        .multilineTextAlignment(.leading)
+                        .foregroundColor(colors.bookTextColor)
+                }
+                .padding(.horizontal, frameWidth * 0.06)
+                .padding(.top, frameHeight * 0.025)
+                
+                Spacer()
+                
+                // Bottom page numbers - exactly like reference with smaller font
+                HStack {
+                    Text("\(pageNumber)")
+                        .font(.professionalBodyFont(size: frameHeight * 0.015)) // Small professional page numbers
+                        .foregroundColor(colors.pageNumberColor)
+                    
+                    Spacer()
+                    
+                    Text("\(pageNumber + 1)")
+                        .font(.professionalBodyFont(size: frameHeight * 0.015))
+                        .foregroundColor(colors.pageNumberColor)
+                }
+                .padding(.horizontal, frameWidth * 0.06)
+                .padding(.bottom, frameHeight * 0.03)
+            }
+        }
+        .frame(width: frameWidth, height: frameHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(colors.bookFrameStroke.opacity(0.3), lineWidth: 0.5)
+        )
+    }
+}
+
+struct VerticalBookTextPage: View {
+    let index: Int
+    let total: Int
+    let text: String
+    let frameWidth: CGFloat
+    let frameHeight: CGFloat
+    let pageNumber: Int
+    
+    private let colors = StoryPageLocalColors()
+    
+    var body: some View {
+        ZStack {
+            // Book page background
+            colors.bookPageBackground
+            
+            VStack(spacing: 0) {
+                // Header section with professional, smaller font
+                VStack(alignment: .leading, spacing: frameHeight * 0.015) {
+                    Text("Chapter \(index)")
+                        .font(.professionalChapterFont(size: frameHeight * 0.025)) // Smaller, professional
+                        .foregroundColor(colors.chapterTitleColor)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, frameWidth * 0.06)
+                .padding(.top, frameHeight * 0.05)
+                
+                // Text content with real book typography - small and elegant
+                ScrollView {
+                    VStack(alignment: .leading, spacing: frameHeight * 0.015) {
+                        Text(text)
+                            .font(.professionalBodyFont(size: frameHeight * 0.018)) // Real book size - small and elegant
+                            .lineSpacing(frameHeight * 0.006) // Tight line spacing like real books
+                            .multilineTextAlignment(.leading)
+                            .foregroundColor(colors.bookTextColor)
+                    }
+                    .padding(.horizontal, frameWidth * 0.06)
+                }
+                .frame(maxHeight: frameHeight * 0.8)
+                
+                Spacer()
+                
+                // Page number at bottom - small and professional
+                Text("\(pageNumber)")
+                    .font(.professionalBodyFont(size: frameHeight * 0.015))
+                    .foregroundColor(colors.pageNumberColor)
+                    .padding(.bottom, frameHeight * 0.03)
+            }
+        }
+        .frame(width: frameWidth, height: frameHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(colors.bookFrameStroke.opacity(0.3), lineWidth: 0.5)
+        )
+    }
+}
+
+// MARK: - Enhanced QR Code Page
+struct EnhancedQRCodePage: View {
+    let url: URL
+    let frameWidth: CGFloat
+    let frameHeight: CGFloat
+    let pageNumber: Int
+    let isKidsBook: Bool
+    
+    private let colors = StoryPageLocalColors()
+    private var qrSide: CGFloat { min(frameWidth, frameHeight) * 0.3 }
+    
+    var body: some View {
+        ZStack {
+            colors.bookPageBackground
+            
+            VStack(spacing: frameHeight * 0.05) {
+                // Header with appropriate font for each style - 1/3 smaller for kids book
+                Text("Listen to This Memory")
+                    .font(isKidsBook ? .kidsBookTitleFont(size: frameHeight * 0.24) : .professionalChapterFont(size: frameHeight * 0.025)) // 1/3 smaller for kids
+                    .foregroundColor(colors.chapterTitleColor)
+                    .padding(.top, frameHeight * 0.08)
+                
+                // QR Code with clean styling
+                Image(uiImage: .qrCode(from: url.absoluteString, size: qrSide))
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: qrSide, height: qrSide)
+                    .padding(frameHeight * 0.02)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(colors.decorativeElementColor.opacity(0.3), lineWidth: 1)
+                    )
+                    .shadow(color: colors.shadowColor.opacity(0.3), radius: 4, x: 0, y: 2)
+                
+                // Description with appropriate font size - 1/3 smaller for kids book
+                VStack(spacing: frameHeight * 0.02) {
+                    Text("Scan this code with your phone's camera to hear the original audio recording of this memory.")
+                        .font(isKidsBook ? .kidsBookBodyFont(size: frameHeight * 0.12) : .professionalBodyFont(size: frameHeight * 0.018)) // 1/3 smaller for kids
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(colors.bookTextColor.opacity(0.8))
+                        .padding(.horizontal, frameWidth * 0.1)
+                }
+                
+                Spacer()
+                
+                // Page number with appropriate font - 1/3 smaller for kids book
+                Text("\(pageNumber)")
+                    .font(isKidsBook ? .kidsBookBodyFont(size: frameHeight * 0.09) : .professionalBodyFont(size: frameHeight * 0.015)) // 1/3 smaller for kids
+                    .foregroundColor(colors.pageNumberColor)
+                    .padding(.bottom, frameHeight * 0.03)
+            }
+        }
+        .frame(width: frameWidth, height: frameHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(colors.bookFrameStroke.opacity(0.3), lineWidth: 0.5)
+        )
+    }
+}
+
+// MARK: - Supporting Views
     struct FullScreenImageView: View {
         @Binding var selectedImage: UIImage?
-        let colors: StoryPageLocalColors // ensure StoryPageLocalColors is defined
+    let colors: StoryPageLocalColors
         
         var body: some View {
             if let image = selectedImage {
@@ -619,7 +1063,7 @@ struct StoryPage: View {
                                 .padding(.horizontal, 24)
                                 .padding(.vertical, 12)
                                 .background(Color.white.opacity(0.9))
-                                .foregroundColor(colors.terracotta) // ensure colors.terracotta is valid
+                            .foregroundColor(colors.terracotta)
                                 .cornerRadius(12)
                                 .shadow(radius: 3)
                         }
@@ -632,250 +1076,11 @@ struct StoryPage: View {
         }
     }
     
-    
-    // MARK: - Placeholder for Paywall View
-    struct PaywallViewRepresentable: View {
-        @EnvironmentObject var subscriptionManager: RCSubscriptionManager
-        @Environment(\.dismiss) var dismiss
-        
-        var body: some View {
-            NavigationView {
-                VStack(spacing: 20) {
-                    Text("Unlock More Pages!")
-                        .font(.largeTitle).bold()
-                        .padding(.top, 40)
-                    
-                    if let offerings = subscriptionManager.offerings {
-                        if let currentOffering = offerings.current { // Use .current for default offering
-                            Text("Choose a plan to continue creating amazing storybooks:")
-                                .font(.headline)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal)
-                            
-                            ForEach(currentOffering.availablePackages) { pkg in
-                                Button {
-                                    Task {
-                                        do {
-                                            print("Paywall: Purchasing \(pkg.storeProduct.localizedTitle)")
-                                            try await subscriptionManager.purchase(package: pkg)
-                                            if subscriptionManager.activeTier != nil {
-                                                print("Paywall: Purchase successful. Tier: \(subscriptionManager.activeTier!.displayName). Dismissing.")
-                                                dismiss()
-                                            } else {
-                                                print("Paywall: Purchase flow done, no active tier yet.")
-                                            }
-                                        } catch {
-                                            print("❌ Paywall: Purchase failed: \(error.localizedDescription)")
-                                            // TODO: Show user-facing alert for purchase failure
-                                        }
-                                    }
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        Text(pkg.storeProduct.localizedTitle).font(.title2).bold()
-                                        Text(pkg.storeProduct.localizedDescription).font(.subheadline).foregroundColor(.gray)
-                                        Text("Price: \(pkg.storeProduct.localizedPriceString)").font(.headline)
-                                    }
-                                    .padding()
-                                    .frame(maxWidth: .infinity)
-                                    .background(Color.gray.opacity(0.15))
-                                    .cornerRadius(12)
-                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.gray.opacity(0.3)))
-                                }
-                                .padding(.horizontal)
-                            }
-                        } else {
-                            Text("No subscription plans currently available.")
-                            Button("Refresh Plans") { Task { await subscriptionManager.loadOfferings() } }
-                        }
-                    } else {
-                        VStack { Text("Loading plans..."); ProgressView() }
-                    }
-                    Spacer()
-                }
-                .navigationTitle("Go Premium")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) { Button("Dismiss") { dismiss() } }
-                }
-                .onAppear{
-                    if subscriptionManager.offerings == nil {
-                        Task { await subscriptionManager.loadOfferings() }
-                    }
-                }
-            }
-        }
-    }
-    
     // MARK: - Preview
     struct StoryPage_Previews: PreviewProvider {
         static var previews: some View {
-            // Create a dummy ProfileViewModel for the preview
             let dummyProfileVM = ProfileViewModel()
-            // You might want to select a default profile for the preview if your VM supports it
-            // Example: dummyProfileVM.selectProfile(dummyProfileVM.profiles.first)
-            
-            // Create a dummy StoryPageViewModel (if needed for preview, but it's @StateObject in StoryPage)
-            // let dummyStoryPageVM = StoryPageViewModel()
-            
-            // Create a dummy RCSubscriptionManager (if needed for preview)
-            // let dummySubManager = RCSubscriptionManager.shared // This might try to init RevenueCat
-            
             StoryPage()
                 .environmentObject(dummyProfileVM)
-            // .environmentObject(dummySubManager) // If sub manager is used in preview setup directly
-            // If StoryPage directly initializes VMs with specific states for preview, do that here.
-        }
-    }
-    // MARK: – Illustration & Text Pages
-struct IllustrationPage: View {
-    let image: UIImage
-    let caption: String
-    let frameWidth: CGFloat
-    let frameHeight: CGFloat
-
-    var body: some View {
-        ZStack(alignment: .bottom) {
-            // ▪︎ Full‐page image
-            Image(uiImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: frameWidth, height: frameHeight)
-                .clipped()
-                .cornerRadius(8)
-
-            // ▪︎ Translucent caption banner (20% of height)
-//            Rectangle()
-//                .fill(StoryPageLocalColors().softCream.opacity(0.85))
-//                .frame(height: frameHeight * 0.20)
-//                .overlay(
-//                    Text(caption)
-//                        // ↓ Reduce font multiplier from 0.12 → 0.04 (≈ 1/3)
-//                        .font(.system(size: frameHeight * 0.04, weight: .light))
-//                        .multilineTextAlignment(.leading)
-//                        .lineLimit(nil)                     // allow unlimited lines
-//                        .fixedSize(horizontal: false, vertical: true)
-//                        .padding(.horizontal, 16),
-//                    alignment: .leading
-//                )
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-
-
-
-// Updated SwiftUI Views for a more book-like presentation
-
-// Updated SwiftUI Views for a more distinct, book-like presentation
-
-struct TextPageView: View {
-    let index: Int
-    let total: Int
-    let text: String
-    let frameWidth: CGFloat
-    let frameHeight: CGFloat
-
-    // We'll use the memory's "Untitled Prompt" as a chapter title.
-    private var memoryTitle: String {
-        // A real implementation might pass the actual title in.
-        // For now, we'll hardcode this for the design.
-        return "A Memory"
-    }
-    
-    // Define a specific font size that scales with the view height.
-    private var bodyFontSize: CGFloat { frameHeight * 0.038 }
-
-    var body: some View {
-        ZStack(alignment: .bottom) {
-            // ▪︎ Background “page” styling
-            RoundedRectangle(cornerRadius: 10)
-                .fill(StoryPageLocalColors().softCream.opacity(0.92))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(StoryPageLocalColors().bookFrameStroke, lineWidth: 0.8)
-                )
-
-            // ▪︎ Scrollable text content
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // 1. A "Chapter Title" for the memory
-                    Text(memoryTitle)
-                        .font(.custom("NewYork-Medium", size: bodyFontSize * 1.5))
-                        .foregroundColor(StoryPageLocalColors().terracotta)
-                        .padding(.bottom, 10)
-                        .frame(maxWidth: .infinity, alignment: .center)
-
-                    // 2. The body text with the new font
-                    Text(text)
-                        .font(.custom("NewYork-Regular", size: bodyFontSize))
-                        .lineSpacing(5)
-                        .multilineTextAlignment(.leading)
-                }
-                .padding(.horizontal, frameWidth * 0.1) // Generous margins
-                .padding(.vertical, frameHeight * 0.08)
-            }
-            
-            // ▪︎ Page number at the bottom center
-            Text("\(index)")
-                .font(.custom("NewYork-Regular", size: 12))
-                .foregroundColor(StoryPageLocalColors().defaultGray.opacity(0.8))
-                .padding(.bottom, 12)
-        }
-        .frame(width: frameWidth, height: frameHeight)
-    }
-}
-
-struct QRCodePage: View {
-    let url: URL
-    let frameWidth: CGFloat
-    let frameHeight: CGFloat
-    
-    private let colors = StoryPageLocalColors()
-    private var qrSide: CGFloat { min(frameWidth, frameHeight) * 0.35 }
-    
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(colors.softCream.opacity(0.92))
-            
-            VStack(spacing: 25) {
-                // A classic book-style ornament instead of an icon
-                Text("· ⏅ ·")
-                    .font(.custom("NewYork-Regular", size: 20))
-                    .foregroundColor(colors.terracotta)
-                
-                // The QR Code, framed
-                Image(uiImage: .qrCode(from: url.absoluteString, size: qrSide))
-                    .interpolation(.none)
-                    .resizable()
-                    .frame(width: qrSide, height: qrSide)
-                    .padding(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(colors.defaultGray.opacity(0.3), lineWidth: 1)
-                    )
-                
-                // A refined call to action
-                VStack {
-                    Text("Revisit This Memory")
-                        .font(.custom("NewYork-Medium", size: 17))
-                        .foregroundColor(colors.defaultGray)
-                    
-                    Text("Scan with your camera to open this memory in the MemoirAI app.")
-                        .font(.custom("NewYork-Regular", size: 13))
-                        .italic()
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(colors.defaultGray.opacity(0.8))
-                        .padding(.top, 2)
-                }
-                .padding(.horizontal, 40)
-            }
-        }
-        .frame(width: frameWidth, height: frameHeight)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(colors.bookFrameStroke, lineWidth: 0.8)
-        )
     }
 }

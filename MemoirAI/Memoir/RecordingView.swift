@@ -498,6 +498,7 @@ struct RecordingView: View {
             entry.id           = UUID()
             entry.prompt       = prompt.text
             entry.text         = typedText.isEmpty ? nil : typedText
+            entry.audioData    = audioURL.flatMap { try? Data(contentsOf: $0) }
             entry.audioFileURL = audioURL?.absoluteString
             entry.createdAt    = Date()
             entry.chapter      = chapterTitle

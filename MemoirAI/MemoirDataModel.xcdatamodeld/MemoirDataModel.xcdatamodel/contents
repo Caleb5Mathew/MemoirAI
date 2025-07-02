@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23605" systemVersion="23H626" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithSwiftData="YES" userDefinedModelVersionIdentifier="">
     <entity name="MemoryEntry" representedClassName="MemoryEntry" syncable="YES" codeGenerationType="class">
+        <attribute name="audioData" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
         <attribute name="audioFileURL" optional="YES" attributeType="String"/>
         <attribute name="chapter" optional="YES" attributeType="String"/>
         <attribute name="characterDetails" optional="YES" attributeType="String"/>

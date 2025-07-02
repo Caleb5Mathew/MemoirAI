@@ -96,9 +96,9 @@ struct RecordMemoryView: View {
                             ForEach(0..<3, id: \.self) { i in
                                 Circle()
                                     .stroke(
-                                        audioMonitor.isVoiceActive ? 
-                                            accent.opacity(0.2) : 
-                                            micColor.opacity(0.2), 
+                                        audioMonitor.isVoiceActive ?
+                                            accent.opacity(0.2) :
+                                            micColor.opacity(0.2),
                                         lineWidth: 2
                                     )
                                     .frame(width: CGFloat(140 + i * 20),
@@ -116,12 +116,12 @@ struct RecordMemoryView: View {
                         // Main mic button with level-responsive scaling
                         Circle()
                             .fill(
-                                isRecording && !isPaused && audioMonitor.isVoiceActive ? 
+                                isRecording && !isPaused && audioMonitor.isVoiceActive ?
                                     accent : micColor
                             )
                             .frame(width: 120, height: 120)
                             .scaleEffect(
-                                isRecording && !isPaused ? 
+                                isRecording && !isPaused ?
                                     (1.0 + audioMonitor.getSmoothedLevel() * 0.1) : 1.0
                             )
                             .shadow(color: Color.orange.opacity(0.25),
@@ -465,53 +465,66 @@ struct RecordMemoryView: View {
         
         // Audio monitor is already stopped in stopRecording()
     }
-    // MARK: – Save & Transcribe
+    // MARK: – Save & Transcribe (ENHANCED VERSION)
     func saveMemory() {
         guard hasUnsavedData() else { return }
         
         let promptToSave = selectedPrompt ?? "Untitled Prompt"
         
-        // 1️⃣ Create & save the raw entry
-        let newEntry = MemoryEntry(context: context)
-        newEntry.id           = UUID()
-        newEntry.prompt       = promptToSave
-        newEntry.text         = typedText.isEmpty ? nil : typedText
-        newEntry.audioFileURL = audioURL?.absoluteString
-        newEntry.createdAt    = Date()
-        newEntry.profileID    = profileVM.selectedProfile.id
-        
-        do {
-            try context.save()
-            NotificationCenter.default.post(name: .memorySaved, object: nil)
+        // 🔥 ENHANCED: Use background context like RecordingView
+        let bgContext = PersistenceController.shared.container.newBackgroundContext()
+        bgContext.perform {
+            // 1️⃣ Create & save the entry in background context
+            let newEntry = MemoryEntry(context: bgContext)
+            newEntry.id           = UUID()
+            newEntry.prompt       = promptToSave
+            newEntry.text         = typedText.isEmpty ? nil : typedText
+            newEntry.audioFileURL = audioURL?.absoluteString
+            newEntry.createdAt    = Date()
+            newEntry.profileID    = profileVM.selectedProfile.id
             
-            // Track successful recording for review prompts
-            usageTracker.recordingCompleted()
-        } catch {
-            print("❌ Error saving MemoryEntry:", error)
-        }
-        
-        // 2️⃣ Start URL‐based transcription
-        if let urlString = newEntry.audioFileURL,
-           let fileURL = URL(string: urlString) {
-            SFSpeechRecognizer.requestAuthorization { status in
-                guard status == .authorized else { return }
-                let request = SFSpeechURLRecognitionRequest(url: fileURL)
-                SFSpeechRecognizer()?.recognitionTask(with: request) { result, error in
-                    if let r = result, r.isFinal {
-                        let transcript = r.bestTranscription.formattedString
-                        context.perform {
-                            newEntry.text = transcript
-                            try? context.save()
-                            // notify again so your list/detail views update
-                            NotificationCenter.default.post(name: .memorySaved,
-                                                            object: nil)
+            do {
+                try bgContext.save()
+                
+                // 2️⃣ Notify on main thread immediately
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .memorySaved, object: nil)
+                    
+                    // Track successful recording for review prompts
+                    usageTracker.recordingCompleted()
+                }
+            } catch {
+                print("❌ Error saving MemoryEntry:", error)
+            }
+            
+            // 3️⃣ Start transcription using same background context
+            if let urlString = newEntry.audioFileURL,
+               let fileURL = URL(string: urlString) {
+                SFSpeechRecognizer.requestAuthorization { status in
+                    guard status == .authorized else { return }
+                    let request = SFSpeechURLRecognitionRequest(url: fileURL)
+                    SFSpeechRecognizer()?.recognitionTask(with: request) { result, error in
+                        if let r = result, r.isFinal {
+                            let transcript = r.bestTranscription.formattedString
+                            
+                            // 🔥 ENHANCED: Use same background context + better notification
+                            bgContext.perform {
+                                newEntry.text = transcript
+                                try? bgContext.save()
+                                
+                                // 🔥 KEY FIX: Notify AGAIN after transcription completes
+                                DispatchQueue.main.async {
+                                    NotificationCenter.default.post(name: .memorySaved, object: nil)
+                                    print("✅ Transcription completed: \(transcript.prefix(50))...")
+                                }
+                            }
                         }
                     }
                 }
             }
         }
         
-        // 3️⃣ Reset UI immediately
+        // 4️⃣ Reset UI immediately on main thread (but don't dismiss yet)
         typedText       = ""
         selectedPrompt  = nil
         audioURL        = nil
@@ -522,6 +535,11 @@ struct RecordMemoryView: View {
         // Persist prompt‐of‐the‐day if needed
         if promptToSave == passedPrompt {
             UserDefaults.standard.set(true, forKey: promptKey)
+        }
+        
+        // 🔥 ENHANCED: Brief delay to allow transcription to start, then dismiss
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            dismiss()
         }
     }
 }

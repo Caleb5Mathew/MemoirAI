@@ -34,6 +34,9 @@ struct HomepageView: View {
 
     @State private var showingAddProfile = false
 
+    @State private var showMemoryRecoveryAlert = false
+    @State private var recoveredMemoryCount = 0
+
     // MARK: – Computed Properties
 
     /// How many full chapters have been completed?
@@ -195,6 +198,17 @@ struct HomepageView: View {
             .sheet(item: $selectedPhotoData) { wrapper in
                 CropSheetView(photoData: wrapper.data) { croppedData in
                     // profileVM.addProfile(...) as needed
+                }
+            }
+            .alert("Memories Recovered!", isPresented: $showMemoryRecoveryAlert) {
+                Button("Great!") {}
+            } message: {
+                Text("We found and recovered \(recoveredMemoryCount) of your memories that were previously missing.")
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("MemoriesRecovered"))) { notification in
+                if let count = notification.object as? Int, count > 0 {
+                    recoveredMemoryCount = count
+                    showMemoryRecoveryAlert = true
                 }
             }
 //            .navigationBarHidden(true)

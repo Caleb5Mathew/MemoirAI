@@ -669,9 +669,14 @@ struct OnboardingFlow: View {
         
         let newProfile = Profile(name: profileName, photoData: profileImageData)
         
-        // Clear any existing default profiles and add the new one
-        profileVM.profiles.removeAll()
-        profileVM.addProfile(newProfile)
+        // Smart profile handling
+        if profileVM.profiles.isEmpty {
+            // First time user - create new profile
+            profileVM.addProfile(newProfile)
+        } else {
+            // Existing user re-running onboarding - don't destroy their data
+            print("⚠️ User already has profiles. Skipping profile creation to preserve data.")
+        }
         
         // Save additional user data
         UserDefaults.standard.set(selectedDate, forKey: "userBirthday")
@@ -688,12 +693,6 @@ struct OnboardingFlow: View {
         // Schedule notifications
         notificationManager.scheduleDailyPrompt()
         notificationManager.scheduleWeeklyReminder()
-        
-//        // Mark onboarding as completed
-//        hasCompletedOnboarding = true
-//        
-//        // Dismiss onboarding
-//        dismiss()
     }
 }
 
@@ -705,4 +704,4 @@ struct OnboardingFlow: View {
             UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
             print("🔄 Onboarding reset for testing")
         }
-} 
+}
