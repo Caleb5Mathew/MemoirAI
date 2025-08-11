@@ -283,5 +283,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+	<true/>
+	<key>NSUbiquitousContainerName</key>
+	<string>MemoirAI</string>
+	<key>NSUbiquitousContainerSupportedFolderLevels</key>
+	<string>None</string>
 </dict>
 </plist>

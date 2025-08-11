@@ -54,7 +54,18 @@ struct PersistenceController {
         
         container.loadPersistentStores(completionHandler: { (storeDescription, error) in
             if let error = error as NSError? {
-                fatalError("Unresolved error \(error), \(error.userInfo)")
+                print("❌ Core Data store loading error: \(error)")
+                print("❌ Error details: \(error.userInfo)")
+                
+                // Don't fatal error for CloudKit sync issues - let the app continue
+                if error.domain == "NSCocoaErrorDomain" && error.code == 134060 {
+                    print("⚠️ CloudKit sync error - app will continue with local data")
+                } else {
+                    fatalError("Unresolved error \(error), \(error.userInfo)")
+                }
+            } else {
+                print("✅ Core Data store loaded successfully")
+                print("✅ CloudKit container: \(storeDescription.cloudKitContainerOptions?.containerIdentifier ?? "None")")
             }
         })
 
