@@ -15,6 +15,7 @@ struct RecordingView: View {
     @Environment(\.managedObjectContext) private var context
     @EnvironmentObject var profileVM: ProfileViewModel
     @StateObject private var audioMonitor = AudioLevelMonitor()
+    @StateObject private var permissionManager = PermissionManager.shared
 
     @State private var typedText: String = ""
     @State private var audioRecorder: AVAudioRecorder?
@@ -322,6 +323,13 @@ struct RecordingView: View {
             }
             .onAppear(perform: setupAudioSession)
             .onDisappear(perform: cleanup)
+            // Permission alerts
+            .fullScreenCover(isPresented: $permissionManager.showMicrophonePermissionAlert) {
+                MicrophonePermissionAlert(
+                    isPresented: $permissionManager.showMicrophonePermissionAlert,
+                    onSettingsTap: permissionManager.openSettings
+                )
+            }
         }
     }
 
@@ -397,6 +405,12 @@ struct RecordingView: View {
     }
 
     func startRecording() {
+        // Check microphone permission before starting
+        guard permissionManager.isMicrophoneAuthorized else {
+            permissionManager.requestMicrophonePermission()
+            return
+        }
+        
         triggerHaptic(.impact(.medium))
         
         // Generate a unique filename with a CAF extension for uncompressed PCM
@@ -560,6 +574,14 @@ struct RecordingView: View {
                     dismiss()
                 }
             }
+        }
+    }
+    
+    // MARK: - Permission Management
+    
+    private func checkMicrophonePermission() {
+        if !permissionManager.isMicrophoneAuthorized {
+            permissionManager.requestMicrophonePermission()
         }
     }
 

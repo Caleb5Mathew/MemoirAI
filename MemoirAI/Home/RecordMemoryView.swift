@@ -9,6 +9,7 @@ struct RecordMemoryView: View {
     @StateObject private var viewModel = MemoryEntryViewModel()
     @StateObject private var usageTracker = UsageTracker.shared
     @StateObject private var audioMonitor = AudioLevelMonitor()
+    @StateObject private var permissionManager = PermissionManager.shared
     
     @State private var selectedPrompt: String? = nil
     @State private var showTextEntry: Bool = false
@@ -322,10 +323,10 @@ struct RecordMemoryView: View {
         }
         .onAppear {
             answeredPrompts = viewModel.entries.compactMap { $0.prompt }
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                if !granted {
-                    print("🔒 Microphone permission not granted")
-                }
+            
+            // Request microphone permission if not already granted
+            if !permissionManager.isMicrophoneAuthorized {
+                permissionManager.requestMicrophonePermission()
             }
 
             // Ensure speech recognition permission is requested up-front
@@ -334,6 +335,13 @@ struct RecordMemoryView: View {
             }
         }
         .navigationBarHidden(true)
+        // Permission alerts
+        .fullScreenCover(isPresented: $permissionManager.showMicrophonePermissionAlert) {
+            MicrophonePermissionAlert(
+                isPresented: $permissionManager.showMicrophonePermissionAlert,
+                onSettingsTap: permissionManager.openSettings
+            )
+        }
     }
     
     func recordingControl(title: String, icon: String, action: @escaping () -> Void) -> some View {
@@ -392,6 +400,12 @@ struct RecordMemoryView: View {
     
     // MARK: - Recording
     func startRecording() {
+        // Check microphone permission before starting
+        guard permissionManager.isMicrophoneAuthorized else {
+            permissionManager.requestMicrophonePermission()
+            return
+        }
+        
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])

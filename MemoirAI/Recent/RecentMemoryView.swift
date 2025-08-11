@@ -4,6 +4,7 @@ import CoreData
 struct RecentMemoriesView: View {
     @Environment(\.managedObjectContext) private var context
     @EnvironmentObject var profileVM: ProfileViewModel
+    @StateObject private var permissionManager = PermissionManager.shared
 
     @State private var entries: [MemoryEntry] = []
     @State private var sortAscending = false
@@ -86,14 +87,29 @@ struct RecentMemoriesView: View {
                         }
                     }
                 }
-                .onAppear { fetchEntries(for: profileVM.selectedProfile.id) }
+                .onAppear { 
+                    fetchEntries(for: profileVM.selectedProfile.id)
+                    // Check for untranscribed memories and request permissions if needed
+                    checkPermissionsAndTranscribe()
+                }
                 .onChange(of: profileVM.selectedProfile.id) { newID in
                     print("🔄 Switched to profile: \(profileVM.selectedProfile.name ?? "Unnamed") (ID: \(newID))")
                     fetchEntries(for: newID)
+                    // Check permissions again when switching profiles
+                    checkPermissionsAndTranscribe()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .memorySaved)) { _ in
                     // Refresh entries when a memory is saved/updated
                     fetchEntries(for: profileVM.selectedProfile.id)
+                    // Refresh permission manager state
+                    permissionManager.refreshUntranscribedCount()
+                }
+                // Permission alerts
+                .fullScreenCover(isPresented: $permissionManager.showSpeechPermissionAlert) {
+                    SpeechRecognitionPermissionAlert(
+                        isPresented: $permissionManager.showSpeechPermissionAlert,
+                        onSettingsTap: permissionManager.openSettings
+                    )
                 }
             }
         }
@@ -117,6 +133,22 @@ struct RecentMemoriesView: View {
         context.delete(entry)
         try? context.save()
         fetchEntries(for: profileVM.selectedProfile.id)
+    }
+    
+    // MARK: - Permission Management
+    
+    private func checkPermissionsAndTranscribe() {
+        // Check if there are untranscribed memories
+        permissionManager.refreshUntranscribedCount()
+        
+        // If there are untranscribed memories and speech recognition is not authorized,
+        // request permission with a professional popup
+        if permissionManager.hasUntranscribedMemories && !permissionManager.isSpeechRecognitionAuthorized {
+            // Small delay to ensure UI is ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                permissionManager.requestSpeechRecognitionPermission()
+            }
+        }
     }
 }
 

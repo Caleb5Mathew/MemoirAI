@@ -108,6 +108,7 @@ struct MemoryDetailView: View {
     @Environment(\.presentationMode) private var presentationMode
     @Environment(\.managedObjectContext) private var context
     @StateObject private var familyManager = FamilyManager.shared
+    @StateObject private var permissionManager = PermissionManager.shared
     let memory: MemoryEntry
 
     @State private var audioEngine = AVAudioEngine()
@@ -376,6 +377,13 @@ struct MemoryDetailView: View {
         // Alert for already-complete or permission issues
         .alert(transcriptionAlertMessage, isPresented: $showTranscriptionAlert) {
             Button("OK", role: .cancel) {}
+        }
+        // Permission alerts
+        .fullScreenCover(isPresented: $permissionManager.showSpeechPermissionAlert) {
+            SpeechRecognitionPermissionAlert(
+                isPresented: $permissionManager.showSpeechPermissionAlert,
+                onSettingsTap: permissionManager.openSettings
+            )
         }
     }
     
@@ -661,24 +669,11 @@ struct MemoryDetailView: View {
 
     // MARK: - Batch Transcription Handler
     private func handleBatchTranscription() {
-        let status = SFSpeechRecognizer.authorizationStatus()
-        switch status {
-        case .authorized:
+        // Use the new permission manager
+        if permissionManager.isSpeechRecognitionAuthorized {
             startBatchTranscription()
-        case .notDetermined:
-            SFSpeechRecognizer.requestAuthorization { newStatus in
-                DispatchQueue.main.async {
-                    if newStatus == .authorized {
-                        startBatchTranscription()
-                    } else {
-                        transcriptionAlertMessage = "Speech recognition permission is required to transcribe your audio memories. You can enable it in Settings."
-                        showTranscriptionAlert = true
-                    }
-                }
-            }
-        default:
-            transcriptionAlertMessage = "Speech recognition permission is required to transcribe your audio memories. You can enable it in Settings."
-            showTranscriptionAlert = true
+        } else {
+            permissionManager.requestSpeechRecognitionPermission()
         }
     }
 

@@ -88,6 +88,10 @@ struct MemoirAIApp: App {
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 // Our custom UI uses light backgrounds; force a light appearance so dynamic text stays dark
                 .preferredColorScheme(.light)
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    // Check for untranscribed memories when app becomes active
+                    PermissionManager.shared.handleAppDidBecomeActive()
+                }
         }
     }
 }
