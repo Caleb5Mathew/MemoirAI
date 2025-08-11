@@ -12,7 +12,8 @@ class AudioLevelMonitor: ObservableObject {
     private var audioRecorder: AVAudioRecorder?
     private var levelTimer: Timer?
     private var voiceActivityBuffer: [Bool] = []
-    private let voiceThreshold: Float = -40.0 // dB threshold for voice activity
+    // Lower threshold (more sensitive): values above -50 dB now count as speech instead of -40 dB.
+    private let voiceThreshold: Float = -55.0 // dB threshold for voice activity
     private let bufferSize = 10 // Number of samples to average for voice activity
     
     func startMonitoring(recorder: AVAudioRecorder) {

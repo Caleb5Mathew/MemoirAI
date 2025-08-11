@@ -1,0 +1,9 @@
+//
+//  MemoryEntry+Playback.swift
+//  MemoirAI
+//
+//  Created by user941803 on 7/3/25.
+//
+
+
+import Foundationextension MemoryEntry {    /// Returns a URL that points to playable audio for this memory.    /// 1. Uses the stored `audioFileURL` if the file still exists on disk.    /// 2. Falls back to writing the `audioData` blob to a temporary file and returns that URL.    /// Returns `nil` if no audio is available.    public var playbackURL: URL? {        // 1️⃣ First, try the original file URL        if let urlString = audioFileURL,           let url = URL(string: urlString),           FileManager.default.fileExists(atPath: url.path) {            return url        }        // 2️⃣ Fallback: write audioData (if any) to a temp file        if let data = value(forKey: "audioData") as? Data {            let tempURL = FileManager.default.temporaryDirectory                .appendingPathComponent((id?.uuidString ?? UUID().uuidString) + ".caf")            // Write once – if it already exists, skip write to save IO            if !FileManager.default.fileExists(atPath: tempURL.path) {                do { try data.write(to: tempURL, options: .atomic) } catch {                    print("❌ Could not write temp audio file: \(error)")                }            }            return tempURL        }        return nil    }    /// True when the memory contains either an audio file path or raw audio data.    public var hasAudio: Bool {        if let playbackURL = playbackURL {            return FileManager.default.fileExists(atPath: playbackURL.path)        }        return false    }} 

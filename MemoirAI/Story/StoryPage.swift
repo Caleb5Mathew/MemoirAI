@@ -3,6 +3,7 @@ import PhotosUI
 import Combine
 import RevenueCat
 import RevenueCatUI
+import CoreData
 
 // Enhanced color definitions for book-like appearance
 struct StoryPageLocalColors {
@@ -75,6 +76,7 @@ struct StoryPage: View {
     
     @State private var currentPageIndex = 0
     @State private var showSettings = false
+    @State private var showGallery = false
     @State private var selectedImageForFullScreen: UIImage? = nil
     @State private var hasRequestedGeneration = false
     
@@ -94,11 +96,33 @@ struct StoryPage: View {
     // NEW: Tooltip state for subscription status
     @State private var showSubscriptionTooltip = false
     
+    // Incomplete memories banner
+    @State private var incompleteCount: Int = 0
+    @State private var navigateToRecent: Bool = false
+    
+    @Environment(\.managedObjectContext) private var context
+    
+    // ETA tracking
+    @State private var totalEstimatedSeconds: Int = 0
+    @State private var generationStart: Date? = nil
+    @State private var etaTick: Int = 0
+    @State private var etaTimer: AnyCancellable?
+    
     private var displayProgress: Double {
         if realProgress > 0.05 && realProgress > fakeProgress {
             return realProgress
         }
         return max(fakeProgress, realProgress)
+    }
+    
+    // Human-readable remaining time string
+    private var etaString: String {
+        guard vm.isLoading, totalEstimatedSeconds > 0, let start = generationStart else { return "" }
+        let elapsed = Int(Date().timeIntervalSince(start))
+        let remaining = max(0, totalEstimatedSeconds - elapsed)
+        let mins = remaining / 60
+        let secs = remaining % 60
+        return "Estimated time: \(mins)m \(secs)s remaining"
     }
     
     // NEW: Subscription check - exactly like MemoirView
@@ -124,6 +148,16 @@ struct StoryPage: View {
                 Text("\(Int(displayProgress * 100))%")
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundColor(localColors.defaultGray)
+
+                if !etaString.isEmpty {
+                    Text(etaString)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                Text("Please keep the app open while we generate your storybook.")
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.8))
             }
         } else if let error = vm.errorMessage {
             VStack(spacing: 12) {
@@ -136,6 +170,7 @@ struct StoryPage: View {
                     .multilineTextAlignment(.center)
                     .foregroundColor(error.contains("Maximum images reached") || error.contains("Not enough images") ? .orange : localColors.defaultRed)
                     .padding(.horizontal, 5)
+                    .fixedSize(horizontal: false, vertical: true)
                 
                 if error.contains("Maximum images reached") || error.contains("Not enough images") {
                     // Show subscription status
@@ -231,9 +266,34 @@ struct StoryPage: View {
             )
         } else {
             VStack(spacing: 12) {
+                // Incomplete memories banner
+                if incompleteCount > 0 {
+                    VStack(spacing:6){
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName:"exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                                .padding(.top,2)
+                            Text("You have \(incompleteCount) memories that can be enhanced for better images.")
+                                .font(.system(size:13))
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Button(action:{ navigateToRecent = true }){
+                            Text("Enhance Now")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(localColors.defaultWhite)
+                                .padding(.horizontal,14).padding(.vertical,6)
+                                .background(Color.orange)
+                                .cornerRadius(8)
+                        }
+                    }
+                    .padding(12)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(10)
+                }
                 Text("Your storybook awaits!")
-                    .font(.storyPageSerifFont(size: 18))
-                    .foregroundColor(localColors.defaultBlack.opacity(0.9))
+                .font(.storyPageSerifFont(size: 18))
+                .foregroundColor(localColors.defaultBlack.opacity(0.9))
                 Text("Tap below to bring this profile's memories to life.")
                     .font(.system(size: 14))
                     .foregroundColor(localColors.defaultGray)
@@ -269,95 +329,124 @@ struct StoryPage: View {
         realProgress = 0
         vm.progress = 0
         cancellableTimer?.cancel()
+        etaTimer?.cancel()
         vm.isLoading = false
         // Don't reset hasRequestedGeneration - let it persist
     }
         
-        private func generateStorybookWithPaywallCheck() {
+    private func generateStorybookWithPaywallCheck() {
         let pagesToAttempt = vm.expectedPageCount()
 
-            guard pagesToAttempt > 0 else {
-                print("StoryPage: Attempting to generate 0 pages. Aborting.")
-                vm.errorMessage = "Please select a valid number of pages to generate."
-                return
-            }
-            
-            // NEW: Check for active subscription first - same logic as MemoirView
-            guard isSubscribed else {
-                print("StoryPage: No active subscription. Showing paywall.")
+        guard pagesToAttempt > 0 else {
+            vm.errorMessage = "Please select at least 1 memory to generate."
+            return
+        }
+        
+        // ─────────────────────────────────────────────────────────────
+        // FREE PREVIEW LOGIC – non-subscribers get ONE lifetime preview (tracked via iCloud KV store)
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        cloudStore.synchronize() // ensure freshest value
+        let freePreviewUsed = UserDefaults.standard.bool(forKey: "memoirai_freeBookUsed") || cloudStore.bool(forKey: "memoirai_freeBookUsed")
+
+        if !isSubscribed {
+            // 1️⃣ Already consumed → block generation entirely
+            if freePreviewUsed {
+                vm.errorMessage = "You have already used your free preview. Subscribe to unlock unlimited storybooks."
                 vm.isLoading = false
                 hasRequestedGeneration = false
-                showPaywall = true  // ← Simple paywall trigger like MemoirView
                 return
             }
-            
-            // NEW: Check if user has reached image limit
-            if subscriptionManager.hasReachedImageLimit {
-                print("StoryPage: Image limit reached. Remaining: \(subscriptionManager.remainingAllowance)")
+
+            // 2️⃣ First (allowed) preview must be exactly ONE page
+            if pagesToAttempt > FreePreviewConfig.maxPagesWithoutSubscription {
+                vm.errorMessage = "Without a subscription you can generate up to \(FreePreviewConfig.maxPagesWithoutSubscription) images as a preview. Reduce the slider or subscribe to unlock full books."
                 vm.isLoading = false
                 hasRequestedGeneration = false
-                let renewalDate = subscriptionManager.getRenewalDateString()
-                vm.errorMessage = "Maximum images reached (50). Your allowance will reset on \(renewalDate)."
                 return
-            }
-            
-            // Check if user has enough remaining allowance for the requested images
-            if subscriptionManager.canGenerate(pages: pagesToAttempt) {
-                print("StoryPage: Check successful. Proceeding with generation of \(pagesToAttempt) pages.")
-                startActualGenerationProcess(pagesExpected: pagesToAttempt)
-            } else {
-                print("StoryPage: Insufficient allowance. Remaining: \(subscriptionManager.remainingAllowance), Requested: \(pagesToAttempt)")
-                vm.isLoading = false
-                hasRequestedGeneration = false
-                let renewalDate = subscriptionManager.getRenewalDateString()
-                vm.errorMessage = "Not enough images remaining (\(subscriptionManager.remainingAllowance) left). Your allowance will reset on \(renewalDate)."
             }
         }
         
-        private func startActualGenerationProcess(pagesExpected: Int) {
-            resetGenerationState()
-            hasRequestedGeneration = true
-            vm.isLoading = true
-            
-            let fakeIncrementPerTick = 0.004
-            let targetFakeProgress = 0.4
-            
-            cancellableTimer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect().sink { _ in
-                if fakeProgress < targetFakeProgress && !Task.isCancelled {
-                    fakeProgress += fakeIncrementPerTick
-                    if fakeProgress >= targetFakeProgress {
-                        fakeProgress = targetFakeProgress
-                        cancellableTimer?.cancel()
-                    }
-                } else {
+        // If subscribed, block when allowance insufficient
+        if isSubscribed && pagesToAttempt > subscriptionManager.remainingAllowance {
+            vm.isLoading = false
+            hasRequestedGeneration = false
+            let renewalDate = subscriptionManager.getRenewalDateString()
+            vm.errorMessage = "You need \(pagesToAttempt) images but only have \(subscriptionManager.remainingAllowance) remaining. Your allowance resets on \(renewalDate)."
+            return
+        }
+        
+        // ✨ Warn about large generations but still allow them
+        if subscriptionManager.isLargeGeneration(pages: pagesToAttempt) {
+            print("⚠️ StoryPage: Large generation requested (\(pagesToAttempt) images). User was warned in settings.")
+        }
+        
+        print("StoryPage: Generation approved. Proceeding with \(pagesToAttempt) memories.")
+        startActualGenerationProcess(pagesExpected: pagesToAttempt)
+    }
+        
+    private func startActualGenerationProcess(pagesExpected: Int) {
+        resetGenerationState()
+        hasRequestedGeneration = true
+        vm.isLoading = true
+        
+        // Estimate – assume ~12 s per image (OpenAI round-trip); tweak as needed
+        totalEstimatedSeconds = pagesExpected * 12
+        generationStart = Date()
+        etaTimer?.cancel()
+        etaTimer = Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { _ in etaTick += 1 } // ticks every second to refresh UI
+        
+        let fakeIncrementPerTick = 0.004
+        let targetFakeProgress = 0.4
+        
+        cancellableTimer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect().sink { _ in
+            if fakeProgress < targetFakeProgress && !Task.isCancelled {
+                fakeProgress += fakeIncrementPerTick
+                if fakeProgress >= targetFakeProgress {
+                    fakeProgress = targetFakeProgress
                     cancellableTimer?.cancel()
                 }
-            }
-            
-            let currentProfileID = profileVM.selectedProfile.id
-            Task {
-                await vm.generateStorybook(forProfileID: currentProfileID)
-                
-                await MainActor.run {
-                    cancellableTimer?.cancel()
-                    
-                    if vm.errorMessage == nil && !vm.images.isEmpty {
-                        let actualImagesGenerated = vm.images.count
-                        if actualImagesGenerated > 0 {
-                            subscriptionManager.consume(pages: actualImagesGenerated)
-                            print("StoryPage: Consumed \(actualImagesGenerated) images.")
-                        }
-                        self.realProgress = 1.0
-                        self.fakeProgress = 1.0
-                    } else {
-                        print("StoryPage: Gen failed/no images. Error: \(vm.errorMessage ?? "N/A").")
-                        self.realProgress = 0.0
-                        self.fakeProgress = 0.0
-                    }
-                    if vm.isLoading { print("Warning: vm.isLoading is still true post-generation.")}
-                }
+            } else {
+                cancellableTimer?.cancel()
             }
         }
+        
+        let currentProfileID = profileVM.selectedProfile.id
+        Task {
+            await vm.generateStorybook(forProfileID: currentProfileID)
+            
+            await MainActor.run {
+                cancellableTimer?.cancel()
+                
+                if vm.errorMessage == nil && !vm.images.isEmpty {
+                    let actualImagesGenerated = vm.images.count
+                    if actualImagesGenerated > 0 {
+                        subscriptionManager.consume(pages: actualImagesGenerated)
+                        print("StoryPage: Consumed \(actualImagesGenerated) images.")
+                    }
+                    self.realProgress = 1.0
+                    self.fakeProgress = 1.0
+                    etaTimer?.cancel()
+                } else {
+                    print("StoryPage: Gen failed/no images. Error: \(vm.errorMessage ?? "N/A").")
+                    self.realProgress = 0.0
+                    self.fakeProgress = 0.0
+                    etaTimer?.cancel()
+                }
+                if vm.isLoading { print("Warning: vm.isLoading is still true post-generation.")}
+            }
+        }
+        
+        // Mark free preview as consumed for non-subscribers (local + iCloud)
+        if !isSubscribed {
+            UserDefaults.standard.set(true, forKey: "memoirai_freeBookUsed")
+            UserDefaults.standard.synchronize()
+            let cloudStore = NSUbiquitousKeyValueStore.default
+            cloudStore.set(true, forKey: "memoirai_freeBookUsed")
+            cloudStore.synchronize()
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -402,6 +491,16 @@ struct StoryPage: View {
                         Spacer()
                         
                         HStack(spacing: 12) {
+                            // Gallery button (opens list of past books)
+                            Button { showGallery = true } label: {
+                                Image(systemName: "books.vertical")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundColor(localColors.defaultBlack.opacity(0.7))
+                                    .padding(10)
+                                    .background(localColors.subtleControlBackground)
+                                    .clipShape(Circle())
+                            }
+                            
                             // NEW: Download button (only show when storybook exists)
                             if hasRequestedGeneration && !vm.pageItems.isEmpty {
                                 Button(action: downloadStorybook) {
@@ -411,7 +510,7 @@ struct StoryPage: View {
                                                 .scaleEffect(0.8)
                                                 .progressViewStyle(CircularProgressViewStyle(tint: localColors.defaultBlack.opacity(0.7)))
                                         } else {
-                                            Image(systemName: showDownloadSuccess ? "checkmark.circle.fill" : "arrow.down.circle.fill")
+                                            Image(systemName: showDownloadSuccess ? "checkmark.circle.fill" : "square.and.arrow.up")
                                                 .font(.system(size: 18, weight: .medium))
                                         }
                                     }
@@ -506,6 +605,8 @@ struct StoryPage: View {
                 }
             }
             .navigationBarHidden(true)
+            // Hidden nav link to RecentMemoriesView for enhance flow
+            NavigationLink(destination: RecentMemoriesView().environmentObject(profileVM), isActive: $navigateToRecent) { EmptyView() }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
                     .environmentObject(profileVM)
@@ -522,6 +623,10 @@ struct StoryPage: View {
                     onGenerate: { }
                 )
                 .environmentObject(profileVM)
+            }
+            .sheet(isPresented: $showGallery) {
+                StorybookGalleryView()
+                    .environmentObject(profileVM)
             }
             .overlay(
                 FullScreenImageView(
@@ -543,12 +648,38 @@ struct StoryPage: View {
                 Text("This will clear your current storybook and create a new one. This action cannot be undone.")
             }
             .fullScreenCover(isPresented: $showPaywall) {
-                GeometryReader { geo in
-                    PaywallView(displayCloseButton: true)
-                        .frame(maxWidth: .infinity)
-                        .ignoresSafeArea()
-                        .edgesIgnoringSafeArea(.all)
+                // Add error handling around PaywallView
+                Group {
+                    if RCSubscriptionManager.shared.offerings?.current?.availablePackages.isEmpty == false {
+                        PaywallView(displayCloseButton: true)
+                    } else {
+                        // Fallback view when paywall can't load
+                        VStack(spacing: 20) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 60))
+                                .foregroundColor(.orange)
+                            
+                            Text("Subscription Temporarily Unavailable")
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                            
+                            Text("Please try again later or contact support.")
+                                .multilineTextAlignment(.center)
+                            
+                            Button("Close") {
+                                showPaywall = false
+                            }
+                            .padding()
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(12)
+                        }
+                        .padding()
+                        .background(Color.white)
+                    }
                 }
+                .frame(maxWidth: .infinity)
+                .ignoresSafeArea()
             }
             .onAppear {
                 // Load persisted storybook when view appears
@@ -568,6 +699,8 @@ struct StoryPage: View {
                 }
 
                 Task { await subscriptionManager.refreshCustomerInfo() }
+                
+                updateIncompleteCount()
             }
             .onChange(of: profileVM.selectedProfile.id) { newProfileID in
                 // Load storybook for new profile, don't reset
@@ -575,6 +708,8 @@ struct StoryPage: View {
                 
                 // Update hasRequestedGeneration based on whether we have content
                 hasRequestedGeneration = vm.hasGeneratedStorybook
+                
+                updateIncompleteCount()
             }
             .onChange(of: vm.progress) { newApiProgress in
                 // existing progress-tracking logic
@@ -626,37 +761,35 @@ struct StoryPage: View {
         isDownloading = true
         
         Task {
-            if let pdfURL = vm.downloadStorybook() {
-                // Share the PDF
-                await MainActor.run {
-                    let activityVC = UIActivityViewController(activityItems: [pdfURL], applicationActivities: nil)
-                    
-                    if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let window = scene.windows.first,
-                       let rootVC = window.rootViewController {
-                        
-                        // Handle iPad presentation
-                        if let popover = activityVC.popoverPresentationController {
-                            popover.sourceView = window
-                            popover.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 0, height: 0)
-                            popover.permittedArrowDirections = []
+            guard let pdfURL = vm.downloadStorybook() else {
+                await MainActor.run { isDownloading = false }
+                return
+            }
+
+            await MainActor.run {
+                let activityVC = UIActivityViewController(activityItems: [pdfURL], applicationActivities: nil)
+
+                activityVC.completionWithItemsHandler = { _, completed, _, _ in
+                    self.isDownloading = false
+                    if completed {
+                        self.showDownloadSuccess = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                            self.showDownloadSuccess = false
                         }
-                        
-                        rootVC.present(activityVC, animated: true)
-                    }
-                    
-                    isDownloading = false
-                    showDownloadSuccess = true
-                    
-                    // Reset success state after delay
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        showDownloadSuccess = false
                     }
                 }
-            } else {
-                await MainActor.run {
-                    isDownloading = false
-                    // Could show error alert here
+
+                if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                   let window = scene.windows.first,
+                   let rootVC = window.rootViewController {
+                    if let popover = activityVC.popoverPresentationController {
+                        popover.sourceView = window
+                        popover.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 0, height: 0)
+                        popover.permittedArrowDirections = []
+                    }
+                    rootVC.present(activityVC, animated: true)
+                } else {
+                    self.isDownloading = false
                 }
             }
         }
@@ -667,6 +800,15 @@ struct StoryPage: View {
         vm.clearCurrentStorybook()
         hasRequestedGeneration = false
         showSettings = true // Open settings so user can adjust parameters
+    }
+    
+    // MARK: – Helper to count memories needing enhancement
+    private func updateIncompleteCount() {
+        let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
+        request.predicate = NSPredicate(format: "profileID == %@", profileVM.selectedProfile.id as CVarArg)
+        if let all = try? context.fetch(request) {
+            incompleteCount = all.filter { $0.isIncomplete }.count
+        }
     }
 }
 

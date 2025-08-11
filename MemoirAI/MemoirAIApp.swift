@@ -22,9 +22,9 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
             didFinishLaunchingWithOptions: launchOptions
         )
 
-        // 3. Enable tracking if you have ATT consent
-        Settings.shared.isAdvertiserTrackingEnabled = true   // or gate behind ATT prompt
-        Settings.shared.isAutoLogAppEventsEnabled   = true   // optional auto events
+        // 3. Initialize Facebook tracking (will be updated by ATT helper)
+        Settings.shared.isAutoLogAppEventsEnabled = true
+        // Note: isAdvertiserTrackingEnabled now managed by ATTHelper
 
         print("✅ FBSDK version:", Settings.shared.sdkVersion)
         return true
@@ -42,16 +42,30 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
 
 @main
 struct MemoirAIApp: App {
+    @StateObject private var profileVM = ProfileViewModel()
+    
+    let persistenceController = PersistenceController.shared
 
     // 4. Tell SwiftUI to install the delegate
     @UIApplicationDelegateAdaptor(FBAppDelegate.self) var fbDelegate
 
     init() {
-        // ─ RevenueCat ─────────────────────────────────────────────
+        //  ❇️  Always give RevenueCat a stable user-ID so Meta gets `app_user_id`
+        let rcUserDefaultsKey = "memoirai_rc_user_id"
+        let uuid = UserDefaults.standard.string(forKey: rcUserDefaultsKey) ?? {
+            let newID = UUID().uuidString
+            UserDefaults.standard.set(newID, forKey: rcUserDefaultsKey)
+            return newID
+        }()
+
+        // Configure RevenueCat FIRST – before any subscription manager access
+        Purchases.logLevel = .debug
         if let apiKey = Bundle.main.object(forInfoDictionaryKey: "RevenueCatAPIKey") as? String,
            !apiKey.isEmpty {
-            Purchases.configure(withAPIKey: apiKey)
-            Purchases.logLevel = .debug
+            Purchases.configure(withAPIKey: apiKey, appUserID: uuid)
+            print("✅ RevenueCat configured with API key: \(apiKey) • userID: \(uuid)")
+        } else {
+            print("❌ RevenueCat API key not found in Info.plist")
         }
 
         // ─ Mixpanel ───────────────────────────────────────────────
@@ -68,9 +82,12 @@ struct MemoirAIApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(profileVM)
+                .environmentObject(iCloudManager.shared)
                 .environmentObject(RCSubscriptionManager.shared)
-                .environment(\.managedObjectContext,
-                              PersistenceController.shared.container.viewContext)
+                .environment(\.managedObjectContext, persistenceController.container.viewContext)
+                // Our custom UI uses light backgrounds; force a light appearance so dynamic text stays dark
+                .preferredColorScheme(.light)
         }
     }
 }

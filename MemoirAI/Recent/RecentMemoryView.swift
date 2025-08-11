@@ -92,7 +92,7 @@ struct RecentMemoriesView: View {
                     fetchEntries(for: newID)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .memorySaved)) { _ in
-                    print("🟢 Memory saved, reloading for \(profileVM.selectedProfile.name ?? "Unnamed")")
+                    // Refresh entries when a memory is saved/updated
                     fetchEntries(for: profileVM.selectedProfile.id)
                 }
             }
@@ -169,7 +169,7 @@ struct MemoryCard: View {
                     }
                     
                     // Media type indicators
-                    if entry.audioFileURL != nil {
+                    if entry.hasAudio {
                         Image(systemName: "waveform.circle.fill")
                             .foregroundColor(.orange)
                     } else if let text = entry.text, !text.isEmpty {
@@ -206,3 +206,7 @@ struct MemoryCard: View {
 extension Notification.Name {
     static let memorySaved = Notification.Name("memorySaved")
 }
+
+// MARK: – Backwards Compatibility Alias
+// Some older views may still reference `RecentMemoryView`. Provide a type-alias so builds don't break.
+typealias RecentMemoryView = RecentMemoriesView

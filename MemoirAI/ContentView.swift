@@ -1,44 +1,52 @@
 import SwiftUI
+import FBSDKCoreKit
 
 struct ContentView: View {
-    // 1️⃣ the shared router that MemoirAIApp’s `.onOpenURL` will call
-    @StateObject private var nav = NavigationRouter.shared
+    @EnvironmentObject var iCloudManager: iCloudManager
     
-    // 2️⃣ one NavigationPath to drive programmatic pushes
+    // For deep-linking to memory details
+    @StateObject private var nav = NavigationRouter.shared
     @State private var path = NavigationPath()
     
-    // 3️⃣ Core-Data context you were already injecting
-    private var moc = PersistenceController.shared.container.viewContext
+    // Local fallback for immediate availability even before iCloud sync
+    @AppStorage("hasCompletedOnboarding_local") private var localCompleted: Bool = false
     
     var body: some View {
-        NavigationStack(path: $path) {
-            // your existing tab bar
-            MainTabView()
-                .environment(\.managedObjectContext, moc)
-                // 4️⃣ whenever the router publishes a new UUID, push it
-                .onReceive(nav.$selectedMemoryID.compactMap { $0 }) { id in
-                    path.append(id)
+        let done = localCompleted || iCloudManager.hasCompletedOnboarding
+        return Group {
+            if done {
+                NavigationStack(path: $path) {
+                    MainTabView()
+                        .onReceive(nav.$selectedMemoryID.compactMap { $0 }) { id in
+                            path.append(id)
+                        }
+                        .onChange(of: path) {
+                            if path.isEmpty { nav.clear() }
+                        }
+                        .navigationDestination(for: UUID.self) { id in
+                            if let entry = PersistenceController.shared.entry(id: id) {
+                                MemoryDetailView(memory: entry)
+                                    .onDisappear { nav.clear() }
+                            } else {
+                                Text("Memory not found").font(.headline)
+                            }
+                        }
                 }
-                // 5️⃣ if you pop back with the system swipe, clear the router
-                .onChange(of: path) { newValue in
-                    if newValue.isEmpty { nav.clear() }
-                }
-                // 6️⃣ declare how to build the destination view
-                .navigationDestination(for: UUID.self) { id in
-                    if let entry = PersistenceController.shared.entry(id: id) {
-                        MemoryDetailView(memory: entry)
-                            .onDisappear { nav.clear() }
-                    } else {
-                        // fallback if the UUID isn’t in Core Data
-                        Text("Memory not found").font(.headline)
-                    }
-                }
+                .environmentObject(nav)
+            } else {
+                OnboardingFlow()
+            }
         }
-        // share the router so child views could react too
-        .environmentObject(nav)
+        .onAppear {
+            // 🎯 CRITICAL: Establish link between ad clicks and app opens
+            AppEvents.shared.activateApp()
+        }
     }
 }
 
-#if DEBUG
-#Preview { ContentView() }
-#endif
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+            .environmentObject(iCloudManager.shared)
+    }
+}

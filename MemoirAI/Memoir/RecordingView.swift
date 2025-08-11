@@ -490,6 +490,11 @@ struct RecordingView: View {
             "recording_duration": recordingTime
         ])
 
+        // Capture current values before we mutate UI state
+        let textToSave        = typedText
+        let audioURLToSave    = audioURL
+        let imagesToSave      = selectedImagesData
+
         // 1️⃣ Spin up a private background context so we never block the UI
         let bgContext = PersistenceController.shared.container.newBackgroundContext()
         bgContext.perform {
@@ -497,15 +502,15 @@ struct RecordingView: View {
             let entry = MemoryEntry(context: bgContext)
             entry.id           = UUID()
             entry.prompt       = prompt.text
-            entry.text         = typedText.isEmpty ? nil : typedText
-            entry.audioData    = audioURL.flatMap { try? Data(contentsOf: $0) }
-            entry.audioFileURL = audioURL?.absoluteString
+            entry.text         = textToSave.isEmpty ? nil : textToSave
+            entry.audioData    = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
+            entry.audioFileURL = audioURLToSave?.absoluteString
             entry.createdAt    = Date()
             entry.chapter      = chapterTitle
             entry.profileID    = profileVM.selectedProfile.id
 
             // 3️⃣ Persist each selected image—Core Data will externalize large blobs
-            for data in selectedImagesData {
+            for data in imagesToSave {
                 let photo = Photo(context: bgContext)
                 photo.id           = UUID()
                 photo.data         = data

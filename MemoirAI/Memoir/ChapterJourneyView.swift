@@ -241,10 +241,7 @@ struct MemoryPlayerOverlay: View {
     }
 
     private func startPlayback() {
-        guard
-            let urlString = entry.audioFileURL,
-            let url = URL(string: urlString)
-        else { return }
+        guard let url = entry.playbackURL else { return }
 
         do {
             player = try AVAudioPlayer(contentsOf: url)

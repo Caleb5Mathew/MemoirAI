@@ -1,0 +1,9 @@
+//
+//  CoverEditorSheet.swift
+//  MemoirAI
+//
+//  Created by user941803 on 7/5/25.
+//
+
+
+import SwiftUIimport PhotosUIstruct CoverEditorSheet: View {    @Binding var settings: CoverSettings    @State private var photoPickerItem: PhotosPickerItem? = nil    @Environment(\.dismiss) private var dismiss    var body: some View {        NavigationStack {            Form {                Section(header: Text("Title")) {                    TextField("Stories of My Life", text: $settings.title)                    TextField("Byline", text: $settings.subtitle)                }                Section(header: Text("Accent Color")) {                    ColorPicker("Accent", selection: Binding(                        get: { settings.accentColor },                        set: { settings.accentHex = $0.toHex() }                    ))                }                Section(header: Text("Cover Photo")) {                    if let data = settings.coverPhotoData, let img = UIImage(data: data) {                        Image(uiImage: img)                            .resizable()                            .scaledToFit()                            .frame(height: 200)                            .cornerRadius(6)                    }                    PhotosPicker(selection: $photoPickerItem, matching: .images) {                        Text("Choose Photo")                    }                }            }            .navigationTitle("Edit Cover")            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }            .onChange(of: photoPickerItem) { newItem in                guard let newItem else { return }                Task { if let data = try? await newItem.loadTransferable(type: Data.self) { settings.coverPhotoData = data } }            }        }    }} 

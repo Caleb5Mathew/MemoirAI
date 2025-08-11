@@ -2,12 +2,10 @@ import Foundation
 import RevenueCat
 import SwiftUI
 
-// Updated subscription tiers - removed free tier allowances
+// Updated subscription tiers to match RevenueCat package identifiers
 enum Tier: String, CaseIterable {
-    case basic   = "com.Buildr.MemoirAI.Monthly"
-    case premium = "com.Buildr.MemoirAI.PremiumMonthly"
-    case pro     = "com.Buildr.MemoirAI.ProMonthly"
-    case yearly  = "com.Buildr.MemoirAI.ProYearly"  // ✅ CHANGE THIS LINE
+    case monthly = "$rc_monthly"  // Matches RevenueCat dashboard package ID
+    case yearly = "$rc_annual"    // Matches RevenueCat dashboard package ID
 
     var allowance: Int {
         // All subscription tiers get 50 images
@@ -16,13 +14,11 @@ enum Tier: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .basic: return "Basic Monthly"
-        case .premium: return "Premium Monthly"
-        case .pro: return "Pro Monthly"
+        case .monthly: return "Monthly"
         case .yearly: return "Yearly"
         }
     }
-    
+
     var isYearly: Bool {
         return self == .yearly
     }
@@ -42,25 +38,36 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     private let lastResetPrefix    = "memoirai_image_lastReset_"
     private let renewalDateKey     = "memoirai_renewal_date"
     private let initializationKey  = "memoirai_initialized_"
+    private let lastPurchaseDateKey = "memoirai_last_purchase_date_"
     
     // Maximum images per subscription period
     private let maxImagesPerPeriod: Int = 50
+    // Developer back-door flag
+    private let devUnlockedKey = "memoirai_devUnlocked"
 
     private override init() {
         super.init()
         
+        // Add a small delay to ensure RevenueCat is fully configured
+        Task {
+            // Wait a brief moment for RevenueCat to be ready
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        
         if Purchases.isConfigured {
+                await MainActor.run {
             Purchases.shared.delegate = self
-            Task {
+                }
                 await loadOfferings()
                 await refreshCustomerInfo()
-            }
         } else {
+                await MainActor.run {
             print("⚠️ RevenueCat not configured - using development mode")
             // In development, simulate no subscription
             activeTier = nil
             remainingAllowance = 0
             nextRenewalDate = nil
+                }
+            }
         }
     }
 
@@ -71,10 +78,24 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             offerings = try await Purchases.shared.offerings()
             print("RCManager: Offerings loaded successfully.")
 
-            // 🔎 DEBUG – packages actually delivered
+            // 🔎 DEBUG – Enhanced package debugging
             Task { @MainActor in
-                if let pkgs = offerings?.current?.availablePackages {
-                    print("🔍 Packages delivered:", pkgs.map(\.identifier))
+                if let current = offerings?.current {
+                    print("🔍 Current offering: \(current.identifier)")
+                    print("🔍 Packages delivered: \(current.availablePackages.map(\.identifier))")
+                    print("🔍 Package details:")
+                    for package in current.availablePackages {
+                        print("  📦 \(package.identifier) -> \(package.storeProduct.productIdentifier)")
+                    }
+                    if current.availablePackages.isEmpty {
+                        print("⚠️ No packages found in current offering!")
+                    }
+                } else {
+                    print("❌ No current offering found!")
+                }
+                
+                if let allOfferings = offerings?.all {
+                    print("🔍 All offerings: \(allOfferings.keys)")
                 }
             }
 
@@ -106,13 +127,17 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     private func evaluateEntitlements(from info: CustomerInfo) {
         var determinedTier: Tier? = nil
         var renewalDate: Date? = nil
+        var purchaseDate: Date? = nil
 
-        // Check for active entitlements and get renewal date
+        // Check for active entitlements and map product IDs to package IDs
         for entitlement in info.entitlements.active.values {
             if entitlement.isActive {
-                if let tier = Tier(rawValue: entitlement.productIdentifier) {
+                // Map product identifiers to our package-based tiers
+                let tier = mapProductIdToTier(entitlement.productIdentifier)
+                if let tier = tier {
                     determinedTier = tier
                     renewalDate = entitlement.expirationDate
+                    purchaseDate = entitlement.latestPurchaseDate
                     break
                 }
             }
@@ -120,15 +145,17 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         
         // Fallback: Check generic entitlement
         if determinedTier == nil, let ent = info.entitlements["image_generation"], ent.isActive {
-            if let tierFromProduct = Tier(rawValue: ent.productIdentifier) {
-                determinedTier = tierFromProduct
+            let tier = mapProductIdToTier(ent.productIdentifier)
+            if let tier = tier {
+                determinedTier = tier
                 renewalDate = ent.expirationDate
+                purchaseDate = ent.latestPurchaseDate
             }
         }
 
         if let newTier = determinedTier {
             print("RCManager: Active subscription found for tier: \(newTier.displayName)")
-            setActiveTier(newTier, renewalDate: renewalDate)
+            setActiveTier(newTier, renewalDate: renewalDate, latestPurchaseDate: purchaseDate)
         } else {
             print("RCManager: No active subscription found. User cannot generate images.")
             activeTier = nil
@@ -137,8 +164,21 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         }
     }
 
+    // Helper function to map product IDs to package-based tiers
+    private func mapProductIdToTier(_ productId: String) -> Tier? {
+        switch productId {
+        case "com.Buildr.MemoirAI.ProMonthly":
+            return .monthly
+        case "com.Buildr.MemoirAI.ProYearly":
+            return .yearly
+        default:
+            print("⚠️ Unknown product ID: \(productId)")
+            return nil
+        }
+    }
+
     // 🔥 COMPLETELY FIXED: This is the core fix for the 50/50 vs 45/50 issue
-    private func setActiveTier(_ tier: Tier, renewalDate: Date?) {
+    private func setActiveTier(_ tier: Tier, renewalDate: Date?, latestPurchaseDate: Date?) {
         let oldTierID = activeTier?.rawValue
         activeTier = tier
         nextRenewalDate = renewalDate
@@ -152,6 +192,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         let calendar = Calendar.current
         let allowanceUDKey = allowanceKeyPrefix + tier.rawValue
         let initKey = initializationKey + tier.rawValue
+        let purchaseDateKey = lastPurchaseDateKey + tier.rawValue
         
         // Check if this is the first time we're setting up this tier
         let isFirstTimeSetup = !UserDefaults.standard.bool(forKey: initKey)
@@ -163,13 +204,8 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             UserDefaults.standard.set(true, forKey: initKey)
             
             // Set initial reset tracking
-            if tier.isYearly {
-                UserDefaults.standard.set(now, forKey: lastResetPrefix + tier.rawValue + "_week")
-            } else {
-                let currentMonth = calendar.component(.month, from: now)
-                let currentYear = calendar.component(.year, from: now)
-                UserDefaults.standard.set(currentYear, forKey: lastResetPrefix + tier.rawValue + "_year")
-                UserDefaults.standard.set(currentMonth, forKey: lastResetPrefix + tier.rawValue + "_month")
+            if let purchaseDate = latestPurchaseDate {
+                UserDefaults.standard.set(purchaseDate, forKey: purchaseDateKey)
             }
             
             print("RCManager: First-time setup for \(tier.displayName). Starting allowance: \(remainingAllowance)")
@@ -177,20 +213,18 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             return
         }
         
-        // 🔥 CHECK FOR PERIOD RESET (monthly/weekly)
-        let shouldReset: Bool
-        if tier.isYearly {
-            // Weekly reset for yearly subscriptions
-            let lastResetWeek = UserDefaults.standard.object(forKey: lastResetPrefix + tier.rawValue + "_week") as? Date ?? Date.distantPast
-            let weeksSinceReset = calendar.dateComponents([.weekOfYear], from: lastResetWeek, to: now).weekOfYear ?? 0
-            shouldReset = weeksSinceReset >= 1
+        // 🔥 CHECK FOR PERIOD RESET based on purchase date
+        var shouldReset = false
+        if let currentPurchaseDate = latestPurchaseDate {
+            if let lastProcessedPurchaseDate = UserDefaults.standard.object(forKey: purchaseDateKey) as? Date {
+                // If the new purchase date is later than the last one we processed, it's a renewal.
+                if currentPurchaseDate > lastProcessedPurchaseDate {
+                    shouldReset = true
+                }
         } else {
-            // Monthly reset for monthly subscriptions
-            let currentMonth = calendar.component(.month, from: now)
-            let currentYear = calendar.component(.year, from: now)
-            let lastResetYear = UserDefaults.standard.integer(forKey: lastResetPrefix + tier.rawValue + "_year")
-            let lastResetMonth = UserDefaults.standard.integer(forKey: lastResetPrefix + tier.rawValue + "_month")
-            shouldReset = (lastResetYear != currentYear || lastResetMonth != currentMonth) && lastResetYear != 0
+                // If we don't have a stored purchase date, but we have one now, treat it as a reset event.
+                shouldReset = true
+            }
         }
         
         // 🔥 CHECK FOR TIER CHANGE
@@ -200,14 +234,9 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             // Reset allowance
             remainingAllowance = maxImagesPerPeriod
             
-            // Update reset tracking
-            if tier.isYearly {
-                UserDefaults.standard.set(now, forKey: lastResetPrefix + tier.rawValue + "_week")
-            } else {
-                let currentMonth = calendar.component(.month, from: now)
-                let currentYear = calendar.component(.year, from: now)
-                UserDefaults.standard.set(currentYear, forKey: lastResetPrefix + tier.rawValue + "_year")
-                UserDefaults.standard.set(currentMonth, forKey: lastResetPrefix + tier.rawValue + "_month")
+            // Update reset tracking with the new purchase date
+            if let purchaseDate = latestPurchaseDate {
+                UserDefaults.standard.set(purchaseDate, forKey: purchaseDateKey)
             }
             
             UserDefaults.standard.set(remainingAllowance, forKey: allowanceUDKey)
@@ -227,16 +256,28 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         
         // Force save
         UserDefaults.standard.synchronize()
+
+        // Apply developer override if previously unlocked
+        if UserDefaults.standard.bool(forKey: devUnlockedKey) {
+            self.unlockDeveloperMode()
+        }
     }
 
     func purchase(package: Package) async throws {
+        // 🎯 Track checkout initiation for Facebook
+        FacebookAnalytics.logCheckoutInitiated()
+        
         let result = try await Purchases.shared.purchase(package: package)
         if result.userCancelled {
             print("RCManager: Purchase cancelled by user.")
             return
         }
+        
         print("RCManager: Purchase successful. Refreshing customer info.")
         evaluateEntitlements(from: result.customerInfo)
+        
+        // ✅ RevenueCat handles purchase events server-side via Conversions API
+        // No client-side purchase logging needed to avoid duplicates
     }
 
     // 🔥 ENHANCED: Better consumption tracking
@@ -360,6 +401,15 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     // ✨ Check if generation would use a large portion of allowance
     func isLargeGeneration(pages: Int) -> Bool {
         return pages > 10 // More than 20% of monthly allowance
+    }
+
+    // MARK: – Developer mode unlock
+    func unlockDeveloperMode() {
+        UserDefaults.standard.set(true, forKey: devUnlockedKey)
+        UserDefaults.standard.synchronize()
+        activeTier = .monthly
+        remainingAllowance = 9_999
+        print("🚀 Developer mode unlocked – unlimited images")
     }
 }
 

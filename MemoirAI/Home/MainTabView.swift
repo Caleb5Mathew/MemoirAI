@@ -4,8 +4,6 @@ struct MainTabView: View {
     @State private var selectedTab = 0
     @StateObject private var profileVM = ProfileViewModel()
     @StateObject private var familyManager = FamilyManager.shared
-    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
-    @State private var showOnboarding = false
 
     var body: some View {
         ZStack {
@@ -64,21 +62,7 @@ struct MainTabView: View {
         }
         .navigationBarHidden(true)
         .statusBarHidden(true)
-        .fullScreenCover(isPresented: $showOnboarding) {
-            OnboardingFlow()
-                .environmentObject(profileVM)
-        }
-        .onAppear {
-            // Check if user needs onboarding
-            if !hasCompletedOnboarding {
-                showOnboarding = true
-            }
-        }
-        .onChange(of: hasCompletedOnboarding) { completed in
-            if completed {
-                showOnboarding = false
-            }
-        }
+        // (Onboarding overlay removed – handled globally)
     }
 }
 

@@ -13,15 +13,8 @@ import RevenueCatUI
 
 // MARK: - Custom Serif Font Fallback
 extension Font {
-    static func customSerifFallback(size: CGFloat) -> Font {
-        let fontNames = [
-            "Georgia-Bold", "NewYork-Bold", "Palatino-Bold",
-            "TimesNewRomanPS-BoldMT", "Charter-Bold"
-        ]
-        for name in fontNames where UIFont(name: name, size: size) != nil {
-            return Font.custom(name, size: size)
-        }
-        return .system(size: size, weight: .bold, design: .serif)
+    static func customSerifFallback(size: CGFloat, weight: Font.Weight = .bold) -> Font {
+        return .system(size: size, weight: weight, design: .serif)
     }
 }
 
@@ -68,12 +61,38 @@ struct MemoirView: View {
         }
         .tint(.black)
         .fullScreenCover(isPresented: $showPaywall) {
-            GeometryReader { geo in        // ← add this wrapper
-                PaywallView(displayCloseButton: true)
-                    .frame(maxWidth: .infinity) // <<< ADD THIS
-                    .ignoresSafeArea()          // <<< ADD THIS
-                    .edgesIgnoringSafeArea(.all)   // ✨ kills the double inset
+            // Add error handling around PaywallView
+            Group {
+                if RCSubscriptionManager.shared.offerings?.current?.availablePackages.isEmpty == false {
+                    PaywallView(displayCloseButton: true)
+                } else {
+                    // Fallback view when paywall can't load
+                    VStack(spacing: 20) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 60))
+                            .foregroundColor(.orange)
+                        
+                        Text("Subscription Temporarily Unavailable")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                        
+                        Text("Please try again later or contact support.")
+                            .multilineTextAlignment(.center)
+                        
+                        Button("Close") {
+                            showPaywall = false
+                        }
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                    }
+                    .padding()
+                    .background(Color.white)
+                }
             }
+            .frame(maxWidth: .infinity)
+            .ignoresSafeArea()
         }
     }
 

@@ -23,6 +23,9 @@ struct RecordMemoryView: View {
     @State private var recordingTime: TimeInterval = 0
     @State private var recordingTimer: Timer?
     
+    // Store picked/cropped images as raw JPEG/PNG data for Core-Data persistence
+    @State private var selectedImagesData: [Data] = []
+    
     private let passedPrompt: String?
     private let promptKey = "PromptOfTheDayCompleted"
     
@@ -324,6 +327,11 @@ struct RecordMemoryView: View {
                     print("🔒 Microphone permission not granted")
                 }
             }
+
+            // Ensure speech recognition permission is requested up-front
+            SFSpeechRecognizer.requestAuthorization { status in
+                print("🔑 Speech auth status (RecordMemoryView):", status.rawValue)
+            }
         }
         .navigationBarHidden(true)
     }
@@ -354,11 +362,11 @@ struct RecordMemoryView: View {
     }
     
     func hasUnsavedData() -> Bool {
-        selectedPrompt != nil || !typedText.isEmpty || audioURL != nil
+        selectedPrompt != nil || !typedText.isEmpty || audioURL != nil || !selectedImagesData.isEmpty
     }
     
     func hasMeaningfulData() -> Bool {
-        !typedText.isEmpty || audioURL != nil
+        !typedText.isEmpty || audioURL != nil || !selectedImagesData.isEmpty
     }
     
     // Format time for display (MM:SS)
@@ -469,7 +477,10 @@ struct RecordMemoryView: View {
     func saveMemory() {
         guard hasUnsavedData() else { return }
         
-        let promptToSave = selectedPrompt ?? "Untitled Prompt"
+        let promptToSave  = selectedPrompt ?? "Untitled Prompt"
+        let textToSave    = typedText          // capture before UI reset
+        let audioURLToSave = audioURL          // capture
+        let imagesToSave   = selectedImagesData // capture
         
         // 🔥 ENHANCED: Use background context like RecordingView
         let bgContext = PersistenceController.shared.container.newBackgroundContext()
@@ -478,10 +489,18 @@ struct RecordMemoryView: View {
             let newEntry = MemoryEntry(context: bgContext)
             newEntry.id           = UUID()
             newEntry.prompt       = promptToSave
-            newEntry.text         = typedText.isEmpty ? nil : typedText
-            newEntry.audioFileURL = audioURL?.absoluteString
+            newEntry.text         = textToSave.isEmpty ? nil : textToSave
+            newEntry.audioFileURL = audioURLToSave?.absoluteString
+            newEntry.audioData    = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
             newEntry.createdAt    = Date()
             newEntry.profileID    = profileVM.selectedProfile.id
+            
+            for data in imagesToSave {
+                let photo = Photo(context: bgContext)
+                photo.id = UUID()
+                photo.data = data
+                photo.memoryEntry = newEntry
+            }
             
             do {
                 try bgContext.save()

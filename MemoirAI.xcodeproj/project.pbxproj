@@ -13,10 +13,9 @@
 		84063F0D2E00E29200218E1F /* FacebookGamingServices in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F0C2E00E29200218E1F /* FacebookGamingServices */; };
 		84063F0F2E00E29200218E1F /* FacebookLogin in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F0E2E00E29200218E1F /* FacebookLogin */; };
 		84063F112E00E29200218E1F /* FacebookShare in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F102E00E29200218E1F /* FacebookShare */; };
+		8458DF492E158DB7001688EA /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 8458DF482E158DB7001688EA /* RevenueCat */; };
+		8458DF4B2E158DB7001688EA /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = 8458DF4A2E158DB7001688EA /* RevenueCatUI */; };
 		845BE2C12DED4D1800ECD629 /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = 845BE2C02DED4D1800ECD629 /* Mixpanel */; };
-		84B2696B2DD8D7080031EACD /* ReceiptParser in Frameworks */ = {isa = PBXBuildFile; productRef = 84B2696A2DD8D7080031EACD /* ReceiptParser */; };
-		84B2696D2DD8D7080031EACD /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 84B2696C2DD8D7080031EACD /* RevenueCat */; };
-		84B2696F2DD8D7080031EACD /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = 84B2696E2DD8D7080031EACD /* RevenueCatUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -47,6 +46,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				"Memory/MemoryEntry+Playback.swift",
 				"Story/String+Pagnation.swift",
 			);
 			target = 844EFABC2DA3416E00620E37 /* MemoirAI */;
@@ -58,6 +58,7 @@
 			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
 			buildPhase = 844EFABB2DA3416E00620E37 /* Resources */;
 			membershipExceptions = (
+				"Memory/MemoryEntry+Playback.swift",
 				"Story/String+Pagnation.swift",
 			);
 		};
@@ -90,14 +91,13 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				84B2696D2DD8D7080031EACD /* RevenueCat in Frameworks */,
 				84063F072E00E29200218E1F /* FacebookAEM in Frameworks */,
 				84063F0B2E00E29200218E1F /* FacebookCore in Frameworks */,
-				84B2696B2DD8D7080031EACD /* ReceiptParser in Frameworks */,
 				84063F092E00E29200218E1F /* FacebookBasics in Frameworks */,
 				84063F0F2E00E29200218E1F /* FacebookLogin in Frameworks */,
+				8458DF492E158DB7001688EA /* RevenueCat in Frameworks */,
+				8458DF4B2E158DB7001688EA /* RevenueCatUI in Frameworks */,
 				845BE2C12DED4D1800ECD629 /* Mixpanel in Frameworks */,
-				84B2696F2DD8D7080031EACD /* RevenueCatUI in Frameworks */,
 				84063F112E00E29200218E1F /* FacebookShare in Frameworks */,
 				84063F0D2E00E29200218E1F /* FacebookGamingServices in Frameworks */,
 			);
@@ -160,9 +160,6 @@
 			);
 			name = MemoirAI;
 			packageProductDependencies = (
-				84B2696A2DD8D7080031EACD /* ReceiptParser */,
-				84B2696C2DD8D7080031EACD /* RevenueCat */,
-				84B2696E2DD8D7080031EACD /* RevenueCatUI */,
 				845BE2C02DED4D1800ECD629 /* Mixpanel */,
 				84063F062E00E29200218E1F /* FacebookAEM */,
 				84063F082E00E29200218E1F /* FacebookBasics */,
@@ -170,6 +167,8 @@
 				84063F0C2E00E29200218E1F /* FacebookGamingServices */,
 				84063F0E2E00E29200218E1F /* FacebookLogin */,
 				84063F102E00E29200218E1F /* FacebookShare */,
+				8458DF482E158DB7001688EA /* RevenueCat */,
+				8458DF4A2E158DB7001688EA /* RevenueCatUI */,
 			);
 			productName = MemoirAI;
 			productReference = 844EFABD2DA3416E00620E37 /* MemoirAI.app */;
@@ -254,9 +253,9 @@
 			mainGroup = 844EFAB42DA3416E00620E37;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */,
 				845BE2BF2DED4D1800ECD629 /* XCRemoteSwiftPackageReference "mixpanel-swift" */,
 				84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */,
+				8458DF472E158DB7001688EA /* XCRemoteSwiftPackageReference "purchases-ios" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 844EFABE2DA3416E00620E37 /* Products */;
@@ -666,20 +665,20 @@
 				minimumVersion = 14.1.0;
 			};
 		};
+		8458DF472E158DB7001688EA /* XCRemoteSwiftPackageReference "purchases-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.30.0;
+			};
+		};
 		845BE2BF2DED4D1800ECD629 /* XCRemoteSwiftPackageReference "mixpanel-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/mixpanel/mixpanel-swift";
 			requirement = {
 				branch = master;
 				kind = branch;
-			};
-		};
-		84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/RevenueCat/purchases-ios";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 5.24.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -715,25 +714,20 @@
 			package = 84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */;
 			productName = FacebookShare;
 		};
+		8458DF482E158DB7001688EA /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8458DF472E158DB7001688EA /* XCRemoteSwiftPackageReference "purchases-ios" */;
+			productName = RevenueCat;
+		};
+		8458DF4A2E158DB7001688EA /* RevenueCatUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8458DF472E158DB7001688EA /* XCRemoteSwiftPackageReference "purchases-ios" */;
+			productName = RevenueCatUI;
+		};
 		845BE2C02DED4D1800ECD629 /* Mixpanel */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 845BE2BF2DED4D1800ECD629 /* XCRemoteSwiftPackageReference "mixpanel-swift" */;
 			productName = Mixpanel;
-		};
-		84B2696A2DD8D7080031EACD /* ReceiptParser */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */;
-			productName = ReceiptParser;
-		};
-		84B2696C2DD8D7080031EACD /* RevenueCat */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */;
-			productName = RevenueCat;
-		};
-		84B2696E2DD8D7080031EACD /* RevenueCatUI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 84B269692DD8D7080031EACD /* XCRemoteSwiftPackageReference "purchases-ios" */;
-			productName = RevenueCatUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

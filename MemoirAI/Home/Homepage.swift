@@ -37,6 +37,9 @@ struct HomepageView: View {
     @State private var showMemoryRecoveryAlert = false
     @State private var recoveredMemoryCount = 0
 
+    // Animation flag for glowing gradient around the Book Preview button
+    @State private var animatePreviewGlow = false
+
     // MARK: – Computed Properties
 
     /// How many full chapters have been completed?
@@ -71,7 +74,7 @@ struct HomepageView: View {
                         Text("Memoir")
                             .font(.customSerifFallback(size: 22))
                             .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
-                        
+
                         if !profileVM.profiles.isEmpty && !profileVM.selectedProfile.name.isEmpty {
                             Text("Hello, \(profileVM.selectedProfile.name)")
                                 .font(.subheadline)
@@ -147,9 +150,10 @@ struct HomepageView: View {
                             .padding(.horizontal)
                         }
 
+                        /*
                         // YOUR BOOK
                         NavigationLink(destination: StoryPage()
-                            .environmentObject(profileVM) // ← Injecting ProfileViewModel here
+                            .environmentObject(profileVM)
                         ) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -171,6 +175,72 @@ struct HomepageView: View {
                             .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
                             .padding(.horizontal)
                         }
+                        
+                        // 📖 LIVE MEMOIR PREVIEW (Animated Glow)
+                        NavigationLink(destination: buildEditor()) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Memoir Preview")
+                                        .font(.footnote)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.black)
+                                    Text("Browse generated pages")
+                                        .font(.subheadline)
+                                        .foregroundColor(.black.opacity(0.7))
+                                }
+                                Spacer()
+                                Image(systemName: "book")
+                                    .foregroundColor(.gray)
+                            }
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color(red: 0.98, green: 0.93, blue: 0.80))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(
+                                                AngularGradient(
+                                                    gradient: Gradient(colors: [Color.pink, Color.orange, Color.yellow, Color.pink]),
+                                                    center: .center,
+                                                    angle: .degrees(animatePreviewGlow ? 360 : 0)
+                                                ),
+                                                lineWidth: 3
+                                            )
+                                    )
+                            )
+                            .shadow(color: Color.orange.opacity(0.25), radius: 6, x: 0, y: 3)
+                            .padding(.horizontal)
+                            .onAppear {
+                                withAnimation(.linear(duration: 10).repeatForever(autoreverses: false)) {
+                                    animatePreviewGlow = true
+                                }
+                            }
+                        }
+                        
+                        // 📚 MY STORYBOOKS
+                        NavigationLink(destination: StorybookGalleryView()
+                            .environmentObject(profileVM)) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("My Storybooks")
+                                        .font(.footnote)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.black)
+                                    Text("View finished illustrated books")
+                                        .font(.subheadline)
+                                        .foregroundColor(.black.opacity(0.7))
+                                }
+                                Spacer()
+                                Image(systemName: "books.vertical")
+                                    .foregroundColor(.gray)
+                            }
+                            .padding()
+                            .background(Color(red: 0.98, green: 0.93, blue: 0.80))
+                            .cornerRadius(16)
+                            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
+                            .padding(.horizontal)
+                        }
+                        */
 
                         Spacer(minLength: 36)
                     }
@@ -211,7 +281,6 @@ struct HomepageView: View {
                     showMemoryRecoveryAlert = true
                 }
             }
-//            .navigationBarHidden(true)
             .statusBarHidden(true)
         }
     }
@@ -253,6 +322,33 @@ struct HomepageView: View {
         }
 
         promptCompleted = UserDefaults.standard.bool(forKey: promptOfTheDay)
+    }
+
+    // Helper to build editor view lazily
+    private func buildEditor() -> some View {
+        let ctx = context
+        let profID = profileVM.selectedProfile.id
+        var pages: [EditorPage] = {
+            let req: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
+            req.predicate = NSPredicate(format: "profileID == %@", profID as CVarArg)
+            req.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
+            let mems = (try? ctx.fetch(req)) ?? []
+            return EditorPage.pages(from: mems, context: ctx)
+        }()
+
+        // Insert cover page at front
+        let coverKey = "coverSettings_\(profID.uuidString)"
+        let cover: CoverSettings = {
+            if let data = UserDefaults.standard.data(forKey: coverKey),
+               let ct = try? JSONDecoder().decode(CoverSettings.self, from: data) {
+                return ct
+            }
+            return CoverSettings(title: "Stories of My Life", subtitle: "", accentHex: "000000", coverPhotoData: nil)
+        }()
+
+        let coverPage = EditorPage(title: cover.title, body: "", photo: cover.coverPhotoData, memory: nil, context: ctx, isCover: true)
+        pages.insert(coverPage, at: 0)
+        return BookEditorPrototypeView(profileID: profID, pages: pages)
     }
 }
 

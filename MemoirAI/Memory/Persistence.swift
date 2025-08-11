@@ -45,21 +45,18 @@ struct PersistenceController {
                 URL(fileURLWithPath: "/dev/null")
         }
 
-        // 🌩 ENABLE CLOUDKIT
-        if let desc = container.persistentStoreDescriptions.first {
-            desc.cloudKitContainerOptions =
-                NSPersistentCloudKitContainerOptions(
-                    containerIdentifier: "iCloud.com.buildr.MemoirAI"
-                )
-            desc.setOption(true as NSNumber,
-                           forKey: NSPersistentHistoryTrackingKey)
-            desc.setOption(true as NSNumber,
-                           forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
+        guard let description = container.persistentStoreDescriptions.first else {
+            fatalError("Failed to retrieve a persistent store description.")
         }
-
-        container.loadPersistentStores { _, error in
-            if let error { fatalError("Core Data failed: \(error)") }
-        }
+        
+        // Set the CloudKit container options
+        description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: "iCloud.com.Buildr.MemoirAI")
+        
+        container.loadPersistentStores(completionHandler: { (storeDescription, error) in
+            if let error = error as NSError? {
+                fatalError("Unresolved error \(error), \(error.userInfo)")
+            }
+        })
 
         container.viewContext.automaticallyMergesChangesFromParent = true
         container.viewContext.mergePolicy =

@@ -1,5 +1,5 @@
 {
-  "originHash" : "7631d941c158f65b7fc3dc5dfae49a3e7092f4879010d69a9b7465d71b94f4ef",
+  "originHash" : "6aae24bfeb4332019b4551b96844dac6efcc850964569aa9ddfeb8597c8cb12d",
   "pins" : [
     {
       "identity" : "facebook-ios-sdk",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/RevenueCat/purchases-ios",
       "state" : {
-        "revision" : "eef133f4e8642675d924827f4b31a11f1ba5fc8a",
-        "version" : "5.24.0"
+        "revision" : "e90dec89a46199cc57eb53d1523ff8606edac276",
+        "version" : "5.30.0"
       }
     }
   ],

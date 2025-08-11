@@ -4,6 +4,7 @@ import AVFoundation
 import PhotosUI
 import CoreData
 import Mixpanel
+import Speech
 
 // MARK: - Character Details Structure
 struct CharacterDetails: Codable {
@@ -124,6 +125,12 @@ struct MemoryDetailView: View {
     @State private var showCharacterDetails = false
     @State private var refreshTrigger = 0
 
+    // Batch transcription support
+    @StateObject private var transcriptionManager = BatchTranscriptionManager.shared
+    @State private var showTranscriptionProgress = false
+    @State private var transcriptionAlertMessage = ""
+    @State private var showTranscriptionAlert = false
+
     private let backgroundColor = Color(red: 1.0, green: 0.96, blue: 0.89)
     private let cardColor = Color(red: 0.98, green: 0.93, blue: 0.80)
     private let headerColor = Color(red: 0.07, green: 0.21, blue: 0.13)
@@ -149,9 +156,8 @@ struct MemoryDetailView: View {
                             .foregroundColor(.black)
                     }
 
-                    // 1. Display the audio player if an audio file exists.
-                    if let urlString = memory.audioFileURL,
-                       let url = URL(string: urlString) {
+                    // 1. Display the audio player if audio is available (file path or data).
+                    if let url = memory.playbackURL {
                         Button(action: { togglePlayback(url: url) }) {
                             Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                                 .resizable()
@@ -316,6 +322,12 @@ struct MemoryDetailView: View {
                 }) {
                     Image(systemName: isEditing ? "checkmark" : "pencil")
                 }
+
+                // TRANSCRIBE ALL BUTTON
+                Button(action: handleBatchTranscription) {
+                    Image(systemName: "waveform.badge.mic")
+                }
+                .disabled(!transcriptionManager.hasUntranscribed)
             }
         }
         .alert("Shared with Family!", isPresented: $showFamilyShareSuccess) {
@@ -330,7 +342,7 @@ struct MemoryDetailView: View {
             Mixpanel.mainInstance().track(event: "Viewed Memory", properties: [
                 "chapter_title": memory.chapter ?? "",
                 "prompt_text": memory.prompt ?? "",
-                "has_audio": memory.audioFileURL != nil,
+                "has_audio": memory.playbackURL != nil,
                 "has_text": !(memory.text?.isEmpty ?? true),
                 "has_photos": !(memory.photos?.allObjects.isEmpty ?? true),
                 "created_at": memory.createdAt?.timeIntervalSince1970 ?? 0
@@ -346,6 +358,25 @@ struct MemoryDetailView: View {
             }
         }
         .id(refreshTrigger) // Force view refresh when trigger changes
+
+        // Progress sheet
+        .sheet(isPresented: $showTranscriptionProgress) {
+            VStack(spacing: 20) {
+                Text("Transcribing Memories…")
+                    .font(.headline)
+                ProgressView(value: Double(transcriptionManager.processed), total: Double(max(transcriptionManager.total, 1)))
+                    .progressViewStyle(CircularProgressViewStyle(tint: .orange))
+                    .frame(width: 80, height: 80)
+                Text("\(transcriptionManager.processed) / \(transcriptionManager.total)")
+                    .font(.subheadline)
+                    .padding(.bottom, 20)
+            }
+            .padding()
+        }
+        // Alert for already-complete or permission issues
+        .alert(transcriptionAlertMessage, isPresented: $showTranscriptionAlert) {
+            Button("OK", role: .cancel) {}
+        }
     }
     
     // MARK: - Family Sharing Section
@@ -499,7 +530,7 @@ struct MemoryDetailView: View {
     private func shareMemory() {
         var items: [Any] = []
         if let text = memory.text { items.append(text) }
-        if let urlString = memory.audioFileURL, let url = URL(string: urlString) {
+        if let url = memory.playbackURL {
             items.append(url)
         }
         items.append(contentsOf: images)
@@ -591,7 +622,7 @@ struct MemoryDetailView: View {
                         .fill(softCream)
                         .frame(width: 32, height: 32)
                         .overlay(
-                            Text(String(character.name.prefix(1)))
+                            Text(character.name.isEmpty ? "?" : String(character.name.prefix(1)))
                                 .font(.custom("Georgia-Bold", size: 14))
                                 .foregroundColor(headerColor)
                         )
@@ -626,6 +657,44 @@ struct MemoryDetailView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.green.opacity(0.2), lineWidth: 1)
         )
+    }
+
+    // MARK: - Batch Transcription Handler
+    private func handleBatchTranscription() {
+        let status = SFSpeechRecognizer.authorizationStatus()
+        switch status {
+        case .authorized:
+            startBatchTranscription()
+        case .notDetermined:
+            SFSpeechRecognizer.requestAuthorization { newStatus in
+                DispatchQueue.main.async {
+                    if newStatus == .authorized {
+                        startBatchTranscription()
+                    } else {
+                        transcriptionAlertMessage = "Speech recognition permission is required to transcribe your audio memories. You can enable it in Settings."
+                        showTranscriptionAlert = true
+                    }
+                }
+            }
+        default:
+            transcriptionAlertMessage = "Speech recognition permission is required to transcribe your audio memories. You can enable it in Settings."
+            showTranscriptionAlert = true
+        }
+    }
+
+    private func startBatchTranscription() {
+        guard transcriptionManager.untranscribedCount > 0 else {
+            transcriptionAlertMessage = "All memories are already transcribed!"
+            showTranscriptionAlert = true
+            return
+        }
+        showTranscriptionProgress = true
+        transcriptionManager.start {
+            // Completed
+            transcriptionAlertMessage = "Finished transcribing all memories!"
+            showTranscriptionProgress = false
+            showTranscriptionAlert = true
+        }
     }
 }
 
