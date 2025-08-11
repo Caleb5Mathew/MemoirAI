@@ -87,11 +87,12 @@ final class SpeechTranscriber {
         
         var finalTranscript = ""
         var isFinal = false
+        var task: SFSpeechRecognitionTask?
         
-        let task = recognizer.recognitionTask(with: request) { result, error in
+        task = recognizer.recognitionTask(with: request) { result, error in
             if let error = error {
                 // Clean shutdown on errors
-                task.cancel()
+                task?.cancel()
                 DispatchQueue.main.async {
                     completion(.failure(error))
                 }
@@ -106,7 +107,7 @@ final class SpeechTranscriber {
                 isFinal = true
                 
                 // Clean shutdown on completion
-                task.cancel()
+                task?.cancel()
                 DispatchQueue.main.async {
                     completion(.success(finalTranscript))
                 }
@@ -119,7 +120,7 @@ final class SpeechTranscriber {
         // Set a timeout for the recognition task
         DispatchQueue.main.asyncAfter(deadline: .now() + 30.0) {
             if !isFinal {
-                task.cancel()
+                task?.cancel()
                 completion(.failure(SpeechTranscriberError.timeout))
             }
         }
@@ -156,10 +157,11 @@ final class SpeechTranscriber {
         request.shouldReportPartialResults = true
         
         var finalTranscript = ""
+        var task: SFSpeechRecognitionTask?
         
-        let task = recognizer.recognitionTask(with: request) { result, error in
+        task = recognizer.recognitionTask(with: request) { result, error in
             if let error = error {
-                task.cancel()
+                task?.cancel()
                 DispatchQueue.main.async {
                     completion(.failure(error))
                 }
@@ -170,7 +172,7 @@ final class SpeechTranscriber {
             
             if result.isFinal {
                 finalTranscript = result.bestTranscription.formattedString
-                task.cancel()
+                task?.cancel()
                 DispatchQueue.main.async {
                     completion(.success(finalTranscript))
                 }
