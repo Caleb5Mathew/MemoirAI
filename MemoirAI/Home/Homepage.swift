@@ -165,7 +165,7 @@ struct HomepageView: View {
                             .padding(.horizontal)
                         }
 
-                        // 📖 LIVE MEMOIR PREVIEW (Normal styling)
+                        // 📖 LIVE MEMOIR PREVIEW (Coming Soon Screen)
                         NavigationLink(destination: buildEditor()) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -173,7 +173,7 @@ struct HomepageView: View {
                                         .font(.footnote)
                                         .fontWeight(.bold)
                                         .foregroundColor(.black)
-                                    Text("Browse generated pages")
+                                    Text("Coming Soon - Browse generated pages")
                                         .font(.subheadline)
                                         .foregroundColor(.black.opacity(0.7))
                                 }
@@ -188,31 +188,7 @@ struct HomepageView: View {
                             .padding(.horizontal)
                         }
                         
-                        // 📚 MY STORYBOOKS
-                        NavigationLink(destination: StorybookGalleryView()
-                            .environmentObject(profileVM)) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("My Storybooks")
-                                        .font(.footnote)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.black)
-                                    Text("View finished illustrated books")
-                                        .font(.subheadline)
-                                        .foregroundColor(.black.opacity(0.7))
-                                }
-                                Spacer()
-                                Image(systemName: "books.vertical")
-                                    .foregroundColor(.gray)
-                            }
-                            .padding()
-                            .background(Color(red: 0.98, green: 0.93, blue: 0.80))
-                            .cornerRadius(16)
-                            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
-                            .padding(.horizontal)
-                        }
-                        
-                        // YOUR BOOK (Premium Gradient Outline)
+                        // YOUR BOOK (AI Generation - Premium Gradient Outline)
                         NavigationLink(destination: StoryPage()
                             .environmentObject(profileVM)
                         ) {
@@ -222,7 +198,7 @@ struct HomepageView: View {
                                         .font(.footnote)
                                         .fontWeight(.bold)
                                         .foregroundColor(.black)
-                                    Text("Generate your life story here!")
+                                    Text("AI Generation - Generate your life story here!")
                                         .font(.subheadline)
                                         .foregroundColor(.black.opacity(0.7))
                                 }
