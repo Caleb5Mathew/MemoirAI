@@ -17,7 +17,6 @@ struct RecordingView: View {
     @StateObject private var audioMonitor = AudioLevelMonitor()
     @StateObject private var permissionManager = PermissionManager.shared
     @StateObject private var realTimeTranscription = RealTimeTranscriptionManager.shared
-    @StateObject private var audioSessionManager = AudioSessionManager.shared
 
     @State private var typedText: String = ""
     @State private var audioRecorder: AVAudioRecorder?
@@ -418,8 +417,14 @@ struct RecordingView: View {
     // MARK: - Recorder Lifecycle
     func setupAudioSession() {
         // Configure audio session for optimal speech recognition
+        let session = AVAudioSession.sharedInstance()
         do {
-            try audioSessionManager.configureForPlayAndRecord()
+            try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setMode(.measurement)
+            try session.setActive(true)
+            if session.isInputGainSettable {
+                try session.setInputGain(1.0)
+            }
         } catch {
             print("⚠️ Enhanced audio session setup error: \(error)")
         }
@@ -441,11 +446,10 @@ struct RecordingView: View {
             .appendingPathComponent(filename)
         
         // Use optimal recording format for speech recognition
-        let optimalFormat = audioSessionManager.getOptimalRecordingFormat()
         let settings: [String: Any] = [
-            AVFormatIDKey: optimalFormat.settings[AVFormatIDKey] ?? kAudioFormatLinearPCM,
-            AVSampleRateKey: optimalFormat.sampleRate,
-            AVNumberOfChannelsKey: optimalFormat.channelCount,
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 44_100,
+            AVNumberOfChannelsKey: 1,
             AVLinearPCMBitDepthKey: 32, // Use 32-bit for better quality
             AVLinearPCMIsFloatKey: true, // Use float for better precision
             AVLinearPCMIsBigEndianKey: false

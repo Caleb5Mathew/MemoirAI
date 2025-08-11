@@ -1,7 +1,6 @@
 import Foundation
 import AVFoundation
 import Speech
-import Combine
 
 /// Manages real-time transcription during audio recording
 final class RealTimeTranscriptionManager: ObservableObject {
@@ -14,12 +13,9 @@ final class RealTimeTranscriptionManager: ObservableObject {
     private var audioEngine: AVAudioEngine?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var audioSessionManager = AudioSessionManager.shared
-    
-    private var cancellables = Set<AnyCancellable>()
     
     private init() {
-        setupRouteChangeHandling()
+        // Simplified initialization without complex audio session management
     }
     
     deinit {
@@ -28,24 +24,13 @@ final class RealTimeTranscriptionManager: ObservableObject {
     
     // MARK: - Route Change Handling
     
-    private func setupRouteChangeHandling() {
-        audioSessionManager.$isInputRouteChanged
-            .sink { [weak self] hasChanged in
-                if hasChanged {
-                    self?.handleRouteChange()
-                }
-            }
-            .store(in: &cancellables)
-    }
-    
     private func handleRouteChange() {
-        // Re-establish audio tap on route changes
+        // Simplified route change handling
         if isTranscribing {
-            print("🔄 Re-establishing audio tap due to route change")
+            print("🔄 Route change detected - restarting transcription")
             stopTranscription()
             startTranscription()
         }
-        audioSessionManager.resetRouteChangeFlag()
     }
     
     // MARK: - Transcription Control
@@ -61,8 +46,13 @@ final class RealTimeTranscriptionManager: ObservableObject {
         }
         
         // Configure audio session for clean recording
+        let session = AVAudioSession.sharedInstance()
         do {
-            try audioSessionManager.configureForRecording()
+            try session.setCategory(.record, mode: .measurement, options: [])
+            try session.setActive(true)
+            if session.isInputGainSettable {
+                try session.setInputGain(1.0)
+            }
         } catch {
             transcriptionError = "Failed to configure audio session: \(error.localizedDescription)"
             return
@@ -125,7 +115,7 @@ final class RealTimeTranscriptionManager: ObservableObject {
         isTranscribing = false
         
         // Deactivate audio session
-        try? audioSessionManager.deactivate()
+        try? AVAudioSession.sharedInstance().setActive(false)
         
         print("✅ Real-time transcription stopped")
     }
@@ -190,11 +180,21 @@ final class RealTimeTranscriptionManager: ObservableObject {
     
     /// Check if current audio setup is optimal for transcription
     func isAudioSetupOptimal() -> Bool {
-        return audioSessionManager.isAudioInputOptimal()
+        let inputNode = AVAudioEngine().inputNode
+        let format = inputNode.outputFormat(forBus: 0)
+        return format.channelCount == 1 && format.sampleRate >= 16000
     }
     
     /// Get current audio format information
     func getAudioFormatInfo() -> String {
-        return audioSessionManager.getCurrentAudioFormatInfo()
+        let inputNode = AVAudioEngine().inputNode
+        let format = inputNode.outputFormat(forBus: 0)
+        return """
+        Audio Format:
+        - Sample Rate: \(format.sampleRate) Hz
+        - Channels: \(format.channelCount)
+        - Format: \(format.commonFormat.rawValue)
+        - Interleaved: \(format.isInterleaved)
+        """
     }
 } 
