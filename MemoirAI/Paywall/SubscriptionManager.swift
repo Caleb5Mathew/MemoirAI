@@ -75,7 +75,15 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         guard Purchases.isConfigured else { return }
 
         do {
+            // Use specific offering instead of default
             offerings = try await Purchases.shared.offerings()
+            
+            // To use "Def2" offering instead of "default", uncomment this:
+            // offerings = try await Purchases.shared.offerings()
+            // if let def2Offering = offerings?.all["Def2"] {
+            //     offerings?.current = def2Offering
+            // }
+            
             print("RCManager: Offerings loaded successfully.")
 
             // 🔎 DEBUG – Enhanced package debugging

@@ -150,7 +150,6 @@ struct HomepageView: View {
                             .padding(.horizontal)
                         }
 
-                        /*
                         // YOUR BOOK
                         NavigationLink(destination: StoryPage()
                             .environmentObject(profileVM)
@@ -176,7 +175,7 @@ struct HomepageView: View {
                             .padding(.horizontal)
                         }
                         
-                        // 📖 LIVE MEMOIR PREVIEW (Animated Glow)
+                        // 📖 LIVE MEMOIR PREVIEW (Animated Glow with Premium Gradient)
                         NavigationLink(destination: buildEditor()) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -200,7 +199,12 @@ struct HomepageView: View {
                                         RoundedRectangle(cornerRadius: 16)
                                             .stroke(
                                                 AngularGradient(
-                                                    gradient: Gradient(colors: [Color.pink, Color.orange, Color.yellow, Color.pink]),
+                                                    gradient: Gradient(colors: [
+                                                        Color.orange,
+                                                        Color.yellow,
+                                                        Color.red.opacity(0.8),
+                                                        Color.orange
+                                                    ]),
                                                     center: .center,
                                                     angle: .degrees(animatePreviewGlow ? 360 : 0)
                                                 ),
@@ -208,10 +212,10 @@ struct HomepageView: View {
                                             )
                                     )
                             )
-                            .shadow(color: Color.orange.opacity(0.25), radius: 6, x: 0, y: 3)
+                            .shadow(color: Color.orange.opacity(0.3), radius: 8, x: 0, y: 4)
                             .padding(.horizontal)
                             .onAppear {
-                                withAnimation(.linear(duration: 10).repeatForever(autoreverses: false)) {
+                                withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) {
                                     animatePreviewGlow = true
                                 }
                             }
@@ -240,7 +244,6 @@ struct HomepageView: View {
                             .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
                             .padding(.horizontal)
                         }
-                        */
 
                         Spacer(minLength: 36)
                     }
