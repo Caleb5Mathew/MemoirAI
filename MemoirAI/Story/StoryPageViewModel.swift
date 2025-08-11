@@ -64,9 +64,9 @@ class StoryPageViewModel: ObservableObject {
     private func restoreSettingsFromCloud() {
         NSUbiquitousKeyValueStore.default.synchronize()
         
-        let cloudPageCount = NSUbiquitousKeyValueStore.default.integer(forKey: "memoir_pageCount")
+        let cloudPageCount = NSUbiquitousKeyValueStore.default.longLong(forKey: "memoir_pageCount")
         if cloudPageCount > 0 {
-            pageCountSetting = cloudPageCount
+            pageCountSetting = Int(cloudPageCount)
         }
         
         let cloudArtStyle = NSUbiquitousKeyValueStore.default.string(forKey: "memoir_artStyle")
