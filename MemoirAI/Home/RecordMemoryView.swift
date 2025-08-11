@@ -10,6 +10,8 @@ struct RecordMemoryView: View {
     @StateObject private var usageTracker = UsageTracker.shared
     @StateObject private var audioMonitor = AudioLevelMonitor()
     @StateObject private var permissionManager = PermissionManager.shared
+    @StateObject private var realTimeTranscription = RealTimeTranscriptionManager.shared
+    @StateObject private var audioSessionManager = AudioSessionManager.shared
     
     @State private var selectedPrompt: String? = nil
     @State private var showTextEntry: Bool = false
@@ -155,6 +157,31 @@ struct RecordMemoryView: View {
                         isPaused: isPaused
                     )
                     .padding(.horizontal)
+                    
+                    // Real-time transcription display
+                    if realTimeTranscription.isTranscribing && !realTimeTranscription.currentTranscript.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Image(systemName: "text.bubble.fill")
+                                    .foregroundColor(accent)
+                                Text("Live Transcription:")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
+                            Text(realTimeTranscription.currentTranscript)
+                                .font(.body)
+                                .foregroundColor(accent)
+                                .padding(12)
+                                .background(Color(red: 1.0, green: 0.96, blue: 0.89))
+                                .cornerRadius(8)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(accent.opacity(0.3), lineWidth: 1)
+                                )
+                        }
+                        .padding(.horizontal)
+                    }
                     
                     // Recording Timer Display
                     if isRecording || isPaused {
@@ -406,16 +433,11 @@ struct RecordMemoryView: View {
             return
         }
         
-        let session = AVAudioSession.sharedInstance()
+        // Configure audio session for optimal speech recognition
         do {
-            try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])
-            try session.setMode(.default)
-            try session.setActive(true)
-            if session.isInputGainSettable {
-                try session.setInputGain(2.0)
-            }
+            try audioSessionManager.configureForPlayAndRecord()
         } catch {
-            print("🔴 Audio session setup error: \(error.localizedDescription)")
+            print("🔴 Enhanced audio session setup error: \(error.localizedDescription)")
         }
         
         let fileName = UUID().uuidString + ".caf"
@@ -423,12 +445,14 @@ struct RecordMemoryView: View {
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(fileName)
         
+        // Use optimal recording format for speech recognition
+        let optimalFormat = audioSessionManager.getOptimalRecordingFormat()
         let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: 44_100,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
+            AVFormatIDKey: optimalFormat.settings[AVFormatIDKey] ?? kAudioFormatLinearPCM,
+            AVSampleRateKey: optimalFormat.sampleRate,
+            AVNumberOfChannelsKey: optimalFormat.channelCount,
+            AVLinearPCMBitDepthKey: 32, // Use 32-bit for better quality
+            AVLinearPCMIsFloatKey: true, // Use float for better precision
             AVLinearPCMIsBigEndianKey: false
         ]
         
@@ -446,6 +470,9 @@ struct RecordMemoryView: View {
                 audioMonitor.startMonitoring(recorder: recorder)
             }
             
+            // Start real-time transcription for better accuracy
+            realTimeTranscription.startTranscription()
+            
             startRecordingTimer()
         } catch {
             print("❌ Failed to start recording: \(error.localizedDescription)")
@@ -457,6 +484,9 @@ struct RecordMemoryView: View {
         isPaused = true
         recordingTimer?.invalidate() // Pause the timer
         
+        // Pause real-time transcription
+        realTimeTranscription.pauseTranscription()
+        
         // Note: We keep audio monitoring active during pause so user can see
         // that audio input is still being detected, just not recorded
     }
@@ -464,6 +494,10 @@ struct RecordMemoryView: View {
     func resumeRecording() {
         audioRecorder?.record()
         isPaused = false
+        
+        // Resume real-time transcription
+        realTimeTranscription.resumeTranscription()
+        
         // Resume timer from current time
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             recordingTime += 1
@@ -478,6 +512,13 @@ struct RecordMemoryView: View {
         
         // Stop audio level monitoring
         audioMonitor.stopMonitoring()
+        
+        // Stop real-time transcription and get final transcript
+        realTimeTranscription.stopTranscription()
+        let realTimeTranscript = realTimeTranscription.getFinalTranscript()
+        if !realTimeTranscript.isEmpty {
+            typedText = realTimeTranscript
+        }
     }
     
     func clearRecording() {
@@ -533,25 +574,21 @@ struct RecordMemoryView: View {
             // 3️⃣ Start transcription using same background context
             if let urlString = newEntry.audioFileURL,
                let fileURL = URL(string: urlString) {
-                SFSpeechRecognizer.requestAuthorization { status in
-                    guard status == .authorized else { return }
-                    let request = SFSpeechURLRecognitionRequest(url: fileURL)
-                    SFSpeechRecognizer()?.recognitionTask(with: request) { result, error in
-                        if let r = result, r.isFinal {
-                            let transcript = r.bestTranscription.formattedString
+                // Use enhanced transcription with better accuracy
+                SpeechTranscriber.shared.transcribe(url: fileURL) { result in
+                    switch result {
+                    case .success(let transcript):
+                        bgContext.perform {
+                            newEntry.text = transcript
+                            try? bgContext.save()
                             
-                            // 🔥 ENHANCED: Use same background context + better notification
-                            bgContext.perform {
-                                newEntry.text = transcript
-                                try? bgContext.save()
-                                
-                                // 🔥 KEY FIX: Notify AGAIN after transcription completes
-                                DispatchQueue.main.async {
-                                    NotificationCenter.default.post(name: .memorySaved, object: nil)
-                                    print("✅ Transcription completed: \(transcript.prefix(50))...")
-                                }
+                            DispatchQueue.main.async {
+                                NotificationCenter.default.post(name: .memorySaved, object: nil)
+                                print("✅ Enhanced transcription completed: \(transcript.prefix(50))...")
                             }
                         }
+                    case .failure(let error):
+                        print("❌ Enhanced transcription failed: \(error.localizedDescription)")
                     }
                 }
             }

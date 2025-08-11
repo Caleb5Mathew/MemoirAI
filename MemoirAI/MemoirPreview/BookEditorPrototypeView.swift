@@ -1,1 +1,667 @@
-import SwiftUIstruct BookEditorPrototypeView: View {    let profileID: UUID    @State private var pages: [EditorPage]        init(profileID: UUID, pages: [EditorPage]) {        self.profileID = profileID        self._pages = State(initialValue: pages)    }        var body: some View {        ZStack {            // Soft background            LinearGradient(                colors: [                    Color(red: 0.96, green: 0.95, blue: 0.94),                    Color(red: 0.91, green: 0.90, blue: 0.89)                ],                startPoint: .topLeading,                endPoint: .bottomTrailing            )            .ignoresSafeArea()                        VStack(spacing: 32) {                // Book icon                Image(systemName: "book.closed")                    .font(.system(size: 80))                    .foregroundColor(.brown.opacity(0.7))                                VStack(spacing: 16) {                    Text("Book Preview")                        .font(.title.weight(.medium))                        .foregroundColor(.primary)                                        Text("Coming Soon")                        .font(.title2.weight(.light))                        .foregroundColor(.secondary)                                        Text("We're working on an amazing book preview experience for your memories.")                        .font(.body)                        .foregroundColor(.secondary)                        .multilineTextAlignment(.center)                        .padding(.horizontal, 40)                }                                // Simple back button                Button("Back") {                    // Handle back navigation                }                .font(.headline)                .foregroundColor(.white)                .padding(.horizontal, 32)                .padding(.vertical, 12)                .background(.brown.opacity(0.8))                .cornerRadius(8)            }        }        .navigationBarHidden(true)    }}// MARK: - Commented Out Previous Implementation/*// Previous complex book editor implementation commented out// This included:// - BookFrameView with realistic book chrome and shadows// - EnhancedBookBackground with paper texture// - BookSpreadView with professional typography// - ProfessionalBookText with proper margins and spacing// - EnhancedCoverView with cover styles// - Complex page navigation and editing functionality// - Landscape-optimized book layout with 4:3 aspect ratio// - Professional typography with Georgia and Playfair Display fonts// - Animated page stack with gradients// - Book spine details and binding effects// - Auto-hiding navigation controls// - Text and cover editing sheets// - Multiple cover styles (linen, cloth, leather)// - Professional page layout constants// - Enhanced typography extensions// - Proper page margins and line spacing*///import SwiftUI//import PhotosUI//import UIKit////enum BookLayout {//    case cover(page: EditorPage)//    case singlePage(page: EditorPage)//    case twoPageSpread(left: EditorPage, right: EditorPage)//}////struct BookEditorPrototypeView: View {//    let profileID: UUID//    @State private var pages: [EditorPage]//    @State private var currentPageIndex = 0//    @State private var showingTextEditor = false//    @State private var showingCoverEditor = false//    @State private var showingNavigation = true//    @State private var lastInteractionTime = Date()//    //    init(profileID: UUID, pages: [EditorPage]) {//        self.profileID = profileID//        self._pages = State(initialValue: pages)//    }//    //    var body: some View {//        GeometryReader { geometry in//            ZStack {//                // Enhanced background//                EnhancedBookBackground()//                //                // Book container - landscape optimized//                VStack(spacing: 0) {//                    // Top navigation bar//                    HStack {//                        Button("Done") {//                            // Handle done action//                        }//                        .foregroundColor(.primary)//                        //                        Spacer()//                        //                        // Page indicator//                        Text("Page \(currentPageIndex + 1) of \(pages.count)")//                            .font(.caption)//                            .foregroundColor(.secondary)//                        //                        Spacer()//                        //                        Button("Edit") {//                            if currentPageIndex == 0 {//                                showingCoverEditor = true//                            } else {//                                showingTextEditor = true//                            }//                        }//                        .foregroundColor(.primary)//                    }//                    .padding(.horizontal)//                    .padding(.top, 8)//                    //                    // Main book view - centered and landscape//                    BookFrameView(pageIndex: currentPageIndex) {//                        TabView(selection: $currentPageIndex) {//                            ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in//                                BookSpreadView(//                                    page: page,//                                    pageIndex: index,//                                    isLeftPage: index % 2 == 0,//                                    showingTextEditor: $showingTextEditor,//                                    showingCoverEditor: $showingCoverEditor//                                )//                                .tag(index)//                            }//                        }//                        .tabViewStyle(.page(indexDisplayMode: .never))//                        .onTapGesture {//                            resetNavigationTimer()//                        }//                    }//                    .frame(maxHeight: min(geometry.size.height * 0.7, 400)) // Limit height for landscape//                    .padding(.horizontal, 16)//                    .padding(.vertical, 8)//                    //                    Spacer()//                }//                //                // Floating navigation (auto-hide)//                if showingNavigation && pages.count > 1 {//                    HStack {//                        // Previous button//                        Button(action: previousPage) {//                            Image(systemName: "chevron.left")//                                .font(.title2)//                                .foregroundColor(.primary)//                                .padding(12)//                                .background(.regularMaterial, in: Circle())//                                .shadow(radius: 4)//                        }//                        .disabled(currentPageIndex == 0)//                        .opacity(currentPageIndex == 0 ? 0.3 : 1.0)//                        //                        Spacer()//                        //                        // Next button//                        Button(action: nextPage) {//                            Image(systemName: "chevron.right")//                                .font(.title2)//                                .foregroundColor(.primary)//                                .padding(12)//                                .background(.regularMaterial, in: Circle())//                                .shadow(radius: 4)//                        }//                        .disabled(currentPageIndex == pages.count - 1)//                        .opacity(currentPageIndex == pages.count - 1 ? 0.3 : 1.0)//                    }//                    .padding(.horizontal, 32)//                    .transition(.opacity)//                }//            }//            .onAppear {//                startNavigationTimer()//            }//            .onTapGesture {//                resetNavigationTimer()//            }//        }//        .sheet(isPresented: $showingTextEditor) {//            if currentPageIndex < pages.count {//                TextEditorSheet(//                    text: pages[currentPageIndex].bodyText,//                    title: pages[currentPageIndex].title ?? "Untitled"//                ) { newText in//                    pages[currentPageIndex].bodyText = newText//                }//            }//        }//        .sheet(isPresented: $showingCoverEditor) {//            if currentPageIndex == 0 {//                CoverEditorSheet(profileID: profileID, page: pages[0]) { updatedPage in//                    pages[0] = updatedPage//                }//            }//        }//        .navigationBarHidden(true)//    }//    //    private func previousPage() {//        let targetIndex = currentPageIndex - 1//        let maxIndex = pages.count - 1//        //        guard targetIndex >= 0 && targetIndex <= maxIndex else { return }//        //        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {//            currentPageIndex = targetIndex//        }//    }//    //    private func nextPage() {//        let targetIndex = currentPageIndex + 1//        let maxIndex = pages.count - 1//        //        guard targetIndex >= 0 && targetIndex <= maxIndex else { return }//        //        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {//            currentPageIndex = targetIndex//        }//    }//    //    private func startNavigationTimer() {//        // Implementation of startNavigationTimer//    }//    //    private func resetNavigationTimer() {//        // Implementation of resetNavigationTimer//    }//}////struct EnhancedBookBackground: View {//    var body: some View {//        ZStack {//            // Soft neutral texture background//            LinearGradient(//                colors: [//                    Color(hex: "f5f3f0") ?? Color(red: 0.96, green: 0.95, blue: 0.94),//                    Color(hex: "e8e6e3") ?? Color(red: 0.91, green: 0.90, blue: 0.89)//                ],//                startPoint: .topLeading,//                endPoint: .bottomTrailing//            )//            .ignoresSafeArea()//            //            // Subtle paper texture overlay//            Rectangle()//                .fill(.black.opacity(0.02))//                .blendMode(.multiply)//                .ignoresSafeArea()//        }//    }//}////struct BookFrameView<Content: View>: View {//    let content: Content//    let aspectRatio: CGFloat = 4.0/3.0 // Landscape book proportions (wider, shorter)//    let pageIndex: Int//    //    init(pageIndex: Int, @ViewBuilder content: () -> Content) {//        self.pageIndex = pageIndex//        self.content = content()//    }//    //    var body: some View {//        GeometryReader { geometry in//            // Much wider and shorter book dimensions//            let bookWidth = min(geometry.size.width * 0.92, 480)  // Wider//            let bookHeight = bookWidth / aspectRatio  // Much shorter//            //            ZStack {//                // Book shadow (multiple layers for realism)//                RoundedRectangle(cornerRadius: 12)//                    .fill(.black.opacity(0.15))//                    .frame(width: bookWidth + 8, height: bookHeight + 8)//                    .offset(x: 6, y: 8)//                    .blur(radius: 8)//                //                RoundedRectangle(cornerRadius: 10)//                    .fill(.black.opacity(0.08))//                    .frame(width: bookWidth + 4, height: bookHeight + 4)//                    .offset(x: 3, y: 4)//                    .blur(radius: 4)//                //                // Book cover/binding//                RoundedRectangle(cornerRadius: 8)//                    .fill(//                        LinearGradient(//                            colors: [//                                Color(hex: "8B4513") ?? .brown,//                                Color(hex: "A0522D") ?? .brown,//                                Color(hex: "654321") ?? .brown//                            ],//                            startPoint: .topLeading,//                            endPoint: .bottomTrailing//                        )//                    )//                    .frame(width: bookWidth + 12, height: bookHeight + 12)//                    .overlay(//                        RoundedRectangle(cornerRadius: 8)//                            .stroke(.black.opacity(0.1), lineWidth: 1)//                    )//                //                // Enhanced animated page stack (5-6 layers with gradients)//                ForEach(0..<6) { i in//                    let offset = CGFloat(i) * 1.5 + CGFloat(pageIndex) * 0.5 // Animate with page turns//                    let shadowIntensity = i % 2 == 0 ? 0.08 : 0.04 // Alternating shadows//                    //                    RoundedRectangle(cornerRadius: 6)//                        .fill(//                            LinearGradient(//                                colors: [//                                    Color.white.opacity(0.98),//                                    Color.white.opacity(0.92)//                                ],//                                startPoint: .topLeading,//                                endPoint: .bottomTrailing//                            )//                        )//                        .frame(//                            width: bookWidth - CGFloat(i) * 2,//                            height: bookHeight - CGFloat(i) * 2//                        )//                        .offset(x: offset, y: CGFloat(i) * -1.5)//                        .shadow(color: .black.opacity(shadowIntensity), radius: 2, x: 1, y: 1)//                        .animation(.easeInOut(duration: 0.3), value: pageIndex)//                }//                //                // Book spine detail with better gradient//                Rectangle()//                    .fill(//                        LinearGradient(//                            colors: [//                                Color(hex: "654321") ?? .brown,//                                Color(hex: "8B4513") ?? .brown,//                                Color(hex: "654321") ?? .brown//                            ],//                            startPoint: .leading,//                            endPoint: .trailing//                        )//                    )//                    .frame(width: 16, height: bookHeight + 8)//                    .offset(x: -(bookWidth + 12) / 2 - 8)//                    .shadow(color: .black.opacity(0.3), radius: 4, x: -2, y: 0)//                //                // Main content area//                content//                    .frame(width: bookWidth, height: bookHeight)//                    .clipShape(RoundedRectangle(cornerRadius: 6))//            }//            .frame(maxWidth: .infinity, maxHeight: .infinity)//        }//    }//}////struct PageLayout {//    static let innerMargin: CGFloat = 24      // Spine side (reduced for landscape)//    static let outerMargin: CGFloat = 32      // Outer edge//    static let headMargin: CGFloat = 24       // Top (reduced for shorter height)//    static let footMargin: CGFloat = 20       // Bottom (reduced for shorter height)//    static let maxTextWidth: CGFloat = 380    // Adjusted for landscape//    static let bodyLineSpacing: CGFloat = 3   // Tighter line spacing for landscape//}////extension Font {//    static let bookTitle = Font.custom("Playfair Display", size: 22).weight(.regular)  // Smaller for landscape//    static let bookSubtitle = Font.custom("Playfair Display", size: 16).weight(.light)//    static let bookBody = Font.custom("Georgia", size: 14).weight(.regular)  // Slightly smaller//    static let bookCaption = Font.custom("Georgia", size: 11).weight(.regular)//    static let pageNumber = Font.custom("Georgia", size: 10).weight(.regular)//    //    static func customSerifFallback(size: CGFloat) -> Font {//        return Font.custom("Georgia", size: size)//    }//}////enum CoverStyle: String, CaseIterable {//    case linen = "Linen"//    case cloth = "Cloth"//    case leather = "Leather"//    //    var colors: [Color] {//        switch self {//        case .linen://            return [//                Color(hex: "f4f1e8") ?? .white,//                Color(hex: "e8e2d5") ?? .gray//            ]//        case .cloth://            return [//                Color(hex: "2c3e50") ?? .blue,//                Color(hex: "34495e") ?? .blue//            ]//        case .leather://            return [//                Color(hex: "8B4513") ?? .brown,//                Color(hex: "654321") ?? .brown//            ]//        }//    }//}////struct ProfessionalBookText: View {//    let text: String//    let isLeftPage: Bool//    let pageNumber: Int//    //    var body: some View {//        VStack(alignment: .leading, spacing: 0) {//            // Main text content//            Text(text)//                .font(.bookBody)//                .foregroundColor(Color(hex: "2C2C2C") ?? .primary)//                .lineSpacing(PageLayout.bodyLineSpacing)//                .multilineTextAlignment(.leading)//                .frame(maxWidth: PageLayout.maxTextWidth, alignment: .leading)//            //            Spacer()//            //            // Page number at bottom//            HStack {//                if isLeftPage {//                    Text("\(pageNumber)")//                        .font(.pageNumber)//                        .foregroundColor(.primary.opacity(0.6))//                    Spacer()//                } else {//                    Spacer()//                    Text("\(pageNumber)")//                        .font(.pageNumber)//                        .foregroundColor(.primary.opacity(0.6))//                }//            }//            .padding(.top, 8)//        }//        .padding(.top, PageLayout.headMargin)//        .padding(.bottom, PageLayout.footMargin)//        .padding(.leading, isLeftPage ? PageLayout.outerMargin : PageLayout.innerMargin)//        .padding(.trailing, isLeftPage ? PageLayout.innerMargin : PageLayout.outerMargin)//    }//}////struct BookSpreadView: View {//    let page: EditorPage//    let pageIndex: Int//    let isLeftPage: Bool//    @Binding var showingTextEditor: Bool//    @Binding var showingCoverEditor: Bool//    //    var body: some View {//        GeometryReader { geometry in//            switch page {//            case .cover(let page)://                EnhancedCoverView(page: page, isEditing: .constant(false))//                    .frame(width: geometry.size.width, height: geometry.size.height)//                //            case .singlePage(let page)://                EnhancedBookPageView(page: page, isEditing: .constant(false), pageNumber: pageIndex + 1)//                    .frame(width: geometry.size.width, height: geometry.size.height)//                //            case .twoPageSpread(let leftPage, let rightPage)://                // Realistic two-page spread with proper book layout//                HStack(spacing: 0) {//                    // Left page with proper margins//                    EnhancedBookPageView(//                        page: leftPage,//                        isEditing: .constant(false),//                        pageNumber: pageIndex + 1,//                        isLeftPage: true//                    )//                    .frame(width: geometry.size.width / 2 - 2)//                    //                    // Center binding with realistic book spine effect//                    VStack(spacing: 0) {//                        Rectangle()//                            .fill(//                                LinearGradient(//                                    colors: [//                                        .black.opacity(0.4),//                                        .black.opacity(0.2),//                                        .black.opacity(0.1),//                                        .black.opacity(0.2),//                                        .black.opacity(0.4)//                                    ],//                                    startPoint: .leading,//                                    endPoint: .trailing//                                )//                            )//                            .frame(width: 4)//                            .overlay(//                                // Subtle binding stitching effect//                                VStack(spacing: 20) {//                                    ForEach(0..<8) { _ in//                                        Circle()//                                            .fill(.black.opacity(0.1))//                                            .frame(width: 1, height: 1)//                                    }//                                }//                            )//                    }//                    //                    // Right page with proper margins//                    EnhancedBookPageView(//                        page: rightPage,//                        isEditing: .constant(false),//                        pageNumber: pageIndex + 2,//                        isLeftPage: false//                    )//                    .frame(width: geometry.size.width / 2 - 2)//                }//            }//        }//    }//}////struct EnhancedCoverView: View {//    @ObservedObject var page: EditorPage//    @Binding var isEditing: Bool//    @State private var coverStyle: CoverStyle = .leather//    //    var body: some View {//        ZStack {//            // Cover background with preset styles//            LinearGradient(//                colors: coverStyle.colors,//                startPoint: .topLeading,//                endPoint: .bottomTrailing//            )//            //            // Subtle noise texture for realism//            Rectangle()//                .fill(.black.opacity(0.05))//                .blendMode(.multiply)//            //            VStack(spacing: 24) {//                Spacer()//                //                // Cover photo if available//                if let img = page.photoUIImage {//                    Image(uiImage: img)//                        .resizable()//                        .scaledToFit()//                        .frame(maxWidth: 120, maxHeight: 120)//                        .clipShape(Circle())//                        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)//                }//                //                // Title with emboss effect//                if let title = page.title, !title.isEmpty {//                    Text(title)//                        .font(.bookTitle)//                        .fontWeight(.bold)//                        .multilineTextAlignment(.center)//                        .foregroundColor(.white)//                        .shadow(color: .black.opacity(0.5), radius: 2, x: 1, y: 1)  // Emboss effect//                        .shadow(color: .white.opacity(0.3), radius: 1, x: -1, y: -1)//                        .padding(.horizontal, 32)//                        .lineLimit(3)//                        .minimumScaleFactor(0.7)//                }//                //                // Subtitle//                if !page.bodyText.isEmpty {//                    Text(page.bodyText)//                        .font(.sectionHeading)//                        .multilineTextAlignment(.center)//                        .foregroundColor(.white.opacity(0.9))//                        .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)//                        .padding(.horizontal, 40)//                        .lineLimit(2)//                }//                //                Spacer()//                Spacer()//            }//        }//        .clipShape(RoundedRectangle(cornerRadius: 4))//        .onTapGesture {//            if isEditing {//                // Cycle through cover styles//                let styles = CoverStyle.allCases//                if let currentIndex = styles.firstIndex(of: coverStyle) {//                    let nextIndex = (currentIndex + 1) % styles.count//                    withAnimation(.easeInOut(duration: 0.3)) {//                        coverStyle = styles[nextIndex]//                    }//                }//            }//        }//    }//}////struct EnhancedBookPageView: View {//    @ObservedObject var page: EditorPage//    @Binding var isEditing: Bool//    let pageNumber: Int//    var isLeftPage: Bool = true//    @State private var photoPickerItem: PhotosPickerItem?//    //    var body: some View {//        ZStack {//            // Enhanced paper background with cream texture//            LinearGradient(//                colors: [//                    Color(hex: "faf8f5") ?? .white,  // Cream instead of pure white//                    Color(hex: "f5f2ed") ?? .white//                ],//                startPoint: isLeftPage ? .topLeading : .topTrailing,//                endPoint: isLeftPage ? .bottomTrailing : .bottomLeading//            )//            //            // Subtle paper grain texture (3% opacity)//            Rectangle()//                .fill(.black.opacity(0.03))//                .blendMode(.multiply)//            //            VStack(spacing: 0) {//                // Enhanced title section - no truncation, spans full width//                if let title = page.title, !title.isEmpty {//                    VStack(spacing: 8) {//                        Text(title)//                            .font(.sectionHeading)//                            .multilineTextAlignment(.center)//                            .foregroundColor(Color(hex: "2c3e50"))//                            .lineLimit(3)  // Up to 3 lines//                            .minimumScaleFactor(0.65)  // Auto-shrink gracefully//                            .padding(.horizontal, PageLayout.innerMargin)//                            .padding(.top, PageLayout.headMargin)//                        //                        Rectangle()//                            .fill(Color(hex: "2c3e50") ?? .black)//                            .frame(width: 50, height: 1)//                            .opacity(0.4)//                    }//                    .padding(.bottom, 16)//                }//                //                // Photo section with better positioning//                if let img = page.photoUIImage {//                    Image(uiImage: img)//                        .resizable()//                        .scaledToFit()//                        .frame(maxHeight: 100)//                        .clipShape(RoundedRectangle(cornerRadius: 6))//                        .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)//                        .padding(.horizontal, PageLayout.innerMargin + PageLayout.outerMargin)//                        .padding(.bottom, 16)//                        .onTapGesture {//                            if isEditing {//                                page.photoData = nil//                            }//                        }//                } else if isEditing {//                    PhotosPicker(selection: $photoPickerItem, matching: .images) {//                        VStack(spacing: 6) {//                            Image(systemName: "photo.badge.plus")//                                .font(.system(size: 18))//                                .foregroundColor(.gray.opacity(0.6))//                            //                            Text("Add Photo")//                                .font(.caption)//                                .foregroundColor(.gray.opacity(0.8))//                        }//                        .frame(height: 60)//                        .frame(maxWidth: .infinity)//                        .background(//                            RoundedRectangle(cornerRadius: 6)//                                .fill(.gray.opacity(0.05))//                                .overlay(//                                    RoundedRectangle(cornerRadius: 6)//                                        .stroke(.gray.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [5]))//                                )//                        )//                        .padding(.horizontal, PageLayout.innerMargin + PageLayout.outerMargin)//                    }//                    .padding(.bottom, 16)//                }//                //                // Main text content with wider columns//                if isEditing {//                    TextEditor(text: $page.bodyText)//                        .font(.bookBodySmall)//                        .foregroundColor(Color(hex: "2c3e50"))//                        .lineSpacing(PageLayout.bodyLineSpacing)//                        .padding(.horizontal, isLeftPage ? PageLayout.innerMargin : PageLayout.outerMargin)//                        .padding(.trailing, isLeftPage ? PageLayout.outerMargin : PageLayout.innerMargin)//                        .background(.clear)//                } else {//                    ProfessionalBookText(//                        text: page.bodyText,//                        isLeftPage: isLeftPage,//                        pageNumber: pageNumber//                    )//                }//                //                Spacer()//                //                // Enhanced page numbers - darker, better positioned, no QR unless generated//                HStack {//                    if isLeftPage {//                        Text("\(pageNumber)")//                            .font(.caption)//                            .foregroundColor(.black.opacity(0.6))  // Darker (60% gray)//                        //                        Spacer()//                        //                        // Only show QR if actually generated//                        if let qr = page.qrUIImage {//                            Image(uiImage: qr)//                                .resizable()//                                .frame(width: 10, height: 10)//                                .opacity(0.3)//                        }//                    } else {//                        // Only show QR if actually generated//                        if let qr = page.qrUIImage {//                            Image(uiImage: qr)//                                .resizable()//                                .frame(width: 10, height: 10)//                                .opacity(0.3)//                        }//                        //                        Spacer()//                        //                        Text("\(pageNumber)")//                            .font(.caption)//                            .foregroundColor(.black.opacity(0.6))  // Darker (60% gray)//                    }//                }//                .padding(.horizontal, PageLayout.innerMargin)//                .padding(.trailing, PageLayout.outerMargin)//                .padding(.bottom, PageLayout.footMargin - 12)  // 12pt above foot margin//            }//        }//        .clipShape(RoundedRectangle(cornerRadius: 4))//        .onChange(of: photoPickerItem) { _ in//            guard let item = photoPickerItem else { return }//            Task {//                if let data = try? await item.loadTransferable(type: Data.self) {//                    page.photoData = data//                    photoPickerItem = nil//                }//            }//        }//    }//}
+import SwiftUI
+import PhotosUI
+import CoreData
+
+struct BookEditorPrototypeView: View {
+    let profileID: UUID
+    @State private var pages: [EditorPage]
+    @State private var currentPageIndex = 0
+    @State private var showPhotoBank = false
+    @State private var selectedPhoto: UIImage?
+    @State private var photoPositions: [UUID: CGPoint] = [:]
+    @State private var draggedPhoto: UUID?
+    @State private var photoPickerItems: [PhotosPickerItem] = []
+    @State private var availablePhotos: [PhotoItem] = []
+    @State private var showSaveSuccess = false
+    
+    init(profileID: UUID, pages: [EditorPage]) {
+        self.profileID = profileID
+        self._pages = State(initialValue: pages)
+    }
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Soft background
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.96, green: 0.95, blue: 0.94),
+                        Color(red: 0.91, green: 0.90, blue: 0.89)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+                
+                VStack(spacing: 0) {
+                    // Navigation header
+                    HStack {
+                        Button("Done") {
+                            // Handle done action
+                        }
+                        .foregroundColor(.primary)
+                        
+                        Spacer()
+                        
+                        Text("Page \(currentPageIndex + 1) of \(pages.count)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        Spacer()
+                        
+                        Button("Save") {
+                            savePhotoLayout()
+                        }
+                        .foregroundColor(.primary)
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                    
+                                    // Book view
+                BookView(
+                    pages: pages,
+                    currentPageIndex: $currentPageIndex,
+                    photoPositions: $photoPositions,
+                    draggedPhoto: $draggedPhoto,
+                    selectedPhoto: $selectedPhoto,
+                    availablePhotos: availablePhotos
+                )
+                    .frame(maxHeight: geometry.size.height * 0.7)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    
+                    Spacer()
+                    
+                    // Photo bank section
+                    PhotoBankSection(
+                        showPhotoBank: $showPhotoBank,
+                        availablePhotos: $availablePhotos,
+                        photoPickerItems: $photoPickerItems,
+                        selectedPhoto: $selectedPhoto
+                    )
+                    .frame(height: showPhotoBank ? 200 : 60)
+                    .animation(.spring(response: 0.6, dampingFraction: 0.8), value: showPhotoBank)
+                }
+            }
+        }
+        .onAppear {
+            loadAvailablePhotos()
+            loadSavedPhotoLayout()
+        }
+        .onChange(of: photoPickerItems) { _ in
+            loadNewPhotos()
+        }
+        .sheet(item: $selectedPhoto) { photo in
+            PhotoDetailView(photo: photo)
+        }
+        .alert("Layout Saved!", isPresented: $showSaveSuccess) {
+            Button("OK") { }
+        } message: {
+            Text("Your photo layout has been saved successfully.")
+        }
+        .navigationBarHidden(true)
+    }
+    
+    private func loadAvailablePhotos() {
+        // Load photos from all memory entries
+        let context = PersistenceController.shared.container.viewContext
+        let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
+        request.predicate = NSPredicate(format: "profileID == %@", profileID as CVarArg)
+        
+        do {
+            let entries = try context.fetch(request)
+            var photos: [PhotoItem] = []
+            
+            for entry in entries {
+                if let photoSet = entry.photos as? Set<Photo> {
+                    for photo in photoSet {
+                        if let data = photo.data, let image = UIImage(data: data) {
+                            photos.append(PhotoItem(id: photo.id ?? UUID(), image: image, sourceMemory: entry))
+                        }
+                    }
+                }
+            }
+            
+            availablePhotos = photos
+        } catch {
+            print("Error loading photos:", error)
+        }
+    }
+    
+    private func loadNewPhotos() {
+        Task {
+            for item in photoPickerItems {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data) {
+                    let newPhoto = PhotoItem(id: UUID(), image: image, sourceMemory: nil)
+                    await MainActor.run {
+                        availablePhotos.append(newPhoto)
+                    }
+                }
+            }
+            await MainActor.run {
+                photoPickerItems.removeAll()
+            }
+        }
+    }
+    
+    private func savePhotoLayout() {
+        // Save photo positions to UserDefaults
+        let layoutKey = "photoLayout_\(profileID.uuidString)"
+        let layoutData = photoPositions.mapKeys { $0.uuidString }
+        
+        if let data = try? JSONEncoder().encode(layoutData) {
+            UserDefaults.standard.set(data, forKey: layoutKey)
+        }
+        
+        // Show success feedback
+        showSaveSuccess = true
+    }
+    
+    private func loadSavedPhotoLayout() {
+        let layoutKey = "photoLayout_\(profileID.uuidString)"
+        
+        if let data = UserDefaults.standard.data(forKey: layoutKey),
+           let layoutData = try? JSONDecoder().decode([String: CGPoint].self, from: data) {
+            photoPositions = layoutData.mapKeys { UUID(uuidString: $0) ?? UUID() }
+        }
+    }
+}
+
+// MARK: - Photo Item Model
+struct PhotoItem: Identifiable {
+    let id: UUID
+    let image: UIImage
+    let sourceMemory: MemoryEntry?
+}
+
+// MARK: - Book View
+struct BookView: View {
+    let pages: [EditorPage]
+    @Binding var currentPageIndex: Int
+    @Binding var photoPositions: [UUID: CGPoint]
+    @Binding var draggedPhoto: UUID?
+    @Binding var selectedPhoto: UIImage?
+    let availablePhotos: [PhotoItem]
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Book background
+                BookBackground()
+                
+                // Page content
+                TabView(selection: $currentPageIndex) {
+                    ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
+                        BookPageView(
+                            page: page,
+                            pageIndex: index,
+                            photoPositions: $photoPositions,
+                            draggedPhoto: $draggedPhoto,
+                            selectedPhoto: $selectedPhoto,
+                            availablePhotos: availablePhotos
+                        )
+                        .tag(index)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                
+                // Navigation arrows
+                if pages.count > 1 {
+                    HStack {
+                        Button(action: previousPage) {
+                            Image(systemName: "chevron.left")
+                                .font(.title2)
+                                .foregroundColor(.primary)
+                                .padding(12)
+                                .background(.regularMaterial, in: Circle())
+                                .shadow(radius: 4)
+                        }
+                        .disabled(currentPageIndex == 0)
+                        .opacity(currentPageIndex == 0 ? 0.3 : 1.0)
+                        
+                        Spacer()
+                        
+                        Button(action: nextPage) {
+                            Image(systemName: "chevron.right")
+                                .font(.title2)
+                                .foregroundColor(.primary)
+                                .padding(12)
+                                .background(.regularMaterial, in: Circle())
+                                .shadow(radius: 4)
+                        }
+                        .disabled(currentPageIndex == pages.count - 1)
+                        .opacity(currentPageIndex == pages.count - 1 ? 0.3 : 1.0)
+                    }
+                    .padding(.horizontal, 32)
+                }
+            }
+        }
+    }
+    
+    private func previousPage() {
+        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+            currentPageIndex = max(0, currentPageIndex - 1)
+        }
+    }
+    
+    private func nextPage() {
+        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+            currentPageIndex = min(pages.count - 1, currentPageIndex + 1)
+        }
+    }
+}
+
+// MARK: - Book Background
+struct BookBackground: View {
+    var body: some View {
+        ZStack {
+            // Book shadow
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.black.opacity(0.15))
+                .offset(x: 6, y: 8)
+                .blur(radius: 8)
+            
+            // Book cover
+            RoundedRectangle(cornerRadius: 8)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.55, green: 0.27, blue: 0.07),
+                            Color(red: 0.63, green: 0.32, blue: 0.18),
+                            Color(red: 0.40, green: 0.26, blue: 0.13)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(.black.opacity(0.1), lineWidth: 1)
+                )
+            
+            // Page stack effect
+            ForEach(0..<6) { i in
+                let offset = CGFloat(i) * 1.5
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.98),
+                                Color.white.opacity(0.92)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .offset(x: offset, y: CGFloat(i) * -1.5)
+                    .shadow(color: .black.opacity(i % 2 == 0 ? 0.08 : 0.04), radius: 2, x: 1, y: 1)
+            }
+        }
+    }
+}
+
+// MARK: - Book Page View
+struct BookPageView: View {
+    let page: EditorPage
+    let pageIndex: Int
+    @Binding var photoPositions: [UUID: CGPoint]
+    @Binding var draggedPhoto: UUID?
+    @Binding var selectedPhoto: UIImage?
+    let availablePhotos: [PhotoItem]
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Page background
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.98, green: 0.96, blue: 0.94),
+                                Color(red: 0.96, green: 0.94, blue: 0.92)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(.black.opacity(0.05), lineWidth: 0.5)
+                    )
+                
+                // Page content
+                VStack(spacing: 16) {
+                    // Title
+                    if let title = page.title, !title.isEmpty {
+                        Text(title)
+                            .font(.custom("Georgia", size: 18).weight(.semibold))
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(Color(red: 0.17, green: 0.24, blue: 0.31))
+                            .lineLimit(3)
+                            .minimumScaleFactor(0.7)
+                            .padding(.horizontal, 24)
+                            .padding(.top, 24)
+                    }
+                    
+                    // Existing photo from memory
+                    if let existingPhoto = page.photoUIImage {
+                        Image(uiImage: existingPhoto)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxHeight: 120)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                            .padding(.horizontal, 24)
+                    }
+                    
+                    // Text content
+                    ScrollView {
+                        Text(page.bodyText)
+                            .font(.custom("Georgia", size: 14))
+                            .lineSpacing(4)
+                            .foregroundColor(Color(red: 0.17, green: 0.24, blue: 0.31))
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 24)
+                    }
+                    
+                    Spacer()
+                }
+                
+                // Dragged photos on this page
+                ForEach(Array(photoPositions.keys), id: \.self) { photoId in
+                    if let position = photoPositions[photoId],
+                       let photo = getPhotoById(photoId) {
+                        DraggablePhotoView(
+                            photo: photo,
+                            position: position,
+                            isDragging: draggedPhoto == photoId
+                        )
+                        .onTapGesture {
+                            selectedPhoto = photo.image
+                        }
+                        .onDrag {
+                            draggedPhoto = photoId
+                            return NSItemProvider(object: photoId.uuidString as NSString)
+                        }
+                        .onLongPressGesture {
+                            // Remove photo from page
+                            photoPositions.removeValue(forKey: photoId)
+                        }
+                    }
+                }
+                
+                // Help text when no photos
+                if photoPositions.isEmpty {
+                    VStack {
+                        Spacer()
+                        Text("Drag photos from the photo bank below to add them to this page")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding()
+                        Spacer()
+                    }
+                }
+                
+                // Drop zone for photos
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onDrop(of: [.text], delegate: PhotoDropDelegate(
+                        photoPositions: $photoPositions,
+                        draggedPhoto: $draggedPhoto,
+                        pageId: page.id,
+                        availablePhotos: availablePhotos
+                    ))
+                    .overlay(
+                        // Grid lines for visual reference
+                        GridOverlay()
+                            .opacity(0.1)
+                    )
+            }
+        }
+    }
+    
+    private func getPhotoById(_ id: UUID) -> PhotoItem? {
+        return availablePhotos.first { $0.id == id }
+    }
+}
+
+// MARK: - Draggable Photo View
+struct DraggablePhotoView: View {
+    let photo: PhotoItem
+    let position: CGPoint
+    let isDragging: Bool
+    
+    var body: some View {
+        Image(uiImage: photo.image)
+            .resizable()
+            .scaledToFit()
+            .frame(width: 80, height: 80)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .shadow(color: .black.opacity(isDragging ? 0.3 : 0.1), radius: isDragging ? 8 : 4)
+            .scaleEffect(isDragging ? 1.1 : 1.0)
+            .opacity(isDragging ? 0.8 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isDragging)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isDragging ? Color.blue : Color.clear, lineWidth: 2)
+            )
+            .position(position)
+    }
+}
+
+// MARK: - Photo Drop Delegate
+struct PhotoDropDelegate: DropDelegate {
+    @Binding var photoPositions: [UUID: CGPoint]
+    @Binding var draggedPhoto: UUID?
+    let pageId: UUID
+    let availablePhotos: [PhotoItem]
+    
+    func performDrop(info: DropInfo) -> Bool {
+        // Handle dragged photo from page
+        if let draggedPhoto = draggedPhoto {
+            // Check if the photo exists in available photos
+            guard availablePhotos.contains(where: { $0.id == draggedPhoto }) else { return false }
+            
+            // Snap to grid for better organization
+            let snappedLocation = snapToGrid(info.location)
+            photoPositions[draggedPhoto] = snappedLocation
+            self.draggedPhoto = nil
+            return true
+        }
+        
+        // Handle new photo from photo bank
+        guard let itemProvider = info.itemProviders(for: [.text]).first else { return false }
+        
+        itemProvider.loadObject(ofClass: NSString.self) { string, error in
+            DispatchQueue.main.async {
+                if let photoIdString = string as? String,
+                   let photoId = UUID(uuidString: photoIdString),
+                   availablePhotos.contains(where: { $0.id == photoId }) {
+                    let snappedLocation = self.snapToGrid(info.location)
+                    photoPositions[photoId] = snappedLocation
+                }
+            }
+        }
+        
+        return true
+    }
+    
+    private func snapToGrid(_ location: CGPoint) -> CGPoint {
+        let gridSize: CGFloat = 100 // Grid spacing
+        let x = round(location.x / gridSize) * gridSize
+        let y = round(location.y / gridSize) * gridSize
+        return CGPoint(x: x, y: y)
+    }
+    
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
+    }
+}
+
+// MARK: - Photo Bank Section
+struct PhotoBankSection: View {
+    @Binding var showPhotoBank: Bool
+    @Binding var availablePhotos: [PhotoItem]
+    @Binding var photoPickerItems: [PhotosPickerItem]
+    @Binding var selectedPhoto: UIImage?
+    
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Photo bank button
+            Button(action: {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                    showPhotoBank.toggle()
+                }
+            }) {
+                HStack {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 20))
+                    Text("Photo Bank")
+                        .font(.headline)
+                    Spacer()
+                    Image(systemName: showPhotoBank ? "chevron.down" : "chevron.up")
+                        .font(.system(size: 16))
+                }
+                .foregroundColor(.primary)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .background(.regularMaterial)
+                .cornerRadius(12)
+                .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            
+            // Photo grid
+            if showPhotoBank {
+                VStack(spacing: 12) {
+                    // Add new photos button
+                    PhotosPicker(selection: $photoPickerItems, maxSelectionCount: 10, matching: .images) {
+                        HStack {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 16))
+                            Text("Add Photos")
+                                .font(.subheadline.weight(.medium))
+                        }
+                        .foregroundColor(.blue)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(8)
+                    }
+                    
+                    // Photo grid
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 8) {
+                            ForEach(availablePhotos) { photo in
+                                PhotoGridItem(photo: photo, selectedPhoto: $selectedPhoto)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                    .frame(maxHeight: 120)
+                }
+                .padding(.bottom, 16)
+            }
+        }
+        .background(.regularMaterial)
+        .cornerRadius(16)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+    }
+}
+
+// MARK: - Photo Grid Item
+struct PhotoGridItem: View {
+    let photo: PhotoItem
+    @Binding var selectedPhoto: UIImage?
+    
+    var body: some View {
+        Image(uiImage: photo.image)
+            .resizable()
+            .scaledToFill()
+            .frame(width: 60, height: 60)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+            .onTapGesture {
+                selectedPhoto = photo.image
+            }
+            .onDrag {
+                return NSItemProvider(object: photo.id.uuidString as NSString)
+            }
+    }
+}
+
+// MARK: - Photo Detail View
+struct PhotoDetailView: View {
+    let photo: UIImage
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                Image(uiImage: photo)
+                    .resizable()
+                    .scaledToFit()
+                    .padding()
+                
+                Spacer()
+            }
+            .navigationTitle("Photo Detail")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Grid Overlay
+struct GridOverlay: View {
+    var body: some View {
+        GeometryReader { geometry in
+            Path { path in
+                let gridSize: CGFloat = 100
+                
+                // Vertical lines
+                for x in stride(from: 0, through: geometry.size.width, by: gridSize) {
+                    path.move(to: CGPoint(x: x, y: 0))
+                    path.addLine(to: CGPoint(x: x, y: geometry.size.height))
+                }
+                
+                // Horizontal lines
+                for y in stride(from: 0, through: geometry.size.height, by: gridSize) {
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: geometry.size.width, y: y))
+                }
+            }
+            .stroke(Color.gray, lineWidth: 0.5)
+        }
+    }
+}
+
+// MARK: - Dictionary Extension
+extension Dictionary {
+    func mapKeys<T>(_ transform: (Key) -> T) -> [T: Value] {
+        var result: [T: Value] = [:]
+        for (key, value) in self {
+            result[transform(key)] = value
+        }
+        return result
+    }
+}
+
+// MARK: - UIImage Extension for Identifiable
+extension UIImage: Identifiable {
+    public var id: String {
+        return UUID().uuidString
+    }
+}

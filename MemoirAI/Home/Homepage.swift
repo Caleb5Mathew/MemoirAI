@@ -165,7 +165,7 @@ struct HomepageView: View {
                             .padding(.horizontal)
                         }
 
-                        // 📖 LIVE MEMOIR PREVIEW (Coming Soon Screen)
+                        // 📖 LIVE MEMOIR PREVIEW
                         NavigationLink(destination: buildEditor()) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -173,7 +173,7 @@ struct HomepageView: View {
                                         .font(.footnote)
                                         .fontWeight(.bold)
                                         .foregroundColor(.black)
-                                    Text("Coming Soon - Browse generated pages")
+                                    Text("Browse and edit your story pages")
                                         .font(.subheadline)
                                         .foregroundColor(.black.opacity(0.7))
                                 }

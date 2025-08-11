@@ -90,8 +90,9 @@ final class BatchTranscriptionManager: ObservableObject {
                 try? self.context.save()
                 // Notify interested views so they refresh.
                 NotificationCenter.default.post(name: .memorySaved, object: nil)
+                print("✅ Enhanced transcription completed for memory: \(text.prefix(50))...")
             case .failure(let error):
-                print("❌ Batch transcription error for memory \(memory.id?.uuidString ?? "?"):", error)
+                print("❌ Enhanced batch transcription error for memory \(memory.id?.uuidString ?? "?"):", error)
             }
             DispatchQueue.main.async {
                 self.processed += 1
