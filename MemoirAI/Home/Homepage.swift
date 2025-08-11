@@ -188,7 +188,7 @@ struct HomepageView: View {
                             .padding(.horizontal)
                         }
                         
-                        // YOUR BOOK (AI Generation - Premium Gradient Outline)
+                        // YOUR BOOK (Premium Gradient Outline)
                         NavigationLink(destination: StoryPage()
                             .environmentObject(profileVM)
                         ) {
@@ -198,7 +198,7 @@ struct HomepageView: View {
                                         .font(.footnote)
                                         .fontWeight(.bold)
                                         .foregroundColor(.black)
-                                    Text("AI Generation - Generate your life story here!")
+                                    Text("Generate your life story here!")
                                         .font(.subheadline)
                                         .foregroundColor(.black.opacity(0.7))
                                 }
