@@ -28,8 +28,19 @@ struct HomepageView: View {
     @State private var photoSelection: PhotosPickerItem? = nil
     @State private var selectedPhotoData: IdentifiableData? = nil
 
-    @State private var disableCameraWiggle: Bool =
-        UserDefaults.standard.bool(forKey: HomepageView.cameraWiggleDisabledKey)
+    @State private var disableCameraWiggle: Bool = {
+        let localValue = UserDefaults.standard.bool(forKey: HomepageView.cameraWiggleDisabledKey)
+        if !localValue {
+            // Try iCloud backup
+            NSUbiquitousKeyValueStore.default.synchronize()
+            let cloudValue = NSUbiquitousKeyValueStore.default.bool(forKey: "memoir_\(HomepageView.cameraWiggleDisabledKey)")
+            if cloudValue {
+                UserDefaults.standard.set(true, forKey: HomepageView.cameraWiggleDisabledKey)
+                return true
+            }
+        }
+        return localValue
+    }()
     private static let cameraWiggleDisabledKey = "cameraWiggleDisabledKey_v1"
 
     @State private var showingAddProfile = false
@@ -96,6 +107,10 @@ struct HomepageView: View {
                             if !disableCameraWiggle {
                                 disableCameraWiggle = true
                                 UserDefaults.standard.set(true, forKey: HomepageView.cameraWiggleDisabledKey)
+                                
+                                // Backup to iCloud for persistence
+                                NSUbiquitousKeyValueStore.default.set(true, forKey: "memoir_\(HomepageView.cameraWiggleDisabledKey)")
+                                NSUbiquitousKeyValueStore.default.synchronize()
                             }
                         }
 
@@ -150,32 +165,7 @@ struct HomepageView: View {
                             .padding(.horizontal)
                         }
 
-                        // YOUR BOOK
-                        NavigationLink(destination: StoryPage()
-                            .environmentObject(profileVM)
-                        ) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Your Book")
-                                        .font(.footnote)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.black)
-                                    Text("Create your life story here!")
-                                        .font(.subheadline)
-                                        .foregroundColor(.black.opacity(0.7))
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.gray)
-                            }
-                            .padding()
-                            .background(Color(red: 0.98, green: 0.93, blue: 0.80))
-                            .cornerRadius(16)
-                            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
-                            .padding(.horizontal)
-                        }
-                        
-                        // 📖 LIVE MEMOIR PREVIEW (Animated Glow with Premium Gradient)
+                        // 📖 LIVE MEMOIR PREVIEW (Normal styling)
                         NavigationLink(destination: buildEditor()) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -189,6 +179,55 @@ struct HomepageView: View {
                                 }
                                 Spacer()
                                 Image(systemName: "book")
+                                    .foregroundColor(.gray)
+                            }
+                            .padding()
+                            .background(Color(red: 0.98, green: 0.93, blue: 0.80))
+                            .cornerRadius(16)
+                            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
+                            .padding(.horizontal)
+                        }
+                        
+                        // 📚 MY STORYBOOKS
+                        NavigationLink(destination: StorybookGalleryView()
+                            .environmentObject(profileVM)) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("My Storybooks")
+                                        .font(.footnote)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.black)
+                                    Text("View finished illustrated books")
+                                        .font(.subheadline)
+                                        .foregroundColor(.black.opacity(0.7))
+                                }
+                                Spacer()
+                                Image(systemName: "books.vertical")
+                                    .foregroundColor(.gray)
+                            }
+                            .padding()
+                            .background(Color(red: 0.98, green: 0.93, blue: 0.80))
+                            .cornerRadius(16)
+                            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
+                            .padding(.horizontal)
+                        }
+                        
+                        // YOUR BOOK (Premium Gradient Outline)
+                        NavigationLink(destination: StoryPage()
+                            .environmentObject(profileVM)
+                        ) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Your Book")
+                                        .font(.footnote)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.black)
+                                    Text("Generate your life story here!")
+                                        .font(.subheadline)
+                                        .foregroundColor(.black.opacity(0.7))
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
                                     .foregroundColor(.gray)
                             }
                             .padding()
@@ -219,30 +258,6 @@ struct HomepageView: View {
                                     animatePreviewGlow = true
                                 }
                             }
-                        }
-                        
-                        // 📚 MY STORYBOOKS
-                        NavigationLink(destination: StorybookGalleryView()
-                            .environmentObject(profileVM)) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("My Storybooks")
-                                        .font(.footnote)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.black)
-                                    Text("View finished illustrated books")
-                                        .font(.subheadline)
-                                        .foregroundColor(.black.opacity(0.7))
-                                }
-                                Spacer()
-                                Image(systemName: "books.vertical")
-                                    .foregroundColor(.gray)
-                            }
-                            .padding()
-                            .background(Color(red: 0.98, green: 0.93, blue: 0.80))
-                            .cornerRadius(16)
-                            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
-                            .padding(.horizontal)
                         }
 
                         Spacer(minLength: 36)
@@ -322,9 +337,24 @@ struct HomepageView: View {
            Calendar.current.compare(today, to: lastDate!, toGranularity: .day) != .orderedSame {
             UserDefaults.standard.set(false, forKey: promptOfTheDay)
             UserDefaults.standard.set(today, forKey: "PromptCompletedDate")
+            
+            // Backup to iCloud for persistence
+            NSUbiquitousKeyValueStore.default.set(false, forKey: "memoir_\(promptOfTheDay)")
+            NSUbiquitousKeyValueStore.default.set(today, forKey: "memoir_PromptCompletedDate")
+            NSUbiquitousKeyValueStore.default.synchronize()
         }
 
-        promptCompleted = UserDefaults.standard.bool(forKey: promptOfTheDay)
+        // Try local first, then iCloud backup
+        var localCompleted = UserDefaults.standard.bool(forKey: promptOfTheDay)
+        if !localCompleted {
+            NSUbiquitousKeyValueStore.default.synchronize()
+            localCompleted = NSUbiquitousKeyValueStore.default.bool(forKey: "memoir_\(promptOfTheDay)")
+            if localCompleted {
+                UserDefaults.standard.set(true, forKey: promptOfTheDay)
+            }
+        }
+        
+        promptCompleted = localCompleted
     }
 
     // Helper to build editor view lazily
