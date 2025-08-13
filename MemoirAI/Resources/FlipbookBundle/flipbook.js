@@ -71,9 +71,32 @@ window.renderPages = function(pagesJSON) {
 
     try {
         const pages = JSON.parse(pagesJSON);
-        const htmlPages = pages.map(page => createPageHTML(page));
+        console.log('Parsed pages:', pages);
         
-        pageFlip.loadFromHTML(htmlPages);
+        // Convert HTML strings to DOM elements
+        const domPages = pages.map(page => {
+            const htmlString = createPageHTML(page);
+            console.log('Generated HTML for page:', page.type, htmlString);
+            
+            // Create a temporary container to parse HTML
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = htmlString.trim();
+            
+            // Get the first child element (the actual page div)
+            const pageElement = tempDiv.firstElementChild;
+            if (!pageElement) {
+                console.error('Failed to create DOM element for page:', page.type);
+                return null;
+            }
+            
+            console.log('Created DOM element:', pageElement);
+            return pageElement;
+        }).filter(element => element !== null);
+        
+        console.log('DOM pages ready:', domPages.length);
+        
+        // Load the DOM elements into PageFlip
+        pageFlip.loadFromHTML(domPages);
         
         // Notify Swift that pages are loaded
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
