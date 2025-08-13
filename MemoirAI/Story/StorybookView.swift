@@ -54,61 +54,97 @@ struct StorybookView: View {
                             // Flipbook preview with fallback to native OpenBookView
                             if useFallback {
                                 // Fallback to native implementation
-                                OpenBookView(
-                                    pages: samplePages,
-                                    currentPage: $currentPage,
-                                    bookWidth: bookSize.width,
-                                    bookHeight: bookSize.height
-                                )
-                            } else {
-                                                            // Flipbook implementation with external chevrons
-                            ZStack {
-                                FlipbookView(
-                                    pages: flipbookPages,
-                                    currentPage: $currentPage,
-                                    onReady: {
-                                        flipbookReady = true
-                                    },
-                                    onFlip: { pageIndex in
-                                        currentPage = pageIndex
-                                    }
-                                )
-                                .frame(width: bookSize.width, height: bookSize.height)
-                                
-                                // Outside chevrons (similar to OpenBookView)
-                                if flipbookPages.count > 1 {
-                                    HStack {
-                                        arrowButton(system: "chevron.left",
-                                                    disabled: currentPage == 0,
-                                                    accessibility: "Previous page") {
-                                            if currentPage > 0 {
-                                                hapticFeedback()
-                                                withAnimation(.easeInOut(duration: 0.25)) {
-                                                    currentPage -= 1
-                                                }
-                                            }
+                                ZStack {
+                                    OpenBookView(
+                                        pages: samplePages,
+                                        currentPage: $currentPage,
+                                        bookWidth: bookSize.width,
+                                        bookHeight: bookSize.height
+                                    )
+                                    
+                                    // Debug overlay for fallback
+                                    VStack {
+                                        HStack {
+                                            Text("Native Fallback")
+                                                .font(.caption)
+                                                .padding(4)
+                                                .background(Color.red.opacity(0.8))
+                                                .foregroundColor(.white)
+                                                .cornerRadius(4)
+                                            Spacer()
                                         }
-
-                                        Spacer(minLength: 0)
-
-                                        arrowButton(system: "chevron.right",
-                                                    disabled: currentPage >= flipbookPages.count - 1,
-                                                    accessibility: "Next page") {
-                                            if currentPage < flipbookPages.count - 1 {
-                                                hapticFeedback()
-                                                withAnimation(.easeInOut(duration: 0.25)) {
-                                                    currentPage += 1
-                                                }
-                                            }
-                                        }
+                                        Spacer()
                                     }
-                                    .frame(width: bookSize.width + Tokens.chevronSize * 0.8, height: bookSize.height)
+                                    .padding(8)
                                 }
-                            }
+                            } else {
+                                // Flipbook implementation with external chevrons
+                                ZStack {
+                                    FlipbookView(
+                                        pages: flipbookPages,
+                                        currentPage: $currentPage,
+                                        onReady: {
+                                            print("StorybookView: Flipbook ready!")
+                                            flipbookReady = true
+                                        },
+                                        onFlip: { pageIndex in
+                                            print("StorybookView: Page flipped to \(pageIndex)")
+                                            currentPage = pageIndex
+                                        }
+                                    )
+                                    .frame(width: bookSize.width, height: bookSize.height)
+                                    
+                                    // Debug overlay (remove in production)
+                                    VStack {
+                                        HStack {
+                                            Text("Flipbook: \(flipbookReady ? "Ready" : "Loading")")
+                                                .font(.caption)
+                                                .padding(4)
+                                                .background(flipbookReady ? Color.green.opacity(0.8) : Color.orange.opacity(0.8))
+                                                .foregroundColor(.white)
+                                                .cornerRadius(4)
+                                            Spacer()
+                                        }
+                                        Spacer()
+                                    }
+                                    .padding(8)
+                                    
+                                    // Outside chevrons (similar to OpenBookView)
+                                    if flipbookPages.count > 1 {
+                                        HStack {
+                                            arrowButton(system: "chevron.left",
+                                                        disabled: currentPage == 0,
+                                                        accessibility: "Previous page") {
+                                                if currentPage > 0 {
+                                                    hapticFeedback()
+                                                    withAnimation(.easeInOut(duration: 0.25)) {
+                                                        currentPage -= 1
+                                                    }
+                                                }
+                                            }
+
+                                            Spacer(minLength: 0)
+
+                                            arrowButton(system: "chevron.right",
+                                                        disabled: currentPage >= flipbookPages.count - 1,
+                                                        accessibility: "Next page") {
+                                                if currentPage < flipbookPages.count - 1 {
+                                                    hapticFeedback()
+                                                    withAnimation(.easeInOut(duration: 0.25)) {
+                                                        currentPage += 1
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        .frame(width: bookSize.width + Tokens.chevronSize * 0.8, height: bookSize.height)
+                                    }
+                                }
                                 .onAppear {
+                                    print("StorybookView: Flipbook view appeared")
                                     // Set a timeout to fallback if flipbook doesn't load
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { // Increased timeout
                                         if !flipbookReady {
+                                            print("StorybookView: Flipbook timeout - falling back to native")
                                             useFallback = true
                                         }
                                     }
