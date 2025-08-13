@@ -18,8 +18,12 @@ struct FlipbookView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         
-        // Enable JavaScript
-        config.preferences.javaScriptEnabled = true
+        // Enable JavaScript (iOS 14+ compatible)
+        if #available(iOS 14.0, *) {
+            config.defaultWebpagePreferences.allowsContentJavaScript = true
+        } else {
+            config.preferences.javaScriptEnabled = true
+        }
         
         // Add message handler for communication with JavaScript
         config.userContentController.add(context.coordinator, name: "native")
@@ -42,7 +46,12 @@ struct FlipbookView: UIViewRepresentable {
             webView.loadFileURL(indexURL, allowingReadAccessTo: bundleURL)
         } else {
             print("FlipbookView: ERROR - FlipbookBundle not found in app bundle!")
-            print("FlipbookView: Available resources: \(Bundle.main.urls(forResourcesWithExtension: nil, subdirectory: nil) ?? [])")
+            // List available resources for debugging
+            if let resourceURLs = Bundle.main.urls(forResourcesWithExtension: nil, subdirectory: nil) {
+                print("FlipbookView: Available resources: \(resourceURLs)")
+            } else {
+                print("FlipbookView: No resources found")
+            }
         }
         
         return webView
@@ -85,6 +94,8 @@ struct FlipbookView: UIViewRepresentable {
             }
         }
     }
+    
+
     
 
     
