@@ -109,35 +109,8 @@ struct StorybookView: View {
                                     }
                                     .padding(8)
                                     
-                                    // Outside chevrons (similar to OpenBookView)
-                                    if flipbookPages.count > 1 {
-                                        HStack {
-                                            arrowButton(system: "chevron.left",
-                                                        disabled: currentPage == 0,
-                                                        accessibility: "Previous page") {
-                                                if currentPage > 0 {
-                                                    hapticFeedback()
-                                                    withAnimation(.easeInOut(duration: 0.25)) {
-                                                        currentPage -= 1
-                                                    }
-                                                }
-                                            }
-
-                                            Spacer(minLength: 0)
-
-                                            arrowButton(system: "chevron.right",
-                                                        disabled: currentPage >= flipbookPages.count - 1,
-                                                        accessibility: "Next page") {
-                                                if currentPage < flipbookPages.count - 1 {
-                                                    hapticFeedback()
-                                                    withAnimation(.easeInOut(duration: 0.25)) {
-                                                        currentPage += 1
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        .frame(width: bookSize.width + Tokens.chevronSize * 0.8, height: bookSize.height)
-                                    }
+                                    // REMOVED: External chevrons - let the flipbook handle its own navigation
+                                    // The external chevrons were causing a navigation loop
                                 }
                                 .onAppear {
                                     print("StorybookView: Flipbook view appeared")

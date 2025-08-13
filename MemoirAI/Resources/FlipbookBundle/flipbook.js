@@ -19,20 +19,22 @@ function initializeFlipbook() {
 
     // Initialize StPageFlip
     pageFlip = new St.PageFlip(bookElement, {
-        width: 550,
-        height: 733,
+        width: 400,
+        height: 533,
         size: "stretch",
-        minWidth: 315,
-        maxWidth: 1000,
+        minWidth: 300,
+        maxWidth: 800,
         minHeight: 400,
-        maxHeight: 1533,
+        maxHeight: 1066,
         maxShadowOpacity: 0.5,
         showCover: true,
-        mobileScrollSupport: false
+        mobileScrollSupport: false,
+        autoSize: true
     });
 
     // Listen for flip events and notify Swift
     pageFlip.on('flip', function(e) {
+        console.log('PageFlip: Page flipped to index:', e.data);
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
             window.webkit.messageHandlers.native.postMessage({
                 type: 'flip',
@@ -43,6 +45,7 @@ function initializeFlipbook() {
 
     // Listen for state changes
     pageFlip.on('changeState', function(e) {
+        console.log('PageFlip: State changed to:', e.data);
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
             window.webkit.messageHandlers.native.postMessage({
                 type: 'stateChange',
