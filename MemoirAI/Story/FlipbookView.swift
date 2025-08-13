@@ -109,13 +109,55 @@ struct FlipbookView: UIViewRepresentable {
             let jsonData = try JSONEncoder().encode(pages)
             let jsonString = String(data: jsonData, encoding: .utf8) ?? "[]"
             
-            webView.evaluateJavaScript("window.renderPages('\(jsonString)')") { _, error in
+            print("FlipbookView: JSON data to render: \(jsonString)")
+            
+            // Use a safer approach to pass JSON data
+            let escapedJSON = jsonString.replacingOccurrences(of: "\\", with: "\\\\")
+                                        .replacingOccurrences(of: "'", with: "\\'")
+                                        .replacingOccurrences(of: "\"", with: "\\\"")
+                                        .replacingOccurrences(of: "\n", with: "\\n")
+                                        .replacingOccurrences(of: "\r", with: "\\r")
+            
+            let jsCode = "window.renderPages('\(escapedJSON)')"
+            print("FlipbookView: Executing JS: \(jsCode)")
+            
+            webView.evaluateJavaScript(jsCode) { result, error in
                 if let error = error {
                     print("Error rendering pages: \(error)")
+                    // Try alternative approach if the first fails
+                    self.renderPagesAlternative(webView: webView, jsonString: jsonString)
+                } else {
+                    print("FlipbookView: Pages rendered successfully")
                 }
             }
         } catch {
             print("Error encoding pages: \(error)")
+        }
+    }
+    
+    private func renderPagesAlternative(webView: WKWebView, jsonString: String) {
+        // Alternative approach using base64 encoding
+        if let jsonData = jsonString.data(using: .utf8) {
+            let base64String = jsonData.base64EncodedString()
+            let jsCode = """
+                (function() {
+                    try {
+                        var jsonData = atob('\(base64String)');
+                        var pages = JSON.parse(jsonData);
+                        window.renderPages(pages);
+                    } catch(e) {
+                        console.error('Error parsing pages:', e);
+                    }
+                })();
+            """
+            
+            webView.evaluateJavaScript(jsCode) { result, error in
+                if let error = error {
+                    print("Alternative rendering also failed: \(error)")
+                } else {
+                    print("FlipbookView: Pages rendered successfully (alternative method)")
+                }
+            }
         }
     }
     
