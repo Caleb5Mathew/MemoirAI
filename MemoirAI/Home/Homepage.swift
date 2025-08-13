@@ -189,7 +189,7 @@ struct HomepageView: View {
                         }
                         
                         // YOUR BOOK (Premium Gradient Outline)
-                        NavigationLink(destination: StoryPage()
+                        NavigationLink(destination: StorybookView()
                             .environmentObject(profileVM)
                         ) {
                             HStack {
