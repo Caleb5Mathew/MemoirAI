@@ -137,6 +137,6 @@ extension View {
 
     /// A soft drop shadow used across the UI.
     func softDropShadow() -> some View {
-        self.shadow(color: Tokens.shadow, radius: Tokens.softShadow.0, x: 0, y: Tokens.softShadow.1)
+        self.shadow(color: Tokens.shadow, radius: Tokens.softShadow.radius, x: 0, y: Tokens.softShadow.y)
     }
 }
