@@ -4,70 +4,65 @@ import SwiftUI
 struct StorybookView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var profileVM: ProfileViewModel
-    
+
     @State private var currentPage = 0
     @State private var showPhotoPicker = false
     @State private var selectedPhotos: [UIImage] = []
-    @State private var isCreatingNewBook = false
-    
+
     // Sample pages for the finished book preview
     private let samplePages = MockBookPage.samplePages
-    
+
     var body: some View {
         NavigationView {
             ZStack {
-                // Background with subtle parchment gradient (warm cream to slightly darker at bottom)
+                // Warm parchment gradient background
                 LinearGradient(
-                    colors: [
-                        Tokens.bgPrimary,
-                        Tokens.bgWash
-                    ],
+                    colors: [Tokens.bgPrimary, Tokens.bgWash],
                     startPoint: .top,
                     endPoint: .bottom
                 )
                 .ignoresSafeArea()
-                
+
                 VStack(spacing: 0) {
-                    // Header with proper spacing
                     headerView
-                    
-                    // Main content with generous breathing room
+
                     GeometryReader { geo in
-                        let bookWidth = geo.size.width * Tokens.bookMaxWidthPct
-                        let bookHeight = bookWidth * Tokens.pageAspect
-                        
+                        // Spread sizing: two 3:4 pages side-by-side → ~3:2 aspect
+                        let maxW = geo.size.width * Tokens.bookMaxWidthPct
+                        let targetAspect: CGFloat = 3.0 / 2.0
+                        let maxH = geo.size.height * 0.60
+
+                        var bookW = maxW
+                        var bookH = bookW / targetAspect
+                        if bookH > maxH {
+                            bookH = maxH
+                            bookW = bookH * targetAspect
+                        }
+
                         VStack(spacing: 0) {
-                            // Book preview (occupies ~60% of vertical space above the fold)
-                            if isCreatingNewBook {
-                                BlankBookCoverView(
-                                    bookWidth: bookWidth,
-                                    bookHeight: bookHeight
-                                )
-                            } else {
-                                OpenBookView(
-                                    pages: samplePages,
-                                    currentPage: $currentPage,
-                                    bookWidth: bookWidth,
-                                    bookHeight: bookHeight
-                                )
-                            }
-                            
+                            // Open book preview (always shown for the mock)
+                            OpenBookView(
+                                pages: samplePages,
+                                currentPage: $currentPage,
+                                bookWidth: bookW,
+                                bookHeight: bookH
+                            )
+
                             Spacer()
-                            
-                            // Hint row with proper spacing
-                            if !isCreatingNewBook && samplePages.count > 1 {
+
+                            if samplePages.count > 1 {
                                 Text("Swipe to flip pages")
                                     .font(Tokens.Typography.hint)
                                     .foregroundColor(Tokens.ink.opacity(0.6))
                                     .padding(.top, Tokens.bookSpacing)
                                     .padding(.bottom, Tokens.buttonSpacing)
                             }
-                            
-                            // Action buttons with proper spacing
+
                             actionButtonsView
                                 .padding(.bottom, Tokens.bottomPadding)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.horizontal, 16)
                     }
                 }
             }
@@ -78,16 +73,12 @@ struct StorybookView: View {
                 isPresented: $showPhotoPicker,
                 onPhotosSelected: { photos in
                     selectedPhotos = photos
-                    // Handle photo selection - could integrate with existing photo system
                 }
             )
         }
-        .onAppear {
-            // Reset to first page when view appears
-            currentPage = 0
-        }
+        .onAppear { currentPage = 0 }
     }
-    
+
     // MARK: - Header View
     private var headerView: some View {
         HStack {
@@ -99,22 +90,22 @@ struct StorybookView: View {
                     .background(Tokens.bgWash)
                     .clipShape(Circle())
             }
-            
+
             Spacer()
-            
+
             VStack(spacing: Tokens.headerSpacing) {
                 Text("Create your book")
                     .font(Tokens.Typography.title)
                     .foregroundColor(Tokens.ink)
-                
+
                 Text("Flip through a finished book")
                     .font(Tokens.Typography.subtitle)
                     .foregroundColor(Tokens.ink.opacity(0.7))
             }
-            
+
             Spacer()
-            
-            // Placeholder for balance
+
+            // Spacer to balance back button
             Color.clear
                 .frame(width: 38, height: 38)
         }
@@ -122,43 +113,30 @@ struct StorybookView: View {
         .padding(.top, 10)
         .padding(.bottom, 20)
     }
-    
+
     // MARK: - Action Buttons View
     private var actionButtonsView: some View {
         VStack(spacing: Tokens.buttonSpacing) {
-            // Primary button - Create your own book (pill shape, transparent fill, gradient stroke)
-            Button(action: {
-                isCreatingNewBook = true
-                // Navigate to book creation flow
-                // This could integrate with existing StoryPage or create new flow
-            }) {
+            // Primary: gradient-outline pill (navigates to creation flow)
+            NavigationLink {
+                StoryPage()
+                    .environmentObject(profileVM)
+            } label: {
                 Text("Create your own book")
                     .font(Tokens.Typography.button)
                     .foregroundColor(Tokens.ink)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
                     .background(
-                        RoundedRectangle(cornerRadius: 25)
-                            .fill(Color.clear)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 25)
-                                    .stroke(
-                                        LinearGradient(
-                                            colors: Tokens.primaryOutlineGradient,
-                                            startPoint: .leading,
-                                            endPoint: .trailing
-                                        ),
-                                        lineWidth: 3
-                                    )
-                            )
+                        Capsule().fill(Color.clear)
                     )
+                    .primaryGradientOutline(lineWidth: Tokens.gradientStrokeWidth)
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("Create your own book")
-            
-            // Secondary button - Add photos (soft cream fill, pill shape, subtle shadow)
-            Button(action: {
-                showPhotoPicker = true
-            }) {
+
+            // Secondary: soft cream filled pill (opens photo picker)
+            Button(action: { showPhotoPicker = true }) {
                 Text("Add photos")
                     .font(Tokens.Typography.button)
                     .fontWeight(.medium)
@@ -166,16 +144,15 @@ struct StorybookView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
                     .background(
-                        RoundedRectangle(cornerRadius: 25)
-                            .fill(Tokens.bgWash)
-                            .shadow(
-                                color: Tokens.shadow,
-                                radius: Tokens.softShadow.radius,
-                                x: 0,
-                                y: Tokens.softShadow.y
-                            )
+                        Capsule()
+                            .fill(Tokens.bgPrimary)
+                            .shadow(color: Tokens.shadow.opacity(Tokens.softShadow.opacity),
+                                    radius: Tokens.softShadow.radius,
+                                    x: 0,
+                                    y: Tokens.softShadow.y)
                     )
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("Add photos")
         }
         .padding(.horizontal, 20)
@@ -188,4 +165,4 @@ struct StorybookView_Previews: PreviewProvider {
         StorybookView()
             .environmentObject(ProfileViewModel())
     }
-} 
+}
