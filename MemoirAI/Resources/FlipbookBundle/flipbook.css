@@ -1,0 +1,235 @@
+/* Memoir Flipbook Styles - Matching Tokens Design System */
+
+:root {
+    /* Colors from Tokens */
+    --bg-primary: #F6F1E8;
+    --bg-wash: #EDE6DA;
+    --ink: #2F2A25;
+    --accent: #7C5C3A;
+    --accent-soft: #C9B6A0;
+    --paper: #FFFFFF;
+    --shadow: rgba(0, 0, 0, 0.12);
+    --spine-color: #8B7355;
+    --page-edge-highlight: rgba(255, 255, 255, 0.8);
+    --gutter-shadow: rgba(0, 0, 0, 0.08);
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overflow: hidden;
+}
+
+#book-container {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(to bottom, var(--bg-primary), var(--bg-wash));
+}
+
+#book {
+    width: 100%;
+    height: 100%;
+    max-width: 86vw;
+    max-height: 60vh;
+}
+
+/* Page Styles */
+.flipbook-page {
+    background: var(--paper);
+    border-radius: 20px;
+    box-shadow: 0 6px 14px var(--shadow);
+    overflow: hidden;
+    position: relative;
+}
+
+/* Page content container */
+.page-content {
+    padding: 22px 18px;
+    height: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Left page (paragraph bars) */
+.left-page .page-content {
+    padding-right: 26px;
+}
+
+/* Right page (photo + caption) */
+.right-page .page-content {
+    padding-left: 26px;
+}
+
+/* Typography */
+.page-title {
+    font-family: 'Georgia', serif;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 14px;
+    line-height: 1.4;
+}
+
+.page-caption {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--ink);
+    line-height: 1.4;
+    margin-top: 14px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* Paragraph bars (left page) */
+.paragraph-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+}
+
+.paragraph-bar {
+    background: var(--ink);
+    opacity: 0.09;
+    border-radius: 3px;
+    height: 10px;
+    min-width: 40px;
+}
+
+/* Photo container */
+.photo-container {
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg-wash);
+    position: relative;
+    margin: 14px 0;
+}
+
+.photo-container img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.photo-placeholder {
+    width: 100%;
+    height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-wash);
+    color: var(--accent-soft);
+    font-size: 36px;
+}
+
+.small-photo {
+    height: 120px;
+}
+
+.small-photo .photo-placeholder {
+    height: 120px;
+    font-size: 24px;
+}
+
+/* Mixed page (bars + small photo) */
+.mixed-content {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    flex: 1;
+}
+
+.mixed-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.mixed-bars .paragraph-bar {
+    height: 10px;
+}
+
+/* Cover page */
+.cover-page {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 18px;
+    height: 100%;
+}
+
+.cover-title {
+    font-family: 'Georgia', serif;
+    font-size: 30px;
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1.2;
+}
+
+.cover-accent {
+    width: 60px;
+    height: 2px;
+    background: var(--accent-soft);
+    border-radius: 1px;
+}
+
+/* StPageFlip overrides for better integration */
+.stf__parent {
+    background: transparent !important;
+}
+
+.stf__wrapper {
+    background: transparent !important;
+}
+
+.stf__block {
+    background: transparent !important;
+}
+
+.stf__page {
+    background: transparent !important;
+}
+
+.stf__page__content {
+    background: transparent !important;
+}
+
+.stf__page__hard {
+    background: var(--paper) !important;
+    border-radius: 20px !important;
+    box-shadow: 0 6px 14px var(--shadow) !important;
+}
+
+.stf__page__flipping {
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .page-content {
+        padding: 16px 14px;
+    }
+    
+    .left-page .page-content {
+        padding-right: 20px;
+    }
+    
+    .right-page .page-content {
+        padding-left: 20px;
+    }
+    
+    .cover-title {
+        font-size: 24px;
+    }
+} 
