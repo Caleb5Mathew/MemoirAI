@@ -17,9 +17,9 @@ struct BookPreviewView: View {
             RoundedRectangle(cornerRadius: Tokens.cornerRadius + 6)
                 .fill(Tokens.paper.opacity(0.0))
                 .overlay(
-                    RoundedRectangle(cornerRadius: Tokens.cornerRadius + 6)
-                        .stroke(Tokens.accentSoft.opacity(0.35), lineWidth: 1)
-                        .shadow(color: Tokens.shadow, radius: Tokens.softShadow.radius, x: 0, y: Tokens.softShadow.y)
+                                RoundedRectangle(cornerRadius: Tokens.cornerRadius + 6)
+                .stroke(Tokens.accentSoft.opacity(0.35), lineWidth: 1)
+                .shadow(color: Tokens.shadow, radius: Tokens.softShadow.0, x: 0, y: Tokens.softShadow.1)
                 )
 
             // Inner pages area with subtle paper + spine/gutter
@@ -124,7 +124,7 @@ struct BlankBookCoverView: View {
         ZStack {
             RoundedRectangle(cornerRadius: Tokens.cornerRadius + 6)
                 .fill(Tokens.paper)
-                .shadow(color: Tokens.shadow, radius: Tokens.softShadow.radius, x: 0, y: Tokens.softShadow.y)
+                .shadow(color: Tokens.shadow, radius: Tokens.softShadow.0, x: 0, y: Tokens.softShadow.1)
                 .overlay(
                     RoundedRectangle(cornerRadius: Tokens.cornerRadius + 6)
                         .stroke(Tokens.accentSoft.opacity(0.35), lineWidth: 1)

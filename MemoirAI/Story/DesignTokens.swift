@@ -14,9 +14,9 @@ extension Color {
 
         switch cleaned.count {
         case 3: // RGB (12-bit)
-            let r = cleaned[0]
-            let g = cleaned[1]
-            let b = cleaned[2]
+            let r = cleaned[cleaned.startIndex]
+            let g = cleaned[cleaned.index(cleaned.startIndex, offsetBy: 1)]
+            let b = cleaned[cleaned.index(cleaned.startIndex, offsetBy: 2)]
             let rr = CGFloat(Int(String([r,r]), radix: 16) ?? 255)
             let gg = CGFloat(Int(String([g,g]), radix: 16) ?? 255)
             let bb = CGFloat(Int(String([b,b]), radix: 16) ?? 255)
@@ -43,7 +43,9 @@ extension Color {
 
     // Convenience to index a single hex char
     subscript(i: Int) -> Character {
-        Array(String(describing: self))[i]
+        let str = String(describing: self)
+        let index = str.index(str.startIndex, offsetBy: i)
+        return str[index]
     }
 }
 
@@ -135,6 +137,6 @@ extension View {
 
     /// A soft drop shadow used across the UI.
     func softDropShadow() -> some View {
-        self.shadow(color: Tokens.shadow, radius: Tokens.softShadow.radius, x: 0, y: Tokens.softShadow.y)
+        self.shadow(color: Tokens.shadow, radius: Tokens.softShadow.0, x: 0, y: Tokens.softShadow.1)
     }
 }

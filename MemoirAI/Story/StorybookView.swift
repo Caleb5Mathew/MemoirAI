@@ -146,10 +146,10 @@ struct StorybookView: View {
                     .background(
                         Capsule()
                             .fill(Tokens.bgPrimary)
-                            .shadow(color: Tokens.shadow.opacity(Tokens.softShadow.opacity),
-                                    radius: Tokens.softShadow.radius,
+                            .shadow(color: Tokens.shadow.opacity(Tokens.softShadow.2),
+                                    radius: Tokens.softShadow.0,
                                     x: 0,
-                                    y: Tokens.softShadow.y)
+                                    y: Tokens.softShadow.1)
                     )
             }
             .buttonStyle(.plain)
