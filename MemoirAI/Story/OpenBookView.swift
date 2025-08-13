@@ -64,8 +64,11 @@ struct OpenBookView: View {
                     arrowButton(system: "chevron.left",
                                 disabled: currentPage == 0,
                                 accessibility: "Previous page") {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            if currentPage > 0 { currentPage -= 1; hapticFeedback() }
+                        if currentPage > 0 {
+                            hapticFeedback()
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                currentPage -= 1
+                            }
                         }
                     }
 
@@ -74,8 +77,11 @@ struct OpenBookView: View {
                     arrowButton(system: "chevron.right",
                                 disabled: currentPage >= pages.count - 1,
                                 accessibility: "Next page") {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            if currentPage < pages.count - 1 { currentPage += 1; hapticFeedback() }
+                        if currentPage < pages.count - 1 {
+                            hapticFeedback()
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                currentPage += 1
+                            }
                         }
                     }
                 }
