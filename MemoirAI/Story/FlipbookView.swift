@@ -149,8 +149,8 @@ struct FlipbookView: UIViewRepresentable {
                 parent.onReady?()
                 
                 // Render pages if we have them
-                if !parent.pages.isEmpty {
-                    parent.renderPages(webView: message.webView)
+                if !parent.pages.isEmpty, let webView = self.webView {
+                    parent.renderPages(webView: webView)
                 }
                 
             case "flip":
@@ -190,12 +190,20 @@ class FlipbookController: ObservableObject {
     
     func next(webView: WKWebView?) {
         guard let webView = webView else { return }
-        // This will be called from the parent view
+        webView.evaluateJavaScript("window.next()") { _, error in
+            if let error = error {
+                print("Error calling next: \(error)")
+            }
+        }
     }
     
     func prev(webView: WKWebView?) {
         guard let webView = webView else { return }
-        // This will be called from the parent view
+        webView.evaluateJavaScript("window.prev()") { _, error in
+            if let error = error {
+                print("Error calling prev: \(error)")
+            }
+        }
     }
 }
 
