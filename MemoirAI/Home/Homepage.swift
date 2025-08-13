@@ -166,14 +166,16 @@ struct HomepageView: View {
                         }
 
                         // 📖 LIVE MEMOIR PREVIEW
-                        NavigationLink(destination: buildEditor()) {
+                        NavigationLink(destination: StorybookView()
+                            .environmentObject(profileVM)
+                        ) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Memoir Preview")
                                         .font(.footnote)
                                         .fontWeight(.bold)
                                         .foregroundColor(.black)
-                                    Text("Browse and edit your story pages")
+                                    Text("Flip through a finished book")
                                         .font(.subheadline)
                                         .foregroundColor(.black.opacity(0.7))
                                 }
@@ -189,7 +191,7 @@ struct HomepageView: View {
                         }
                         
                         // YOUR BOOK (Premium Gradient Outline)
-                        NavigationLink(destination: StorybookView()
+                        NavigationLink(destination: StoryPage()
                             .environmentObject(profileVM)
                         ) {
                             HStack {
