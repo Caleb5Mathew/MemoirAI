@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 
 // MARK: - Main Storybook View
 struct StorybookView: View {
@@ -8,9 +9,13 @@ struct StorybookView: View {
     @State private var currentPage = 0
     @State private var showPhotoPicker = false
     @State private var selectedPhotos: [UIImage] = []
+    @State private var flipbookReady = false
+    @State private var useFallback = false
+    @State private var webView: WKWebView?
 
     // Sample pages for the finished book preview
     private let samplePages = MockBookPage.samplePages
+    private let flipbookPages = FlipPage.samplePages
     
     // Helper function to calculate book size outside ViewBuilder context
     private func calculateBookSize(for size: CGSize) -> CGSize {
@@ -46,13 +51,69 @@ struct StorybookView: View {
                         let bookSize = calculateBookSize(for: geo.size)
                         
                         VStack(spacing: 0) {
-                            // Open book preview (always shown for the mock)
-                            OpenBookView(
-                                pages: samplePages,
-                                currentPage: $currentPage,
-                                bookWidth: bookSize.width,
-                                bookHeight: bookSize.height
-                            )
+                            // Flipbook preview with fallback to native OpenBookView
+                            if useFallback {
+                                // Fallback to native implementation
+                                OpenBookView(
+                                    pages: samplePages,
+                                    currentPage: $currentPage,
+                                    bookWidth: bookSize.width,
+                                    bookHeight: bookSize.height
+                                )
+                            } else {
+                                                            // Flipbook implementation with external chevrons
+                            ZStack {
+                                FlipbookView(
+                                    pages: flipbookPages,
+                                    currentPage: $currentPage,
+                                    onReady: {
+                                        flipbookReady = true
+                                    },
+                                    onFlip: { pageIndex in
+                                        currentPage = pageIndex
+                                    }
+                                )
+                                .frame(width: bookSize.width, height: bookSize.height)
+                                
+                                // Outside chevrons (similar to OpenBookView)
+                                if flipbookPages.count > 1 {
+                                    HStack {
+                                        arrowButton(system: "chevron.left",
+                                                    disabled: currentPage == 0,
+                                                    accessibility: "Previous page") {
+                                            if currentPage > 0 {
+                                                hapticFeedback()
+                                                withAnimation(.easeInOut(duration: 0.25)) {
+                                                    currentPage -= 1
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(minLength: 0)
+
+                                        arrowButton(system: "chevron.right",
+                                                    disabled: currentPage >= flipbookPages.count - 1,
+                                                    accessibility: "Next page") {
+                                            if currentPage < flipbookPages.count - 1 {
+                                                hapticFeedback()
+                                                withAnimation(.easeInOut(duration: 0.25)) {
+                                                    currentPage += 1
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .frame(width: bookSize.width + Tokens.chevronSize * 0.8, height: bookSize.height)
+                                }
+                            }
+                                .onAppear {
+                                    // Set a timeout to fallback if flipbook doesn't load
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                                        if !flipbookReady {
+                                            useFallback = true
+                                        }
+                                    }
+                                }
+                            }
 
                             Spacer()
 
@@ -159,6 +220,35 @@ struct StorybookView: View {
             .accessibilityLabel("Add photos")
         }
         .padding(.horizontal, 20)
+    }
+    
+    // MARK: - Helper Functions
+    private func hapticFeedback() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+    
+    private func arrowButton(system: String,
+                             disabled: Bool,
+                             accessibility: String,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(Tokens.paper.opacity(0.85))
+                    .overlay(Circle().stroke(Color.black.opacity(0.08), lineWidth: 0.5))
+                    .shadow(color: Tokens.shadow.opacity(0.4), radius: 2, x: 0, y: 1)
+
+                Image(systemName: system)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(Tokens.ink.opacity(disabled ? 0.35 : 0.7))
+            }
+            .frame(width: Tokens.chevronSize, height: Tokens.chevronSize)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.45 : 1.0)
+        .accessibilityLabel(accessibility)
     }
 }
 
