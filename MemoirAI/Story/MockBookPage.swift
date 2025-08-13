@@ -27,7 +27,7 @@ extension MockBookPage {
 }
 
 // MARK: - Book Page View
-struct BookPageView: View {
+struct MockBookPageView: View {
     let page: MockBookPage
     let isLeftPage: Bool
     
@@ -60,7 +60,7 @@ struct BookPageView: View {
             Spacer()
             
             Text(page.content)
-                .font(Tokens.Type.title)
+                .font(Tokens.Typography.title)
                 .foregroundColor(Tokens.ink)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
@@ -78,7 +78,7 @@ struct BookPageView: View {
     private var textPage: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(page.content)
-                .font(Tokens.Type.subtitle)
+                .font(Tokens.Typography.subtitle)
                 .foregroundColor(Tokens.ink)
                 .lineSpacing(4)
                 .multilineTextAlignment(.leading)
@@ -89,13 +89,13 @@ struct BookPageView: View {
             HStack {
                 if isLeftPage {
                     Text("1")
-                        .font(Tokens.Type.hint)
+                        .font(Tokens.Typography.hint)
                         .foregroundColor(Tokens.accentSoft)
                 }
                 Spacer()
                 if !isLeftPage {
                     Text("2")
-                        .font(Tokens.Type.hint)
+                        .font(Tokens.Typography.hint)
                         .foregroundColor(Tokens.accentSoft)
                 }
             }
@@ -106,7 +106,7 @@ struct BookPageView: View {
         VStack(spacing: 16) {
             // Title
             Text("Memories of Achievement:")
-                .font(Tokens.Type.subtitle)
+                .font(Tokens.Typography.subtitle)
                 .foregroundColor(Tokens.accent)
                 .frame(maxWidth: .infinity, alignment: .leading)
             
@@ -120,14 +120,14 @@ struct BookPageView: View {
                             .font(.system(size: 40))
                             .foregroundColor(Tokens.accentSoft)
                         Text("Photo Placeholder")
-                            .font(Tokens.Type.hint)
+                            .font(Tokens.Typography.hint)
                             .foregroundColor(Tokens.accentSoft)
                     }
                 )
             
             // Caption
             Text(page.content)
-                .font(Tokens.Type.hint)
+                .font(Tokens.Typography.hint)
                 .foregroundColor(Tokens.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
             
@@ -137,13 +137,13 @@ struct BookPageView: View {
             HStack {
                 if isLeftPage {
                     Text("3")
-                        .font(Tokens.Type.hint)
+                        .font(Tokens.Typography.hint)
                         .foregroundColor(Tokens.accentSoft)
                 }
                 Spacer()
                 if !isLeftPage {
                     Text("4")
-                        .font(Tokens.Type.hint)
+                        .font(Tokens.Typography.hint)
                         .foregroundColor(Tokens.accentSoft)
                 }
             }
@@ -154,7 +154,7 @@ struct BookPageView: View {
         VStack(spacing: 16) {
             // Text content
             Text(page.content)
-                .font(Tokens.Type.subtitle)
+                .font(Tokens.Typography.subtitle)
                 .foregroundColor(Tokens.ink)
                 .lineSpacing(4)
                 .multilineTextAlignment(.leading)
@@ -175,13 +175,13 @@ struct BookPageView: View {
             HStack {
                 if isLeftPage {
                     Text("5")
-                        .font(Tokens.Type.hint)
+                        .font(Tokens.Typography.hint)
                         .foregroundColor(Tokens.accentSoft)
                 }
                 Spacer()
                 if !isLeftPage {
                     Text("6")
-                        .font(Tokens.Type.hint)
+                        .font(Tokens.Typography.hint)
                         .foregroundColor(Tokens.accentSoft)
                 }
             }

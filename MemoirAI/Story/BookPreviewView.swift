@@ -103,12 +103,12 @@ struct BlankBookCoverView: View {
                     .foregroundColor(Tokens.accentSoft)
                 
                 Text("Your Story Awaits")
-                    .font(Tokens.Type.title)
+                    .font(Tokens.Typography.title)
                     .foregroundColor(Tokens.ink)
                     .multilineTextAlignment(.center)
                 
                 Text("Start creating your memoir to see your story come to life")
-                    .font(Tokens.Type.subtitle)
+                    .font(Tokens.Typography.subtitle)
                     .foregroundColor(Tokens.ink.opacity(0.7))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)

@@ -61,7 +61,7 @@ struct PageCurlBookController: UIViewControllerRepresentable {
                 return nil
             }
             
-            return viewController(for: currentIndex - 1)
+            return self.viewController(for: currentIndex - 1)
         }
         
         func pageViewController(_ pageViewController: UIPageViewController, viewControllerAfter viewController: UIViewController) -> UIViewController? {
@@ -71,7 +71,7 @@ struct PageCurlBookController: UIViewControllerRepresentable {
                 return nil
             }
             
-            return viewController(for: currentIndex + 1)
+            return self.viewController(for: currentIndex + 1)
         }
         
         func pageViewController(_ pageViewController: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
@@ -79,7 +79,7 @@ struct PageCurlBookController: UIViewControllerRepresentable {
                let currentVC = pageViewController.viewControllers?.first as? BookPageViewController,
                let index = currentVC.pageIndex {
                 parent.currentPage = index
-                currentPage = index
+                self.currentPage = index
             }
         }
         
@@ -89,7 +89,7 @@ struct PageCurlBookController: UIViewControllerRepresentable {
             let page = pages[index]
             let isLeftPage = index % 2 == 0
             
-            let bookPageView = BookPageView(page: page, isLeftPage: isLeftPage)
+            let bookPageView = MockBookPageView(page: page, isLeftPage: isLeftPage)
             let hostingController = BookPageViewController(rootView: bookPageView, pageIndex: index)
             
             return hostingController
@@ -102,10 +102,10 @@ struct PageCurlBookController: UIViewControllerRepresentable {
 }
 
 // MARK: - Book Page View Controller
-class BookPageViewController: UIHostingController<BookPageView> {
+class BookPageViewController: UIHostingController<MockBookPageView> {
     let pageIndex: Int?
     
-    init(rootView: BookPageView, pageIndex: Int) {
+    init(rootView: MockBookPageView, pageIndex: Int) {
         self.pageIndex = pageIndex
         super.init(rootView: rootView)
     }

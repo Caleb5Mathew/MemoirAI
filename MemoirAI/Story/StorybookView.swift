@@ -48,7 +48,7 @@ struct StorybookView: View {
                             // Navigation hint
                             if !isCreatingNewBook && samplePages.count > 1 {
                                 Text("Create to flip pages")
-                                    .font(Tokens.Type.hint)
+                                    .font(Tokens.Typography.hint)
                                     .foregroundColor(Tokens.ink.opacity(0.7))
                             }
                             
@@ -94,11 +94,11 @@ struct StorybookView: View {
             
             VStack(spacing: 2) {
                 Text("Create your book")
-                    .font(Tokens.Type.title)
+                    .font(Tokens.Typography.title)
                     .foregroundColor(Tokens.ink)
                 
                 Text("Flip through a finished book")
-                    .font(Tokens.Type.subtitle)
+                    .font(Tokens.Typography.subtitle)
                     .foregroundColor(Tokens.ink.opacity(0.7))
             }
             
@@ -123,7 +123,7 @@ struct StorybookView: View {
                 // This could integrate with existing StoryPage or create new flow
             }) {
                 Text("Create your own book")
-                    .font(Tokens.Type.button)
+                    .font(Tokens.Typography.button)
                     .foregroundColor(Tokens.ink)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
@@ -149,7 +149,7 @@ struct StorybookView: View {
                 showPhotoPicker = true
             }) {
                 Text("Add photos")
-                    .font(Tokens.Type.button)
+                    .font(Tokens.Typography.button)
                     .foregroundColor(Tokens.ink)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)

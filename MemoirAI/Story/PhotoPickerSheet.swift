@@ -15,12 +15,12 @@ struct PhotoPickerSheet: View {
                 // Header
                 VStack(spacing: 16) {
                     Text("Add Photos to Your Story")
-                        .font(Tokens.Type.title)
+                        .font(Tokens.Typography.title)
                         .foregroundColor(Tokens.ink)
                         .multilineTextAlignment(.center)
                     
                     Text("Select photos that will bring your memories to life")
-                        .font(Tokens.Type.subtitle)
+                        .font(Tokens.Typography.subtitle)
                         .foregroundColor(Tokens.ink.opacity(0.7))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 20)
@@ -40,11 +40,11 @@ struct PhotoPickerSheet: View {
                             .foregroundColor(Tokens.accent)
                         
                         Text("Select Photos")
-                            .font(Tokens.Type.button)
+                            .font(Tokens.Typography.button)
                             .foregroundColor(Tokens.ink)
                         
                         Text("Choose up to 10 photos")
-                            .font(Tokens.Type.subtitle)
+                            .font(Tokens.Typography.subtitle)
                             .foregroundColor(Tokens.ink.opacity(0.7))
                     }
                     .frame(maxWidth: .infinity)
@@ -64,7 +64,7 @@ struct PhotoPickerSheet: View {
                 if !selectedImages.isEmpty {
                     VStack(spacing: 16) {
                         Text("Selected Photos (\(selectedImages.count))")
-                            .font(Tokens.Type.subtitle)
+                            .font(Tokens.Typography.subtitle)
                             .foregroundColor(Tokens.ink)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 20)
@@ -108,7 +108,7 @@ struct PhotoPickerSheet: View {
                         isPresented = false
                     }) {
                         Text("Add to Story")
-                            .font(Tokens.Type.button)
+                            .font(Tokens.Typography.button)
                             .foregroundColor(Tokens.paper)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
@@ -130,7 +130,7 @@ struct PhotoPickerSheet: View {
                         isPresented = false
                     }) {
                         Text("Cancel")
-                            .font(Tokens.Type.subtitle)
+                            .font(Tokens.Typography.subtitle)
                             .foregroundColor(Tokens.ink.opacity(0.7))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
