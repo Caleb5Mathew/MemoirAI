@@ -16,7 +16,7 @@ struct StorybookView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // Background with subtle parchment gradient
+                // Background with subtle parchment gradient (warm cream to slightly darker at bottom)
                 LinearGradient(
                     colors: [
                         Tokens.bgPrimary,
@@ -28,16 +28,16 @@ struct StorybookView: View {
                 .ignoresSafeArea()
                 
                 VStack(spacing: 0) {
-                    // Header
+                    // Header with proper spacing
                     headerView
                     
-                    // Main content
+                    // Main content with generous breathing room
                     GeometryReader { geo in
                         let bookWidth = geo.size.width * Tokens.bookMaxWidthPct
                         let bookHeight = bookWidth * Tokens.pageAspect
                         
                         VStack(spacing: 0) {
-                            // Book preview (occupies ~60% of vertical space)
+                            // Book preview (occupies ~60% of vertical space above the fold)
                             if isCreatingNewBook {
                                 BlankBookCoverView(
                                     bookWidth: bookWidth,
@@ -54,18 +54,18 @@ struct StorybookView: View {
                             
                             Spacer()
                             
-                            // Hint row
+                            // Hint row with proper spacing
                             if !isCreatingNewBook && samplePages.count > 1 {
                                 Text("Swipe to flip pages")
                                     .font(Tokens.Typography.hint)
                                     .foregroundColor(Tokens.ink.opacity(0.6))
-                                    .padding(.top, 20)
-                                    .padding(.bottom, 16)
+                                    .padding(.top, Tokens.bookSpacing)
+                                    .padding(.bottom, Tokens.buttonSpacing)
                             }
                             
-                            // Action buttons
+                            // Action buttons with proper spacing
                             actionButtonsView
-                                .padding(.bottom, 30)
+                                .padding(.bottom, Tokens.bottomPadding)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
@@ -102,7 +102,7 @@ struct StorybookView: View {
             
             Spacer()
             
-            VStack(spacing: 8) {
+            VStack(spacing: Tokens.headerSpacing) {
                 Text("Create your book")
                     .font(Tokens.Typography.title)
                     .foregroundColor(Tokens.ink)
@@ -125,8 +125,8 @@ struct StorybookView: View {
     
     // MARK: - Action Buttons View
     private var actionButtonsView: some View {
-        VStack(spacing: 16) {
-            // Primary button - Create your own book
+        VStack(spacing: Tokens.buttonSpacing) {
+            // Primary button - Create your own book (pill shape, transparent fill, gradient stroke)
             Button(action: {
                 isCreatingNewBook = true
                 // Navigate to book creation flow
@@ -155,7 +155,7 @@ struct StorybookView: View {
             }
             .accessibilityLabel("Create your own book")
             
-            // Secondary button - Add photos
+            // Secondary button - Add photos (soft cream fill, pill shape, subtle shadow)
             Button(action: {
                 showPhotoPicker = true
             }) {

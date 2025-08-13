@@ -87,10 +87,16 @@ struct PageCurlBookController: UIViewControllerRepresentable {
             guard index >= 0 && index < pages.count else { return nil }
             
             let page = pages[index]
-            let isLeftPage = index % 2 == 0
             
-            let bookPageView = MockBookPageView(page: page, isLeftPage: isLeftPage)
-            let hostingController = BookPageViewController(rootView: bookPageView, pageIndex: index)
+            // For two-page spreads, we need to render the full spread
+            let bookPageView: some View
+            if page.type == .twoPageSpread {
+                bookPageView = TwoPageSpreadView(page: page)
+            } else {
+                bookPageView = MockBookPageView(page: page, isLeftPage: index % 2 == 0)
+            }
+            
+            let hostingController = BookPageViewController(rootView: AnyView(bookPageView), pageIndex: index)
             
             return hostingController
         }
@@ -102,12 +108,12 @@ struct PageCurlBookController: UIViewControllerRepresentable {
 }
 
 // MARK: - Book Page View Controller
-class BookPageViewController: UIHostingController<MockBookPageView> {
+class BookPageViewController: UIHostingController<AnyView> {
     let pageIndex: Int?
     
-    init(rootView: MockBookPageView, pageIndex: Int) {
+    init<V: View>(rootView: V, pageIndex: Int) {
         self.pageIndex = pageIndex
-        super.init(rootView: rootView)
+        super.init(rootView: AnyView(rootView))
     }
     
     @MainActor required dynamic init?(coder aDecoder: NSCoder) {

@@ -9,7 +9,7 @@ struct OpenBookView: View {
     
     var body: some View {
         ZStack {
-            // Book container with spine and shadows
+            // Main book container
             HStack(spacing: 0) {
                 // Left page
                 leftPage
@@ -23,7 +23,7 @@ struct OpenBookView: View {
             .frame(width: bookWidth, height: bookHeight)
             .shadow(color: Tokens.shadow, radius: 12, x: 0, y: 6)
             
-            // Navigation chevrons (outside page edges)
+            // Navigation chevrons (outside page edges, vertically centered)
             if pages.count > 1 {
                 HStack {
                     // Left chevron
@@ -39,6 +39,7 @@ struct OpenBookView: View {
                             Circle()
                                 .fill(Tokens.bgWash.opacity(0.8))
                                 .frame(width: Tokens.chevronSize, height: Tokens.chevronSize)
+                                .shadow(color: Tokens.shadow.opacity(0.3), radius: 2, x: 0, y: 1)
                             
                             Image(systemName: "chevron.left")
                                 .font(.system(size: 20, weight: .medium))
@@ -64,6 +65,7 @@ struct OpenBookView: View {
                             Circle()
                                 .fill(Tokens.bgWash.opacity(0.8))
                                 .frame(width: Tokens.chevronSize, height: Tokens.chevronSize)
+                                .shadow(color: Tokens.shadow.opacity(0.3), radius: 2, x: 0, y: 1)
                             
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 20, weight: .medium))
@@ -100,9 +102,21 @@ struct OpenBookView: View {
                         )
                 )
             
-            // Page content
+            // Page content - render the left side of the spread
             if currentPage < pages.count {
-                MockBookPageView(page: pages[currentPage], isLeftPage: true)
+                let page = pages[currentPage]
+                if page.type == .twoPageSpread {
+                    // For two-page spread, show left side content
+                    TwoPageSpreadView(page: page)
+                        .mask(
+                            Rectangle()
+                                .frame(width: (bookWidth - Tokens.spineWidth) / 2)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        )
+                } else {
+                    // For single pages, show full content
+                    MockBookPageView(page: page, isLeftPage: true)
+                }
             }
             
             // Page edge highlight
@@ -160,9 +174,21 @@ struct OpenBookView: View {
                         )
                 )
             
-            // Page content
+            // Page content - render the right side of the spread
             if currentPage < pages.count {
-                MockBookPageView(page: pages[currentPage], isLeftPage: false)
+                let page = pages[currentPage]
+                if page.type == .twoPageSpread {
+                    // For two-page spread, show right side content
+                    TwoPageSpreadView(page: page)
+                        .mask(
+                            Rectangle()
+                                .frame(width: (bookWidth - Tokens.spineWidth) / 2)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        )
+                } else {
+                    // For single pages, show full content
+                    MockBookPageView(page: page, isLeftPage: false)
+                }
             }
             
             // Page edge highlight

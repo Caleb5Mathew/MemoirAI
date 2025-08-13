@@ -53,8 +53,8 @@ struct PhotoPickerSheet: View {
                         RoundedRectangle(cornerRadius: Tokens.cornerRadius)
                             .fill(Tokens.bgWash)
                             .overlay(
-                                RoundedRectangle(cornerRadius: Tokens.cornerRadius)
-                                    .stroke(Tokens.accentSoft.opacity(0.3) ?? Tokens.accentSoft, lineWidth: 1)
+                                                            RoundedRectangle(cornerRadius: Tokens.cornerRadius)
+                                .stroke(Tokens.accentSoft.opacity(0.3), lineWidth: 1)
                             )
                     )
                     .padding(.horizontal, 20)
