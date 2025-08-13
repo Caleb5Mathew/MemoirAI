@@ -35,9 +35,14 @@ struct FlipbookView: UIViewRepresentable {
         context.coordinator.webView = webView
         
         // Load the local HTML file
-        if let bundleURL = Bundle.main.url(forResource: "FlipbookBundle", withExtension: nil),
-           let indexURL = bundleURL.appendingPathComponent("index.html") {
+        if let bundleURL = Bundle.main.url(forResource: "FlipbookBundle", withExtension: nil) {
+            let indexURL = bundleURL.appendingPathComponent("index.html")
+            print("FlipbookView: Bundle URL found: \(bundleURL)")
+            print("FlipbookView: Index URL: \(indexURL)")
             webView.loadFileURL(indexURL, allowingReadAccessTo: bundleURL)
+        } else {
+            print("FlipbookView: ERROR - FlipbookBundle not found in app bundle!")
+            print("FlipbookView: Available resources: \(Bundle.main.urls(forResourcesWithExtension: nil, subdirectory: nil) ?? [])")
         }
         
         return webView
@@ -112,6 +117,7 @@ struct FlipbookView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             // WebView finished loading
             print("FlipbookView: WebView loaded successfully")
+            print("FlipbookView: URL loaded: \(webView.url?.absoluteString ?? "unknown")")
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
