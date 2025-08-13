@@ -77,77 +77,61 @@ struct MockBookPageView: View {
     
     private var textPage: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(page.content)
-                .font(Tokens.Typography.subtitle)
-                .foregroundColor(Tokens.ink)
-                .lineSpacing(4)
-                .multilineTextAlignment(.leading)
-            
-            Spacer()
-            
-            // Page number
-            HStack {
-                if isLeftPage {
-                    Text("1")
-                        .font(Tokens.Typography.hint)
-                        .foregroundColor(Tokens.accentSoft)
-                }
-                Spacer()
-                if !isLeftPage {
-                    Text("2")
-                        .font(Tokens.Typography.hint)
-                        .foregroundColor(Tokens.accentSoft)
+            // 5-7 grey text bars to imply paragraphs
+            VStack(spacing: 8) {
+                ForEach(0..<6, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Tokens.ink.opacity(0.3))
+                        .frame(height: 12)
+                        .frame(maxWidth: .infinity)
+                        .frame(width: [0.8, 0.9, 0.7, 0.85, 0.75, 0.95][index] * UIScreen.main.bounds.width * 0.3)
                 }
             }
+            .padding(.top, 8)
+            
+            Spacer()
         }
+        .padding(Tokens.pageMargin)
     }
     
     private var photoPage: some View {
         VStack(spacing: 16) {
-            // Title
-            Text("Memories of Achievement:")
-                .font(Tokens.Typography.subtitle)
-                .foregroundColor(Tokens.accent)
+            // Small chapter title
+            Text("Memories of Achievement")
+                .font(Tokens.Typography.chapterTitle)
+                .foregroundColor(Tokens.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 8)
             
-            // Photo placeholder
-            RoundedRectangle(cornerRadius: 8)
+            // Photo placeholder with rounded corners
+            RoundedRectangle(cornerRadius: 6)
                 .fill(Tokens.bgWash)
-                .frame(height: 200)
+                .frame(height: 160)
                 .overlay(
                     VStack {
                         Image(systemName: "photo")
-                            .font(.system(size: 40))
+                            .font(.system(size: 32))
                             .foregroundColor(Tokens.accentSoft)
-                        Text("Photo Placeholder")
-                            .font(Tokens.Typography.hint)
+                        Text("Photo")
+                            .font(Tokens.Typography.caption)
                             .foregroundColor(Tokens.accentSoft)
                     }
                 )
             
-            // Caption
-            Text(page.content)
-                .font(Tokens.Typography.hint)
-                .foregroundColor(Tokens.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // Two-line caption
+            VStack(alignment: .leading, spacing: 2) {
+                Text("A short two-line caption")
+                    .font(Tokens.Typography.caption)
+                    .foregroundColor(Tokens.ink)
+                Text("underneath the photograph.")
+                    .font(Tokens.Typography.caption)
+                    .foregroundColor(Tokens.ink)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             
             Spacer()
-            
-            // Page numbers
-            HStack {
-                if isLeftPage {
-                    Text("3")
-                        .font(Tokens.Typography.hint)
-                        .foregroundColor(Tokens.accentSoft)
-                }
-                Spacer()
-                if !isLeftPage {
-                    Text("4")
-                        .font(Tokens.Typography.hint)
-                        .foregroundColor(Tokens.accentSoft)
-                }
-            }
         }
+        .padding(Tokens.pageMargin)
     }
     
     private var mixedPage: some View {
@@ -170,21 +154,7 @@ struct MockBookPageView: View {
                 )
             
             Spacer()
-            
-            // Page numbers
-            HStack {
-                if isLeftPage {
-                    Text("5")
-                        .font(Tokens.Typography.hint)
-                        .foregroundColor(Tokens.accentSoft)
-                }
-                Spacer()
-                if !isLeftPage {
-                    Text("6")
-                        .font(Tokens.Typography.hint)
-                        .foregroundColor(Tokens.accentSoft)
-                }
-            }
         }
+        .padding(Tokens.pageMargin)
     }
 } 

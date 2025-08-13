@@ -16,9 +16,16 @@ struct StorybookView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // Background
-                Tokens.bgPrimary
-                    .ignoresSafeArea()
+                // Background with subtle parchment gradient
+                LinearGradient(
+                    colors: [
+                        Tokens.bgPrimary,
+                        Tokens.bgWash
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
                 
                 VStack(spacing: 0) {
                     // Header
@@ -29,15 +36,15 @@ struct StorybookView: View {
                         let bookWidth = geo.size.width * Tokens.bookMaxWidthPct
                         let bookHeight = bookWidth * Tokens.pageAspect
                         
-                        VStack(spacing: 24) {
-                            // Book preview
+                        VStack(spacing: 0) {
+                            // Book preview (occupies ~60% of vertical space)
                             if isCreatingNewBook {
                                 BlankBookCoverView(
                                     bookWidth: bookWidth,
                                     bookHeight: bookHeight
                                 )
                             } else {
-                                BookPreviewView(
+                                OpenBookView(
                                     pages: samplePages,
                                     currentPage: $currentPage,
                                     bookWidth: bookWidth,
@@ -45,17 +52,20 @@ struct StorybookView: View {
                                 )
                             }
                             
-                            // Navigation hint
-                            if !isCreatingNewBook && samplePages.count > 1 {
-                                Text("Create to flip pages")
-                                    .font(Tokens.Typography.hint)
-                                    .foregroundColor(Tokens.ink.opacity(0.7))
-                            }
-                            
                             Spacer()
+                            
+                            // Hint row
+                            if !isCreatingNewBook && samplePages.count > 1 {
+                                Text("Swipe to flip pages")
+                                    .font(Tokens.Typography.hint)
+                                    .foregroundColor(Tokens.ink.opacity(0.6))
+                                    .padding(.top, 20)
+                                    .padding(.bottom, 16)
+                            }
                             
                             // Action buttons
                             actionButtonsView
+                                .padding(.bottom, 30)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
@@ -92,7 +102,7 @@ struct StorybookView: View {
             
             Spacer()
             
-            VStack(spacing: 2) {
+            VStack(spacing: 8) {
                 Text("Create your book")
                     .font(Tokens.Typography.title)
                     .foregroundColor(Tokens.ink)
@@ -128,21 +138,22 @@ struct StorybookView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
                     .background(
-                        RoundedRectangle(cornerRadius: Tokens.cornerRadius)
-                            .fill(Tokens.paper)
+                        RoundedRectangle(cornerRadius: 25)
+                            .fill(Color.clear)
                             .overlay(
-                                RoundedRectangle(cornerRadius: Tokens.cornerRadius)
+                                RoundedRectangle(cornerRadius: 25)
                                     .stroke(
                                         LinearGradient(
                                             colors: Tokens.primaryOutlineGradient,
                                             startPoint: .leading,
                                             endPoint: .trailing
                                         ),
-                                        lineWidth: 2
+                                        lineWidth: 3
                                     )
                             )
                     )
             }
+            .accessibilityLabel("Create your own book")
             
             // Secondary button - Add photos
             Button(action: {
@@ -150,17 +161,24 @@ struct StorybookView: View {
             }) {
                 Text("Add photos")
                     .font(Tokens.Typography.button)
+                    .fontWeight(.medium)
                     .foregroundColor(Tokens.ink)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
                     .background(
-                        RoundedRectangle(cornerRadius: Tokens.cornerRadius)
-                            .fill(Tokens.paper)
+                        RoundedRectangle(cornerRadius: 25)
+                            .fill(Tokens.bgWash)
+                            .shadow(
+                                color: Tokens.shadow,
+                                radius: Tokens.softShadow.radius,
+                                x: 0,
+                                y: Tokens.softShadow.y
+                            )
                     )
             }
+            .accessibilityLabel("Add photos")
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, 30)
     }
 }
 
