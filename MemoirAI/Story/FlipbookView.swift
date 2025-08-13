@@ -31,6 +31,9 @@ struct FlipbookView: UIViewRepresentable {
         webView.scrollView.bounces = false
         webView.navigationDelegate = context.coordinator
         
+        // Store reference to webView in coordinator
+        context.coordinator.webView = webView
+        
         // Load the local HTML file
         if let bundleURL = Bundle.main.url(forResource: "FlipbookBundle", withExtension: nil),
            let indexURL = bundleURL.appendingPathComponent("index.html") {
@@ -78,6 +81,8 @@ struct FlipbookView: UIViewRepresentable {
         }
     }
     
+
+    
     private func renderPages(webView: WKWebView) {
         do {
             let jsonData = try JSONEncoder().encode(pages)
@@ -97,6 +102,7 @@ struct FlipbookView: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var parent: FlipbookView
         var isReady = false
+        weak var webView: WKWebView?
         
         init(_ parent: FlipbookView) {
             self.parent = parent
