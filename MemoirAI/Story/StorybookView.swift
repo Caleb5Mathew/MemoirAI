@@ -11,6 +11,22 @@ struct StorybookView: View {
 
     // Sample pages for the finished book preview
     private let samplePages = MockBookPage.samplePages
+    
+    // Helper function to calculate book size outside ViewBuilder context
+    private func calculateBookSize(for size: CGSize) -> CGSize {
+        let maxW = size.width * Tokens.bookMaxWidthPct
+        let targetAspect: CGFloat = 3.0 / 2.0
+        let maxH = size.height * 0.60
+
+        var bookW = maxW
+        var bookH = bookW / targetAspect
+        if bookH > maxH {
+            bookH = maxH
+            bookW = bookH * targetAspect
+        }
+        
+        return CGSize(width: bookW, height: bookH)
+    }
 
     var body: some View {
         NavigationView {
@@ -27,25 +43,15 @@ struct StorybookView: View {
                     headerView
 
                     GeometryReader { geo in
-                        // Spread sizing: two 3:4 pages side-by-side → ~3:2 aspect
-                        let maxW = geo.size.width * Tokens.bookMaxWidthPct
-                        let targetAspect: CGFloat = 3.0 / 2.0
-                        let maxH = geo.size.height * 0.60
-
-                        var bookW = maxW
-                        var bookH = bookW / targetAspect
-                        if bookH > maxH {
-                            bookH = maxH
-                            bookW = bookH * targetAspect
-                        }
-
+                        let bookSize = calculateBookSize(for: geo.size)
+                        
                         VStack(spacing: 0) {
                             // Open book preview (always shown for the mock)
                             OpenBookView(
                                 pages: samplePages,
                                 currentPage: $currentPage,
-                                bookWidth: bookW,
-                                bookHeight: bookH
+                                bookWidth: bookSize.width,
+                                bookHeight: bookSize.height
                             )
 
                             Spacer()
