@@ -19,13 +19,13 @@ function initializeFlipbook() {
 
     // Initialize StPageFlip
     pageFlip = new St.PageFlip(bookElement, {
-        width: 400,
-        height: 533,
+        width: 350,
+        height: 467,
         size: "stretch",
-        minWidth: 300,
-        maxWidth: 800,
-        minHeight: 400,
-        maxHeight: 1066,
+        minWidth: 280,
+        maxWidth: 600,
+        minHeight: 374,
+        maxHeight: 800,
         maxShadowOpacity: 0.5,
         showCover: true,
         mobileScrollSupport: false,

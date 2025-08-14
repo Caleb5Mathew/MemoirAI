@@ -19,9 +19,10 @@ struct StorybookView: View {
     
     // Helper function to calculate book size outside ViewBuilder context
     private func calculateBookSize(for size: CGSize) -> CGSize {
-        let maxW = size.width * Tokens.bookMaxWidthPct
+        // Give the flipbook more space - use larger percentages
+        let maxW = size.width * 0.85  // Increased from Tokens.bookMaxWidthPct
         let targetAspect: CGFloat = 3.0 / 2.0
-        let maxH = size.height * 0.60
+        let maxH = size.height * 0.75  // Increased from 0.60
 
         var bookW = maxW
         var bookH = bookW / targetAspect
@@ -94,23 +95,7 @@ struct StorybookView: View {
                                     )
                                     .frame(width: bookSize.width, height: bookSize.height)
                                     
-                                    // Debug overlay (remove in production)
-                                    VStack {
-                                        HStack {
-                                            Text("Flipbook: \(flipbookReady ? "Ready" : "Loading")")
-                                                .font(.caption)
-                                                .padding(4)
-                                                .background(flipbookReady ? Color.green.opacity(0.8) : Color.orange.opacity(0.8))
-                                                .foregroundColor(.white)
-                                                .cornerRadius(4)
-                                            Spacer()
-                                        }
-                                        Spacer()
-                                    }
-                                    .padding(8)
-                                    
-                                    // REMOVED: External chevrons - let the flipbook handle its own navigation
-                                    // The external chevrons were causing a navigation loop
+                                    // Debug overlay removed to prevent layout interference
                                 }
                                 .onAppear {
                                     print("StorybookView: Flipbook view appeared")
@@ -138,7 +123,7 @@ struct StorybookView: View {
                                 .padding(.bottom, Tokens.bottomPadding)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, 8)  // Reduced from 16 to give more space
                     }
                 }
             }
