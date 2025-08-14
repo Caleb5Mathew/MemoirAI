@@ -41,6 +41,9 @@ struct FlipbookView: UIViewRepresentable {
         webView.scrollView.contentInset = .zero
         webView.scrollView.scrollIndicatorInsets = .zero
         
+        // Ensure webview background is transparent
+        webView.scrollView.backgroundColor = .clear
+        
         // Store reference to webView in coordinator
         context.coordinator.webView = webView
         

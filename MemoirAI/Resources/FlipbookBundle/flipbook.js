@@ -36,27 +36,28 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Initialize StPageFlip
     pageFlip = new St.PageFlip(bookElement, {
-        width: 350,
-        height: 467,
+        width: null, // Let PageFlip calculate width based on container
+        height: null, // Let PageFlip calculate height based on container
         size: "stretch",
         minWidth: 280,
-        maxWidth: 600,
+        maxWidth: 800,
         minHeight: 374,
         maxHeight: 800,
         maxShadowOpacity: 0.5,
-        showCover: true,
+        showCover: false, // Disable single-page cover behavior
         mobileScrollSupport: false,
         autoSize: true
     });
     
     console.log('Flipbook: StPageFlip initialized with config:', {
-        width: 350,
-        height: 467,
+        width: null,
+        height: null,
         size: "stretch",
         minWidth: 280,
-        maxWidth: 600,
+        maxWidth: 800,
         minHeight: 374,
         maxHeight: 800,
+        showCover: false,
         autoSize: true
     });
     
