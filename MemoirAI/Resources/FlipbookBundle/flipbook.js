@@ -6,14 +6,31 @@ let isReady = false;
 
 // Initialize the flipbook when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
-    initializeFlipbook();
-});
-
-function initializeFlipbook() {
+    console.log('Flipbook: DOM loaded');
+    
     const bookElement = document.getElementById('book');
+    const containerElement = document.getElementById('book-container');
+    
+    console.log('Flipbook: Container element:', containerElement);
+    console.log('Flipbook: Container dimensions:', {
+        offsetWidth: containerElement?.offsetWidth,
+        offsetHeight: containerElement?.offsetHeight,
+        clientWidth: containerElement?.clientWidth,
+        clientHeight: containerElement?.clientHeight,
+        scrollWidth: containerElement?.scrollWidth,
+        scrollHeight: containerElement?.scrollHeight
+    });
+    
+    console.log('Flipbook: Book element:', bookElement);
+    console.log('Flipbook: Book dimensions:', {
+        offsetWidth: bookElement?.offsetWidth,
+        offsetHeight: bookElement?.offsetHeight,
+        clientWidth: bookElement?.clientWidth,
+        clientHeight: bookElement?.clientHeight
+    });
     
     if (!bookElement) {
-        console.error('Book element not found');
+        console.error('Flipbook: Book element not found!');
         return;
     }
 
@@ -31,7 +48,27 @@ function initializeFlipbook() {
         mobileScrollSupport: false,
         autoSize: true
     });
-
+    
+    console.log('Flipbook: StPageFlip initialized with config:', {
+        width: 350,
+        height: 467,
+        size: "stretch",
+        minWidth: 280,
+        maxWidth: 600,
+        minHeight: 374,
+        maxHeight: 800,
+        autoSize: true
+    });
+    
+    console.log('Flipbook: PageFlip instance created:', pageFlip);
+    
+    // Notify Swift that we're ready
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+        window.webkit.messageHandlers.native.postMessage({
+            type: 'ready'
+        });
+    }
+    
     // Listen for flip events and notify Swift
     pageFlip.on('flip', function(e) {
         console.log('PageFlip: Page flipped to index:', e.data);
@@ -53,33 +90,36 @@ function initializeFlipbook() {
             });
         }
     });
-
-    // Notify Swift that we're ready
-    setTimeout(() => {
-        isReady = true;
+    
+    // Listen for resize events
+    pageFlip.on('resize', function(e) {
+        console.log('PageFlip: Resized to:', e.data);
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
             window.webkit.messageHandlers.native.postMessage({
-                type: 'ready'
+                type: 'resize',
+                dimensions: e.data
             });
         }
-    }, 100);
-}
+    });
+});
 
 // API functions exposed to Swift
 window.renderPages = function(pagesJSON) {
+    console.log('Flipbook: renderPages called with:', pagesJSON);
+    
     if (!pageFlip) {
         console.error('PageFlip not initialized');
         return;
     }
-
+    
     try {
         const pages = JSON.parse(pagesJSON);
-        console.log('Parsed pages:', pages);
+        console.log('Flipbook: Parsed pages:', pages);
         
         // Convert HTML strings to DOM elements
         const domPages = pages.map(page => {
             const htmlString = createPageHTML(page);
-            console.log('Generated HTML for page:', page.type, htmlString);
+            console.log('Flipbook: Generated HTML for page:', page.type, htmlString);
             
             // Create a temporary container to parse HTML
             const tempDiv = document.createElement('div');
@@ -88,18 +128,31 @@ window.renderPages = function(pagesJSON) {
             // Get the first child element (the actual page div)
             const pageElement = tempDiv.firstElementChild;
             if (!pageElement) {
-                console.error('Failed to create DOM element for page:', page.type);
+                console.error('Flipbook: Failed to create DOM element for page:', page.type);
                 return null;
             }
             
-            console.log('Created DOM element:', pageElement);
+            console.log('Flipbook: Created DOM element:', pageElement);
+            console.log('Flipbook: Page element dimensions:', {
+                offsetWidth: pageElement.offsetWidth,
+                offsetHeight: pageElement.offsetHeight,
+                clientWidth: pageElement.clientWidth,
+                clientHeight: pageElement.clientHeight
+            });
+            
             return pageElement;
-        }).filter(element => element !== null);
+        }).filter(element => element !== null); // Filter out any nulls
         
-        console.log('DOM pages ready:', domPages.length);
+        console.log('Flipbook: DOM pages ready:', domPages.length);
+        console.log('Flipbook: PageFlip current state before loading:', pageFlip.getState());
         
         // Load the DOM elements into PageFlip
         pageFlip.loadFromHTML(domPages);
+        
+        console.log('Flipbook: Pages loaded into PageFlip');
+        console.log('Flipbook: PageFlip state after loading:', pageFlip.getState());
+        console.log('Flipbook: PageFlip current page:', pageFlip.getCurrentPageIndex());
+        console.log('Flipbook: PageFlip total pages:', pageFlip.getPageCount());
         
         // Notify Swift that pages are loaded
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
@@ -109,7 +162,7 @@ window.renderPages = function(pagesJSON) {
             });
         }
     } catch (error) {
-        console.error('Error rendering pages:', error);
+        console.error('Flipbook: Error rendering pages:', error);
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
             window.webkit.messageHandlers.native.postMessage({
                 type: 'error',

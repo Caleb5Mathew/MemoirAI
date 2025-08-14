@@ -35,8 +35,15 @@ struct FlipbookView: UIViewRepresentable {
         webView.scrollView.bounces = false
         webView.navigationDelegate = context.coordinator
         
+        // CRITICAL: Set content mode to scale to fit
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.contentInset = .zero
+        webView.scrollView.scrollIndicatorInsets = .zero
+        
         // Store reference to webView in coordinator
         context.coordinator.webView = webView
+        
+        print("FlipbookView: Created WKWebView with frame: \(webView.frame)")
         
         // Load the local HTML file
         if let indexURL = Bundle.main.url(forResource: "index", withExtension: "html") {
@@ -64,6 +71,11 @@ struct FlipbookView: UIViewRepresentable {
     
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.parent = self
+        
+        // Debug: Log the current frame
+        print("FlipbookView: updateUIView called with frame: \(webView.frame)")
+        print("FlipbookView: WebView bounds: \(webView.bounds)")
+        print("FlipbookView: WebView content size: \(webView.scrollView.contentSize)")
         
         // If the webview is ready and we have pages, render them
         if context.coordinator.isReady && !pages.isEmpty {
@@ -219,6 +231,11 @@ struct FlipbookView: UIViewRepresentable {
             case "stateChange":
                 if let state = body["state"] as? String {
                     print("FlipbookView state change: \(state)")
+                }
+                
+            case "resize":
+                if let dimensions = body["dimensions"] as? [String: Any] {
+                    print("FlipbookView resize: \(dimensions)")
                 }
                 
             default:
