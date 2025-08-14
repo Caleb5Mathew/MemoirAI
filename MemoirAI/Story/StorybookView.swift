@@ -51,12 +51,6 @@ struct StorybookView: View {
                     GeometryReader { geo in
                         let bookSize = calculateBookSize(for: geo.size)
                         
-                        // Move print statements outside ViewBuilder context
-                        DispatchQueue.main.async {
-                            print("StorybookView: Geometry size: \(geo.size)")
-                            print("StorybookView: Calculated book size: \(bookSize)")
-                        }
-                        
                         VStack(spacing: 0) {
                             // Flipbook preview with fallback to native OpenBookView
                             if useFallback {
@@ -105,6 +99,8 @@ struct StorybookView: View {
                                 }
                                 .onAppear {
                                     print("StorybookView: Flipbook view appeared")
+                                    print("StorybookView: Geometry size: \(geo.size)")
+                                    print("StorybookView: Calculated book size: \(bookSize)")
                                     // Set a timeout to fallback if flipbook doesn't load
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { // Increased timeout
                                         if !flipbookReady {
