@@ -4,6 +4,52 @@
 let pageFlip;
 let isReady = false;
 
+// Function to get current container dimensions
+function getContainerDimensions() {
+    const containerElement = document.getElementById('book-container');
+    const bookElement = document.getElementById('book');
+    
+    // Get the actual container dimensions
+    const containerWidth = containerElement?.offsetWidth || containerElement?.clientWidth || 350;
+    const containerHeight = containerElement?.offsetHeight || containerElement?.clientHeight || 467;
+    
+    console.log('Flipbook: Current container dimensions:', {
+        width: containerWidth,
+        height: containerHeight,
+        containerElement: containerElement,
+        bookElement: bookElement
+    });
+    
+    return { width: containerWidth, height: containerHeight };
+}
+
+// Function to update PageFlip dimensions
+function updatePageFlipDimensions() {
+    if (!pageFlip) {
+        console.log('Flipbook: PageFlip not available for dimension update');
+        return;
+    }
+    
+    const dimensions = getContainerDimensions();
+    
+    console.log('Flipbook: Updating PageFlip dimensions to:', dimensions);
+    
+    try {
+        // Update PageFlip with new dimensions
+        pageFlip.updateFromHtml();
+        
+        // Notify Swift of the dimension update
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+            window.webkit.messageHandlers.native.postMessage({
+                type: 'dimensionsUpdated',
+                dimensions: dimensions
+            });
+        }
+    } catch (error) {
+        console.error('Flipbook: Error updating PageFlip dimensions:', error);
+    }
+}
+
 // Initialize the flipbook when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
     console.log('Flipbook: DOM loaded');
@@ -56,20 +102,16 @@ document.addEventListener('DOMContentLoaded', function() {
 
     try {
         // Get actual container dimensions
-        const containerWidth = containerElement.offsetWidth || 350;
-        const containerHeight = containerElement.offsetHeight || 467;
+        const dimensions = getContainerDimensions();
         
-        console.log('Flipbook: Using container dimensions:', {
-            width: containerWidth,
-            height: containerHeight
-        });
+        console.log('Flipbook: Using container dimensions:', dimensions);
         
         // Small delay to ensure container is properly sized
         setTimeout(() => {
             // Initialize StPageFlip
             pageFlip = new St.PageFlip(bookElement, {
-                width: containerWidth,
-                height: containerHeight,
+                width: dimensions.width,
+                height: dimensions.height,
                 size: "stretch",
                 minWidth: 280,
                 maxWidth: 800,
@@ -85,8 +127,8 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log('Flipbook: StPageFlip instance:', pageFlip);
             
             console.log('Flipbook: StPageFlip initialized with config:', {
-                width: containerWidth,
-                height: containerHeight,
+                width: dimensions.width,
+                height: dimensions.height,
                 size: "stretch",
                 minWidth: 280,
                 maxWidth: 800,
@@ -211,6 +253,9 @@ window.renderPages = function(pagesJSON) {
         
         console.log('Flipbook: Pages loaded into PageFlip');
         
+        // Update dimensions after loading pages
+        updatePageFlipDimensions();
+        
         // Safely check PageFlip state after loading
         try {
             console.log('Flipbook: PageFlip state after loading:', pageFlip.getState ? pageFlip.getState() : 'getState not available');
@@ -236,6 +281,11 @@ window.renderPages = function(pagesJSON) {
             });
         }
     }
+};
+
+// Expose updatePageFlipDimensions to Swift
+window.updatePageFlipDimensions = function() {
+    updatePageFlipDimensions();
 };
 
 window.next = function() {
@@ -352,6 +402,6 @@ function createImageElement(imageBase64, imageName) {
 // Handle window resize
 window.addEventListener('resize', function() {
     if (pageFlip) {
-        pageFlip.updateFromHtml();
+        updatePageFlipDimensions();
     }
 }); 

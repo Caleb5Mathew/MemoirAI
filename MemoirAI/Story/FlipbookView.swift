@@ -28,8 +28,8 @@ struct FlipbookView: UIViewRepresentable {
         // Add message handler for communication with JavaScript
         config.userContentController.add(context.coordinator, name: "native")
         
-        // Create WKWebView with a proper initial frame
-        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 300, height: 400), configuration: config)
+        // Create WKWebView with a proper initial frame - use the expected book size
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 334, height: 223), configuration: config)
         webView.backgroundColor = .clear
         webView.isOpaque = false
         webView.scrollView.isScrollEnabled = false
@@ -76,22 +76,104 @@ struct FlipbookView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.parent = self
         
-        // Debug: Log the current frame
+        // CRITICAL FIX: Get the actual container size from the webView's superview
+        // Try multiple approaches to get the correct container size
+        var containerSize = webView.superview?.bounds.size ?? webView.bounds.size
+        
+        // If superview bounds are zero, try to get from the webView's frame in the parent view
+        if containerSize.width == 0 || containerSize.height == 0 {
+            if let superview = webView.superview {
+                // Get the webView's frame within its superview
+                let webViewFrame = webView.frame
+                if webViewFrame.width > 0 && webViewFrame.height > 0 {
+                    containerSize = webViewFrame.size
+                } else {
+                    // Fallback to superview bounds
+                    containerSize = superview.bounds.size
+                }
+            }
+        }
+        
+        // Debug: Log the current frame and container size
         print("FlipbookView: updateUIView called with frame: \(webView.frame)")
         print("FlipbookView: WebView bounds: \(webView.bounds)")
+        print("FlipbookView: Container size: \(containerSize)")
         print("FlipbookView: WebView content size: \(webView.scrollView.contentSize)")
+        print("FlipbookView: WebView superview: \(webView.superview?.description ?? "nil")")
+        print("FlipbookView: WebView superview bounds: \(webView.superview?.bounds ?? CGRect.zero)")
         
-        // CRITICAL: Ensure the webView has proper dimensions
-        if webView.frame.width == 0 || webView.frame.height == 0 {
-            print("FlipbookView: WARNING - WebView has zero dimensions!")
-            // Try to set a reasonable size
-            webView.frame = CGRect(x: 0, y: 0, width: 300, height: 400)
+        // CRITICAL: Update the WebView frame to match the container size
+        if containerSize.width > 0 && containerSize.height > 0 {
+            let newFrame = CGRect(x: 0, y: 0, width: containerSize.width, height: containerSize.height)
+            print("FlipbookView: Updating WebView frame from \(webView.frame) to \(newFrame)")
+            webView.frame = newFrame
+            
+            // Force layout update
+            webView.setNeedsLayout()
+            webView.layoutIfNeeded()
+            
+            // Add a small delay to ensure the frame update is processed
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                // Notify JavaScript of the new dimensions
+                let jsCode = """
+                    if (window.updatePageFlipDimensions) {
+                        window.updatePageFlipDimensions();
+                    }
+                """
+                webView.evaluateJavaScript(jsCode) { _, error in
+                    if let error = error {
+                        print("FlipbookView: Error updating PageFlip dimensions: \(error)")
+                    } else {
+                        print("FlipbookView: PageFlip dimensions updated successfully")
+                    }
+                }
+            }
+        } else {
+            print("FlipbookView: WARNING - Container has zero dimensions!")
+            // Try to set a reasonable default size
+            let defaultFrame = CGRect(x: 0, y: 0, width: 334, height: 223) // Based on the calculated book size
+            webView.frame = defaultFrame
+            print("FlipbookView: Set default frame: \(defaultFrame)")
+            
+            // Also notify JavaScript of the default dimensions
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                let jsCode = """
+                    if (window.updatePageFlipDimensions) {
+                        window.updatePageFlipDimensions();
+                    }
+                """
+                webView.evaluateJavaScript(jsCode) { _, error in
+                    if let error = error {
+                        print("FlipbookView: Error updating PageFlip dimensions with default: \(error)")
+                    } else {
+                        print("FlipbookView: PageFlip dimensions updated with default successfully")
+                    }
+                }
+            }
         }
         
         // If the webview is ready and we have pages, render them
         if context.coordinator.isReady && !pages.isEmpty {
             renderPages(webView: webView)
         }
+    }
+    
+    // CRITICAL: Add this method to handle SwiftUI frame updates
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: WKWebView, context: Context) -> CGSize? {
+        // Return the proposed size to ensure the WebView matches the SwiftUI frame
+        let size = proposal.replacingUnspecifiedDimensions()
+        print("FlipbookView: sizeThatFits called with proposal: \(proposal), returning: \(size)")
+        
+        // Also update the WebView frame directly
+        if size.width > 0 && size.height > 0 {
+            let newFrame = CGRect(x: 0, y: 0, width: size.width, height: size.height)
+            if uiView.frame != newFrame {
+                print("FlipbookView: Updating WebView frame in sizeThatFits from \(uiView.frame) to \(newFrame)")
+                uiView.frame = newFrame
+            }
+        }
+        
+        return size
     }
     
     func makeCoordinator() -> Coordinator {
@@ -227,6 +309,25 @@ struct FlipbookView: UIViewRepresentable {
                     print("FlipbookView: JavaScript ready successfully")
                     parent.onReady?()
                     
+                    // Force a dimension update after JavaScript is ready
+                    if let webView = self.webView {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            // Force update dimensions
+                            let jsCode = """
+                                if (window.updatePageFlipDimensions) {
+                                    window.updatePageFlipDimensions();
+                                }
+                            """
+                            webView.evaluateJavaScript(jsCode) { _, error in
+                                if let error = error {
+                                    print("FlipbookView: Error forcing dimension update: \(error)")
+                                } else {
+                                    print("FlipbookView: Forced dimension update completed")
+                                }
+                            }
+                        }
+                    }
+                    
                     // Render pages if we have them
                     if !parent.pages.isEmpty, let webView = self.webView {
                         parent.renderPages(webView: webView)
@@ -242,6 +343,24 @@ struct FlipbookView: UIViewRepresentable {
             case "pagesLoaded":
                 if let count = body["count"] as? Int {
                     print("FlipbookView: Loaded \(count) pages")
+                    
+                    // Force another dimension update after pages are loaded
+                    if let webView = self.webView {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            let jsCode = """
+                                if (window.updatePageFlipDimensions) {
+                                    window.updatePageFlipDimensions();
+                                }
+                            """
+                            webView.evaluateJavaScript(jsCode) { _, error in
+                                if let error = error {
+                                    print("FlipbookView: Error updating dimensions after pages loaded: \(error)")
+                                } else {
+                                    print("FlipbookView: Dimensions updated after pages loaded")
+                                }
+                            }
+                        }
+                    }
                 }
                 
             case "error":
@@ -259,6 +378,11 @@ struct FlipbookView: UIViewRepresentable {
             case "resize":
                 if let dimensions = body["dimensions"] as? [String: Any] {
                     print("FlipbookView resize: \(dimensions)")
+                }
+                
+            case "dimensionsUpdated":
+                if let dimensions = body["dimensions"] as? [String: Any] {
+                    print("FlipbookView: Dimensions updated to: \(dimensions)")
                 }
                 
             default:
