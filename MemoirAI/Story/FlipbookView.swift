@@ -216,11 +216,21 @@ struct FlipbookView: UIViewRepresentable {
             switch type {
             case "ready":
                 isReady = true
-                parent.onReady?()
+                print("FlipbookView: JavaScript ready message received")
                 
-                // Render pages if we have them
-                if !parent.pages.isEmpty, let webView = self.webView {
-                    parent.renderPages(webView: webView)
+                // Check if there's an error in the ready message
+                if let errorMessage = body["error"] as? String {
+                    print("FlipbookView: JavaScript ready with error: \(errorMessage)")
+                    // Still mark as ready but notify parent of error
+                    parent.onFlip?(-1) // Signal error
+                } else {
+                    print("FlipbookView: JavaScript ready successfully")
+                    parent.onReady?()
+                    
+                    // Render pages if we have them
+                    if !parent.pages.isEmpty, let webView = self.webView {
+                        parent.renderPages(webView: webView)
+                    }
                 }
                 
             case "flip":
