@@ -108,7 +108,14 @@ window.renderPages = function(pagesJSON) {
     console.log('Flipbook: renderPages called with:', pagesJSON);
     
     if (!pageFlip) {
-        console.error('PageFlip not initialized');
+        console.error('Flipbook: PageFlip not initialized');
+        // Notify Swift of the error
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+            window.webkit.messageHandlers.native.postMessage({
+                type: 'error',
+                message: 'PageFlip not initialized'
+            });
+        }
         return;
     }
     
@@ -144,15 +151,27 @@ window.renderPages = function(pagesJSON) {
         }).filter(element => element !== null); // Filter out any nulls
         
         console.log('Flipbook: DOM pages ready:', domPages.length);
-        console.log('Flipbook: PageFlip current state before loading:', pageFlip.getState());
+        
+        // Safely check PageFlip state
+        try {
+            console.log('Flipbook: PageFlip current state before loading:', pageFlip.getState ? pageFlip.getState() : 'getState not available');
+        } catch (e) {
+            console.log('Flipbook: Could not get PageFlip state:', e.message);
+        }
         
         // Load the DOM elements into PageFlip
         pageFlip.loadFromHTML(domPages);
         
         console.log('Flipbook: Pages loaded into PageFlip');
-        console.log('Flipbook: PageFlip state after loading:', pageFlip.getState());
-        console.log('Flipbook: PageFlip current page:', pageFlip.getCurrentPageIndex());
-        console.log('Flipbook: PageFlip total pages:', pageFlip.getPageCount());
+        
+        // Safely check PageFlip state after loading
+        try {
+            console.log('Flipbook: PageFlip state after loading:', pageFlip.getState ? pageFlip.getState() : 'getState not available');
+            console.log('Flipbook: PageFlip current page:', pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() : 'getCurrentPageIndex not available');
+            console.log('Flipbook: PageFlip total pages:', pageFlip.getPageCount ? pageFlip.getPageCount() : 'getPageCount not available');
+        } catch (e) {
+            console.log('Flipbook: Could not get PageFlip state after loading:', e.message);
+        }
         
         // Notify Swift that pages are loaded
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {

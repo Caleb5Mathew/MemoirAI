@@ -11,6 +11,7 @@ struct StorybookView: View {
     @State private var selectedPhotos: [UIImage] = []
     @State private var flipbookReady = false
     @State private var useFallback = false
+    @State private var flipbookError = false
     @State private var webView: WKWebView?
 
     // Sample pages for the finished book preview
@@ -90,7 +91,14 @@ struct StorybookView: View {
                                         },
                                         onFlip: { pageIndex in
                                             print("StorybookView: Page flipped to \(pageIndex)")
-                                            currentPage = pageIndex
+                                            if pageIndex == -1 {
+                                                // Error occurred
+                                                print("StorybookView: Flipbook error detected, falling back to native")
+                                                flipbookError = true
+                                                useFallback = true
+                                            } else {
+                                                currentPage = pageIndex
+                                            }
                                         }
                                     )
                                     .frame(width: bookSize.width, height: bookSize.height)
@@ -103,8 +111,8 @@ struct StorybookView: View {
                                     print("StorybookView: Calculated book size: \(bookSize)")
                                     // Set a timeout to fallback if flipbook doesn't load
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { // Increased timeout
-                                        if !flipbookReady {
-                                            print("StorybookView: Flipbook timeout - falling back to native")
+                                        if !flipbookReady || flipbookError {
+                                            print("StorybookView: Flipbook timeout or error - falling back to native")
                                             useFallback = true
                                         }
                                     }

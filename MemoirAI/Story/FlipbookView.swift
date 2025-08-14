@@ -28,7 +28,8 @@ struct FlipbookView: UIViewRepresentable {
         // Add message handler for communication with JavaScript
         config.userContentController.add(context.coordinator, name: "native")
         
-        let webView = WKWebView(frame: .zero, configuration: config)
+        // Create WKWebView with a proper initial frame
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 300, height: 400), configuration: config)
         webView.backgroundColor = .clear
         webView.isOpaque = false
         webView.scrollView.isScrollEnabled = false
@@ -76,6 +77,13 @@ struct FlipbookView: UIViewRepresentable {
         print("FlipbookView: updateUIView called with frame: \(webView.frame)")
         print("FlipbookView: WebView bounds: \(webView.bounds)")
         print("FlipbookView: WebView content size: \(webView.scrollView.contentSize)")
+        
+        // CRITICAL: Ensure the webView has proper dimensions
+        if webView.frame.width == 0 || webView.frame.height == 0 {
+            print("FlipbookView: WARNING - WebView has zero dimensions!")
+            // Try to set a reasonable size
+            webView.frame = CGRect(x: 0, y: 0, width: 300, height: 400)
+        }
         
         // If the webview is ready and we have pages, render them
         if context.coordinator.isReady && !pages.isEmpty {
@@ -226,6 +234,8 @@ struct FlipbookView: UIViewRepresentable {
             case "error":
                 if let errorMessage = body["message"] as? String {
                     print("FlipbookView JavaScript error: \(errorMessage)")
+                    // Notify parent of error
+                    parent.onFlip?(-1) // Use -1 to indicate error
                 }
                 
             case "stateChange":
