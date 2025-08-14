@@ -55,76 +55,88 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     try {
-        // Initialize StPageFlip
-        pageFlip = new St.PageFlip(bookElement, {
-            width: null, // Let PageFlip calculate width based on container
-            height: null, // Let PageFlip calculate height based on container
-            size: "stretch",
-            minWidth: 280,
-            maxWidth: 800,
-            minHeight: 374,
-            maxHeight: 800,
-            maxShadowOpacity: 0.5,
-            showCover: false, // Disable single-page cover behavior
-            mobileScrollSupport: false,
-            autoSize: true
+        // Get actual container dimensions
+        const containerWidth = containerElement.offsetWidth || 350;
+        const containerHeight = containerElement.offsetHeight || 467;
+        
+        console.log('Flipbook: Using container dimensions:', {
+            width: containerWidth,
+            height: containerHeight
         });
         
-        console.log('Flipbook: StPageFlip initialized successfully');
-        console.log('Flipbook: StPageFlip instance:', pageFlip);
-        
-        console.log('Flipbook: StPageFlip initialized with config:', {
-            width: null,
-            height: null,
-            size: "stretch",
-            minWidth: 280,
-            maxWidth: 800,
-            minHeight: 374,
-            maxHeight: 800,
-            showCover: false,
-            autoSize: true
-        });
-        
-        // Listen for flip events and notify Swift
-        pageFlip.on('flip', function(e) {
-            console.log('PageFlip: Page flipped to index:', e.data);
-            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
-                window.webkit.messageHandlers.native.postMessage({
-                    type: 'flip',
-                    index: e.data
-                });
-            }
-        });
-
-        // Listen for state changes
-        pageFlip.on('changeState', function(e) {
-            console.log('PageFlip: State changed to:', e.data);
-            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
-                window.webkit.messageHandlers.native.postMessage({
-                    type: 'stateChange',
-                    state: e.data
-                });
-            }
-        });
-        
-        // Listen for resize events
-        pageFlip.on('resize', function(e) {
-            console.log('PageFlip: Resized to:', e.data);
-            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
-                window.webkit.messageHandlers.native.postMessage({
-                    type: 'resize',
-                    dimensions: e.data
-                });
-            }
-        });
-        
-        // Notify Swift that we're ready
-        console.log('Flipbook: Sending ready message to Swift');
-        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
-            window.webkit.messageHandlers.native.postMessage({
-                type: 'ready'
+        // Small delay to ensure container is properly sized
+        setTimeout(() => {
+            // Initialize StPageFlip
+            pageFlip = new St.PageFlip(bookElement, {
+                width: containerWidth,
+                height: containerHeight,
+                size: "stretch",
+                minWidth: 280,
+                maxWidth: 800,
+                minHeight: 374,
+                maxHeight: 800,
+                maxShadowOpacity: 0.5,
+                showCover: false, // Disable single-page cover behavior
+                mobileScrollSupport: false,
+                autoSize: true
             });
-        }
+            
+            console.log('Flipbook: StPageFlip initialized successfully');
+            console.log('Flipbook: StPageFlip instance:', pageFlip);
+            
+            console.log('Flipbook: StPageFlip initialized with config:', {
+                width: containerWidth,
+                height: containerHeight,
+                size: "stretch",
+                minWidth: 280,
+                maxWidth: 800,
+                minHeight: 374,
+                maxHeight: 800,
+                showCover: false,
+                autoSize: true
+            });
+            
+            // Listen for flip events and notify Swift
+            pageFlip.on('flip', function(e) {
+                console.log('PageFlip: Page flipped to index:', e.data);
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+                    window.webkit.messageHandlers.native.postMessage({
+                        type: 'flip',
+                        index: e.data
+                    });
+                }
+            });
+
+            // Listen for state changes
+            pageFlip.on('changeState', function(e) {
+                console.log('PageFlip: State changed to:', e.data);
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+                    window.webkit.messageHandlers.native.postMessage({
+                        type: 'stateChange',
+                        state: e.data
+                    });
+                }
+            });
+            
+            // Listen for resize events
+            pageFlip.on('resize', function(e) {
+                console.log('PageFlip: Resized to:', e.data);
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+                    window.webkit.messageHandlers.native.postMessage({
+                        type: 'resize',
+                        dimensions: e.data
+                    });
+                }
+            });
+            
+            // Notify Swift that we're ready
+            console.log('Flipbook: Sending ready message to Swift');
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+                window.webkit.messageHandlers.native.postMessage({
+                    type: 'ready'
+                });
+            }
+        }, 100); // 100ms delay
         
     } catch (error) {
         console.error('Flipbook: Error initializing StPageFlip:', error);
