@@ -3,6 +3,8 @@
 
 let pageFlip;
 let isReady = false;
+let isUpdatingDimensions = false; // Prevent recursive calls
+let dimensionUpdateTimeout = null; // For debouncing
 
 // Function to get current container dimensions
 function getContainerDimensions() {
@@ -23,31 +25,52 @@ function getContainerDimensions() {
     return { width: containerWidth, height: containerHeight };
 }
 
-// Function to update PageFlip dimensions
+// Function to update PageFlip dimensions with debouncing
 function updatePageFlipDimensions() {
     if (!pageFlip) {
         console.log('Flipbook: PageFlip not available for dimension update');
         return;
     }
     
-    const dimensions = getContainerDimensions();
-    
-    console.log('Flipbook: Updating PageFlip dimensions to:', dimensions);
-    
-    try {
-        // Update PageFlip with new dimensions
-        pageFlip.updateFromHtml();
-        
-        // Notify Swift of the dimension update
-        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
-            window.webkit.messageHandlers.native.postMessage({
-                type: 'dimensionsUpdated',
-                dimensions: dimensions
-            });
-        }
-    } catch (error) {
-        console.error('Flipbook: Error updating PageFlip dimensions:', error);
+    // Prevent recursive calls
+    if (isUpdatingDimensions) {
+        console.log('Flipbook: Dimension update already in progress, skipping');
+        return;
     }
+    
+    // Clear any existing timeout
+    if (dimensionUpdateTimeout) {
+        clearTimeout(dimensionUpdateTimeout);
+    }
+    
+    // Debounce the update
+    dimensionUpdateTimeout = setTimeout(() => {
+        isUpdatingDimensions = true;
+        
+        const dimensions = getContainerDimensions();
+        
+        console.log('Flipbook: Updating PageFlip dimensions to:', dimensions);
+        
+        try {
+            // Update PageFlip with new dimensions
+            pageFlip.updateFromHtml();
+            
+            // Notify Swift of the dimension update
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+                window.webkit.messageHandlers.native.postMessage({
+                    type: 'dimensionsUpdated',
+                    dimensions: dimensions
+                });
+            }
+        } catch (error) {
+            console.error('Flipbook: Error updating PageFlip dimensions:', error);
+        } finally {
+            // Reset the flag after a short delay to prevent immediate re-entry
+            setTimeout(() => {
+                isUpdatingDimensions = false;
+            }, 100);
+        }
+    }, 50); // 50ms debounce
 }
 
 // Initialize the flipbook when DOM is loaded
@@ -160,7 +183,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             });
             
-            // Listen for resize events
+            // Listen for resize events - but don't call updatePageFlipDimensions to avoid recursion
             pageFlip.on('resize', function(e) {
                 console.log('PageFlip: Resized to:', e.data);
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
@@ -253,8 +276,10 @@ window.renderPages = function(pagesJSON) {
         
         console.log('Flipbook: Pages loaded into PageFlip');
         
-        // Update dimensions after loading pages
-        updatePageFlipDimensions();
+        // Update dimensions after loading pages - but only once
+        setTimeout(() => {
+            updatePageFlipDimensions();
+        }, 200);
         
         // Safely check PageFlip state after loading
         try {
@@ -287,6 +312,13 @@ window.renderPages = function(pagesJSON) {
 window.updatePageFlipDimensions = function() {
     updatePageFlipDimensions();
 };
+
+// Expose the updating flag to Swift
+Object.defineProperty(window, 'isUpdatingDimensions', {
+    get: function() {
+        return isUpdatingDimensions;
+    }
+});
 
 window.next = function() {
     if (pageFlip) {
@@ -399,9 +431,8 @@ function createImageElement(imageBase64, imageName) {
     }
 }
 
-// Handle window resize
+// Handle window resize - but don't call updatePageFlipDimensions to avoid recursion
 window.addEventListener('resize', function() {
-    if (pageFlip) {
-        updatePageFlipDimensions();
-    }
+    // Just log the resize event, don't trigger dimension updates
+    console.log('Flipbook: Window resize detected');
 }); 

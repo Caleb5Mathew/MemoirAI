@@ -113,10 +113,10 @@ struct FlipbookView: UIViewRepresentable {
             webView.layoutIfNeeded()
             
             // Add a small delay to ensure the frame update is processed
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                // Notify JavaScript of the new dimensions
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                // Notify JavaScript of the new dimensions - but only if not already updating
                 let jsCode = """
-                    if (window.updatePageFlipDimensions) {
+                    if (window.updatePageFlipDimensions && !window.isUpdatingDimensions) {
                         window.updatePageFlipDimensions();
                     }
                 """
@@ -135,10 +135,10 @@ struct FlipbookView: UIViewRepresentable {
             webView.frame = defaultFrame
             print("FlipbookView: Set default frame: \(defaultFrame)")
             
-            // Also notify JavaScript of the default dimensions
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            // Also notify JavaScript of the default dimensions - but only if not already updating
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 let jsCode = """
-                    if (window.updatePageFlipDimensions) {
+                    if (window.updatePageFlipDimensions && !window.isUpdatingDimensions) {
                         window.updatePageFlipDimensions();
                     }
                 """
@@ -309,10 +309,10 @@ struct FlipbookView: UIViewRepresentable {
                     print("FlipbookView: JavaScript ready successfully")
                     parent.onReady?()
                     
-                    // Force a dimension update after JavaScript is ready
+                    // Force a dimension update after JavaScript is ready - but only once
                     if let webView = self.webView {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            // Force update dimensions
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            // Force update dimensions only once
                             let jsCode = """
                                 if (window.updatePageFlipDimensions) {
                                     window.updatePageFlipDimensions();
@@ -344,9 +344,9 @@ struct FlipbookView: UIViewRepresentable {
                 if let count = body["count"] as? Int {
                     print("FlipbookView: Loaded \(count) pages")
                     
-                    // Force another dimension update after pages are loaded
+                    // Force another dimension update after pages are loaded - but only once
                     if let webView = self.webView {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                             let jsCode = """
                                 if (window.updatePageFlipDimensions) {
                                     window.updatePageFlipDimensions();
