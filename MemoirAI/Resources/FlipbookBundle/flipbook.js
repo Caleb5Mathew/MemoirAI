@@ -190,6 +190,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 autoSize: true
             });
             
+            // DEBUG: Verify cover page configuration
+            console.log('Flipbook: Cover page should be first page with showCover: true');
+            
             // Listen for flip events and notify Swift
             pageFlip.on('flip', function(e) {
                 console.log('PageFlip: Page flipped to index:', e.data);
