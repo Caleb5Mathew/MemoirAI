@@ -102,6 +102,18 @@ struct FlipbookView: UIViewRepresentable {
         print("FlipbookView: WebView superview: \(webView.superview?.description ?? "nil")")
         print("FlipbookView: WebView superview bounds: \(webView.superview?.bounds ?? CGRect.zero)")
         
+        // ADDITIONAL DEBUG: Check if WebView can display basic content
+        print("FlipbookView: Testing WebView with simple HTML content...")
+        let testHTML = """
+        <html>
+        <body style="background: red; color: white; font-size: 24px; padding: 20px;">
+            <h1>TEST CONTENT</h1>
+            <p>If you can see this, WebView is working!</p>
+        </body>
+        </html>
+        """
+        webView.loadHTMLString(testHTML, baseURL: nil)
+        
         // CRITICAL: Update the WebView frame to match the container size
         if containerSize.width > 0 && containerSize.height > 0 {
             // Ensure we don't exceed the container bounds
@@ -258,6 +270,21 @@ struct FlipbookView: UIViewRepresentable {
             // WebView finished loading
             print("FlipbookView: WebView loaded successfully")
             print("FlipbookView: URL loaded: \(webView.url?.absoluteString ?? "unknown")")
+            
+            // DEBUG: Check WebView content after loading
+            print("FlipbookView: WebView content size after loading: \(webView.scrollView.contentSize)")
+            print("FlipbookView: WebView frame after loading: \(webView.frame)")
+            print("FlipbookView: WebView bounds after loading: \(webView.bounds)")
+            
+            // DEBUG: Check if WebView can execute JavaScript
+            webView.evaluateJavaScript("document.body.innerHTML") { result, error in
+                if let error = error {
+                    print("FlipbookView: Error getting HTML content: \(error)")
+                } else if let html = result as? String {
+                    print("FlipbookView: HTML content length: \(html.count)")
+                    print("FlipbookView: HTML content preview: \(String(html.prefix(200)))")
+                }
+            }
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

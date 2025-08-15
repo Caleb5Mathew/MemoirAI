@@ -223,6 +223,17 @@ document.addEventListener('DOMContentLoaded', function() {
 window.renderPages = function(pagesJSON) {
     console.log('Flipbook: renderPages called with:', pagesJSON);
     
+    // DEBUG: Check if book element exists and has content
+    const bookElement = document.getElementById('book');
+    console.log('Flipbook: Book element before rendering:', bookElement);
+    console.log('Flipbook: Book element innerHTML before rendering:', bookElement?.innerHTML);
+    console.log('Flipbook: Book element dimensions before rendering:', {
+        offsetWidth: bookElement?.offsetWidth,
+        offsetHeight: bookElement?.offsetHeight,
+        clientWidth: bookElement?.clientWidth,
+        clientHeight: bookElement?.clientHeight
+    });
+    
     if (!pageFlip) {
         console.error('Flipbook: PageFlip not initialized');
         // Notify Swift of the error
@@ -280,9 +291,48 @@ window.renderPages = function(pagesJSON) {
         
         console.log('Flipbook: Pages loaded into PageFlip');
         
+        // DEBUG: Check book element after loading pages
+        const bookElementAfter = document.getElementById('book');
+        console.log('Flipbook: Book element after loading pages:', bookElementAfter);
+        console.log('Flipbook: Book element innerHTML after loading:', bookElementAfter?.innerHTML);
+        console.log('Flipbook: Book element dimensions after loading:', {
+            offsetWidth: bookElementAfter?.offsetWidth,
+            offsetHeight: bookElementAfter?.offsetHeight,
+            clientWidth: bookElementAfter?.clientWidth,
+            clientHeight: bookElementAfter?.clientHeight
+        });
+        
         // Update dimensions after loading pages - but only once
         setTimeout(() => {
             updatePageFlipDimensions();
+            
+            // DEBUG: Check CSS and visibility
+            console.log('Flipbook: Checking CSS and visibility...');
+            const bookElement = document.getElementById('book');
+            const computedStyle = window.getComputedStyle(bookElement);
+            console.log('Flipbook: Book element computed style:', {
+                display: computedStyle.display,
+                visibility: computedStyle.visibility,
+                opacity: computedStyle.opacity,
+                width: computedStyle.width,
+                height: computedStyle.height,
+                position: computedStyle.position,
+                zIndex: computedStyle.zIndex
+            });
+            
+            // DEBUG: Check if PageFlip elements are visible
+            const pageFlipElements = bookElement.querySelectorAll('.stf__block, .stf__page, .stf__page__content');
+            console.log('Flipbook: PageFlip elements found:', pageFlipElements.length);
+            pageFlipElements.forEach((el, index) => {
+                const style = window.getComputedStyle(el);
+                console.log(`Flipbook: PageFlip element ${index} style:`, {
+                    display: style.display,
+                    visibility: style.visibility,
+                    opacity: style.opacity,
+                    width: style.width,
+                    height: style.height
+                });
+            });
         }, 200);
         
         // Safely check PageFlip state after loading
