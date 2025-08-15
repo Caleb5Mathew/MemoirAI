@@ -228,6 +228,41 @@ body {
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15) !important;
 }
 
+/* Book spine styling for realism */
+.stf__page__hard::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 8px;
+    height: 100%;
+    background: linear-gradient(90deg, 
+        var(--spine-color) 0%, 
+        var(--spine-color) 40%, 
+        var(--page-edge-highlight) 50%, 
+        var(--spine-color) 60%, 
+        var(--spine-color) 100%);
+    transform: translateX(-50%);
+    border-radius: 4px;
+    box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.3);
+    z-index: 1;
+}
+
+/* Enhanced book shadows for 3D effect */
+.stf__page__hard {
+    position: relative;
+    box-shadow: 
+        0 6px 14px var(--shadow),
+        inset 0 0 20px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Page curl effect enhancement */
+.stf__page__flipping {
+    box-shadow: 
+        0 8px 20px rgba(0, 0, 0, 0.15),
+        0 2px 8px rgba(0, 0, 0, 0.1) !important;
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
     .page-content {
@@ -272,6 +307,48 @@ body {
     }
 }
 
+/* Navigation arrows styling */
+#navigation-arrows {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 20px;
+    z-index: 10;
+}
+
+.nav-arrow {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: var(--paper);
+    border: 1px solid var(--accent-soft);
+    color: var(--ink);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px var(--shadow);
+    transition: all 0.2s ease;
+}
+
+.nav-arrow:hover {
+    background: var(--bg-wash);
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px var(--shadow);
+}
+
+.nav-arrow:active {
+    transform: scale(0.95);
+}
+
+.nav-arrow:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    transform: none;
+}
+
 /* Ensure book container fits within viewport */
 @media (max-width: 400px) {
     #book-container {
@@ -281,5 +358,15 @@ body {
     #book {
         max-width: calc(100% - 16px);
         max-height: calc(100% - 16px);
+    }
+    
+    #navigation-arrows {
+        bottom: 10px;
+        gap: 15px;
+    }
+    
+    .nav-arrow {
+        width: 36px;
+        height: 36px;
     }
 } 
