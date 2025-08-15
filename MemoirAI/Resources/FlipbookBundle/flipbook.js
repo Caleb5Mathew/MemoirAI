@@ -116,8 +116,16 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Check if St.PageFlip is available
+    console.log('Flipbook: Checking St.PageFlip availability...');
+    console.log('Flipbook: typeof St:', typeof St);
+    console.log('Flipbook: St object:', St);
+    console.log('Flipbook: St.PageFlip:', St?.PageFlip);
+    
     if (typeof St === 'undefined' || !St.PageFlip) {
         console.error('Flipbook: St.PageFlip not available!');
+        console.error('Flipbook: St is undefined:', typeof St === 'undefined');
+        console.error('Flipbook: St.PageFlip is undefined:', !St?.PageFlip);
+        
         // Notify Swift of the error
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
             window.webkit.messageHandlers.native.postMessage({
@@ -127,6 +135,8 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         return;
     }
+    
+    console.log('Flipbook: St.PageFlip is available!');
 
     try {
         // Get actual container dimensions
@@ -141,26 +151,31 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log('Flipbook: Book element for PageFlip:', bookElement);
             
             try {
+                // Try minimal configuration first
                 pageFlip = new St.PageFlip(bookElement, {
                     width: dimensions.width,
                     height: dimensions.height,
-                    size: "stretch",
-                    minWidth: 280,
-                    maxWidth: 800,
-                    minHeight: 374,
-                    maxHeight: 800,
-                    maxShadowOpacity: 0.5,
-                    showCover: false, // Disable single-page cover behavior
-                    mobileScrollSupport: false,
-                    autoSize: false, // Disable autoSize to prevent layout issues
-                    flippingTime: 1000,
-                    usePortrait: false,
-                    hard: "cover",
-                    pageMode: "double"
+                    size: "stretch"
                 });
-                console.log('Flipbook: PageFlip initialized successfully:', pageFlip);
+                console.log('Flipbook: PageFlip initialized successfully with minimal config:', pageFlip);
+                
+                // DEBUG: Test if PageFlip can render a simple div
+                console.log('Flipbook: Testing PageFlip with simple div...');
+                const testDiv = document.createElement('div');
+                testDiv.innerHTML = '<div style="width: 100px; height: 100px; background: blue; color: white;">TEST PAGE</div>';
+                testDiv.style.width = '100px';
+                testDiv.style.height = '100px';
+                
+                try {
+                    pageFlip.loadFromHTML([testDiv]);
+                    console.log('Flipbook: Simple div test successful');
+                } catch (testError) {
+                    console.error('Flipbook: Simple div test failed:', testError);
+                }
+                
             } catch (error) {
                 console.error('Flipbook: Error initializing PageFlip:', error);
+                console.error('Flipbook: Error stack:', error.stack);
                 throw error;
             }
             
@@ -296,6 +311,8 @@ window.renderPages = function(pagesJSON) {
         // Safely check PageFlip state
         try {
             console.log('Flipbook: PageFlip current state before loading:', pageFlip.getState ? pageFlip.getState() : 'getState not available');
+            console.log('Flipbook: PageFlip methods available:', Object.getOwnPropertyNames(pageFlip));
+            console.log('Flipbook: PageFlip prototype methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(pageFlip)));
         } catch (e) {
             console.log('Flipbook: Could not get PageFlip state:', e.message);
         }
@@ -304,11 +321,38 @@ window.renderPages = function(pagesJSON) {
         console.log('Flipbook: About to load DOM pages into PageFlip:', domPages.length);
         console.log('Flipbook: DOM pages:', domPages);
         
+        // DEBUG: Check book element before PageFlip
+        const bookElementBefore = document.getElementById('book');
+        console.log('Flipbook: Book element BEFORE PageFlip:', bookElementBefore);
+        console.log('Flipbook: Book innerHTML BEFORE PageFlip:', bookElementBefore?.innerHTML);
+        console.log('Flipbook: Book children BEFORE PageFlip:', bookElementBefore?.children?.length);
+        
         try {
+            console.log('Flipbook: Calling pageFlip.loadFromHTML...');
             pageFlip.loadFromHTML(domPages);
             console.log('Flipbook: loadFromHTML completed successfully');
+            
+            // DEBUG: Check book element immediately after PageFlip
+            const bookElementAfter = document.getElementById('book');
+            console.log('Flipbook: Book element AFTER PageFlip:', bookElementAfter);
+            console.log('Flipbook: Book innerHTML AFTER PageFlip:', bookElementAfter?.innerHTML);
+            console.log('Flipbook: Book children AFTER PageFlip:', bookElementAfter?.children?.length);
+            
+            // DEBUG: Check for PageFlip-specific elements
+            const pageFlipElements = document.querySelectorAll('.stf__block, .stf__page, .stf__page__content, .stf__wrapper');
+            console.log('Flipbook: PageFlip elements found immediately after loadFromHTML:', pageFlipElements.length);
+            pageFlipElements.forEach((el, index) => {
+                console.log(`Flipbook: PageFlip element ${index}:`, {
+                    tagName: el.tagName,
+                    className: el.className,
+                    id: el.id,
+                    innerHTML: el.innerHTML.substring(0, 100) + '...'
+                });
+            });
+            
         } catch (error) {
             console.error('Flipbook: Error in loadFromHTML:', error);
+            console.error('Flipbook: Error stack:', error.stack);
         }
         
         console.log('Flipbook: Pages loaded into PageFlip');
