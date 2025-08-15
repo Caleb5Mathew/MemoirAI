@@ -428,15 +428,36 @@ window.renderPages = function(pagesJSON) {
                 });
             }
             
-            // DEBUG: Check navigation arrows
-            const navArrows = document.getElementById('navigation-arrows');
-            const prevButton = document.getElementById('prev-button');
-            const nextButton = document.getElementById('next-button');
-            console.log('Flipbook: Navigation elements found:', {
-                navArrows: !!navArrows,
-                prevButton: !!prevButton,
-                nextButton: !!nextButton
+                    // DEBUG: Check navigation arrows
+        const navArrows = document.getElementById('navigation-arrows');
+        const prevButton = document.getElementById('prev-button');
+        const nextButton = document.getElementById('next-button');
+        console.log('Flipbook: Navigation elements found:', {
+            navArrows: !!navArrows,
+            prevButton: !!prevButton,
+            nextButton: !!nextButton
+        });
+        
+        // DEBUG: Check positioning
+        if (navArrows) {
+            const navStyle = window.getComputedStyle(navArrows);
+            console.log('Flipbook: Navigation arrows positioning:', {
+                top: navStyle.top,
+                left: navStyle.left,
+                transform: navStyle.transform,
+                position: navStyle.position
             });
+        }
+        
+        if (bookElement) {
+            const bookStyle = window.getComputedStyle(bookElement);
+            console.log('Flipbook: Book positioning:', {
+                marginTop: bookStyle.marginTop,
+                display: bookStyle.display,
+                alignItems: bookStyle.alignItems,
+                justifyContent: bookStyle.justifyContent
+            });
+        }
             
             // DEBUG: Check PageFlip state for navigation
             if (pageFlip) {

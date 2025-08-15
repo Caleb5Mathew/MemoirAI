@@ -28,12 +28,14 @@ body {
     width: 100%;
     height: 100%;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     padding: 0;
     box-sizing: border-box;
     /* Ensure container doesn't overflow */
     overflow: hidden;
+    position: relative;
 }
 
 #book {
@@ -46,6 +48,8 @@ body {
     max-width: 100%;
     max-height: 100%;
     box-sizing: border-box;
+    /* Center the book vertically with some top margin */
+    margin-top: -10%;
 }
 
 /* Page Styles */
@@ -310,7 +314,7 @@ body {
 /* Navigation arrows styling */
 #navigation-arrows {
     position: absolute;
-    bottom: 20px;
+    top: 65%; /* Position right below the book instead of at bottom */
     left: 50%;
     transform: translateX(-50%);
     display: flex;
@@ -358,15 +362,27 @@ body {
     #book {
         max-width: calc(100% - 16px);
         max-height: calc(100% - 16px);
+        margin-top: -5%; /* Less margin on smaller screens */
     }
     
     #navigation-arrows {
-        bottom: 10px;
+        top: 70%; /* Adjust for smaller screens */
         gap: 15px;
     }
     
     .nav-arrow {
         width: 36px;
         height: 36px;
+    }
+}
+
+/* Adjust positioning for larger screens */
+@media (min-width: 768px) {
+    #book {
+        margin-top: -15%; /* More margin on larger screens */
+    }
+    
+    #navigation-arrows {
+        top: 60%; /* Adjust for larger screens */
     }
 } 
