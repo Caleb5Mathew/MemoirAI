@@ -116,22 +116,8 @@ struct FlipbookView: UIViewRepresentable {
             webView.setNeedsLayout()
             webView.layoutIfNeeded()
             
-            // Add a small delay to ensure the frame update is processed
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                // Notify JavaScript of the new dimensions - but only if not already updating
-                let jsCode = """
-                    if (window.updatePageFlipDimensions && !window.isUpdatingDimensions) {
-                        window.updatePageFlipDimensions();
-                    }
-                """
-                webView.evaluateJavaScript(jsCode) { _, error in
-                    if let error = error {
-                        print("FlipbookView: Error updating PageFlip dimensions: \(error)")
-                    } else {
-                        print("FlipbookView: PageFlip dimensions updated successfully")
-                    }
-                }
-            }
+            // Don't call dimension updates to prevent recursion - let PageFlip handle its own sizing
+            print("FlipbookView: Frame updated, letting PageFlip handle dimensions")
         } else {
             print("FlipbookView: WARNING - Container has zero dimensions!")
             // Try to set a reasonable default size
@@ -139,21 +125,8 @@ struct FlipbookView: UIViewRepresentable {
             webView.frame = defaultFrame
             print("FlipbookView: Set default frame: \(defaultFrame)")
             
-            // Also notify JavaScript of the default dimensions - but only if not already updating
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                let jsCode = """
-                    if (window.updatePageFlipDimensions && !window.isUpdatingDimensions) {
-                        window.updatePageFlipDimensions();
-                    }
-                """
-                webView.evaluateJavaScript(jsCode) { _, error in
-                    if let error = error {
-                        print("FlipbookView: Error updating PageFlip dimensions with default: \(error)")
-                    } else {
-                        print("FlipbookView: PageFlip dimensions updated with default successfully")
-                    }
-                }
-            }
+            // Don't call dimension updates to prevent recursion
+            print("FlipbookView: Set default frame, letting PageFlip handle dimensions")
         }
         
         // If the webview is ready and we have pages, render them
@@ -313,24 +286,8 @@ struct FlipbookView: UIViewRepresentable {
                     print("FlipbookView: JavaScript ready successfully")
                     parent.onReady?()
                     
-                    // Force a dimension update after JavaScript is ready - but only once
-                    if let webView = self.webView {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                            // Force update dimensions only once
-                            let jsCode = """
-                                if (window.updatePageFlipDimensions && !window.isUpdatingDimensions) {
-                                    window.updatePageFlipDimensions();
-                                }
-                            """
-                            webView.evaluateJavaScript(jsCode) { _, error in
-                                if let error = error {
-                                    print("FlipbookView: Error forcing dimension update: \(error)")
-                                } else {
-                                    print("FlipbookView: Forced dimension update completed")
-                                }
-                            }
-                        }
-                    }
+                    // Don't force dimension updates to prevent recursion
+                    print("FlipbookView: JavaScript ready, letting PageFlip handle dimensions")
                     
                     // Render pages if we have them
                     if !parent.pages.isEmpty, let webView = self.webView {
@@ -348,23 +305,8 @@ struct FlipbookView: UIViewRepresentable {
                 if let count = body["count"] as? Int {
                     print("FlipbookView: Loaded \(count) pages")
                     
-                    // Force another dimension update after pages are loaded - but only once
-                    if let webView = self.webView {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            let jsCode = """
-                                if (window.updatePageFlipDimensions && !window.isUpdatingDimensions) {
-                                    window.updatePageFlipDimensions();
-                                }
-                            """
-                            webView.evaluateJavaScript(jsCode) { _, error in
-                                if let error = error {
-                                    print("FlipbookView: Error updating dimensions after pages loaded: \(error)")
-                                } else {
-                                    print("FlipbookView: Dimensions updated after pages loaded")
-                                }
-                            }
-                        }
-                    }
+                    // Don't force dimension updates to prevent recursion
+                    print("FlipbookView: Pages loaded, letting PageFlip handle dimensions")
                 }
                 
             case "error":

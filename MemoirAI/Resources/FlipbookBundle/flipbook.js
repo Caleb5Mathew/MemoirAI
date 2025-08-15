@@ -46,20 +46,17 @@ function updatePageFlipDimensions() {
         return;
     }
     
-    // Clear any existing timeout
-    if (dimensionUpdateTimeout) {
-        clearTimeout(dimensionUpdateTimeout);
-    }
+    // Set flag to prevent recursion
+    isUpdatingDimensions = true;
     
-    // Debounce the update
-    dimensionUpdateTimeout = setTimeout(() => {
-        isUpdatingDimensions = true;
-        
+    try {
         const dimensions = getContainerDimensions();
-        
         console.log('Flipbook: Updating PageFlip dimensions to:', dimensions);
         
-        try {
+        // Only update if dimensions have actually changed
+        if (pageFlip.getState().pageFlipSize.width !== dimensions.width || 
+            pageFlip.getState().pageFlipSize.height !== dimensions.height) {
+            
             // Update PageFlip with new dimensions
             pageFlip.updateFromHtml();
             
@@ -70,15 +67,15 @@ function updatePageFlipDimensions() {
                     dimensions: dimensions
                 });
             }
-        } catch (error) {
-            console.error('Flipbook: Error updating PageFlip dimensions:', error);
-        } finally {
-            // Reset the flag after a short delay to prevent immediate re-entry
-            setTimeout(() => {
-                isUpdatingDimensions = false;
-            }, 100);
         }
-    }, 50); // 50ms debounce
+    } catch (error) {
+        console.error('Flipbook: Error updating PageFlip dimensions:', error);
+    } finally {
+        // Reset the flag after a delay to prevent immediate re-entry
+        setTimeout(() => {
+            isUpdatingDimensions = false;
+        }, 200);
+    }
 }
 
 // Initialize the flipbook when DOM is loaded
@@ -195,15 +192,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             });
             
-            // Listen for resize events - but don't call updatePageFlipDimensions to avoid recursion
+            // Listen for resize events - but don't trigger dimension updates to avoid recursion
             pageFlip.on('resize', function(e) {
                 console.log('PageFlip: Resized to:', e.data);
-                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
-                    window.webkit.messageHandlers.native.postMessage({
-                        type: 'resize',
-                        dimensions: e.data
-                    });
-                }
+                // Don't call any dimension update functions to prevent recursion
             });
             
             // Notify Swift that we're ready
@@ -322,8 +314,8 @@ window.renderPages = function(pagesJSON) {
 
 // Expose updatePageFlipDimensions to Swift
 window.updatePageFlipDimensions = function() {
-    // Prevent recursive calls by checking if already updating
-    if (!isUpdatingDimensions) {
+    // Only call if not already updating and pageFlip exists
+    if (!isUpdatingDimensions && pageFlip) {
         updatePageFlipDimensions();
     }
 };
