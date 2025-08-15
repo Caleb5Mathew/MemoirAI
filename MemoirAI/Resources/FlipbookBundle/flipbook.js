@@ -155,7 +155,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 pageFlip = new St.PageFlip(bookElement, {
                     width: dimensions.width,
                     height: dimensions.height,
-                    size: "stretch"
+                    size: "stretch",
+                    showCover: true  // Show single cover page instead of spread
                 });
                 console.log('Flipbook: PageFlip initialized with minimal config (reverted)');
                 console.log('Flipbook: PageFlip initialized successfully with minimal config:', pageFlip);
@@ -185,11 +186,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 width: dimensions.width,
                 height: dimensions.height,
                 size: "stretch",
-                minWidth: 280,
-                maxWidth: 800,
-                minHeight: 374,
-                maxHeight: 800,
-                showCover: false,
+                showCover: true,  // Show single cover page
                 autoSize: true
             });
             

@@ -102,17 +102,8 @@ struct FlipbookView: UIViewRepresentable {
         print("FlipbookView: WebView superview: \(webView.superview?.description ?? "nil")")
         print("FlipbookView: WebView superview bounds: \(webView.superview?.bounds ?? CGRect.zero)")
         
-        // ADDITIONAL DEBUG: Check if WebView can display basic content
-        print("FlipbookView: Testing WebView with simple HTML content...")
-        let testHTML = """
-        <html>
-        <body style="background: red; color: white; font-size: 24px; padding: 20px;">
-            <h1>TEST CONTENT</h1>
-            <p>If you can see this, WebView is working!</p>
-        </body>
-        </html>
-        """
-        webView.loadHTMLString(testHTML, baseURL: nil)
+        // DEBUG: Keep red background for visual debugging but don't load test content
+        print("FlipbookView: WebView frame updated, keeping red background for debugging")
         
         // CRITICAL: Update the WebView frame to match the container size
         if containerSize.width > 0 && containerSize.height > 0 {

@@ -49,7 +49,7 @@ body {
     max-height: 100%;
     box-sizing: border-box;
     /* Center the book vertically with some top margin */
-    margin-top: -10%;
+    margin-top: 5%;
 }
 
 /* Page Styles */
@@ -314,7 +314,7 @@ body {
 /* Navigation arrows styling */
 #navigation-arrows {
     position: absolute;
-    top: 65%; /* Position right below the book instead of at bottom */
+    top: 75%; /* Move arrows down with the book */
     left: 50%;
     transform: translateX(-50%);
     display: flex;
@@ -362,11 +362,11 @@ body {
     #book {
         max-width: calc(100% - 16px);
         max-height: calc(100% - 16px);
-        margin-top: -5%; /* Less margin on smaller screens */
+        margin-top: 10%; /* Move down more on smaller screens */
     }
     
     #navigation-arrows {
-        top: 70%; /* Adjust for smaller screens */
+        top: 80%; /* Move arrows down with book */
         gap: 15px;
     }
     
@@ -379,10 +379,10 @@ body {
 /* Adjust positioning for larger screens */
 @media (min-width: 768px) {
     #book {
-        margin-top: -15%; /* More margin on larger screens */
+        margin-top: 0%; /* Center on larger screens */
     }
     
     #navigation-arrows {
-        top: 60%; /* Adjust for larger screens */
+        top: 70%; /* Move arrows down with book */
     }
 } 
