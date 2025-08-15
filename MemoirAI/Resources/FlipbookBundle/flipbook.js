@@ -151,37 +151,26 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log('Flipbook: Book element for PageFlip:', bookElement);
             
             try {
-                // Try minimal configuration first
+                // Try minimal configuration first - REVERTED to working config
                 pageFlip = new St.PageFlip(bookElement, {
                     width: dimensions.width,
                     height: dimensions.height,
-                    size: "stretch",
-                    minWidth: dimensions.width * 0.8,  // Ensure book fills most of container
-                    maxWidth: dimensions.width,
-                    minHeight: dimensions.height * 0.8, // Ensure book fills most of container
-                    maxHeight: dimensions.height,
-                    autoSize: false, // Disable autoSize to maintain our sizing
-                    showCover: false, // Disable single-page cover behavior
-                    flippingTime: 1000,
-                    usePortrait: false,
-                    hard: "cover",
-                    pageMode: "double"
+                    size: "stretch"
                 });
+                console.log('Flipbook: PageFlip initialized with minimal config (reverted)');
                 console.log('Flipbook: PageFlip initialized successfully with minimal config:', pageFlip);
                 
-                // DEBUG: Test if PageFlip can render a simple div
-                console.log('Flipbook: Testing PageFlip with simple div...');
-                const testDiv = document.createElement('div');
-                testDiv.innerHTML = '<div style="width: 100px; height: 100px; background: blue; color: white;">TEST PAGE</div>';
-                testDiv.style.width = '100px';
-                testDiv.style.height = '100px';
+                // REMOVED: Simple div test that was interfering with book rendering
+                console.log('Flipbook: Skipping simple div test to avoid interference');
                 
-                try {
-                    pageFlip.loadFromHTML([testDiv]);
-                    console.log('Flipbook: Simple div test successful');
-                } catch (testError) {
-                    console.error('Flipbook: Simple div test failed:', testError);
-                }
+                // DEBUG: Check PageFlip state immediately after initialization
+                console.log('Flipbook: PageFlip state after init:', {
+                    hasLoadFromHTML: typeof pageFlip.loadFromHTML === 'function',
+                    hasFlipNext: typeof pageFlip.flipNext === 'function',
+                    hasFlipPrev: typeof pageFlip.flipPrev === 'function',
+                    hasGetCurrentPageIndex: typeof pageFlip.getCurrentPageIndex === 'function',
+                    hasGetPageCount: typeof pageFlip.getPageCount === 'function'
+                });
                 
             } catch (error) {
                 console.error('Flipbook: Error initializing PageFlip:', error);
@@ -233,7 +222,9 @@ document.addEventListener('DOMContentLoaded', function() {
             });
             
             // Set up navigation arrows
+            console.log('Flipbook: About to setup navigation arrows...');
             setupNavigationArrows();
+            console.log('Flipbook: Navigation arrows setup completed');
             
             // Notify Swift that we're ready
             console.log('Flipbook: Sending ready message to Swift');
@@ -379,6 +370,18 @@ window.renderPages = function(pagesJSON) {
             offsetHeight: bookElementAfter?.offsetHeight,
             clientWidth: bookElementAfter?.clientWidth,
             clientHeight: bookElementAfter?.clientHeight
+        });
+        
+        // DEBUG: Check if PageFlip actually created any elements
+        const allPageFlipElements = document.querySelectorAll('[class*="stf"]');
+        console.log('Flipbook: All PageFlip elements found:', allPageFlipElements.length);
+        allPageFlipElements.forEach((el, index) => {
+            console.log(`Flipbook: PageFlip element ${index}:`, {
+                tagName: el.tagName,
+                className: el.className,
+                id: el.id,
+                innerHTML: el.innerHTML.substring(0, 50) + '...'
+            });
         });
         
                 // Update dimensions after loading pages - but only once
