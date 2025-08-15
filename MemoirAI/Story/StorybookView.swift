@@ -113,6 +113,7 @@ struct StorybookView: View {
                                         }
                                     )
                                     .frame(width: bookSize.width, height: bookSize.height)
+                                    .background(Color.red.opacity(0.3)) // DEBUG: Show the frame
                                     
                                     // Debug overlay removed to prevent layout interference
                                 }

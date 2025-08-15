@@ -133,11 +133,18 @@ struct FlipbookView: UIViewRepresentable {
         } else {
             print("FlipbookView: WARNING - Container has zero dimensions!")
             print("FlipbookView: This is the root cause - SwiftUI is not giving the WebView proper space!")
+            print("FlipbookView: Setting WebView to use its own frame instead of container size")
             
-            // Try to set a reasonable default size
-            let defaultFrame = CGRect(x: 0, y: 0, width: 280, height: 374) // Conservative default size
-            webView.frame = defaultFrame
-            print("FlipbookView: Set default frame: \(defaultFrame)")
+            // CRITICAL FIX: Use the WebView's current frame instead of relying on container
+            let currentFrame = webView.frame
+            if currentFrame.width > 0 && currentFrame.height > 0 {
+                print("FlipbookView: Using WebView's current frame: \(currentFrame)")
+            } else {
+                // Try to set a reasonable default size
+                let defaultFrame = CGRect(x: 0, y: 0, width: 280, height: 374) // Conservative default size
+                webView.frame = defaultFrame
+                print("FlipbookView: Set default frame: \(defaultFrame)")
+            }
             
             // Don't call dimension updates to prevent recursion
             print("FlipbookView: Set default frame, letting PageFlip handle dimensions")
@@ -155,16 +162,22 @@ struct FlipbookView: UIViewRepresentable {
         let size = proposal.replacingUnspecifiedDimensions()
         print("FlipbookView: sizeThatFits called with proposal: \(proposal), returning: \(size)")
         
+        // CRITICAL FIX: Always return a valid size, even if proposal is zero
+        let finalSize = CGSize(
+            width: max(size.width, 280),
+            height: max(size.height, 374)
+        )
+        
         // Also update the WebView frame directly
-        if size.width > 0 && size.height > 0 {
-            let newFrame = CGRect(x: 0, y: 0, width: size.width, height: size.height)
+        if finalSize.width > 0 && finalSize.height > 0 {
+            let newFrame = CGRect(x: 0, y: 0, width: finalSize.width, height: finalSize.height)
             if uiView.frame != newFrame {
                 print("FlipbookView: Updating WebView frame in sizeThatFits from \(uiView.frame) to \(newFrame)")
                 uiView.frame = newFrame
             }
         }
         
-        return size
+        return finalSize
     }
     
     func makeCoordinator() -> Coordinator {
@@ -286,6 +299,23 @@ struct FlipbookView: UIViewRepresentable {
                     print("FlipbookView: HTML content length: \(html.count)")
                     print("FlipbookView: HTML content preview: \(String(html.prefix(200)))")
                 }
+            }
+            
+            // DEBUG: Check if WebView is visible
+            print("FlipbookView: WebView isHidden: \(webView.isHidden)")
+            print("FlipbookView: WebView alpha: \(webView.alpha)")
+            print("FlipbookView: WebView isUserInteractionEnabled: \(webView.isUserInteractionEnabled)")
+            
+            // DEBUG: Check WebView's parent view hierarchy
+            var parentView = webView.superview
+            var level = 0
+            while parentView != nil {
+                print("FlipbookView: Parent view level \(level): \(parentView?.description ?? "nil")")
+                print("FlipbookView: Parent view level \(level) frame: \(parentView?.frame ?? CGRect.zero)")
+                print("FlipbookView: Parent view level \(level) isHidden: \(parentView?.isHidden ?? true)")
+                parentView = parentView?.superview
+                level += 1
+                if level > 5 { break } // Prevent infinite loop
             }
         }
         
