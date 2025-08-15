@@ -11,9 +11,17 @@ function getContainerDimensions() {
     const containerElement = document.getElementById('book-container');
     const bookElement = document.getElementById('book');
     
-    // Get the actual container dimensions
-    const containerWidth = containerElement?.offsetWidth || containerElement?.clientWidth || 350;
-    const containerHeight = containerElement?.offsetHeight || containerElement?.clientHeight || 467;
+    // Get the actual container dimensions with fallbacks
+    let containerWidth = containerElement?.offsetWidth || containerElement?.clientWidth || 280;
+    let containerHeight = containerElement?.offsetHeight || containerElement?.clientHeight || 374;
+    
+    // Ensure minimum dimensions
+    containerWidth = Math.max(containerWidth, 280);
+    containerHeight = Math.max(containerHeight, 374);
+    
+    // Ensure maximum dimensions to prevent overflow
+    containerWidth = Math.min(containerWidth, 800);
+    containerHeight = Math.min(containerHeight, 800);
     
     console.log('Flipbook: Current container dimensions:', {
         width: containerWidth,
@@ -143,7 +151,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 maxShadowOpacity: 0.5,
                 showCover: false, // Disable single-page cover behavior
                 mobileScrollSupport: false,
-                autoSize: true
+                autoSize: false, // Disable autoSize to prevent layout issues
+                flippingTime: 1000,
+                usePortrait: false,
+                hard: "cover",
+                pageMode: "double"
             });
             
             console.log('Flipbook: StPageFlip initialized successfully');

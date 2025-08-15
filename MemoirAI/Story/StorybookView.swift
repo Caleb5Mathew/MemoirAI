@@ -20,10 +20,15 @@ struct StorybookView: View {
     
     // Helper function to calculate book size outside ViewBuilder context
     private func calculateBookSize(for size: CGSize) -> CGSize {
-        // Give the flipbook more space - use larger percentages
-        let maxW = size.width * 0.85  // Increased from Tokens.bookMaxWidthPct
+        // Account for safe areas and UI elements
+        let safeAreaTop: CGFloat = 120 // Header + padding
+        let safeAreaBottom: CGFloat = 200 // Action buttons + padding
+        let availableHeight = size.height - safeAreaTop - safeAreaBottom
+        
+        // Use more conservative sizing to prevent cut-off
+        let maxW = size.width * 0.80  // Reduced from 0.85
         let targetAspect: CGFloat = 3.0 / 2.0
-        let maxH = size.height * 0.75  // Increased from 0.60
+        let maxH = availableHeight * 0.85  // Reduced from 0.75
 
         var bookW = maxW
         var bookH = bookW / targetAspect
@@ -31,6 +36,12 @@ struct StorybookView: View {
             bookH = maxH
             bookW = bookH * targetAspect
         }
+        
+        // Ensure minimum size
+        let minWidth: CGFloat = 280
+        let minHeight: CGFloat = 374
+        bookW = max(bookW, minWidth)
+        bookH = max(bookH, minHeight)
         
         return CGSize(width: bookW, height: bookH)
     }
@@ -134,6 +145,7 @@ struct StorybookView: View {
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, 8)  // Reduced from 16 to give more space
+                        .clipped() // Ensure content doesn't overflow
                     }
                 }
             }

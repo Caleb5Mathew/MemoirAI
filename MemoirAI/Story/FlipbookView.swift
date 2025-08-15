@@ -29,7 +29,7 @@ struct FlipbookView: UIViewRepresentable {
         config.userContentController.add(context.coordinator, name: "native")
         
         // Create WKWebView with a proper initial frame - use the expected book size
-        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 334, height: 223), configuration: config)
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 280, height: 374), configuration: config)
         webView.backgroundColor = .clear
         webView.isOpaque = false
         webView.scrollView.isScrollEnabled = false
@@ -104,7 +104,11 @@ struct FlipbookView: UIViewRepresentable {
         
         // CRITICAL: Update the WebView frame to match the container size
         if containerSize.width > 0 && containerSize.height > 0 {
-            let newFrame = CGRect(x: 0, y: 0, width: containerSize.width, height: containerSize.height)
+            // Ensure we don't exceed the container bounds
+            let maxWidth = min(containerSize.width, 800)
+            let maxHeight = min(containerSize.height, 800)
+            let newFrame = CGRect(x: 0, y: 0, width: maxWidth, height: maxHeight)
+            
             print("FlipbookView: Updating WebView frame from \(webView.frame) to \(newFrame)")
             webView.frame = newFrame
             
@@ -131,7 +135,7 @@ struct FlipbookView: UIViewRepresentable {
         } else {
             print("FlipbookView: WARNING - Container has zero dimensions!")
             // Try to set a reasonable default size
-            let defaultFrame = CGRect(x: 0, y: 0, width: 334, height: 223) // Based on the calculated book size
+            let defaultFrame = CGRect(x: 0, y: 0, width: 280, height: 374) // Conservative default size
             webView.frame = defaultFrame
             print("FlipbookView: Set default frame: \(defaultFrame)")
             

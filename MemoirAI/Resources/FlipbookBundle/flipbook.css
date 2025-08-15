@@ -17,8 +17,8 @@
 body {
     margin: 0;
     padding: 0;
-    width: 100vw;
-    height: 100vh;
+    width: 100%;
+    height: 100%;
     overflow: hidden;
     background: transparent; /* Make body transparent to show native background */
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -30,17 +30,22 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 0; /* Remove padding to fill entire webview */
+    padding: 0;
     box-sizing: border-box;
+    /* Ensure container doesn't overflow */
+    overflow: hidden;
 }
 
 #book {
     width: 100%;
     height: 100%;
-    /* Remove max-width and max-height to fill container completely */
     display: flex;
     align-items: center;
     justify-content: center;
+    /* Ensure book content fits within container */
+    max-width: 100%;
+    max-height: 100%;
+    box-sizing: border-box;
 }
 
 /* Page Styles */
@@ -59,6 +64,9 @@ body {
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
+    /* Ensure content doesn't overflow */
+    overflow: hidden;
+    max-height: 100%;
 }
 
 /* Left page (paragraph bars) */
@@ -236,5 +244,42 @@ body {
     
     .cover-title {
         font-size: 24px;
+    }
+}
+
+/* Additional responsive fixes for content overflow */
+@media (max-height: 600px) {
+    .page-content {
+        padding: 12px 10px;
+    }
+    
+    .page-title {
+        font-size: 14px;
+        margin-bottom: 10px;
+    }
+    
+    .page-caption {
+        font-size: 12px;
+        margin-top: 10px;
+    }
+    
+    .paragraph-bars {
+        gap: 8px;
+    }
+    
+    .paragraph-bar {
+        height: 8px;
+    }
+}
+
+/* Ensure book container fits within viewport */
+@media (max-width: 400px) {
+    #book-container {
+        padding: 8px;
+    }
+    
+    #book {
+        max-width: calc(100% - 16px);
+        max-height: calc(100% - 16px);
     }
 } 
