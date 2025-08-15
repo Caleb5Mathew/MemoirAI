@@ -132,6 +132,8 @@ struct FlipbookView: UIViewRepresentable {
             print("FlipbookView: Frame updated, letting PageFlip handle dimensions")
         } else {
             print("FlipbookView: WARNING - Container has zero dimensions!")
+            print("FlipbookView: This is the root cause - SwiftUI is not giving the WebView proper space!")
+            
             // Try to set a reasonable default size
             let defaultFrame = CGRect(x: 0, y: 0, width: 280, height: 374) // Conservative default size
             webView.frame = defaultFrame

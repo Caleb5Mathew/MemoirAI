@@ -137,23 +137,32 @@ document.addEventListener('DOMContentLoaded', function() {
         // Small delay to ensure container is properly sized
         setTimeout(() => {
             // Initialize StPageFlip
-            pageFlip = new St.PageFlip(bookElement, {
-                width: dimensions.width,
-                height: dimensions.height,
-                size: "stretch",
-                minWidth: 280,
-                maxWidth: 800,
-                minHeight: 374,
-                maxHeight: 800,
-                maxShadowOpacity: 0.5,
-                showCover: false, // Disable single-page cover behavior
-                mobileScrollSupport: false,
-                autoSize: false, // Disable autoSize to prevent layout issues
-                flippingTime: 1000,
-                usePortrait: false,
-                hard: "cover",
-                pageMode: "double"
-            });
+            console.log('Flipbook: Initializing PageFlip with dimensions:', dimensions);
+            console.log('Flipbook: Book element for PageFlip:', bookElement);
+            
+            try {
+                pageFlip = new St.PageFlip(bookElement, {
+                    width: dimensions.width,
+                    height: dimensions.height,
+                    size: "stretch",
+                    minWidth: 280,
+                    maxWidth: 800,
+                    minHeight: 374,
+                    maxHeight: 800,
+                    maxShadowOpacity: 0.5,
+                    showCover: false, // Disable single-page cover behavior
+                    mobileScrollSupport: false,
+                    autoSize: false, // Disable autoSize to prevent layout issues
+                    flippingTime: 1000,
+                    usePortrait: false,
+                    hard: "cover",
+                    pageMode: "double"
+                });
+                console.log('Flipbook: PageFlip initialized successfully:', pageFlip);
+            } catch (error) {
+                console.error('Flipbook: Error initializing PageFlip:', error);
+                throw error;
+            }
             
             console.log('Flipbook: StPageFlip initialized successfully');
             console.log('Flipbook: StPageFlip instance:', pageFlip);
@@ -267,12 +276,17 @@ window.renderPages = function(pagesJSON) {
             }
             
             console.log('Flipbook: Created DOM element:', pageElement);
+            console.log('Flipbook: Page element tag name:', pageElement.tagName);
+            console.log('Flipbook: Page element class name:', pageElement.className);
             console.log('Flipbook: Page element dimensions:', {
                 offsetWidth: pageElement.offsetWidth,
                 offsetHeight: pageElement.offsetHeight,
                 clientWidth: pageElement.clientWidth,
                 clientHeight: pageElement.clientHeight
             });
+            
+            // DEBUG: Check if element has content
+            console.log('Flipbook: Page element innerHTML:', pageElement.innerHTML);
             
             return pageElement;
         }).filter(element => element !== null); // Filter out any nulls
@@ -287,7 +301,15 @@ window.renderPages = function(pagesJSON) {
         }
         
         // Load the DOM elements into PageFlip
-        pageFlip.loadFromHTML(domPages);
+        console.log('Flipbook: About to load DOM pages into PageFlip:', domPages.length);
+        console.log('Flipbook: DOM pages:', domPages);
+        
+        try {
+            pageFlip.loadFromHTML(domPages);
+            console.log('Flipbook: loadFromHTML completed successfully');
+        } catch (error) {
+            console.error('Flipbook: Error in loadFromHTML:', error);
+        }
         
         console.log('Flipbook: Pages loaded into PageFlip');
         
@@ -320,9 +342,20 @@ window.renderPages = function(pagesJSON) {
                 zIndex: computedStyle.zIndex
             });
             
-            // DEBUG: Check if PageFlip elements are visible
-            const pageFlipElements = bookElement.querySelectorAll('.stf__block, .stf__page, .stf__page__content');
-            console.log('Flipbook: PageFlip elements found:', pageFlipElements.length);
+                    // DEBUG: Check if PageFlip elements are visible
+        const pageFlipElements = bookElement.querySelectorAll('.stf__block, .stf__page, .stf__page__content');
+        console.log('Flipbook: PageFlip elements found:', pageFlipElements.length);
+        
+        if (pageFlipElements.length === 0) {
+            console.error('Flipbook: NO PageFlip elements found! This is the problem!');
+            console.log('Flipbook: Book element innerHTML:', bookElement.innerHTML);
+            console.log('Flipbook: Book element children:', bookElement.children.length);
+            console.log('Flipbook: Book element children:', Array.from(bookElement.children).map(child => ({
+                tagName: child.tagName,
+                className: child.className,
+                id: child.id
+            })));
+        } else {
             pageFlipElements.forEach((el, index) => {
                 const style = window.getComputedStyle(el);
                 console.log(`Flipbook: PageFlip element ${index} style:`, {
@@ -333,6 +366,7 @@ window.renderPages = function(pagesJSON) {
                     height: style.height
                 });
             });
+        }
         }, 200);
         
         // Safely check PageFlip state after loading
