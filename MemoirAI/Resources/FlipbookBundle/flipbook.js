@@ -322,7 +322,10 @@ window.renderPages = function(pagesJSON) {
 
 // Expose updatePageFlipDimensions to Swift
 window.updatePageFlipDimensions = function() {
-    updatePageFlipDimensions();
+    // Prevent recursive calls by checking if already updating
+    if (!isUpdatingDimensions) {
+        updatePageFlipDimensions();
+    }
 };
 
 // Expose the updating flag to Swift

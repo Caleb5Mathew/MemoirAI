@@ -121,7 +121,7 @@ struct StorybookView: View {
                                     print("StorybookView: Geometry size: \(geo.size)")
                                     print("StorybookView: Calculated book size: \(bookSize)")
                                     // Set a timeout to fallback if flipbook doesn't load
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { // Increased timeout
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { // Reduced timeout for faster fallback
                                         if !flipbookReady || flipbookError {
                                             print("StorybookView: Flipbook timeout or error - falling back to native")
                                             useFallback = true
