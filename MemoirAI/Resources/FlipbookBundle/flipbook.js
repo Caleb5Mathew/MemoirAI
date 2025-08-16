@@ -78,6 +78,81 @@ function updatePageFlipDimensions() {
     }
 }
 
+// Page zoom functionality
+let zoomModal = null;
+
+function createZoomModal() {
+    if (zoomModal) return zoomModal;
+    
+    zoomModal = document.createElement('div');
+    zoomModal.className = 'page-zoom-modal';
+    zoomModal.innerHTML = `
+        <div class="page-zoom-content" id="zoom-content">
+            <button class="page-zoom-close" id="zoom-close">×</button>
+            <div id="zoom-page-content"></div>
+        </div>
+    `;
+    document.body.appendChild(zoomModal);
+    
+    // Close on background click
+    zoomModal.addEventListener('click', function(e) {
+        if (e.target === zoomModal) {
+            closeZoom();
+        }
+    });
+    
+    // Close button
+    const closeBtn = zoomModal.querySelector('#zoom-close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', closeZoom);
+    }
+    
+    return zoomModal;
+}
+
+function showZoom(pageElement) {
+    const modal = createZoomModal();
+    const content = modal.querySelector('#zoom-page-content');
+    
+    if (content && pageElement) {
+        // Clone the page content
+        const clone = pageElement.cloneNode(true);
+        
+        // Scale up the text for readability
+        const textElements = clone.querySelectorAll('.page-text, .text-content, p, .page-title, .figure-caption');
+        textElements.forEach(el => {
+            const currentSize = window.getComputedStyle(el).fontSize;
+            const sizeValue = parseFloat(currentSize);
+            el.style.fontSize = (sizeValue * 3) + 'px'; // Scale up 3x for readability
+            el.style.lineHeight = '1.4';
+        });
+        
+        content.innerHTML = '';
+        content.appendChild(clone);
+        modal.classList.add('active');
+        
+        // Notify Swift
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+            window.webkit.messageHandlers.native.postMessage({
+                type: 'zoomOpened'
+            });
+        }
+    }
+}
+
+function closeZoom() {
+    if (zoomModal) {
+        zoomModal.classList.remove('active');
+        
+        // Notify Swift
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+            window.webkit.messageHandlers.native.postMessage({
+                type: 'zoomClosed'
+            });
+        }
+    }
+}
+
 // Initialize the flipbook when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
     console.log('Flipbook: DOM loaded');
@@ -225,6 +300,9 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log('Flipbook: About to setup navigation arrows...');
             setupNavigationArrows();
             console.log('Flipbook: Navigation arrows setup completed');
+            
+            // Set up page click handlers for zoom
+            setupPageClickHandlers();
             
             // Notify Swift that we're ready
             console.log('Flipbook: Sending ready message to Swift');
@@ -775,8 +853,35 @@ function createImageElement(imageBase64, imageName) {
     }
 }
 
+// Set up click handlers for page zoom
+function setupPageClickHandlers() {
+    console.log('Flipbook: Setting up page click handlers for zoom...');
+    
+    // Add click handler to book container
+    const bookContainer = document.getElementById('book-container');
+    if (bookContainer) {
+        bookContainer.addEventListener('click', function(e) {
+            // Check if clicked on a page (not navigation or other UI)
+            const pageElement = e.target.closest('.flipbook-page');
+            if (pageElement && !e.target.closest('.nav-arrow')) {
+                console.log('Flipbook: Page clicked for zoom');
+                showZoom(pageElement);
+            }
+        });
+    }
+    
+    console.log('Flipbook: Page click handlers setup complete');
+}
+
 // Handle window resize - but don't call updatePageFlipDimensions to avoid recursion
 window.addEventListener('resize', function() {
     // Just log the resize event, don't trigger dimension updates
     console.log('Flipbook: Window resize detected');
+});
+
+// Keyboard shortcuts for zoom
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && zoomModal && zoomModal.classList.contains('active')) {
+        closeZoom();
+    }
 }); 

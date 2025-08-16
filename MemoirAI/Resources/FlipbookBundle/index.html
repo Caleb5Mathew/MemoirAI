@@ -9,7 +9,7 @@
 </head>
 <body>
     <div id="book-container">
-        <div id="book"></div>
+        <div id="book" class="book-opening"></div>
         
         <!-- Navigation arrows -->
         <div id="navigation-arrows">
@@ -23,6 +23,14 @@
                     <path d="M9 18L15 12L9 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
             </button>
+        </div>
+    </div>
+    
+    <!-- Page zoom modal -->
+    <div class="page-zoom-modal" id="page-zoom-modal">
+        <div class="page-zoom-content">
+            <button class="page-zoom-close" onclick="closeZoom()">&times;</button>
+            <div id="zoom-page-content"></div>
         </div>
     </div>
     
