@@ -113,7 +113,6 @@ struct StorybookView: View {
                                         }
                                     )
                                     .frame(width: bookSize.width, height: bookSize.height)
-                                    .background(Color.red.opacity(0.3)) // DEBUG: Show the frame
                                     
                                     // Debug overlay removed to prevent layout interference
                                 }
@@ -137,13 +136,7 @@ struct StorybookView: View {
 
                             Spacer()
 
-                            if samplePages.count > 1 {
-                                Text("Swipe to flip pages")
-                                    .font(Tokens.Typography.hint)
-                                    .foregroundColor(Tokens.ink.opacity(0.6))
-                                    .padding(.top, Tokens.bookSpacing)
-                                    .padding(.bottom, Tokens.buttonSpacing)
-                            }
+                            // Removed "Swipe to flip pages" text overlay
 
                             actionButtonsView
                                 .padding(.bottom, Tokens.bottomPadding)
