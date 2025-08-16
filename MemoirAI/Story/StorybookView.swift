@@ -1,10 +1,7 @@
 import SwiftUI
 import WebKit
 
-// MARK: - Notification Names
-extension Notification.Name {
-    static let storybookContentGenerated = Notification.Name("storybookContentGenerated")
-}
+
 
 // MARK: - Main Storybook View
 struct StorybookView: View {
