@@ -1341,17 +1341,4 @@ extension UIImage {
     }
 }
 
-extension String {
-    func paginated(wordsPerPage: Int = 130) -> [String] {
-        let words = split { $0.isWhitespace }
-        guard words.count > wordsPerPage else { return [self] }
-        var pages: [String] = []
-        var i = 0
-        while i < words.count {
-            let j = min(i + wordsPerPage, words.count)
-            pages.append(words[i..<j].joined(separator: " "))
-            i += wordsPerPage
-        }
-        return pages
-    }
-}
+

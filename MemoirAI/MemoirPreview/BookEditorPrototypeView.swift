@@ -659,9 +659,8 @@ extension Dictionary {
     }
 }
 
-// MARK: - UIImage Extension for Identifiable
-extension UIImage: Identifiable {
-    public var id: String {
-        return UUID().uuidString
-    }
+// MARK: - UIImage Wrapper for Identifiable
+struct IdentifiableImage: Identifiable {
+    let id = UUID()
+    let image: UIImage
 }
