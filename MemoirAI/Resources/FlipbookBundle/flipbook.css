@@ -1,4 +1,4 @@
-/* Memoir Flipbook Styles - Matching Tokens Design System */
+/* Memoir Flipbook Styles - Full Viewport Book Spread */
 
 :root {
     /* Colors from Tokens */
@@ -7,107 +7,103 @@
     --ink: #2F2A25;
     --accent: #7C5C3A;
     --accent-soft: #C9B6A0;
-    --paper: #FFFFFF;
+    --paper: #fdfdf8;
     --shadow: rgba(0, 0, 0, 0.12);
     --spine-color: #8B7355;
     --page-edge-highlight: rgba(255, 255, 255, 0.8);
-    --gutter-shadow: rgba(0, 0, 0, 0.08);
+    --gutter-shadow: rgba(0, 0, 0, 0.25);
 }
 
 body {
     margin: 0;
     padding: 0;
-    width: 100%;
-    height: 100%;
+    width: 100vw;
+    height: 100vh;
     overflow: hidden;
-    background: transparent; /* Make body transparent to show native background */
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f5f5f5; /* Neutral reading background */
+    font-family: 'Georgia', 'Times New Roman', serif;
 }
 
 #book-container {
-    width: 100%;
-    height: 100%;
+    width: 100vw;
+    height: 100vh;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
     padding: 0;
     box-sizing: border-box;
-    /* Ensure container doesn't overflow */
     overflow: hidden;
     position: relative;
 }
 
 #book {
-    width: 100%;
-    height: 100%;
+    width: 90vw;  /* Dominate viewport */
+    height: 85vh; /* Full height with room for controls */
+    max-width: 1400px; /* Max width for large screens */
+    max-height: 900px; /* Max height for large screens */
     display: flex;
     align-items: center;
     justify-content: center;
-    /* Ensure book content fits within container */
-    max-width: 100%;
-    max-height: 100%;
     box-sizing: border-box;
-    /* Center the book vertically with some top margin */
-    margin-top: 20%; /* Moved down 3x more (was 5%, now 20%) */
-}
-
-/* Page Styles */
-.flipbook-page {
-    background: var(--paper);
-    border-radius: 20px;
-    box-shadow: 0 6px 14px var(--shadow);
-    overflow: hidden;
+    margin: 0 auto;
     position: relative;
 }
 
-/* Page content container - Professional book layout */
+/* Page Styles - Authentic book pages */
+.flipbook-page {
+    background: #fdfdf8; /* Slightly off-white paper */
+    border-radius: 0; /* Square corners for real book look */
+    box-shadow: none; /* Shadow handled by container */
+    overflow: hidden;
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+/* Page content container - Classic book margins */
 .page-content {
-    padding: 28px 24px;
     height: 100%;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    /* Ensure content doesn't overflow */
     overflow: hidden;
-    max-height: 100%;
     position: relative;
+}
+
+/* Left page margins - larger inner margin for gutter */
+.left-page .page-content {
+    padding: 60px 50px 80px 70px; /* top right bottom left */
+}
+
+/* Right page margins - larger inner margin for gutter */
+.right-page .page-content {
+    padding: 60px 70px 80px 50px; /* top right bottom left */
 }
 
 /* Page numbers */
 .page-number {
     position: absolute;
-    bottom: 16px;
+    bottom: 40px;
     font-family: 'Georgia', serif;
     font-size: 11px;
     color: var(--accent);
 }
 
 .page-number.left {
-    left: 24px;
+    left: 70px;
 }
 
 .page-number.right {
-    right: 24px;
-}
-
-/* Left page (paragraph bars) */
-.left-page .page-content {
-    padding-right: 26px;
-}
-
-/* Right page (photo + caption) */
-.right-page .page-content {
-    padding-left: 26px;
+    right: 70px;
 }
 
 /* Typography - Professional Book Styling */
 .page-title {
     font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 18px; /* Fixed size for consistency */
+    font-size: 22px; /* Slightly larger for viewport scale */
     font-weight: 600;
     color: var(--ink);
-    margin-bottom: 16px;
+    margin-bottom: 24px;
     line-height: 1.3;
     text-align: center;
     letter-spacing: 0.5px;
@@ -115,11 +111,11 @@ body {
 
 .page-caption {
     font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 13px; /* Professional book font size */
+    font-size: 14px; /* Professional book font size */
     font-weight: 400;
     color: var(--ink);
-    line-height: 1.6;
-    margin-top: 12px;
+    line-height: 1.7;
+    margin-top: 16px;
     text-align: justify;
     text-justify: inter-word;
     hyphens: auto;
@@ -127,39 +123,19 @@ body {
     word-spacing: 0.05em;
 }
 
-/* Paragraph bars (left page) */
-.paragraph-bars {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    flex: 1;
-}
-
-.paragraph-bar {
-    background: var(--ink);
-    opacity: 0.09;
-    border-radius: 3px;
-    height: 10px;
-    min-width: 40px;
-}
-
 /* Text pages - Professional book layout */
 .text-page .page-content,
 .left-page .page-content {
-    padding: 32px 28px;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    box-sizing: border-box;
+    padding: 60px 50px 80px 70px; /* Classic book margins */
 }
 
 .text-page .page-title,
 .left-page .page-title {
     font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 20px;
+    font-size: 24px;
     font-weight: 600;
     color: var(--ink);
-    margin-bottom: 20px;
+    margin-bottom: 30px;
     line-height: 1.3;
     text-align: center;
     letter-spacing: 0.5px;
@@ -168,10 +144,10 @@ body {
 .text-page .page-text,
 .left-page .page-text {
     font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 400;
     color: var(--ink);
-    line-height: 1.7;
+    line-height: 1.8;
     text-align: justify;
     text-justify: inter-word;
     hyphens: auto;
@@ -184,8 +160,8 @@ body {
 /* Paragraph styling */
 .text-page p,
 .left-page p {
-    margin: 0 0 12px 0;
-    text-indent: 1.5em;
+    margin: 0 0 16px 0;
+    text-indent: 2em;
 }
 
 .text-page p:first-child,
@@ -197,22 +173,22 @@ body {
 .text-page p:first-child::first-letter,
 .left-page p:first-child::first-letter {
     float: left;
-    font-size: 48px;
-    line-height: 40px;
-    padding-right: 6px;
+    font-size: 56px;
+    line-height: 48px;
+    padding-right: 8px;
     margin-top: 4px;
     font-weight: 600;
 }
 
 /* Photo container - Professional layout */
 .photo-container {
-    border-radius: 6px;
+    border-radius: 0; /* Square for book aesthetic */
     overflow: hidden;
     background: var(--bg-wash);
     position: relative;
-    margin: 16px 0;
+    margin: 20px 0;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    max-height: 180px; /* Constrain photo height */
+    max-height: 240px; /* Larger for viewport scale */
 }
 
 .photo-container img {
@@ -223,68 +199,41 @@ body {
 
 .photo-placeholder {
     width: 100%;
-    height: 160px; /* Fixed height for consistency */
+    height: 200px; /* Fixed height for consistency */
     display: flex;
     align-items: center;
     justify-content: center;
     background: linear-gradient(135deg, var(--bg-wash) 0%, var(--accent-soft) 100%);
     color: var(--paper);
-    font-size: 32px;
-    border-radius: 4px;
+    font-size: 36px;
 }
 
-.small-photo {
-    height: clamp(80px, 15vw, 120px); /* Responsive height */
-}
-
-.small-photo .photo-placeholder {
-    height: clamp(80px, 15vw, 120px); /* Responsive height */
-    font-size: clamp(16px, 4vw, 24px); /* Responsive font size */
-}
-
-/* Mixed page (bars + small photo) */
-.mixed-content {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    flex: 1;
-}
-
-.mixed-bars {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.mixed-bars .paragraph-bar {
-    height: 10px;
-}
-
-/* Cover page - Professional book cover */
+/* Cover page - Clean book cover */
 .cover-page {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     text-align: center;
-    gap: 20px;
+    gap: 24px;
     height: 100%;
-    background: linear-gradient(135deg, var(--paper) 0%, var(--bg-wash) 100%);
+    background: #fdfdf8;
+    padding: 80px;
 }
 
 .cover-title {
     font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 28px;
+    font-size: 42px;
     font-weight: 600;
     color: var(--ink);
     line-height: 1.2;
-    letter-spacing: 1px;
+    letter-spacing: 2px;
     text-transform: uppercase;
 }
 
 .cover-subtitle {
     font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 16px;
+    font-size: 20px;
     font-weight: 400;
     color: var(--accent);
     font-style: italic;
@@ -292,30 +241,37 @@ body {
 }
 
 .cover-accent {
-    width: 60px;
-    height: 2px;
+    width: 80px;
+    height: 3px;
     background: var(--accent-soft);
-    border-radius: 1px;
-    margin: 10px auto;
+    border-radius: 0;
+    margin: 20px auto;
 }
 
 .cover-decoration {
-    margin-top: 30px;
+    margin-top: 40px;
     color: var(--accent-soft);
     opacity: 0.5;
 }
 
-/* StPageFlip overrides for better integration */
+/* StPageFlip overrides - Book spread appearance */
 .stf__parent {
     background: transparent !important;
+    width: 100% !important;
+    height: 100% !important;
 }
 
 .stf__wrapper {
     background: transparent !important;
+    box-shadow: 0 15px 50px rgba(0, 0, 0, 0.3) !important;
+    width: 100% !important;
+    height: 100% !important;
 }
 
 .stf__block {
     background: transparent !important;
+    width: 100% !important;
+    height: 100% !important;
 }
 
 .stf__page {
@@ -323,59 +279,125 @@ body {
 }
 
 .stf__page__content {
-    background: transparent !important;
+    background: #fdfdf8 !important;
+    border: none !important;
+    box-shadow: none !important;
 }
 
 .stf__page__hard {
-    background: var(--paper) !important;
-    border-radius: 20px !important;
-    box-shadow: 0 6px 14px var(--shadow) !important;
+    background: #fdfdf8 !important;
+    border-radius: 0 !important; /* Square corners */
+    box-shadow: none !important;
 }
 
-.stf__page__flipping {
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15) !important;
-}
-
-/* Book spine styling for realism */
-.stf__page__hard::before {
+/* Book gutter/spine effect - Central shadow */
+.stf__wrapper::after {
     content: '';
     position: absolute;
     top: 0;
     left: 50%;
-    width: 8px;
-    height: 100%;
-    background: linear-gradient(90deg, 
-        var(--spine-color) 0%, 
-        var(--spine-color) 40%, 
-        var(--page-edge-highlight) 50%, 
-        var(--spine-color) 60%, 
-        var(--spine-color) 100%);
     transform: translateX(-50%);
-    border-radius: 4px;
-    box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.3);
-    z-index: 1;
+    width: 30px;
+    height: 100%;
+    background: linear-gradient(to right,
+        transparent 0%,
+        rgba(0, 0, 0, 0.05) 20%,
+        rgba(0, 0, 0, 0.15) 40%,
+        rgba(0, 0, 0, 0.25) 50%,
+        rgba(0, 0, 0, 0.15) 60%,
+        rgba(0, 0, 0, 0.05) 80%,
+        transparent 100%);
+    pointer-events: none;
+    z-index: 100;
 }
 
-/* Enhanced book shadows for 3D effect */
-.stf__page__hard {
-    position: relative;
-    box-shadow: 
-        0 6px 14px var(--shadow),
-        inset 0 0 20px rgba(0, 0, 0, 0.05) !important;
+/* Page edge effects for depth */
+.stf__page--left {
+    border-right: 1px solid rgba(0, 0, 0, 0.05);
 }
 
-/* Page curl effect enhancement */
+.stf__page--right {
+    border-left: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+/* Page edges gradient */
+.stf__page__content::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 20px;
+    pointer-events: none;
+}
+
+.left-page .stf__page__content::before {
+    right: 0;
+    background: linear-gradient(to left, rgba(0, 0, 0, 0.03) 0%, transparent 100%);
+}
+
+.right-page .stf__page__content::before {
+    left: 0;
+    background: linear-gradient(to right, rgba(0, 0, 0, 0.03) 0%, transparent 100%);
+}
+
+/* Page curl effect */
 .stf__page__flipping {
-    box-shadow: 
-        0 8px 20px rgba(0, 0, 0, 0.15),
-        0 2px 8px rgba(0, 0, 0, 0.1) !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2) !important;
 }
 
-/* Continuation indicator for overflowing text */
+/* Navigation arrows - Minimal, outside content */
+#navigation-arrows {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 60px;
+    z-index: 1000;
+}
+
+.nav-arrow {
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    color: #666;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: all 0.2s ease;
+    opacity: 0.6;
+}
+
+.nav-arrow svg {
+    width: 18px;
+    height: 18px;
+}
+
+.nav-arrow:hover {
+    background: rgba(255, 255, 255, 1);
+    opacity: 1;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.nav-arrow:active {
+    transform: scale(0.95);
+}
+
+.nav-arrow:disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Continuation indicators */
 .continued-indicator {
     position: absolute;
-    bottom: 20px;
-    right: 24px;
+    bottom: 40px;
+    right: 70px;
     font-family: 'Georgia', serif;
     font-size: 11px;
     font-style: italic;
@@ -387,172 +409,71 @@ body {
     font-size: 11px;
     font-style: italic;
     color: var(--accent);
-    margin-bottom: 8px;
+    margin-bottom: 12px;
 }
 
-/* Responsive adjustments - maintain readability */
+/* Responsive adjustments - Maintain book proportions */
 @media (max-width: 768px) {
-    .page-content {
-        padding: 20px 18px;
+    #book {
+        width: 95vw;
+        height: 80vh;
+    }
+    
+    .left-page .page-content {
+        padding: 40px 35px 60px 50px;
+    }
+    
+    .right-page .page-content {
+        padding: 40px 50px 60px 35px;
     }
     
     .text-page .page-title,
     .left-page .page-title {
-        font-size: 18px;
+        font-size: 20px;
     }
     
     .text-page .page-text,
     .left-page .page-text,
     .page-caption {
-        font-size: 12px;
+        font-size: 13px;
     }
     
     .cover-title {
-        font-size: 24px;
+        font-size: 32px;
     }
     
     .photo-container {
-        max-height: 140px;
+        max-height: 180px;
     }
 }
 
-/* Additional responsive fixes for content overflow */
-@media (max-height: 600px) {
-    .page-content {
-        padding: 12px 10px;
-    }
-    
-    .page-title {
-        font-size: 14px;
-        margin-bottom: 10px;
-    }
-    
-    .page-caption {
-        font-size: 12px;
-        margin-top: 10px;
-    }
-    
-    .paragraph-bars {
-        gap: 8px;
-    }
-    
-    .paragraph-bar {
-        height: 8px;
-    }
-}
-
-/* Navigation arrows styling */
-#navigation-arrows {
-    position: absolute;
-    top: 85%; /* Move arrows down with the book (was 75%, now 85%) */
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    gap: 20px;
-    z-index: 10;
-}
-
-.nav-arrow {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    background: var(--paper);
-    border: 1px solid var(--accent-soft);
-    color: var(--ink);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 2px 8px var(--shadow);
-    transition: all 0.2s ease;
-}
-
-.nav-arrow:hover {
-    background: var(--bg-wash);
-    transform: scale(1.05);
-    box-shadow: 0 4px 12px var(--shadow);
-}
-
-.nav-arrow:active {
-    transform: scale(0.95);
-}
-
-.nav-arrow:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-    transform: none;
-}
-
-/* Ensure book container fits within viewport */
-@media (max-width: 400px) {
-    #book-container {
-        padding: 8px;
-    }
-    
+/* Mobile adjustments */
+@media (max-width: 480px) {
     #book {
-        max-width: calc(100% - 16px);
-        max-height: calc(100% - 16px);
-        margin-top: 25%; /* Move down 3x more on smaller screens */
+        width: 100vw;
+        height: 75vh;
+    }
+    
+    .left-page .page-content,
+    .right-page .page-content {
+        padding: 30px 25px 50px 35px;
     }
     
     #navigation-arrows {
-        top: 90%; /* Move arrows down with book */
-        gap: 15px;
+        bottom: 20px;
+        gap: 40px;
     }
     
     .nav-arrow {
-        width: 36px;
-        height: 36px;
+        width: 32px;
+        height: 32px;
     }
 }
 
-/* Adjust positioning for larger screens */
-@media (min-width: 768px) {
-    #book {
-        margin-top: 15%; /* Move down 3x more on larger screens */
-    }
-    
-    #navigation-arrows {
-        top: 80%; /* Move arrows down with book */
-    }
-}
-
-/* Center single pages (cover and ending pages) */
-.stf__parent {
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-}
-
-/* When showing a single page (cover or ending), center it */
-.stf__wrapper {
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-}
-
-/* Specifically target single page mode */
-.stf__block {
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-}
-
-/* When only one page is visible (cover or last page) */
-.stf__page__single {
-    margin: 0 auto !important;
-}
-
-/* Additional centering for cover page specifically */
-.cover-page {
-    margin: 0 auto;
-}
-
-/* Ensure single pages are centered when in single page view */
+/* Center single pages (cover and ending) */
 .stf__single-mode .stf__page,
 .stf__single-mode .stf__page__content {
     margin: 0 auto !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-} 
+    width: 50% !important;
+    max-width: 700px !important;
+}

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add MemoirAI/Resources/FlipbookBundle/flipbook.css)",
+      "Bash(git push origin feature/flipbook-web)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
