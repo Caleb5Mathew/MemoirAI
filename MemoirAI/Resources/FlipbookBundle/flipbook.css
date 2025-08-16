@@ -1,14 +1,14 @@
-/* Memoir Flipbook - Professional Book Typography */
+/* Memoir Flipbook - Clean Book Spread */
 
 :root {
-    /* Colors */
-    --ink: #1a1a1a;
-    --ink-light: #4a4a4a;
-    --paper: #fffef9;
+    /* Colors - single ivory paper, no gray blocks */
+    --ink: #2a2a2a;
+    --ink-light: #5a5a5a;
+    --paper: #fdfcf8; /* Ivory/off-white */
     --caption: #666666;
-    --rule: rgba(0, 0, 0, 0.1);
-    --shadow: rgba(0, 0, 0, 0.15);
-    --gutter-shadow: rgba(0, 0, 0, 0.2);
+    --rule: rgba(0, 0, 0, 0.08);
+    --shadow: rgba(0, 0, 0, 0.1);
+    --gutter: rgba(0, 0, 0, 0.06);
 }
 
 * {
@@ -22,7 +22,7 @@ body {
     width: 100vw;
     height: 100vh;
     overflow: hidden;
-    background: #e8e8e8;
+    background: #f0f0f0;
     font-family: 'New York', 'Georgia', 'Times New Roman', serif;
 }
 
@@ -32,17 +32,17 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 0;
+    padding: 20px;
     box-sizing: border-box;
     overflow: hidden;
     position: relative;
 }
 
 #book {
-    width: 90vw;
-    height: 88vh;
-    max-width: 1400px;
-    max-height: 900px;
+    width: 95vw; /* Fill most of viewport */
+    height: 90vh;
+    max-width: 1600px;
+    max-height: 1000px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -51,9 +51,9 @@ body {
     position: relative;
 }
 
-/* Base page styles */
+/* Base page - single ivory surface, no gray blocks */
 .flipbook-page {
-    background: var(--paper);
+    background: var(--paper); /* Single ivory color */
     border-radius: 0;
     box-shadow: none;
     overflow: hidden;
@@ -62,57 +62,51 @@ body {
     height: 100%;
 }
 
-/* Page content container with book margins */
+/* Remove any gray overlays or split backgrounds */
+.flipbook-page::before,
+.flipbook-page::after {
+    display: none !important;
+}
+
+/* Page content with proper book margins */
 .page-content {
     height: 100%;
+    width: 100%;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
     overflow: hidden;
     position: relative;
+    background: transparent; /* No gray blocks */
 }
 
-/* Left page margins - wider inner gutter */
+/* Left page margins - comfortable reading area */
 .left-page .page-content {
-    padding: 72px 60px 90px 80px; /* top outer bottom inner */
+    padding: 80px 70px 100px 90px; /* top outer bottom inner(gutter) */
 }
 
-/* Right page margins - wider inner gutter */
+/* Right page margins - mirrored */
 .right-page .page-content {
-    padding: 72px 80px 90px 60px; /* top inner bottom outer */
+    padding: 80px 90px 100px 70px; /* top inner(gutter) bottom outer */
 }
 
-/* TYPOGRAPHY SYSTEM */
-
-/* Chapter/Section Titles - centered, generous spacing */
+/* Chapter Titles - restrained sizing */
 .page-title {
     font-family: 'New York', 'Georgia', serif;
-    font-size: 26pt;
-    font-weight: 500;
+    font-size: 24pt;
+    font-weight: 400;
     color: var(--ink);
     text-align: center;
-    margin: 0 0 36px 0;
+    margin: 0 0 32px 0;
     line-height: 1.3;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.01em;
 }
 
-/* Subtitles */
-.page-subtitle {
-    font-family: 'New York', 'Georgia', serif;
-    font-size: 18pt;
-    font-weight: 400;
-    font-style: italic;
-    color: var(--ink-light);
-    text-align: center;
-    margin: -24px 0 36px 0;
-    line-height: 1.3;
-}
-
-/* Body text - optimal reading width */
+/* Body text - comfortable line length */
 .page-text,
 .text-content {
     font-family: 'New York', 'Georgia', serif;
-    font-size: 16pt;
+    font-size: 15pt;
     font-weight: 400;
     color: var(--ink);
     line-height: 1.5;
@@ -120,138 +114,120 @@ body {
     text-justify: inter-word;
     hyphens: auto;
     -webkit-hyphens: auto;
-    max-width: 38em; /* ~60-75 chars per line */
-    margin: 0 auto;
-    width: 100%;
+    flex: 1;
+    max-width: 100%; /* Use full width of margins */
 }
 
-/* Paragraphs - no extra spacing, just indents */
+/* Paragraphs with indents, no extra spacing */
 .page-text p,
 .text-content p {
     margin: 0;
-    text-indent: 1.5em;
+    text-indent: 2em;
 }
 
-/* First paragraph after title - no indent */
+/* First paragraph - no indent */
 .page-text p:first-child,
 .text-content p:first-child,
-.page-title + p,
-.page-subtitle + p,
-.figure-block + p {
+.page-title + .text-content p:first-child {
     text-indent: 0;
 }
 
-/* Remove drop caps - too decorative */
-.page-text p:first-child::first-letter,
-.text-content p:first-child::first-letter {
-    /* No special styling */
-    font-size: inherit;
-    float: none;
-    line-height: inherit;
-    padding: 0;
-    margin: 0;
-    font-weight: inherit;
-}
-
-/* FIGURE BLOCKS - Images with captions */
-.figure-block {
-    margin: 32px auto;
-    width: 70%;
-    max-width: 400px;
-}
-
-.figure-image {
-    width: 100%;
-    height: auto;
-    display: block;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-}
-
-.figure-caption {
+/* Page numbers - OUTER bottom corners only */
+.page-number {
+    position: absolute;
+    bottom: 60px;
     font-family: 'New York', 'Georgia', serif;
-    font-size: 12pt;
-    font-style: italic;
+    font-size: 11pt;
     color: var(--caption);
-    text-align: center;
-    margin-top: 12px;
-    line-height: 1.4;
 }
 
-/* Rule/separator between sections */
-.section-break {
-    width: 30%;
-    height: 1px;
-    background: var(--rule);
-    margin: 32px auto;
-    border: none;
+/* Left page number - outer left */
+.page-number.left {
+    left: 70px; /* Align with outer margin */
 }
 
-/* Photo container refactor to figure block */
-.photo-container {
-    margin: 32px auto;
+/* Right page number - outer right */
+.page-number.right {
+    right: 70px; /* Align with outer margin */
+}
+
+/* Continuation indicator - small caps style */
+.continuation-from {
+    font-family: 'New York', 'Georgia', serif;
+    font-size: 10pt;
+    font-variant: small-caps;
+    color: var(--caption);
+    margin-bottom: 16px;
+    text-align: left;
+    opacity: 0.7;
+}
+
+/* Figure blocks - centered with breathing room */
+.figure-block {
+    margin: 40px auto;
     width: 65%;
-    max-width: 380px;
+    max-width: 360px;
+}
+
+.photo-container {
+    width: 100%;
     border-radius: 0;
     overflow: hidden;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
 .photo-container img {
     width: 100%;
     height: auto;
     display: block;
-    object-fit: cover;
 }
 
 .photo-placeholder {
     width: 100%;
-    height: 240px;
+    height: 220px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #f5f5f5;
-    color: #999;
+    background: #f8f8f8;
+    color: #bbb;
     font-size: 24px;
 }
 
-/* Page caption becomes figure caption style */
-.page-caption {
+.figure-caption {
     font-family: 'New York', 'Georgia', serif;
-    font-size: 12pt;
+    font-size: 11pt;
     font-style: italic;
     color: var(--caption);
     text-align: center;
-    margin-top: 12px;
+    margin-top: 10px;
     line-height: 1.4;
-    hyphens: none;
 }
 
-/* COVER PAGE - Clean, centered */
+/* Cover page - clean and centered */
 .cover-page {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     text-align: center;
-    padding: 80px;
+    padding: 100px;
     height: 100%;
     background: var(--paper);
 }
 
 .cover-title {
     font-family: 'New York', 'Georgia', serif;
-    font-size: 36pt;
+    font-size: 32pt;
     font-weight: 400;
     color: var(--ink);
     line-height: 1.2;
-    letter-spacing: 0.03em;
-    margin-bottom: 24px;
-    text-transform: none; /* Remove uppercase */
+    letter-spacing: 0.02em;
+    margin-bottom: 20px;
 }
 
 .cover-subtitle {
     font-family: 'New York', 'Georgia', serif;
-    font-size: 20pt;
+    font-size: 18pt;
     font-weight: 400;
     font-style: italic;
     color: var(--ink-light);
@@ -259,54 +235,17 @@ body {
 }
 
 .cover-accent {
-    width: 60px;
+    width: 50px;
     height: 1px;
     background: var(--rule);
-    margin: 32px auto;
+    margin: 30px auto;
 }
 
 .cover-decoration {
-    display: none; /* Remove decorative elements */
+    display: none;
 }
 
-/* Page numbers - smaller, subtle */
-.page-number {
-    position: absolute;
-    bottom: 48px;
-    font-family: 'New York', 'Georgia', serif;
-    font-size: 11pt;
-    color: var(--caption);
-}
-
-.page-number.left {
-    left: 80px;
-}
-
-.page-number.right {
-    right: 80px;
-}
-
-/* Continuation indicators */
-.continued-indicator {
-    position: absolute;
-    bottom: 48px;
-    right: 80px;
-    font-family: 'New York', 'Georgia', serif;
-    font-size: 11pt;
-    font-style: italic;
-    color: var(--caption);
-}
-
-.continuation-from {
-    font-family: 'New York', 'Georgia', serif;
-    font-size: 11pt;
-    font-style: italic;
-    color: var(--caption);
-    margin-bottom: 18px;
-    text-align: center;
-}
-
-/* StPageFlip overrides */
+/* StPageFlip overrides - clean spread */
 .stf__parent {
     background: transparent !important;
     width: 100% !important;
@@ -315,7 +254,7 @@ body {
 
 .stf__wrapper {
     background: transparent !important;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25) !important;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15) !important;
     width: 100% !important;
     height: 100% !important;
 }
@@ -342,165 +281,160 @@ body {
     box-shadow: none !important;
 }
 
-/* Book gutter/spine - subtle but present */
+/* Subtle center gutter - not dark/textured */
 .stf__wrapper::after {
     content: '';
     position: absolute;
     top: 0;
     left: 50%;
     transform: translateX(-50%);
-    width: 24px;
+    width: 16px;
     height: 100%;
     background: linear-gradient(to right,
         transparent 0%,
-        rgba(0, 0, 0, 0.03) 20%,
-        rgba(0, 0, 0, 0.08) 40%,
-        rgba(0, 0, 0, 0.12) 50%,
-        rgba(0, 0, 0, 0.08) 60%,
-        rgba(0, 0, 0, 0.03) 80%,
+        var(--gutter) 45%,
+        var(--gutter) 55%,
         transparent 100%);
     pointer-events: none;
     z-index: 100;
 }
 
-/* Page edges - very subtle */
-.left-page::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 1px;
-    background: rgba(0, 0, 0, 0.05);
+/* Very subtle page edges */
+.left-page {
+    border-right: 1px solid rgba(0, 0, 0, 0.03);
 }
 
-.right-page::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 1px;
-    background: rgba(0, 0, 0, 0.05);
+.right-page {
+    border-left: 1px solid rgba(0, 0, 0, 0.03);
 }
 
-/* Page flip animation */
+/* Page flip shadow */
 .stf__page__flipping {
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15) !important;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12) !important;
 }
 
-/* Navigation arrows - minimal */
+/* Navigation - OUTSIDE the pages */
 #navigation-arrows {
     position: fixed;
-    bottom: 24px;
+    bottom: 16px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
-    gap: 48px;
-    z-index: 1000;
+    gap: 60px;
+    z-index: 2000;
 }
 
 .nav-arrow {
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     border-radius: 2px;
-    background: rgba(255, 255, 255, 0.95);
-    border: 1px solid rgba(0, 0, 0, 0.08);
-    color: #666;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    color: #888;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-    transition: all 0.15s ease;
-    opacity: 0.5;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    transition: opacity 0.15s ease;
+    opacity: 0.4;
 }
 
 .nav-arrow svg {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
 }
 
 .nav-arrow:hover {
-    background: rgba(255, 255, 255, 1);
-    opacity: 0.9;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
-}
-
-.nav-arrow:active {
-    transform: scale(0.95);
+    opacity: 0.8;
+    background: white;
 }
 
 .nav-arrow:disabled {
-    opacity: 0.2;
+    opacity: 0.15;
     cursor: not-allowed;
 }
 
-/* Responsive - maintain readability */
+/* Remove any in-page UI elements */
+.page-nub,
+.page-button,
+.ui-overlay {
+    display: none !important;
+}
+
+/* Responsive - maintain proportions */
 @media (max-width: 768px) {
     #book {
-        width: 95vw;
-        height: 85vh;
+        width: 98vw;
+        height: 88vh;
     }
     
     .left-page .page-content {
-        padding: 48px 40px 60px 50px;
+        padding: 60px 50px 80px 65px;
     }
     
     .right-page .page-content {
-        padding: 48px 50px 60px 40px;
+        padding: 60px 65px 80px 50px;
     }
     
     .page-title {
-        font-size: 22pt;
-    }
-    
-    .page-text,
-    .text-content {
-        font-size: 15pt;
-    }
-    
-    .cover-title {
-        font-size: 30pt;
-    }
-    
-    .figure-block {
-        width: 80%;
-    }
-}
-
-/* Mobile */
-@media (max-width: 480px) {
-    #book {
-        width: 100vw;
-        height: 80vh;
-    }
-    
-    .left-page .page-content,
-    .right-page .page-content {
-        padding: 36px 28px 48px 32px;
+        font-size: 20pt;
     }
     
     .page-text,
     .text-content {
         font-size: 14pt;
-        line-height: 1.5;
+    }
+    
+    .page-number {
+        bottom: 45px;
+    }
+    
+    .page-number.left {
+        left: 50px;
+    }
+    
+    .page-number.right {
+        right: 50px;
+    }
+}
+
+/* Mobile */
+@media (max-width: 480px) {
+    #book-container {
+        padding: 10px;
+    }
+    
+    #book {
+        width: 100vw;
+        height: 85vh;
+    }
+    
+    .left-page .page-content,
+    .right-page .page-content {
+        padding: 40px 35px 60px 40px;
+    }
+    
+    .page-text,
+    .text-content {
+        font-size: 13pt;
+        line-height: 1.45;
     }
     
     .page-title {
-        font-size: 20pt;
+        font-size: 18pt;
         margin-bottom: 24px;
     }
     
-    .figure-block {
-        width: 90%;
+    #navigation-arrows {
+        bottom: 8px;
+        gap: 40px;
     }
 }
 
 /* Single page mode (cover) */
-.stf__single-mode .stf__page,
-.stf__single-mode .stf__page__content {
+.stf__single-mode .stf__page {
     margin: 0 auto !important;
     width: 50% !important;
-    max-width: 650px !important;
+    max-width: 600px !important;
 }
