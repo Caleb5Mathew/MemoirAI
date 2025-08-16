@@ -54,9 +54,9 @@ extension FlipPage {
         
         FlipPage(type: .textWithImage, 
                 title: "First Steps", 
-                textContent: "My first steps into the world were filled with wonder and curiosity. Each new experience was a building block for the future. The excitement of discovering new things, the thrill of learning, and the joy of making connections with others all began in those early moments. These experiences taught me that life is an adventure waiting to be explored.",
                 caption: "My first steps into the world were filled with wonder and curiosity. Each new experience was a building block for the future.",
                 imageName: "childhood_photo",
+                textContent: "My first steps into the world were filled with wonder and curiosity. Each new experience was a building block for the future. The excitement of discovering new things, the thrill of learning, and the joy of making connections with others all began in those early moments. These experiences taught me that life is an adventure waiting to be explored.",
                 chapterNumber: 1, pageNumber: 2, totalPages: 2),
         
         // Chapter 2: Education Journey
@@ -83,9 +83,9 @@ extension FlipPage {
         
         FlipPage(type: .textWithImage, 
                 title: "First Job", 
-                textContent: "My first real job felt like stepping into adulthood. The responsibility was overwhelming at first, but I quickly learned to embrace the challenge. Every day brought new lessons about teamwork, problem-solving, and personal growth. This experience taught me that success comes from dedication, hard work, and the courage to step outside my comfort zone.",
                 caption: "My first real job felt like stepping into adulthood. The responsibility was overwhelming at first, but I quickly learned to embrace the challenge.",
                 imageName: "first_job_photo",
+                textContent: "My first real job felt like stepping into adulthood. The responsibility was overwhelming at first, but I quickly learned to embrace the challenge. Every day brought new lessons about teamwork, problem-solving, and personal growth. This experience taught me that success comes from dedication, hard work, and the courage to step outside my comfort zone.",
                 chapterNumber: 3, pageNumber: 2, totalPages: 2),
         
         // Chapter 4: Life Lessons

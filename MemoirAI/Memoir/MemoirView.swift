@@ -33,7 +33,7 @@ struct MemoirView: View {
     @StateObject private var subscriptionManager = RCSubscriptionManager.shared
     @State private var showPaywall = false
     @State private var entries: [MemoryEntry] = []
-    @State private var navigateToChapter: Int? = nil
+    @State private var navigateToChapter: ChapterIdentifier? = nil
     private let totalChapters = allChapters.count
 
     var body: some View {
@@ -53,8 +53,8 @@ struct MemoirView: View {
             }
             .toolbarBackground(colors.softCream, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .navigationDestination(item: $navigateToChapter) { chapterNumber in
-                ChapterJourneyView(chapter: getMockChapter(chapterNumber))
+            .navigationDestination(item: $navigateToChapter) { chapterIdentifier in
+                ChapterJourneyView(chapter: getMockChapter(chapterIdentifier.id))
                     .environmentObject(profileVM)
                     .navigationBarHidden(true)
             }
@@ -175,7 +175,7 @@ struct MemoirView: View {
 
                     Button(action: {
                         if chapterNumber == 1 || isSubscribed {
-                            navigateToChapter = chapterNumber
+                            navigateToChapter = ChapterIdentifier(chapterNumber)
                         } else {
                             showPaywall = true
                         }
@@ -269,7 +269,8 @@ struct ChapterTileView: View {
     }
 }
 
-// Make Int conform to Identifiable for navigation
-extension Int: Identifiable {
-    public var id: Int { self }
+// Create a wrapper for Int to avoid extending fundamental types
+struct ChapterIdentifier: Identifiable {
+    let id: Int
+    init(_ value: Int) { self.id = value }
 }

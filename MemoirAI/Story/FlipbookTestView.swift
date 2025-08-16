@@ -28,9 +28,9 @@ struct FlipbookTestView: View {
         
         FlipPage(type: .textWithImage, 
                 title: "With Image", 
-                textContent: "This page combines text content with an image. The text should be positioned above the image with proper spacing, and the image should have breathing room around it. This layout demonstrates how the system handles mixed content effectively.",
                 caption: "A test image with caption that can be longer than two lines and should display properly without being cut off.",
                 imageName: "test_photo",
+                textContent: "This page combines text content with an image. The text should be positioned above the image with proper spacing, and the image should have breathing room around it. This layout demonstrates how the system handles mixed content effectively.",
                 chapterNumber: 1, pageNumber: 2, totalPages: 2),
         
         // Chapter 2

@@ -207,7 +207,7 @@ struct StorybookView: View {
             storyVM.loadStorybookForProfile(profileVM.selectedProfile.id)
             generateFlipbookContent()
         }
-        .onChange(of: profileVM.selectedProfile.id) { _ in
+        .onChange(of: profileVM.selectedProfile.id) { _, _ in
             // Reload content when profile changes
             storyVM.loadStorybookForProfile(profileVM.selectedProfile.id)
             generateFlipbookContent()
