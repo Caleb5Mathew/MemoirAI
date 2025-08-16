@@ -48,7 +48,7 @@ actor OpenAIImageService {
         print("[OpenAIImageService DEBUG] N requested: \(n) (will use 1 for DALL-E 3)")
         print("[OpenAIImageService DEBUG] Referenced image IDs: \(referencedImageIDs)")
         
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model"           : "dall-e-3",
             "prompt"          : prompt,
             "n"               : 1, // DALL-E 3 only supports n=1

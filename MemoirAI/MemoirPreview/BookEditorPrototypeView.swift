@@ -7,7 +7,7 @@ struct BookEditorPrototypeView: View {
     @State private var pages: [EditorPage]
     @State private var currentPageIndex = 0
     @State private var showPhotoBank = false
-    @State private var selectedPhoto: IdentifiableImage?
+    @State private var selectedPhoto: UIImage?
     @State private var photoPositions: [UUID: CGPoint] = [:]
     @State private var draggedPhoto: UUID?
     @State private var photoPickerItems: [PhotosPickerItem] = []
@@ -91,8 +91,8 @@ struct BookEditorPrototypeView: View {
         .onChange(of: photoPickerItems) { _ in
             loadNewPhotos()
         }
-        .sheet(item: $selectedPhoto) { identifiablePhoto in
-            PhotoDetailView(photo: identifiablePhoto.image)
+        .sheet(item: $selectedPhoto) { photo in
+            PhotoDetailView(photo: photo)
         }
         .alert("Layout Saved!", isPresented: $showSaveSuccess) {
             Button("OK") { }
@@ -181,7 +181,7 @@ struct BookView: View {
     @Binding var currentPageIndex: Int
     @Binding var photoPositions: [UUID: CGPoint]
     @Binding var draggedPhoto: UUID?
-    @Binding var selectedPhoto: IdentifiableImage?
+    @Binding var selectedPhoto: UIImage?
     let availablePhotos: [PhotoItem]
     
     var body: some View {
@@ -307,7 +307,7 @@ struct BookPageView: View {
     let pageIndex: Int
     @Binding var photoPositions: [UUID: CGPoint]
     @Binding var draggedPhoto: UUID?
-    @Binding var selectedPhoto: IdentifiableImage?
+    @Binding var selectedPhoto: UIImage?
     let availablePhotos: [PhotoItem]
     
     var body: some View {
@@ -378,7 +378,7 @@ struct BookPageView: View {
                             isDragging: draggedPhoto == photoId
                         )
                         .onTapGesture {
-                            selectedPhoto = IdentifiableImage(image: photo.image)
+                            selectedPhoto = photo.image
                         }
                         .onDrag {
                             draggedPhoto = photoId
@@ -505,7 +505,7 @@ struct PhotoBankSection: View {
     @Binding var showPhotoBank: Bool
     @Binding var availablePhotos: [PhotoItem]
     @Binding var photoPickerItems: [PhotosPickerItem]
-    @Binding var selectedPhoto: IdentifiableImage?
+    @Binding var selectedPhoto: UIImage?
     
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
     
@@ -578,7 +578,7 @@ struct PhotoBankSection: View {
 // MARK: - Photo Grid Item
 struct PhotoGridItem: View {
     let photo: PhotoItem
-    @Binding var selectedPhoto: IdentifiableImage?
+    @Binding var selectedPhoto: UIImage?
     
     var body: some View {
         Image(uiImage: photo.image)
@@ -588,7 +588,7 @@ struct PhotoGridItem: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
             .onTapGesture {
-                selectedPhoto = IdentifiableImage(image: photo.image)
+                selectedPhoto = photo.image
             }
             .onDrag {
                 return NSItemProvider(object: photo.id.uuidString as NSString)
@@ -659,8 +659,9 @@ extension Dictionary {
     }
 }
 
-// MARK: - UIImage Wrapper for Identifiable
-struct IdentifiableImage: Identifiable {
-    let id = UUID()
-    let image: UIImage
+// MARK: - UIImage Extension for Identifiable
+extension UIImage: Identifiable {
+    public var id: String {
+        return UUID().uuidString
+    }
 }

@@ -246,7 +246,7 @@ struct HomepageView: View {
                     resetDailyPromptIfNeeded()
                     fetchEntries()
                 }
-                .onChange(of: profileVM.selectedProfile.id) { _, _ in
+                .onChange(of: profileVM.selectedProfile.id) { _ in
                     fetchEntries()
                 }
             }
@@ -256,7 +256,7 @@ struct HomepageView: View {
                     .environmentObject(profileVM)
             }
             .photosPicker(isPresented: $isShowingPhotoPicker, selection: $photoSelection, matching: .images)
-            .onChange(of: photoSelection) { _, newItem in
+            .onChange(of: photoSelection) { newItem in
                 if let newItem = newItem {
                     loadPhotoData(newItem)
                 }
