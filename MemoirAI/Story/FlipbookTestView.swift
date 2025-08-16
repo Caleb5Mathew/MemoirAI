@@ -69,6 +69,12 @@ struct FlipbookTestView: View {
         This is a comprehensive test of the word count pagination system. The goal is to ensure that each page contains between 150 and 200 words, which is the optimal range for professional book layout. This text will be automatically split into appropriate chunks by the pagination algorithm. The system should maintain natural sentence breaks and paragraph structure while ensuring that no content is lost or cut off. Every word should be visible and readable, with proper typography and formatting. The text should flow naturally from one page to the next, maintaining the narrative structure and readability. This test demonstrates the enhanced capabilities of the new flipbook system, which combines professional typography with smart content distribution. The pagination algorithm takes into account the available space, font size, and line spacing to create optimal page breaks. This ensures that the reading experience is smooth and professional, just like a real book. The system also handles different types of content, including text, images, and mixed layouts, while maintaining consistent formatting and readability throughout the book.
         """
         
+        // Debug: Test if the extension is available
+        print("Testing String extension...")
+        let testString = "Hello world"
+        let testResult = testString.paginatedForBook(wordsPerPage: 5)
+        print("Test result: \(testResult)")
+        
         let chunks = longText.paginatedForBook(wordsPerPage: 175)
         
         var pages: [FlipPage] = [
