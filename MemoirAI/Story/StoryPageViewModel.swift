@@ -992,8 +992,27 @@ class StoryPageViewModel: ObservableObject {
                 generated.append(img)
 
                 pageItems.append(.illustration(image: img, caption: content.pageDisplayText))
-                // Use enhanced pagination for better content distribution (150-200 words per page)
-                let chunks = raw.paginatedForBook(wordsPerPage: 175)
+                // Direct pagination workaround - split text into chunks of ~175 words
+                let words = raw.split { $0.isWhitespace }
+                var chunks: [String] = []
+                var currentChunk: [String] = []
+                var wordCount = 0
+                
+                for word in words {
+                    currentChunk.append(String(word))
+                    wordCount += 1
+                    
+                    if wordCount >= 175 {
+                        chunks.append(currentChunk.joined(separator: " "))
+                        currentChunk = []
+                        wordCount = 0
+                    }
+                }
+                
+                // Add remaining words
+                if !currentChunk.isEmpty {
+                    chunks.append(currentChunk.joined(separator: " "))
+                }
                 for (i, chunk) in chunks.enumerated() {
                     pageItems.append(.textPage(index: i + 1, total: chunks.count, body: chunk))
                 }
@@ -1061,8 +1080,27 @@ class StoryPageViewModel: ObservableObject {
                 chapterNumber += 1
                 
             case .textPage(let pageIndex, let total, let body):
-                // Use enhanced pagination for better content distribution
-                let textChunks = body.paginatedForBook(wordsPerPage: 175)
+                // Direct pagination workaround - split text into chunks of ~175 words
+                let words = body.split { $0.isWhitespace }
+                var textChunks: [String] = []
+                var currentChunk: [String] = []
+                var wordCount = 0
+                
+                for word in words {
+                    currentChunk.append(String(word))
+                    wordCount += 1
+                    
+                    if wordCount >= 175 {
+                        textChunks.append(currentChunk.joined(separator: " "))
+                        currentChunk = []
+                        wordCount = 0
+                    }
+                }
+                
+                // Add remaining words
+                if !currentChunk.isEmpty {
+                    textChunks.append(currentChunk.joined(separator: " "))
+                }
                 
                 for (chunkIndex, chunk) in textChunks.enumerated() {
                     flipPages.append(FlipPage(
@@ -1194,8 +1232,27 @@ class StoryPageViewModel: ObservableObject {
                 // Create enhanced page items with better structure
                 pageItems.append(.illustration(image: img, caption: content.pageDisplayText))
                 
-                // Use enhanced pagination for text content
-                let textChunks = raw.paginatedForBook(wordsPerPage: 175)
+                // Direct pagination workaround - split text into chunks of ~175 words
+                let words = raw.split { $0.isWhitespace }
+                var textChunks: [String] = []
+                var currentChunk: [String] = []
+                var wordCount = 0
+                
+                for word in words {
+                    currentChunk.append(String(word))
+                    wordCount += 1
+                    
+                    if wordCount >= 175 {
+                        textChunks.append(currentChunk.joined(separator: " "))
+                        currentChunk = []
+                        wordCount = 0
+                    }
+                }
+                
+                // Add remaining words
+                if !currentChunk.isEmpty {
+                    textChunks.append(currentChunk.joined(separator: " "))
+                }
                 for (i, chunk) in textChunks.enumerated() {
                     pageItems.append(.textPage(index: i + 1, total: textChunks.count, body: chunk))
                 }
