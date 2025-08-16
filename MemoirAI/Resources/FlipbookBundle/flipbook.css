@@ -1,10 +1,12 @@
-/* Memoir Flipbook - Professional Book Design */
+/* Memoir Flipbook - Realistic Book Design Matching Target */
 
 :root {
-    --paper: #fffef8; /* Warm ivory paper */
-    --ink: #2c2c2c;
-    --caption: #666;
-    --gutter: rgba(0, 0, 0, 0.08);
+    --paper: #faf8f3; /* Slightly warm paper color */
+    --ink: #333333;
+    --caption: #555555;
+    --shadow: rgba(0, 0, 0, 0.2);
+    --page-edge: #e8e6e1;
+    --spine-shadow: rgba(0, 0, 0, 0.3);
 }
 
 * {
@@ -18,7 +20,8 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #e5e5e5;
+    /* Match target book's blue-gray background */
+    background: linear-gradient(135deg, #9db4c7 0%, #b8c6d6 100%);
     font-family: 'Georgia', 'Times New Roman', serif;
 }
 
@@ -29,78 +32,84 @@ html, body {
     align-items: center;
     justify-content: center;
     position: relative;
+    perspective: 1200px; /* 3D perspective */
 }
 
 #book {
-    width: 100%;
-    height: 100%;
-    max-width: 100%;
-    max-height: 100%;
+    width: 90%;
+    height: 85%;
+    max-width: 900px; /* Smaller max width for proper book size */
+    max-height: 600px;
     position: relative;
+    transform-style: preserve-3d;
 }
 
-/* CRITICAL: Remove ALL gray sections and overlays */
+/* Base page styling - clean paper */
 .flipbook-page {
-    background: var(--paper) !important; /* Entire page is ivory */
+    background: var(--paper) !important;
     position: relative;
     width: 100%;
     height: 100%;
     overflow: hidden;
+    /* Subtle paper texture */
+    background-image: 
+        repeating-linear-gradient(
+            90deg,
+            transparent,
+            transparent 2px,
+            rgba(255, 255, 255, 0.03) 2px,
+            rgba(255, 255, 255, 0.03) 4px
+        );
 }
 
-/* Remove any pseudo-elements that create gray sections */
-.flipbook-page::before,
-.flipbook-page::after,
-.page-content::before,
-.page-content::after {
-    display: none !important;
-}
-
-/* Page content - full height, no gray */
+/* Page content with tighter margins like target */
 .page-content {
     width: 100%;
     height: 100%;
-    padding: 15% 12% 15% 12%; /* Percentage-based margins */
-    background: transparent !important;
-    position: relative;
+    padding: 40px 35px 50px 35px; /* Much tighter margins */
     display: flex;
     flex-direction: column;
+    position: relative;
 }
 
-/* Adjust margins for left/right pages */
+/* Adjust for inner pages */
 .left-page .page-content {
-    padding-right: 10%;
-    padding-left: 15%; /* More inner margin for gutter */
+    padding-left: 45px; /* Slightly more for binding */
+    padding-right: 30px;
 }
 
 .right-page .page-content {
-    padding-left: 10%;
-    padding-right: 15%; /* More inner margin for gutter */
+    padding-right: 45px;
+    padding-left: 30px;
 }
 
-/* TEXT SIZING - Make it readable! */
+/* CRITICAL: Smaller text sizing to match target */
 .page-title {
-    font-size: 24px !important;
-    font-weight: 500;
+    font-family: 'Georgia', serif;
+    font-size: 16px !important; /* Much smaller */
+    font-weight: 600;
     color: var(--ink);
     text-align: center;
-    margin: 0 0 20px 0;
+    margin: 0 0 15px 0;
     line-height: 1.3;
 }
 
+/* Body text - smaller and tighter */
 .page-text,
 .text-content {
-    font-size: 18px !important; /* Readable size */
-    line-height: 1.6;
+    font-family: 'Georgia', serif;
+    font-size: 11px !important; /* Much smaller to match target */
+    line-height: 1.4;
     color: var(--ink);
     text-align: justify;
     flex: 1;
+    overflow: hidden;
 }
 
 .page-text p,
 .text-content p {
-    margin: 0 0 12px 0;
-    text-indent: 1.5em;
+    margin: 0 0 8px 0;
+    text-indent: 1.2em;
 }
 
 .page-text p:first-child,
@@ -108,57 +117,77 @@ html, body {
     text-indent: 0;
 }
 
-/* Page numbers - bottom outer corners */
+/* Page numbers - subtle and small */
 .page-number {
     position: absolute;
-    bottom: 10%;
-    font-size: 14px;
-    color: var(--caption);
+    bottom: 25px;
+    font-size: 9px;
+    color: #999;
+    font-family: 'Georgia', serif;
 }
 
 .page-number.left {
-    left: 12%;
+    left: 35px;
 }
 
 .page-number.right {
-    right: 12%;
+    right: 35px;
 }
 
-/* Continuation text */
-.continuation-from {
-    font-size: 12px;
+/* Images - properly sized */
+.photo-container {
+    width: 80%;
+    margin: 15px auto;
+    border-radius: 2px;
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.photo-container img {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.figure-caption {
+    font-size: 10px;
     font-style: italic;
     color: var(--caption);
-    margin-bottom: 10px;
+    text-align: center;
+    margin-top: 8px;
+    line-height: 1.3;
 }
 
-/* Images */
-.figure-block {
-    margin: 20px auto;
-    width: 70%;
-    max-width: 300px;
-}
-
-.photo-container {
-    width: 100%;
-    background: #f5f5f5;
-    aspect-ratio: 4/3;
+/* QR Code styling */
+.qr-code {
+    position: absolute;
+    top: 40px;
+    width: 50px;
+    height: 50px;
+    background: white;
+    border: 1px solid #ddd;
+    padding: 4px;
     display: flex;
     align-items: center;
     justify-content: center;
 }
 
-.photo-placeholder {
-    color: #ccc;
-    font-size: 20px;
+.left-page .qr-code {
+    right: 35px;
 }
 
-.figure-caption {
-    font-size: 14px;
-    font-style: italic;
-    color: var(--caption);
-    text-align: center;
-    margin-top: 8px;
+.right-page .qr-code {
+    left: 35px;
+}
+
+.qr-code::after {
+    content: '';
+    width: 100%;
+    height: 100%;
+    background: 
+        repeating-linear-gradient(0deg, #000 0px, #000 2px, #fff 2px, #fff 4px),
+        repeating-linear-gradient(90deg, #000 0px, #000 2px, #fff 2px, #fff 4px);
+    opacity: 0.3;
 }
 
 /* Cover page */
@@ -167,46 +196,62 @@ html, body {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 20%;
+    padding: 60px;
     height: 100%;
     background: var(--paper) !important;
 }
 
 .cover-title {
-    font-size: 32px !important;
+    font-size: 24px !important;
     font-weight: 400;
     color: var(--ink);
-    margin-bottom: 16px;
+    margin-bottom: 10px;
     text-align: center;
 }
 
 .cover-subtitle {
-    font-size: 20px;
+    font-size: 14px;
     font-style: italic;
-    color: var(--ink);
-    opacity: 0.7;
+    color: var(--caption);
+    text-align: center;
 }
 
-.cover-accent {
-    width: 40px;
-    height: 1px;
-    background: var(--ink);
-    opacity: 0.2;
-    margin: 20px auto;
-}
-
-.cover-decoration {
-    display: none;
-}
-
-/* PageFlip library overrides */
+/* PageFlip overrides for realistic book */
 .stf__parent {
     background: transparent !important;
 }
 
+/* Book wrapper with 3D effect */
 .stf__wrapper {
     background: transparent !important;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1) !important;
+    /* Realistic book shadow */
+    box-shadow: 
+        0 20px 40px rgba(0, 0, 0, 0.3),
+        0 10px 20px rgba(0, 0, 0, 0.2) !important;
+    transform: rotateX(2deg); /* Slight 3D tilt */
+}
+
+/* Page edges for depth */
+.stf__wrapper::before {
+    content: '';
+    position: absolute;
+    bottom: -8px;
+    left: 0;
+    right: 0;
+    height: 8px;
+    background: linear-gradient(to bottom, var(--page-edge), #d0cec9);
+    border-radius: 0 0 2px 2px;
+}
+
+/* Side page edges */
+.stf__wrapper::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: -4px;
+    bottom: -8px;
+    width: 4px;
+    background: linear-gradient(to right, var(--page-edge), #d0cec9);
 }
 
 .stf__block {
@@ -222,51 +267,88 @@ html, body {
     box-shadow: none !important;
 }
 
-/* Subtle gutter shadow */
-.stf__wrapper::after {
+/* Center spine/binding effect */
+.stf__wrapper > div::after {
     content: '';
     position: absolute;
     top: 0;
     left: 50%;
     transform: translateX(-50%);
-    width: 8px;
+    width: 20px;
     height: 100%;
     background: linear-gradient(to right,
-        transparent,
-        var(--gutter),
-        var(--gutter),
-        transparent);
+        transparent 0%,
+        rgba(0, 0, 0, 0.05) 20%,
+        rgba(0, 0, 0, 0.15) 40%,
+        rgba(0, 0, 0, 0.2) 50%,
+        rgba(0, 0, 0, 0.15) 60%,
+        rgba(0, 0, 0, 0.05) 80%,
+        transparent 100%);
     pointer-events: none;
-    z-index: 10;
+    z-index: 100;
 }
 
-/* Navigation arrows - OUTSIDE pages */
+/* Inner page shadows for depth */
+.left-page::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 30px;
+    background: linear-gradient(to left,
+        rgba(0, 0, 0, 0.05) 0%,
+        transparent 100%);
+    pointer-events: none;
+}
+
+.right-page::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 30px;
+    background: linear-gradient(to right,
+        rgba(0, 0, 0, 0.05) 0%,
+        transparent 100%);
+    pointer-events: none;
+}
+
+/* Navigation arrows - below book like target */
 #navigation-arrows {
     position: fixed;
-    bottom: 20px;
+    bottom: 10%;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
-    gap: 50px;
+    gap: 40px;
     z-index: 1000;
 }
 
 .nav-arrow {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.05);
-    border: none;
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(0, 0, 0, 0.1);
     color: #666;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.2s;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: all 0.2s;
 }
 
 .nav-arrow:hover {
-    background: rgba(0, 0, 0, 0.1);
+    background: white;
+    transform: scale(1.05);
+}
+
+.nav-arrow svg {
+    width: 18px;
+    height: 18px;
 }
 
 .nav-arrow:disabled {
@@ -274,72 +356,63 @@ html, body {
     cursor: not-allowed;
 }
 
-.nav-arrow svg {
-    width: 20px;
-    height: 20px;
+/* Page flip animation */
+.stf__page__flipping {
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2) !important;
 }
 
-/* CRITICAL: Hide ALL overlays and UI elements on pages */
+/* Continuation text */
+.continuation-from {
+    font-size: 9px;
+    font-style: italic;
+    color: #999;
+    margin-bottom: 10px;
+}
+
+/* Hide UI overlays */
 .swipe-hint,
 .flip-hint,
-.ui-overlay,
-.page-overlay,
-.instruction-text,
-[class*="swipe"],
-[class*="hint"] {
+.ui-overlay {
     display: none !important;
-    visibility: hidden !important;
-    opacity: 0 !important;
-}
-
-/* Hide any text that says "Swipe to flip pages" */
-*:not(script):not(style) {
-    &:has-text("Swipe to flip pages"),
-    &:has-text("Flip through"),
-    &:has-text("swipe") {
-        display: none !important;
-    }
 }
 
 /* Responsive adjustments */
 @media (max-width: 768px) {
     .page-content {
-        padding: 12% 10% 12% 10%;
+        padding: 30px 25px 40px 25px;
     }
     
     .page-title {
-        font-size: 20px !important;
+        font-size: 14px !important;
     }
     
     .page-text,
     .text-content {
-        font-size: 16px !important;
+        font-size: 10px !important;
     }
     
-    .cover-title {
-        font-size: 28px !important;
+    .qr-code {
+        width: 40px;
+        height: 40px;
     }
 }
 
-/* Single page mode */
-.stf__single-mode .stf__page {
-    width: 100% !important;
-    max-width: 500px !important;
-    margin: 0 auto !important;
+/* Ensure clean rendering */
+.flipbook-page * {
+    max-width: 100%;
+    word-wrap: break-word;
 }
 
-/* Ensure no gray backgrounds anywhere */
-* {
-    background-color: transparent !important;
+/* Remove any default margins that might interfere */
+h1, h2, h3, h4, h5, h6 {
+    margin: 0 0 10px 0;
 }
 
-.flipbook-page,
-.stf__page__content,
-.cover-page {
-    background: var(--paper) !important;
-}
-
-body,
-#book-container {
-    background: #e5e5e5 !important;
+/* Section breaks */
+.section-break {
+    width: 30%;
+    height: 1px;
+    background: #ddd;
+    margin: 15px auto;
+    border: none;
 }
