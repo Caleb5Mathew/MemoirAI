@@ -5,6 +5,11 @@ import CoreImage.CIFilterBuiltins
 import PDFKit
 import UIKit
 
+// MARK: - Notification Names
+extension Notification.Name {
+    static let storybookContentGenerated = Notification.Name("storybookContentGenerated")
+}
+
 struct PersistablePageItem: Codable {
     let type: String // "illustration", "textPage", "qrCode"
     let imageData: Data?
@@ -987,7 +992,8 @@ class StoryPageViewModel: ObservableObject {
                 generated.append(img)
 
                 pageItems.append(.illustration(image: img, caption: content.pageDisplayText))
-                let chunks = raw.paginated()
+                // Use enhanced pagination for better content distribution (150-200 words per page)
+                let chunks = raw.paginatedForBook(wordsPerPage: 175)
                 for (i, chunk) in chunks.enumerated() {
                     pageItems.append(.textPage(index: i + 1, total: chunks.count, body: chunk))
                 }
@@ -1001,6 +1007,9 @@ class StoryPageViewModel: ObservableObject {
             // NEW: Persist the generated storybook
             if let profileID = currentProfileID {
                 persistStorybook(for: profileID)
+                
+                // Notify that new content is available
+                NotificationCenter.default.post(name: .storybookContentGenerated, object: nil)
             }
             
         } catch {
@@ -1011,6 +1020,205 @@ class StoryPageViewModel: ObservableObject {
             } else {
             errorMessage = error.localizedDescription
             print("StoryPageViewModel ERROR:", error.localizedDescription)
+            }
+        }
+
+        isLoading = false
+    }
+
+    // NEW: Generate FlipPage content with proper pagination and chapter structure
+    func generateFlipPages(from pageItems: [PageItem]) -> [FlipPage] {
+        var flipPages: [FlipPage] = []
+        var chapterNumber = 1
+        
+        // Add cover page
+        flipPages.append(FlipPage(type: .cover, title: "Memories of Achievement"))
+        
+        for (index, item) in pageItems.enumerated() {
+            switch item {
+            case .illustration(let image, let caption):
+                // Add chapter break before each new memory (except the first)
+                if index > 0 {
+                    flipPages.append(FlipPage(
+                        type: .chapterBreak,
+                        title: "Chapter \(chapterNumber)",
+                        caption: "Memory \(chapterNumber)",
+                        chapterNumber: chapterNumber
+                    ))
+                }
+                
+                // Add image page with breathing room
+                flipPages.append(FlipPage(
+                    type: .imagePage,
+                    title: "Memories of Achievement",
+                    caption: caption,
+                    imageBase64: image.jpegData(compressionQuality: 0.8)?.base64EncodedString(),
+                    chapterNumber: chapterNumber,
+                    pageNumber: 1,
+                    totalPages: 1
+                ))
+                
+                chapterNumber += 1
+                
+            case .textPage(let pageIndex, let total, let body):
+                // Use enhanced pagination for better content distribution
+                let textChunks = body.paginatedForBook(wordsPerPage: 175)
+                
+                for (chunkIndex, chunk) in textChunks.enumerated() {
+                    flipPages.append(FlipPage(
+                        type: .textPage,
+                        title: "Page \(pageIndex)",
+                        textContent: chunk,
+                        chapterNumber: chapterNumber,
+                        pageNumber: chunkIndex + 1,
+                        totalPages: textChunks.count
+                    ))
+                }
+                
+            case .qrCode(_, let url):
+                // Add QR code page (optional - could be integrated into other pages)
+                flipPages.append(FlipPage(
+                    type: .textPage,
+                    title: "Scan to Listen",
+                    textContent: "Scan the QR code to listen to this memory: \(url.absoluteString)",
+                    chapterNumber: chapterNumber,
+                    pageNumber: 1,
+                    totalPages: 1
+                ))
+            }
+        }
+        
+        return flipPages
+    }
+    
+    // NEW: Enhanced content generation with better structure
+    func generateEnhancedStorybook(forProfileID id: UUID) async {
+        currentProfileID = id
+        isLoading = true
+        errorMessage = nil
+        progress = 0
+        images.removeAll()
+        pageItems.removeAll()
+
+        await ensureSubjectPhotoIsRegistered()
+        await ensureFaceDescription()
+
+        do {
+            let entries = try await fetchMemoryEntries(for: id)
+            let chosen = await rankMemoriesWithLLM(entries, top: pageCountSetting)
+            
+            guard !chosen.isEmpty else {
+                throw NSError(domain: "MemoirAI", code: 1, userInfo: [NSLocalizedDescriptionKey: "No memories were selected to generate the story."])
+            }
+
+            // Sort memories chronologically
+            print("🕥 Starting chronological sorting of \(chosen.count) memories...")
+            var chronologicalMemories: [ChronologicalMemory] = []
+            
+            await withTaskGroup(of: ChronologicalMemory?.self) { group in
+                for entry in chosen {
+                    group.addTask {
+                        guard let text = entry.text, !text.isEmpty else { return nil }
+                        let age = await self.extractAge(from: text) ?? 999
+                        print(" -> Memory inferred age: \(age) for entry: \(entry.id?.uuidString ?? "N/A")")
+                        return ChronologicalMemory(entry: entry, age: age)
+                    }
+                }
+                
+                for await chronoMemory in group {
+                    if let memory = chronoMemory {
+                        chronologicalMemories.append(memory)
+                    }
+                }
+            }
+            
+            chronologicalMemories.sort { $0.age < $1.age }
+            let sortedEntries = chronologicalMemories.map { $0.entry }
+            print("✅ Chronological sorting complete.")
+            
+            let identityPrefix = buildIdentityPrompt()
+            var generated: [UIImage] = []
+
+            for (idx, entry) in sortedEntries.enumerated() {
+                guard let entryID = entry.id else { continue }
+                let raw = entry.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !raw.isEmpty else { continue }
+
+                let enrichedTranscript = try await enrich(memory: raw)
+
+                guard let content = try await promptGen.generatePrompts(
+                    from: enrichedTranscript,
+                    pageCount: 1,
+                    chosenArtStyle: currentArtStyle,
+                    customArtStyleDetails: customArtStyleText
+                ).first else {
+                    print("⚠️ Could not generate content for memory entry. Skipping.")
+                    continue
+                }
+
+                let characterContext = buildCharacterContext(for: entry)
+                var sanitizedImagePrompt = await sanitizeForDALLE3(content.imagePromptText)
+
+                if currentArtStyle == .realistic {
+                    sanitizedImagePrompt += " Camera pulled back, face partly turned away or softly out of focus so exact features are not discernible. Or another method where the face isn't perfectly clear."
+                }
+
+                let promptToSend = identityPrefix + characterContext + sanitizedImagePrompt
+                print("🖼️ FULL PROMPT (\(promptToSend.count) chars) ►", promptToSend)
+
+                let img: UIImage
+                do {
+                    img = try await imageSvc.generateImages(
+                        prompt: promptToSend, n: 1, size: "1792x1024"
+                    ).first ?? UIImage()
+                } catch {
+                    print("⚠️ Full prompt failed, trying simplified approach...")
+                    var simplifiedPrompt = createSimplifiedPrompt(from: content.imagePromptText)
+                    simplifiedPrompt = await sanitizeForDALLE3(simplifiedPrompt)
+                    print("🖼️ SIMPLIFIED PROMPT (\(simplifiedPrompt.count) chars) ►", simplifiedPrompt)
+                    
+                    do {
+                        img = try await imageSvc.generateImages(
+                            prompt: simplifiedPrompt, n: 1, size: "1792x1024"
+                        ).first ?? UIImage()
+                        print("✅ Simplified prompt succeeded!")
+                    } catch {
+                        print("⏳ Both full and simplified prompts failed on image \(idx + 1)/\(sortedEntries.count). Continuing with next memory...")
+                        print("⏳ Error details: \(error.localizedDescription)")
+                        continue
+                    }
+                }
+
+                generated.append(img)
+
+                // Create enhanced page items with better structure
+                pageItems.append(.illustration(image: img, caption: content.pageDisplayText))
+                
+                // Use enhanced pagination for text content
+                let textChunks = raw.paginatedForBook(wordsPerPage: 175)
+                for (i, chunk) in textChunks.enumerated() {
+                    pageItems.append(.textPage(index: i + 1, total: textChunks.count, body: chunk))
+                }
+                
+                pageItems.append(.qrCode(id: entryID, url: URL(string: "memoirai://memory/\(entryID.uuidString)")!))
+
+                progress = Double(idx + 1) / Double(sortedEntries.count)
+            }
+
+            images = generated
+            
+            // Persist the generated storybook
+            if let profileID = currentProfileID {
+                persistStorybook(for: profileID)
+            }
+            
+        } catch {
+            if let nsError = error as? NSError, nsError.code == 429 {
+                errorMessage = "Too many requests to OpenAI. Please wait a few minutes and try again."
+                print("StoryPageViewModel ERROR: Rate limited (429)")
+            } else {
+                errorMessage = error.localizedDescription
+                print("StoryPageViewModel ERROR:", error.localizedDescription)
             }
         }
 

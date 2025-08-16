@@ -106,6 +106,123 @@ body {
     overflow: hidden;
 }
 
+/* NEW: Professional text content styling */
+.page-text-content {
+    font-family: 'Georgia', serif;
+    font-size: clamp(11px, 2.8vw, 14px); /* Professional book size */
+    font-weight: 400;
+    color: var(--ink);
+    line-height: 1.6; /* Professional line spacing */
+    text-align: justify; /* Professional text justification */
+    margin-top: clamp(10px, 2.5vw, 14px);
+    flex: 1;
+    overflow-y: auto; /* Allow scrolling if content is too long */
+    padding-right: 4px; /* Space for scrollbar */
+}
+
+/* NEW: Chapter break styling */
+.chapter-break {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: clamp(16px, 4vw, 24px);
+    height: 100%;
+    padding: clamp(20px, 5vw, 32px);
+}
+
+.chapter-number {
+    font-family: 'Georgia', serif;
+    font-size: clamp(16px, 4vw, 22px);
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.chapter-title {
+    font-family: 'Georgia', serif;
+    font-size: clamp(20px, 5vw, 28px);
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1.3;
+}
+
+.chapter-subtitle {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: clamp(14px, 3.5vw, 18px);
+    font-weight: 400;
+    color: var(--ink);
+    opacity: 0.8;
+    line-height: 1.4;
+}
+
+/* NEW: Page numbering */
+.page-number {
+    position: absolute;
+    bottom: clamp(8px, 2vw, 12px);
+    right: clamp(10px, 3vw, 18px);
+    font-family: 'Georgia', serif;
+    font-size: clamp(10px, 2.5vw, 12px);
+    font-weight: 400;
+    color: var(--ink);
+    opacity: 0.6;
+}
+
+/* NEW: Text page specific styling */
+.text-page .page-content {
+    padding: clamp(16px, 4vw, 24px) clamp(14px, 3.5vw, 20px);
+    display: flex;
+    flex-direction: column;
+}
+
+.text-page .page-title {
+    font-size: clamp(14px, 3.5vw, 18px);
+    margin-bottom: clamp(12px, 3vw, 16px);
+    border-bottom: 1px solid var(--accent-soft);
+    padding-bottom: clamp(8px, 2vw, 12px);
+}
+
+/* NEW: Text with image styling */
+.text-with-image .page-content {
+    padding: clamp(14px, 3.5vw, 20px) clamp(12px, 3vw, 18px);
+}
+
+.text-with-image .page-text-content {
+    margin-bottom: clamp(12px, 3vw, 16px);
+    max-height: 60%; /* Limit text height to make room for image */
+}
+
+.text-with-image .photo-container {
+    margin-top: clamp(12px, 3vw, 16px);
+    margin-bottom: clamp(8px, 2vw, 12px);
+}
+
+/* NEW: Image page styling */
+.image-page .page-content {
+    padding: clamp(16px, 4vw, 24px) clamp(14px, 3.5vw, 20px);
+    text-align: center;
+}
+
+.image-page .photo-container {
+    margin: clamp(16px, 4vw, 24px) 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.image-page .page-caption {
+    font-size: clamp(12px, 3vw, 16px);
+    line-height: 1.5;
+    margin-top: clamp(16px, 4vw, 24px);
+    text-align: center;
+    -webkit-line-clamp: unset; /* Allow full caption display */
+    display: block;
+    overflow: visible;
+}
+
 /* Paragraph bars (left page) */
 .paragraph-bars {
     display: flex;
@@ -308,6 +425,11 @@ body {
     .cover-title {
         font-size: 24px;
     }
+    
+    .page-text-content {
+        font-size: 13px;
+        line-height: 1.5;
+    }
 }
 
 /* Additional responsive fixes for content overflow */
@@ -324,6 +446,11 @@ body {
     .page-caption {
         font-size: 12px;
         margin-top: 10px;
+    }
+    
+    .page-text-content {
+        font-size: 12px;
+        line-height: 1.4;
     }
     
     .paragraph-bars {

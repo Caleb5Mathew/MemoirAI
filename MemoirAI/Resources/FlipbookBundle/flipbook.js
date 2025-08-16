@@ -599,7 +599,7 @@ window.goToPage = function(pageIndex) {
 
 // Helper function to create HTML for each page
 function createPageHTML(page) {
-    const { type, title, caption, imageBase64, imageName } = page;
+    const { type, title, caption, imageBase64, imageName, textContent, chapterNumber, pageNumber, totalPages } = page;
     
     switch (type) {
         case 'cover':
@@ -608,6 +608,57 @@ function createPageHTML(page) {
                     <div class="page-content">
                         <div class="cover-title">${title || 'Memories of Achievement'}</div>
                         <div class="cover-accent"></div>
+                    </div>
+                </div>
+            `;
+            
+        case 'chapterBreak':
+            return `
+                <div class="flipbook-page chapter-break">
+                    <div class="page-content">
+                        <div class="chapter-number">${title || 'Chapter'}</div>
+                        <div class="chapter-title">${caption || 'New Chapter'}</div>
+                        ${chapterNumber ? `<div class="chapter-subtitle">Chapter ${chapterNumber}</div>` : ''}
+                    </div>
+                </div>
+            `;
+            
+        case 'textPage':
+            return `
+                <div class="flipbook-page text-page">
+                    <div class="page-content">
+                        ${title ? `<div class="page-title">${title}</div>` : ''}
+                        ${textContent ? `<div class="page-text-content">${textContent}</div>` : ''}
+                        ${pageNumber && totalPages ? `<div class="page-number">${pageNumber} / ${totalPages}</div>` : ''}
+                    </div>
+                </div>
+            `;
+            
+        case 'textWithImage':
+            return `
+                <div class="flipbook-page text-with-image">
+                    <div class="page-content">
+                        ${title ? `<div class="page-title">${title}</div>` : ''}
+                        ${textContent ? `<div class="page-text-content">${textContent}</div>` : ''}
+                        <div class="photo-container">
+                            ${createImageElement(imageBase64, imageName)}
+                        </div>
+                        ${caption ? `<div class="page-caption">${caption}</div>` : ''}
+                        ${pageNumber && totalPages ? `<div class="page-number">${pageNumber} / ${totalPages}</div>` : ''}
+                    </div>
+                </div>
+            `;
+            
+        case 'imagePage':
+            return `
+                <div class="flipbook-page image-page">
+                    <div class="page-content">
+                        ${title ? `<div class="page-title">${title}</div>` : ''}
+                        <div class="photo-container">
+                            ${createImageElement(imageBase64, imageName)}
+                        </div>
+                        ${caption ? `<div class="page-caption">${caption}</div>` : ''}
+                        ${pageNumber && totalPages ? `<div class="page-number">${pageNumber} / ${totalPages}</div>` : ''}
                     </div>
                 </div>
             `;

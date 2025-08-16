@@ -1,10 +1,16 @@
 import SwiftUI
 import WebKit
 
+// MARK: - Notification Names
+extension Notification.Name {
+    static let storybookContentGenerated = Notification.Name("storybookContentGenerated")
+}
+
 // MARK: - Main Storybook View
 struct StorybookView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var profileVM: ProfileViewModel
+    @StateObject private var storyVM = StoryPageViewModel()
 
     @State private var currentPage = 0
     @State private var showPhotoPicker = false
@@ -13,10 +19,11 @@ struct StorybookView: View {
     @State private var useFallback = false
     @State private var flipbookError = false
     @State private var webView: WKWebView?
+    @State private var flipbookPages: [FlipPage] = []
+    @State private var showingUserContent = false
 
-    // Sample pages for the finished book preview
+    // Sample pages for when user hasn't generated content yet
     private let samplePages = MockBookPage.samplePages
-    private let flipbookPages = FlipPage.samplePages
     
     // Helper function to calculate book size outside ViewBuilder context
     private func calculateBookSize(for size: CGSize) -> CGSize {
@@ -45,6 +52,22 @@ struct StorybookView: View {
         
         return CGSize(width: bookW, height: bookH)
     }
+    
+    // NEW: Generate FlipPage content from real story data
+    private func generateFlipbookContent() {
+        // Check if we have a generated storybook for this profile
+        if storyVM.hasGeneratedStorybook && !storyVM.pageItems.isEmpty {
+            // Convert PageItems to FlipPages using the enhanced system
+            flipbookPages = storyVM.generateFlipPages(from: storyVM.pageItems)
+            showingUserContent = true
+            print("StorybookView: Using REAL user-generated content with \(flipbookPages.count) pages")
+        } else {
+            // Use enhanced sample pages as fallback
+            flipbookPages = FlipPage.samplePages
+            showingUserContent = false
+            print("StorybookView: Using enhanced sample pages with \(flipbookPages.count) pages (no user content yet)")
+        }
+    }
 
     var body: some View {
         NavigationView {
@@ -64,7 +87,7 @@ struct StorybookView: View {
                         let bookSize = calculateBookSize(for: geo.size)
                         
                         VStack(spacing: 0) {
-                            // Flipbook preview with fallback to native OpenBookView
+                            // Flipbook preview with real content
                             if useFallback {
                                 // Fallback to native implementation
                                 ZStack {
@@ -91,13 +114,13 @@ struct StorybookView: View {
                                     .padding(8)
                                 }
                             } else {
-                                // Flipbook implementation with external chevrons
+                                // Enhanced Flipbook implementation with real content
                                 ZStack {
                                     FlipbookView(
                                         pages: flipbookPages,
                                         currentPage: $currentPage,
                                         onReady: {
-                                            print("StorybookView: Flipbook ready!")
+                                            print("StorybookView: Enhanced flipbook ready!")
                                             flipbookReady = true
                                         },
                                         onFlip: { pageIndex in
@@ -115,18 +138,32 @@ struct StorybookView: View {
                                     .frame(width: bookSize.width, height: bookSize.height)
                                     .background(Color.red.opacity(0.3)) // DEBUG: Show the frame
                                     
-                                    // Debug overlay removed to prevent layout interference
+                                    // Show indicator if using user content
+                                    if showingUserContent {
+                                        VStack {
+                                            HStack {
+                                                Text("Your Book")
+                                                    .font(.caption)
+                                                    .padding(4)
+                                                    .background(Color.green.opacity(0.8))
+                                                    .foregroundColor(.white)
+                                                    .cornerRadius(4)
+                                                Spacer()
+                                            }
+                                            Spacer()
+                                        }
+                                        .padding(8)
+                                    }
                                 }
                                 .onAppear {
-                                    print("StorybookView: Flipbook view appeared")
+                                    print("StorybookView: Enhanced flipbook view appeared")
                                     print("StorybookView: Geometry size: \(geo.size)")
                                     print("StorybookView: Calculated book size: \(bookSize)")
-                                    
-                                    // DEBUG: Check if FlipbookView is getting proper space
-                                    print("StorybookView: FlipbookView frame should be: \(bookSize)")
+                                    print("StorybookView: Flipbook pages count: \(flipbookPages.count)")
+                                    print("StorybookView: Showing user content: \(showingUserContent)")
                                     
                                     // Set a timeout to fallback if flipbook doesn't load
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { // Reduced timeout for faster fallback
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                                         if !flipbookReady || flipbookError {
                                             print("StorybookView: Flipbook timeout or error - falling back to native")
                                             useFallback = true
@@ -137,7 +174,7 @@ struct StorybookView: View {
 
                             Spacer()
 
-                            if samplePages.count > 1 {
+                            if flipbookPages.count > 1 {
                                 Text("Swipe to flip pages")
                                     .font(Tokens.Typography.hint)
                                     .foregroundColor(Tokens.ink.opacity(0.6))
@@ -164,7 +201,33 @@ struct StorybookView: View {
                 }
             )
         }
-        .onAppear { currentPage = 0 }
+        .onAppear { 
+            currentPage = 0
+            // Load storybook content for current profile
+            storyVM.loadStorybookForProfile(profileVM.selectedProfile.id)
+            generateFlipbookContent()
+        }
+        .onChange(of: profileVM.selectedProfile.id) { _ in
+            // Reload content when profile changes
+            storyVM.loadStorybookForProfile(profileVM.selectedProfile.id)
+            generateFlipbookContent()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            // Refresh content when app comes to foreground (e.g., returning from StoryPage)
+            storyVM.loadStorybookForProfile(profileVM.selectedProfile.id)
+            generateFlipbookContent()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // Additional refresh when app becomes active
+            storyVM.loadStorybookForProfile(profileVM.selectedProfile.id)
+            generateFlipbookContent()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .storybookContentGenerated)) { _ in
+            // Immediate refresh when new content is generated
+            print("StorybookView: Received storybook content generated notification")
+            storyVM.loadStorybookForProfile(profileVM.selectedProfile.id)
+            generateFlipbookContent()
+        }
     }
 
     // MARK: - Header View
@@ -182,11 +245,11 @@ struct StorybookView: View {
             Spacer()
 
             VStack(spacing: Tokens.headerSpacing) {
-                Text("Create your book")
+                Text(showingUserContent ? "Your Storybook" : "Create your book")
                     .font(Tokens.Typography.title)
                     .foregroundColor(Tokens.ink)
 
-                Text("Flip through a finished book")
+                Text(showingUserContent ? "Your memories in a beautiful book" : "Flip through a finished book")
                     .font(Tokens.Typography.subtitle)
                     .foregroundColor(Tokens.ink.opacity(0.7))
             }
@@ -207,7 +270,7 @@ struct StorybookView: View {
         VStack(spacing: Tokens.buttonSpacing) {
             // Primary: gradient-outline pill (navigates to creation flow)
             NavigationLink(destination: StoryPage().environmentObject(profileVM)) {
-                Text("Create your own book")
+                Text(showingUserContent ? "Create new book" : "Create your own book")
                     .font(Tokens.Typography.button)
                     .foregroundColor(Tokens.ink)
                     .frame(maxWidth: .infinity)
@@ -218,7 +281,7 @@ struct StorybookView: View {
                     .primaryGradientOutline(lineWidth: Tokens.gradientStrokeWidth)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Create your own book")
+            .accessibilityLabel(showingUserContent ? "Create new book" : "Create your own book")
 
             // Secondary: soft cream filled pill (opens photo picker)
             Button(action: { showPhotoPicker = true }) {
