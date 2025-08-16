@@ -1,4 +1,32 @@
 import SwiftUI
+import WebKit
+
+// MARK: - String Extension for Testing
+extension String {
+    /// Enhanced pagination that creates professional book layout with 150-200 words per page
+    func paginatedForBook(wordsPerPage: Int = 175) -> [String] {
+        let words = self.split { $0.isWhitespace }
+        guard words.count > wordsPerPage else {
+            return [self]
+        }
+        
+        var pages: [String] = []
+        var start = 0
+        
+        while start < words.count {
+            let end = min(start + wordsPerPage, words.count)
+            let slice = words[start..<end]
+            
+            // Join words and clean up any extra whitespace
+            let pageContent = slice.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            pages.append(pageContent)
+            
+            start += wordsPerPage
+        }
+        
+        return pages
+    }
+}
 
 // MARK: - Flipbook Test View
 struct FlipbookTestView: View {
