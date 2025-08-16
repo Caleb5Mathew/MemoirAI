@@ -118,18 +118,35 @@ function showZoom(pageElement) {
         // Clone the page content
         const clone = pageElement.cloneNode(true);
         
-        // Scale up the text for readability
-        const textElements = clone.querySelectorAll('.page-text, .text-content, p, .page-title, .figure-caption');
+        // Scale up the text for readability in zoom view
+        const textElements = clone.querySelectorAll('.page-text, .text-content, p, .page-title, .figure-caption, .cover-title, .cover-subtitle');
         textElements.forEach(el => {
             const currentSize = window.getComputedStyle(el).fontSize;
             const sizeValue = parseFloat(currentSize);
-            el.style.fontSize = (sizeValue * 3) + 'px'; // Scale up 3x for readability
-            el.style.lineHeight = '1.4';
+            // Scale up 2.5x since base text is now larger
+            el.style.fontSize = (sizeValue * 2.5) + 'px';
+            el.style.lineHeight = '1.5';
         });
+        
+        // Ensure the page fills the zoom container properly
+        clone.style.width = 'auto';
+        clone.style.height = 'auto';
+        clone.style.maxWidth = '100%';
+        clone.style.maxHeight = '100%';
+        clone.style.margin = '0 auto';
+        
+        // Adjust padding for zoom view
+        const pageContent = clone.querySelector('.page-content');
+        if (pageContent) {
+            pageContent.style.padding = '60px';
+        }
         
         content.innerHTML = '';
         content.appendChild(clone);
         modal.classList.add('active');
+        
+        // Prevent body scroll when modal is open
+        document.body.style.overflow = 'hidden';
         
         // Notify Swift
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
@@ -143,6 +160,9 @@ function showZoom(pageElement) {
 function closeZoom() {
     if (zoomModal) {
         zoomModal.classList.remove('active');
+        
+        // Restore body scroll
+        document.body.style.overflow = '';
         
         // Notify Swift
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
