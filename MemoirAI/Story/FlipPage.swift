@@ -62,7 +62,7 @@ extension FlipPage {
         Years later, I would become a professional photographer, traveling the world and capturing stories for major publications. But nothing would ever compare to that summer of discovery, when my grandfather gave me not just a camera, but a new way of seeing the world.
         """),
         
-        // IMAGE PROMPT: "Vintage 1980s American farmhouse at golden hour, weathered white paint, wraparound porch with rocking chairs, old oak tree in foreground, nostalgic summer atmosphere, photorealistic, warm lighting, rural countryside setting"
+        // Using actual farmhouse image from Assets
         FlipPage(type: .rightPhoto, title: "Summer Memories", caption: "The old farmhouse where it all began, unchanged by time.", imageName: "farmhouse"),
         
         // Story 2: First Day at University (Extended 4x)
@@ -244,8 +244,8 @@ extension FlipPage {
         Sometimes, young couples come into the bookshop while we're browsing, and I see them stealing glances at each other, building courage. Isabelle and I exchange knowing looks, remembering. Love, we've learned, isn't just the dramatic meeting or the passionate beginning. It's the thousands of ordinary days made extraordinary by sharing them with the right person. It's restoration work—patient, careful, revealing beauty layer by layer, year after year.
         """),
         
-        // IMAGE PROMPT: "Cozy Parisian bookshop interior on rainy day, warm lighting from vintage lamps, floor-to-ceiling bookshelves, wet cobblestone street visible through window, romantic atmosphere, Shakespeare and Company style, artistic photography"
-        FlipPage(type: .rightPhoto, title: "Paris in the Rain", caption: "Where every love story should begin.", imageName: "paris_bookshop"),
+        // Using actual paris image from Assets
+        FlipPage(type: .rightPhoto, title: "Paris in the Rain", caption: "Where every love story should begin.", imageName: "paris"),
         
         // Story 7: Life Lessons (Extended 4x)
         FlipPage(type: .text, title: "What I've Learned", text: """

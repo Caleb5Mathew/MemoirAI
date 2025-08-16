@@ -899,9 +899,14 @@ function createImageElement(imageBase64, imageName) {
     if (imageBase64) {
         return `<img src="data:image/jpeg;base64,${imageBase64}" alt="Page image">`;
     } else if (imageName) {
-        // For demo purposes, we'll use a placeholder
-        // In a real implementation, you'd need to handle image loading
-        return `<div class="photo-placeholder">📷</div>`;
+        // For named images, we'll show a placeholder with the image name
+        // The actual image loading needs to be handled by the native iOS side
+        return `<div class="photo-placeholder" data-image="${imageName}">
+            <div style="text-align: center; padding: 20px; background: rgba(0,0,0,0.05); border-radius: 4px;">
+                <div style="font-size: 8px; color: #666; margin-bottom: 5px;">Image: ${imageName}</div>
+                <div style="font-size: 24px;">🖼️</div>
+            </div>
+        </div>`;
     } else {
         return `<div class="photo-placeholder">📷</div>`;
     }

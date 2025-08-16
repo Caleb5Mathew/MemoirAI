@@ -305,50 +305,129 @@ struct ZoomedPageView: View {
     let pages: [FlipPage]
     @Environment(\.dismiss) private var dismiss
     
+    var currentPage: FlipPage? {
+        guard pageIndex >= 0 && pageIndex < pages.count else { return nil }
+        return pages[pageIndex]
+    }
+    
     var body: some View {
         ZStack {
+            // Dark background
             Color.black.opacity(0.95)
                 .ignoresSafeArea()
             
-            VStack {
-                // Close button
+            VStack(spacing: 0) {
+                // Close button header
                 HStack {
                     Spacer()
                     Button(action: { dismiss() }) {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 30))
+                            .font(.system(size: 32))
                             .foregroundColor(.white)
-                            .background(Circle().fill(Color.black.opacity(0.5)))
+                            .background(Circle().fill(Color.white.opacity(0.2)))
                     }
                     .padding()
                 }
                 
                 // Page content
                 ScrollView {
-                    if pageIndex < pages.count {
-                        let page = pages[pageIndex]
-                        VStack(alignment: .leading, spacing: 20) {
-                            if let title = page.title {
-                                Text(title)
-                                    .font(.system(size: 28, weight: .medium, design: .serif))
-                                    .foregroundColor(.white)
-                            }
-                            
-                            if let text = page.text {
-                                Text(text)
+                    if let page = currentPage {
+                        VStack(alignment: .center, spacing: 24) {
+                            // Handle different page types
+                            switch page.type {
+                            case .cover:
+                                // Cover page display
+                                VStack(spacing: 16) {
+                                    Text(page.title ?? "Life Stories")
+                                        .font(.system(size: 36, weight: .medium, design: .serif))
+                                        .foregroundColor(.white)
+                                        .multilineTextAlignment(.center)
+                                    
+                                    if let caption = page.caption {
+                                        Text(caption)
+                                            .font(.system(size: 20, weight: .light, design: .serif))
+                                            .italic()
+                                            .foregroundColor(.white.opacity(0.8))
+                                            .multilineTextAlignment(.center)
+                                    }
+                                }
+                                .padding(.vertical, 60)
+                                
+                            case .text, .leftBars:
+                                // Text page display
+                                VStack(alignment: .leading, spacing: 20) {
+                                    if let title = page.title {
+                                        Text(title)
+                                            .font(.system(size: 28, weight: .medium, design: .serif))
+                                            .foregroundColor(.white)
+                                            .frame(maxWidth: .infinity, alignment: .center)
+                                    }
+                                    
+                                    if let text = page.text {
+                                        Text(text)
+                                            .font(.system(size: 18, weight: .light, design: .serif))
+                                            .foregroundColor(.white.opacity(0.95))
+                                            .lineSpacing(10)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    
+                                    if let caption = page.caption {
+                                        Text(caption)
+                                            .font(.system(size: 16, weight: .light, design: .serif))
+                                            .italic()
+                                            .foregroundColor(.white.opacity(0.7))
+                                    }
+                                }
+                                
+                            case .rightPhoto, .mixed:
+                                // Photo page display
+                                VStack(spacing: 20) {
+                                    if let title = page.title {
+                                        Text(title)
+                                            .font(.system(size: 28, weight: .medium, design: .serif))
+                                            .foregroundColor(.white)
+                                    }
+                                    
+                                    // Display image if available
+                                    if let imageName = page.imageName {
+                                        Image(imageName)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                            .frame(maxHeight: 400)
+                                            .cornerRadius(8)
+                                    }
+                                    
+                                    if let caption = page.caption {
+                                        Text(caption)
+                                            .font(.system(size: 16, weight: .light, design: .serif))
+                                            .italic()
+                                            .foregroundColor(.white.opacity(0.8))
+                                            .multilineTextAlignment(.center)
+                                    }
+                                    
+                                    if let text = page.text {
+                                        Text(text)
+                                            .font(.system(size: 18, weight: .light, design: .serif))
+                                            .foregroundColor(.white.opacity(0.95))
+                                            .lineSpacing(10)
+                                    }
+                                }
+                                
+                            case .html:
+                                // HTML page (fallback)
+                                Text(page.text ?? "")
                                     .font(.system(size: 18, weight: .light, design: .serif))
                                     .foregroundColor(.white.opacity(0.9))
-                                    .lineSpacing(8)
-                            }
-                            
-                            if let caption = page.caption {
-                                Text(caption)
-                                    .font(.system(size: 16, weight: .light, design: .serif))
-                                    .italic()
-                                    .foregroundColor(.white.opacity(0.7))
                             }
                         }
-                        .padding(40)
+                        .padding(.horizontal, 40)
+                        .padding(.bottom, 40)
+                    } else {
+                        // Error state
+                        Text("Page not found")
+                            .font(.system(size: 20, weight: .medium, design: .serif))
+                            .foregroundColor(.white.opacity(0.5))
+                            .padding()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
