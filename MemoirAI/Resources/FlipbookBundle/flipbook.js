@@ -278,10 +278,52 @@ window.renderPages = function(pagesJSON) {
         const pages = JSON.parse(pagesJSON);
         console.log('Flipbook: Parsed pages:', pages);
         
+        // Process pages and handle text overflow
+        const processedPages = [];
+        let pageNumber = 1;
+        
+        pages.forEach(page => {
+            if (page.type === 'text' || page.type === 'leftBars') {
+                // Check if text needs to be split across multiple pages
+                const fullText = page.text || page.caption || '';
+                const words = fullText.split(/\s+/).length;
+                
+                if (words > 150) {
+                    // Split text into multiple pages
+                    const textPages = splitTextIntoPages(fullText, 150);
+                    textPages.forEach((pageText, index) => {
+                        const isContinuation = index > 0;
+                        const pageData = {
+                            ...page,
+                            text: pageText,
+                            caption: pageText
+                        };
+                        processedPages.push({
+                            data: pageData,
+                            pageNumber: page.type === 'cover' ? null : pageNumber++,
+                            isContinuation
+                        });
+                    });
+                } else {
+                    processedPages.push({
+                        data: page,
+                        pageNumber: page.type === 'cover' ? null : pageNumber++,
+                        isContinuation: false
+                    });
+                }
+            } else {
+                processedPages.push({
+                    data: page,
+                    pageNumber: page.type === 'cover' ? null : pageNumber++,
+                    isContinuation: false
+                });
+            }
+        });
+        
         // Convert HTML strings to DOM elements
-        const domPages = pages.map(page => {
-            const htmlString = createPageHTML(page);
-            console.log('Flipbook: Generated HTML for page:', page.type, htmlString);
+        const domPages = processedPages.map(pageInfo => {
+            const htmlString = createPageHTML(pageInfo.data, pageInfo.pageNumber, pageInfo.isContinuation);
+            console.log('Flipbook: Generated HTML for page:', pageInfo.data.type, htmlString);
             
             // Create a temporary container to parse HTML
             const tempDiv = document.createElement('div');
@@ -597,43 +639,78 @@ window.goToPage = function(pageIndex) {
     }
 };
 
+// Text content splitting function for pagination
+function splitTextIntoPages(text, wordsPerPage = 150) {
+    const words = text.split(/\s+/);
+    const pages = [];
+    
+    for (let i = 0; i < words.length; i += wordsPerPage) {
+        const pageWords = words.slice(i, Math.min(i + wordsPerPage, words.length));
+        pages.push(pageWords.join(' '));
+    }
+    
+    return pages;
+}
+
 // Helper function to create HTML for each page
-function createPageHTML(page) {
-    const { type, title, caption, imageBase64, imageName } = page;
+function createPageHTML(page, pageNumber = null, isContinuation = false) {
+    const { type, title, caption, imageBase64, imageName, text } = page;
     
     switch (type) {
         case 'cover':
+            const subtitle = caption ? `<div class="cover-subtitle">${caption}</div>` : '';
             return `
                 <div class="flipbook-page cover-page">
                     <div class="page-content">
-                        <div class="cover-title">${title || 'Memories of Achievement'}</div>
+                        <div class="cover-title">${title || 'Memories'}</div>
+                        ${subtitle}
                         <div class="cover-accent"></div>
+                        <div class="cover-decoration">
+                            <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
+                                <circle cx="30" cy="30" r="28" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+                                <circle cx="30" cy="30" r="20" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+                                <circle cx="30" cy="30" r="12" stroke="currentColor" stroke-width="1" opacity="0.1"/>
+                            </svg>
+                        </div>
                     </div>
                 </div>
             `;
             
         case 'leftBars':
+        case 'text':
+            const pageNumberHtml = pageNumber ? `<div class="page-number left">${pageNumber}</div>` : '';
+            const continuationHtml = isContinuation ? '<div class="continuation-from">(continued)</div>' : '';
+            const textContent = text || caption || '';
+            
+            // Format text with proper paragraphs
+            const formattedText = textContent.split('\n\n').map((para, index) => 
+                `<p>${para.trim()}</p>`
+            ).join('');
+            
             return `
-                <div class="flipbook-page left-page">
+                <div class="flipbook-page text-page left-page">
                     <div class="page-content">
-                        ${title ? `<div class="page-title">${title}</div>` : ''}
-                        ${caption ? `<div class="page-caption">${caption}</div>` : ''}
-                        <div class="paragraph-bars">
-                            ${generateParagraphBars()}
+                        ${continuationHtml}
+                        ${!isContinuation && title ? `<div class="page-title">${title}</div>` : ''}
+                        <div class="page-text">
+                            ${formattedText}
                         </div>
+                        ${pageNumberHtml}
                     </div>
                 </div>
             `;
             
         case 'rightPhoto':
+            const rightPageNumber = pageNumber ? `<div class="page-number right">${pageNumber}</div>` : '';
             return `
                 <div class="flipbook-page right-page">
                     <div class="page-content">
-                        <div class="page-title">${title || 'Memories of Achievement'}</div>
+                        <div class="page-title">${title || ''}</div>
                         <div class="photo-container">
                             ${createImageElement(imageBase64, imageName)}
                         </div>
-                        <div class="page-caption">${caption || 'A short two-line caption underneath the photograph.'}</div>
+                        <div class="page-caption">${caption || ''}</div>
+                        ${rightPageNumber}
                     </div>
                 </div>
             `;

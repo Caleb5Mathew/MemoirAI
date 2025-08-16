@@ -6,12 +6,8 @@ struct FlipbookTestView: View {
     @State private var flipbookReady = false
     @State private var useFallback = false
     
-    private let testPages = [
-        FlipPage(type: .cover, title: "Test Book"),
-        FlipPage(type: .leftBars, caption: "This is a test page with paragraph bars"),
-        FlipPage(type: .rightPhoto, title: "Test Photo", caption: "This is a test photo page", imageName: "test_photo"),
-        FlipPage(type: .mixed, caption: "This is a mixed page with bars and photo", imageName: "test_photo2")
-    ]
+    // Use the rich sample pages with stories
+    private let testPages = FlipPage.samplePages
     
     var body: some View {
         VStack(spacing: 20) {
