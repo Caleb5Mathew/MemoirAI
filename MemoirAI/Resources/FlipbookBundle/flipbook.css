@@ -409,4 +409,44 @@ body {
     #navigation-arrows {
         top: 80%; /* Move arrows down with book */
     }
+}
+
+/* Center single pages (cover and ending pages) */
+.stf__parent {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+/* When showing a single page (cover or ending), center it */
+.stf__wrapper {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+/* Specifically target single page mode */
+.stf__block {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+/* When only one page is visible (cover or last page) */
+.stf__page__single {
+    margin: 0 auto !important;
+}
+
+/* Additional centering for cover page specifically */
+.cover-page {
+    margin: 0 auto;
+}
+
+/* Ensure single pages are centered when in single page view */
+.stf__single-mode .stf__page,
+.stf__single-mode .stf__page__content {
+    margin: 0 auto !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
 } 
