@@ -486,6 +486,11 @@ window.renderPages = function(pagesJSON) {
                 count: pages.length
             });
         }
+        
+        // DEBUG: Log page navigation details
+        console.log('Flipbook: Total pages in array:', pages.length);
+        console.log('Flipbook: PageFlip page count:', pageFlip.getPageCount ? pageFlip.getPageCount() : 'N/A');
+        console.log('Flipbook: Page indices available:', Array.from({length: pageFlip.getPageCount ? pageFlip.getPageCount() : 0}, (_, i) => i));
     } catch (error) {
         console.error('Flipbook: Error rendering pages:', error);
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
@@ -558,7 +563,13 @@ function setupNavigationArrows() {
     
     // Listen for page changes to update button states
     pageFlip.on('flip', function(e) {
-        console.log('Flipbook: Page flipped, updating navigation state');
+        console.log('Flipbook: Page flipped to index:', e.data);
+        console.log('Flipbook: PageFlip state after flip:', {
+            currentPage: pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() : 'N/A',
+            totalPages: pageFlip.getPageCount ? pageFlip.getPageCount() : 'N/A',
+            canGoNext: pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() < (pageFlip.getPageCount ? pageFlip.getPageCount() - 1 : 0) : false,
+            canGoPrev: pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() > 0 : false
+        });
         setTimeout(updateNavigationState, 100); // Small delay to ensure state is updated
     });
     
@@ -605,6 +616,8 @@ function createPageHTML(page) {
             return `
                 <div class="flipbook-page left-page">
                     <div class="page-content">
+                        ${title ? `<div class="page-title">${title}</div>` : ''}
+                        ${caption ? `<div class="page-caption">${caption}</div>` : ''}
                         <div class="paragraph-bars">
                             ${generateParagraphBars()}
                         </div>

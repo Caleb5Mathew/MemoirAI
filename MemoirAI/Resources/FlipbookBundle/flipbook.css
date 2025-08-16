@@ -122,6 +122,30 @@ body {
     min-width: 40px;
 }
 
+/* Real text content for left pages */
+.left-page .page-content {
+    padding-right: 26px;
+}
+
+.left-page .page-title {
+    font-family: 'Georgia', serif;
+    font-size: clamp(14px, 3.5vw, 18px);
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: clamp(12px, 3vw, 16px);
+    line-height: 1.3;
+}
+
+.left-page .page-caption {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: clamp(11px, 2.8vw, 13px);
+    font-weight: 400;
+    color: var(--ink);
+    line-height: 1.5;
+    margin-top: clamp(10px, 2.5vw, 14px);
+    text-align: justify;
+}
+
 /* Photo container */
 .photo-container {
     border-radius: 8px;
