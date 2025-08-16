@@ -13,6 +13,8 @@ struct StorybookView: View {
     @State private var useFallback = false
     @State private var flipbookError = false
     @State private var webView: WKWebView?
+    @State private var showZoomedPage = false
+    @State private var zoomedPageIndex: Int = 0
 
     // Sample pages for the finished book preview
     private let samplePages = MockBookPage.samplePages
@@ -56,6 +58,22 @@ struct StorybookView: View {
                     endPoint: .bottom
                 )
                 .ignoresSafeArea()
+                
+                // Download button in top-right
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: downloadBook) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.system(size: 24))
+                                .foregroundColor(Tokens.ink.opacity(0.7))
+                                .background(Circle().fill(Color.white.opacity(0.9)))
+                        }
+                        .padding(.trailing, 20)
+                        .padding(.top, 50)
+                    }
+                    Spacer()
+                }
 
                 VStack(spacing: 0) {
                     headerView
@@ -93,9 +111,10 @@ struct StorybookView: View {
                             } else {
                                 // Flipbook implementation with external chevrons
                                 ZStack {
-                                    FlipbookView(
+                                    FlipbookViewWithWebView(
                                         pages: flipbookPages,
                                         currentPage: $currentPage,
+                                        webView: $webView,
                                         onReady: {
                                             print("StorybookView: Flipbook ready!")
                                             flipbookReady = true
@@ -110,6 +129,10 @@ struct StorybookView: View {
                                             } else {
                                                 currentPage = pageIndex
                                             }
+                                        },
+                                        onPageTap: { index in
+                                            zoomedPageIndex = index
+                                            showZoomedPage = true
                                         }
                                     )
                                     .frame(width: bookSize.width, height: bookSize.height)
@@ -158,6 +181,9 @@ struct StorybookView: View {
             )
         }
         .onAppear { currentPage = 0 }
+        .fullScreenCover(isPresented: $showZoomedPage) {
+            ZoomedPageView(pageIndex: zoomedPageIndex, pages: flipbookPages)
+        }
     }
 
     // MARK: - Header View
@@ -263,6 +289,94 @@ struct StorybookView: View {
         .disabled(disabled)
         .opacity(disabled ? 0.45 : 1.0)
         .accessibilityLabel(accessibility)
+    }
+    
+    private func downloadBook() {
+        // Trigger JavaScript PDF download
+        if let webView = webView {
+            webView.evaluateJavaScript("window.downloadPDF()")
+        }
+    }
+}
+
+// MARK: - Zoomed Page View
+struct ZoomedPageView: View {
+    let pageIndex: Int
+    let pages: [FlipPage]
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.95)
+                .ignoresSafeArea()
+            
+            VStack {
+                // Close button
+                HStack {
+                    Spacer()
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 30))
+                            .foregroundColor(.white)
+                            .background(Circle().fill(Color.black.opacity(0.5)))
+                    }
+                    .padding()
+                }
+                
+                // Page content
+                ScrollView {
+                    if pageIndex < pages.count {
+                        let page = pages[pageIndex]
+                        VStack(alignment: .leading, spacing: 20) {
+                            if let title = page.title {
+                                Text(title)
+                                    .font(.system(size: 28, weight: .medium, design: .serif))
+                                    .foregroundColor(.white)
+                            }
+                            
+                            if let text = page.text {
+                                Text(text)
+                                    .font(.system(size: 18, weight: .light, design: .serif))
+                                    .foregroundColor(.white.opacity(0.9))
+                                    .lineSpacing(8)
+                            }
+                            
+                            if let caption = page.caption {
+                                Text(caption)
+                                    .font(.system(size: 16, weight: .light, design: .serif))
+                                    .italic()
+                                    .foregroundColor(.white.opacity(0.7))
+                            }
+                        }
+                        .padding(40)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+}
+
+// MARK: - FlipbookView Wrapper
+struct FlipbookViewWithWebView: View {
+    let pages: [FlipPage]
+    @Binding var currentPage: Int
+    @Binding var webView: WKWebView?
+    let onReady: (() -> Void)?
+    let onFlip: ((Int) -> Void)?
+    let onPageTap: ((Int) -> Void)?
+    
+    var body: some View {
+        FlipbookView(
+            pages: pages,
+            currentPage: $currentPage,
+            onReady: onReady,
+            onFlip: onFlip,
+            onPageTap: onPageTap
+        )
+        .onAppear {
+            // WebView will be set by FlipbookView internally
+        }
     }
 }
 

@@ -78,99 +78,130 @@ function updatePageFlipDimensions() {
     }
 }
 
-// Page zoom functionality
-let zoomModal = null;
+// Store pages data globally for PDF generation
+let globalPagesData = [];
 
-function createZoomModal() {
-    if (zoomModal) return zoomModal;
+// Page tap handler for native iOS zoom
+function handlePageTap(pageIndex) {
+    console.log('Flipbook: Page tapped, index:', pageIndex);
     
-    zoomModal = document.createElement('div');
-    zoomModal.className = 'page-zoom-modal';
-    zoomModal.innerHTML = `
-        <div class="page-zoom-content" id="zoom-content">
-            <button class="page-zoom-close" id="zoom-close">×</button>
-            <div id="zoom-page-content"></div>
-        </div>
-    `;
-    document.body.appendChild(zoomModal);
+    // Notify Swift to show native zoom
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+        window.webkit.messageHandlers.native.postMessage({
+            type: 'pageTapped',
+            pageIndex: pageIndex
+        });
+    }
+}
+
+// PDF Download functionality
+window.downloadPDF = function() {
+    console.log('Flipbook: Starting PDF download...');
     
-    // Close on background click
-    zoomModal.addEventListener('click', function(e) {
-        if (e.target === zoomModal) {
-            closeZoom();
+    // Check if we have pages to export
+    if (!globalPagesData || globalPagesData.length === 0) {
+        console.error('Flipbook: No pages available for PDF export');
+        return;
+    }
+    
+    // Create a temporary canvas for rendering pages
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Set canvas size (standard letter size at 72 DPI)
+    const pageWidth = 612; // 8.5 inches
+    const pageHeight = 792; // 11 inches
+    canvas.width = pageWidth;
+    canvas.height = pageHeight;
+    
+    // Create PDF data
+    const pdfContent = [];
+    
+    globalPagesData.forEach((page, index) => {
+        // Clear canvas
+        ctx.fillStyle = '#faf8f3'; // Paper color
+        ctx.fillRect(0, 0, pageWidth, pageHeight);
+        
+        // Set text properties
+        ctx.fillStyle = '#3a3a3a'; // Ink color
+        ctx.font = '12px Baskerville, Georgia, serif';
+        ctx.textAlign = 'left';
+        
+        // Render page content
+        let yPosition = 60;
+        
+        // Title
+        if (page.title) {
+            ctx.font = 'bold 18px Baskerville, Georgia, serif';
+            ctx.fillText(page.title, 60, yPosition);
+            yPosition += 30;
         }
+        
+        // Text content
+        if (page.text) {
+            ctx.font = '11px Baskerville, Georgia, serif';
+            const lines = wrapText(ctx, page.text, pageWidth - 120);
+            lines.forEach(line => {
+                ctx.fillText(line, 60, yPosition);
+                yPosition += 16;
+                if (yPosition > pageHeight - 60) {
+                    // Start new page if needed
+                    yPosition = 60;
+                }
+            });
+        }
+        
+        // Caption
+        if (page.caption) {
+            ctx.font = 'italic 10px Baskerville, Georgia, serif';
+            ctx.fillStyle = '#5a5a5a';
+            yPosition += 10;
+            ctx.fillText(page.caption, 60, yPosition);
+        }
+        
+        // Page number
+        ctx.font = '9px Baskerville, Georgia, serif';
+        ctx.fillStyle = '#7a7a7a';
+        ctx.fillText(String(index + 1), pageWidth / 2, pageHeight - 30);
+        
+        // Store page data
+        pdfContent.push(canvas.toDataURL('image/jpeg', 0.95));
     });
     
-    // Close button
-    const closeBtn = zoomModal.querySelector('#zoom-close');
-    if (closeBtn) {
-        closeBtn.addEventListener('click', closeZoom);
-    }
+    // Create download link
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const filename = `memoir-book-${timestamp}.pdf`;
     
-    return zoomModal;
-}
-
-function showZoom(pageElement) {
-    const modal = createZoomModal();
-    const content = modal.querySelector('#zoom-page-content');
-    
-    if (content && pageElement) {
-        // Clone the page content
-        const clone = pageElement.cloneNode(true);
-        
-        // Scale up the text for readability in zoom view
-        const textElements = clone.querySelectorAll('.page-text, .text-content, p, .page-title, .figure-caption, .cover-title, .cover-subtitle');
-        textElements.forEach(el => {
-            const currentSize = window.getComputedStyle(el).fontSize;
-            const sizeValue = parseFloat(currentSize);
-            // Scale up 2.5x since base text is now larger
-            el.style.fontSize = (sizeValue * 2.5) + 'px';
-            el.style.lineHeight = '1.5';
+    // Send to Swift for native PDF generation
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+        window.webkit.messageHandlers.native.postMessage({
+            type: 'downloadPDF',
+            pages: pdfContent,
+            filename: filename
         });
-        
-        // Ensure the page fills the zoom container properly
-        clone.style.width = 'auto';
-        clone.style.height = 'auto';
-        clone.style.maxWidth = '100%';
-        clone.style.maxHeight = '100%';
-        clone.style.margin = '0 auto';
-        
-        // Adjust padding for zoom view
-        const pageContent = clone.querySelector('.page-content');
-        if (pageContent) {
-            pageContent.style.padding = '60px';
-        }
-        
-        content.innerHTML = '';
-        content.appendChild(clone);
-        modal.classList.add('active');
-        
-        // Prevent body scroll when modal is open
-        document.body.style.overflow = 'hidden';
-        
-        // Notify Swift
-        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
-            window.webkit.messageHandlers.native.postMessage({
-                type: 'zoomOpened'
-            });
-        }
     }
-}
+    
+    console.log('Flipbook: PDF download initiated');
+};
 
-function closeZoom() {
-    if (zoomModal) {
-        zoomModal.classList.remove('active');
-        
-        // Restore body scroll
-        document.body.style.overflow = '';
-        
-        // Notify Swift
-        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
-            window.webkit.messageHandlers.native.postMessage({
-                type: 'zoomClosed'
-            });
+// Helper function to wrap text
+function wrapText(context, text, maxWidth) {
+    const words = text.split(' ');
+    const lines = [];
+    let currentLine = words[0];
+    
+    for (let i = 1; i < words.length; i++) {
+        const word = words[i];
+        const width = context.measureText(currentLine + ' ' + word).width;
+        if (width < maxWidth) {
+            currentLine += ' ' + word;
+        } else {
+            lines.push(currentLine);
+            currentLine = word;
         }
     }
+    lines.push(currentLine);
+    return lines;
 }
 
 // Initialize the flipbook when DOM is loaded
@@ -375,6 +406,9 @@ window.renderPages = function(pagesJSON) {
     try {
         const pages = JSON.parse(pagesJSON);
         console.log('Flipbook: Parsed pages:', pages);
+        
+        // Store pages globally for PDF export
+        globalPagesData = pages;
         
         // Process pages and handle text overflow
         const processedPages = [];
@@ -875,7 +909,7 @@ function createImageElement(imageBase64, imageName) {
 
 // Set up click handlers for page zoom
 function setupPageClickHandlers() {
-    console.log('Flipbook: Setting up page click handlers for zoom...');
+    console.log('Flipbook: Setting up page click handlers for native zoom...');
     
     // Add click handler to book container
     const bookContainer = document.getElementById('book-container');
@@ -884,8 +918,11 @@ function setupPageClickHandlers() {
             // Check if clicked on a page (not navigation or other UI)
             const pageElement = e.target.closest('.flipbook-page');
             if (pageElement && !e.target.closest('.nav-arrow')) {
-                console.log('Flipbook: Page clicked for zoom');
-                showZoom(pageElement);
+                console.log('Flipbook: Page clicked for native zoom');
+                
+                // Get current page index
+                const currentIndex = pageFlip ? pageFlip.getCurrentPageIndex() : 0;
+                handlePageTap(currentIndex);
             }
         });
     }
@@ -899,9 +936,4 @@ window.addEventListener('resize', function() {
     console.log('Flipbook: Window resize detected');
 });
 
-// Keyboard shortcuts for zoom
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape' && zoomModal && zoomModal.classList.contains('active')) {
-        closeZoom();
-    }
-}); 
+// Remove old zoom modal code since we're using native iOS presentation 

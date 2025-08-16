@@ -7,12 +7,14 @@ struct FlipbookView: UIViewRepresentable {
     @Binding var currentPage: Int
     let onReady: (() -> Void)?
     let onFlip: ((Int) -> Void)?
+    let onPageTap: ((Int) -> Void)?
     
-    init(pages: [FlipPage], currentPage: Binding<Int>, onReady: (() -> Void)? = nil, onFlip: ((Int) -> Void)? = nil) {
+    init(pages: [FlipPage], currentPage: Binding<Int>, onReady: (() -> Void)? = nil, onFlip: ((Int) -> Void)? = nil, onPageTap: ((Int) -> Void)? = nil) {
         self.pages = pages
         self._currentPage = currentPage
         self.onReady = onReady
         self.onFlip = onFlip
+        self.onPageTap = onPageTap
     }
     
     func makeUIView(context: Context) -> WKWebView {
@@ -381,9 +383,38 @@ struct FlipbookView: UIViewRepresentable {
                     print("FlipbookView: Dimensions updated to: \(dimensions)")
                 }
                 
+            case "pageTapped":
+                if let index = body["pageIndex"] as? Int {
+                    parent.onPageTap?(index)
+                }
+                
+            case "zoomOpened":
+                print("FlipbookView: Zoom opened")
+                
+            case "zoomClosed":
+                print("FlipbookView: Zoom closed")
+                
+            case "downloadPDF":
+                if let pages = body["pages"] as? [String],
+                   let filename = body["filename"] as? String {
+                    // Handle PDF download
+                    handlePDFDownload(pages: pages, filename: filename)
+                }
+                
             default:
                 print("FlipbookView: Unknown message type: \(type)")
             }
+        }
+        
+        private func handlePDFDownload(pages: [String], filename: String) {
+            print("FlipbookView: Handling PDF download with \(pages.count) pages")
+            
+            // Create PDF from page images
+            // This would typically be handled by creating a PDFDocument
+            // and saving it to the user's files
+            
+            // For now, just log the action
+            print("FlipbookView: PDF download requested: \(filename)")
         }
     }
 }
