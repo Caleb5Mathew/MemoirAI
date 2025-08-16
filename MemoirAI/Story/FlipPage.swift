@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - FlipPage Model
 struct FlipPage: Codable, Identifiable {
-    let id = UUID()
+    let id: UUID
     let type: PageType
     let title: String?
     let caption: String?
@@ -26,6 +26,7 @@ struct FlipPage: Codable, Identifiable {
     }
     
     init(type: PageType, title: String? = nil, caption: String? = nil, imageBase64: String? = nil, imageName: String? = nil, textContent: String? = nil, chapterNumber: Int? = nil, pageNumber: Int? = nil, totalPages: Int? = nil) {
+        self.id = UUID()
         self.type = type
         self.title = title
         self.caption = caption
