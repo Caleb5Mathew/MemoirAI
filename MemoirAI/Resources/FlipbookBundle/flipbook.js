@@ -681,7 +681,6 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
             const pageNumberHtml = pageNumber ? `<div class="page-number left">${pageNumber}</div>` : '';
             const continuationHtml = isContinuation ? '<div class="continuation-from">(continued)</div>' : '';
             const textContent = text || caption || '';
-            const qrCodeLeft = pageNumber ? '<div class="qr-code"></div>' : '';
             
             // Format text with proper paragraphs - clean typography
             const paragraphs = textContent.split('\n\n').filter(p => p.trim());
@@ -692,7 +691,6 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
             return `
                 <div class="flipbook-page text-page left-page">
                     <div class="page-content">
-                        ${qrCodeLeft}
                         ${continuationHtml}
                         ${!isContinuation && title ? `<div class="page-title">${title}</div>` : ''}
                         <div class="text-content">
@@ -705,11 +703,9 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
             
         case 'rightPhoto':
             const rightPageNumber = pageNumber ? `<div class="page-number right">${pageNumber}</div>` : '';
-            const qrCodeRight = pageNumber ? '<div class="qr-code"></div>' : '';
             return `
                 <div class="flipbook-page right-page">
                     <div class="page-content">
-                        ${qrCodeRight}
                         ${title ? `<div class="page-title">${title}</div>` : ''}
                         <div class="figure-block">
                             <div class="photo-container">

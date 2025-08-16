@@ -1,12 +1,11 @@
-/* Memoir Flipbook - Realistic Book Design Matching Target */
+/* Memoir Flipbook - Clean Book Design Matching Target */
 
 :root {
-    --paper: #faf8f3; /* Slightly warm paper color */
-    --ink: #333333;
-    --caption: #555555;
-    --shadow: rgba(0, 0, 0, 0.2);
-    --page-edge: #e8e6e1;
-    --spine-shadow: rgba(0, 0, 0, 0.3);
+    --paper: #fdfcf8; /* Warm white paper */
+    --ink: #2a2a2a;
+    --caption: #555;
+    --shadow: rgba(0, 0, 0, 0.15);
+    --spine: rgba(0, 0, 0, 0.08);
 }
 
 * {
@@ -20,8 +19,8 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    /* Match target book's blue-gray background */
-    background: linear-gradient(135deg, #9db4c7 0%, #b8c6d6 100%);
+    /* Blue-gray background like target */
+    background: linear-gradient(135deg, #a5b8ca 0%, #c0cdd8 100%);
     font-family: 'Georgia', 'Times New Roman', serif;
 }
 
@@ -32,84 +31,75 @@ html, body {
     align-items: center;
     justify-content: center;
     position: relative;
-    perspective: 1200px; /* 3D perspective */
 }
 
 #book {
-    width: 90%;
-    height: 85%;
-    max-width: 900px; /* Smaller max width for proper book size */
-    max-height: 600px;
+    width: 85%;
+    height: 80%;
+    max-width: 1000px;
+    max-height: 650px;
     position: relative;
-    transform-style: preserve-3d;
 }
 
-/* Base page styling - clean paper */
+/* Base page - clean paper */
 .flipbook-page {
     background: var(--paper) !important;
     position: relative;
     width: 100%;
     height: 100%;
     overflow: hidden;
-    /* Subtle paper texture */
-    background-image: 
-        repeating-linear-gradient(
-            90deg,
-            transparent,
-            transparent 2px,
-            rgba(255, 255, 255, 0.03) 2px,
-            rgba(255, 255, 255, 0.03) 4px
-        );
 }
 
-/* Page content with tighter margins like target */
+/* Page content - very tight margins for maximum text */
 .page-content {
     width: 100%;
     height: 100%;
-    padding: 40px 35px 50px 35px; /* Much tighter margins */
+    padding: 25px 20px 35px 20px; /* Very tight margins */
     display: flex;
     flex-direction: column;
     position: relative;
 }
 
-/* Adjust for inner pages */
+/* Left page - slightly more inner margin */
 .left-page .page-content {
-    padding-left: 45px; /* Slightly more for binding */
-    padding-right: 30px;
-}
-
-.right-page .page-content {
-    padding-right: 45px;
     padding-left: 30px;
+    padding-right: 15px;
 }
 
-/* CRITICAL: Smaller text sizing to match target */
+/* Right page - mirrored */
+.right-page .page-content {
+    padding-right: 30px;
+    padding-left: 15px;
+}
+
+/* Titles - smaller and centered */
 .page-title {
     font-family: 'Georgia', serif;
-    font-size: 16px !important; /* Much smaller */
+    font-size: 14px !important; /* Smaller title */
     font-weight: 600;
     color: var(--ink);
     text-align: center;
-    margin: 0 0 15px 0;
-    line-height: 1.3;
+    margin: 0 0 10px 0;
+    line-height: 1.2;
 }
 
-/* Body text - smaller and tighter */
+/* Body text - very small for dense text */
 .page-text,
 .text-content {
     font-family: 'Georgia', serif;
-    font-size: 11px !important; /* Much smaller to match target */
-    line-height: 1.4;
+    font-size: 9px !important; /* Very small for book appearance */
+    line-height: 1.3; /* Tighter line height */
     color: var(--ink);
     text-align: justify;
     flex: 1;
     overflow: hidden;
 }
 
+/* Paragraphs - minimal spacing */
 .page-text p,
 .text-content p {
-    margin: 0 0 8px 0;
-    text-indent: 1.2em;
+    margin: 0 0 4px 0; /* Very tight paragraph spacing */
+    text-indent: 1em;
 }
 
 .page-text p:first-child,
@@ -117,30 +107,29 @@ html, body {
     text-indent: 0;
 }
 
-/* Page numbers - subtle and small */
+/* Page numbers - tiny and subtle */
 .page-number {
     position: absolute;
-    bottom: 25px;
-    font-size: 9px;
-    color: #999;
+    bottom: 20px;
+    font-size: 8px;
+    color: #888;
     font-family: 'Georgia', serif;
 }
 
 .page-number.left {
-    left: 35px;
+    left: 20px;
 }
 
 .page-number.right {
-    right: 35px;
+    right: 20px;
 }
 
-/* Images - properly sized */
+/* Images - well integrated */
 .photo-container {
-    width: 80%;
-    margin: 15px auto;
-    border-radius: 2px;
+    width: 70%;
+    margin: 10px auto;
     overflow: hidden;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .photo-container img {
@@ -150,112 +139,79 @@ html, body {
 }
 
 .figure-caption {
-    font-size: 10px;
+    font-size: 8px;
     font-style: italic;
     color: var(--caption);
     text-align: center;
-    margin-top: 8px;
-    line-height: 1.3;
+    margin-top: 5px;
 }
 
-/* QR Code styling */
-.qr-code {
-    position: absolute;
-    top: 40px;
-    width: 50px;
-    height: 50px;
-    background: white;
-    border: 1px solid #ddd;
-    padding: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.left-page .qr-code {
-    right: 35px;
-}
-
-.right-page .qr-code {
-    left: 35px;
-}
-
-.qr-code::after {
-    content: '';
-    width: 100%;
-    height: 100%;
-    background: 
-        repeating-linear-gradient(0deg, #000 0px, #000 2px, #fff 2px, #fff 4px),
-        repeating-linear-gradient(90deg, #000 0px, #000 2px, #fff 2px, #fff 4px);
-    opacity: 0.3;
-}
-
-/* Cover page */
+/* Cover page - clean and simple */
 .cover-page {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 60px;
+    padding: 50px;
     height: 100%;
     background: var(--paper) !important;
 }
 
+.cover-page .page-content {
+    padding: 50px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
 .cover-title {
-    font-size: 24px !important;
+    font-size: 20px !important;
     font-weight: 400;
     color: var(--ink);
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     text-align: center;
+    line-height: 1.2;
 }
 
 .cover-subtitle {
-    font-size: 14px;
+    font-size: 12px;
     font-style: italic;
     color: var(--caption);
     text-align: center;
+    margin-top: 4px;
 }
 
-/* PageFlip overrides for realistic book */
+.cover-accent {
+    width: 40px;
+    height: 1px;
+    background: var(--ink);
+    opacity: 0.2;
+    margin: 15px auto;
+}
+
+/* NO QR CODES */
+.qr-code {
+    display: none !important;
+}
+
+/* PageFlip overrides */
 .stf__parent {
     background: transparent !important;
 }
 
-/* Book wrapper with 3D effect */
 .stf__wrapper {
     background: transparent !important;
-    /* Realistic book shadow */
-    box-shadow: 
-        0 20px 40px rgba(0, 0, 0, 0.3),
-        0 10px 20px rgba(0, 0, 0, 0.2) !important;
-    transform: rotateX(2deg); /* Slight 3D tilt */
-}
-
-/* Page edges for depth */
-.stf__wrapper::before {
-    content: '';
-    position: absolute;
-    bottom: -8px;
-    left: 0;
-    right: 0;
-    height: 8px;
-    background: linear-gradient(to bottom, var(--page-edge), #d0cec9);
-    border-radius: 0 0 2px 2px;
-}
-
-/* Side page edges */
-.stf__wrapper::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: -4px;
-    bottom: -8px;
-    width: 4px;
-    background: linear-gradient(to right, var(--page-edge), #d0cec9);
+    /* Simple book shadow */
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.2) !important;
+    position: relative;
+    overflow: hidden; /* Prevent shadow overflow */
 }
 
 .stf__block {
     background: transparent !important;
+    position: relative;
+    overflow: hidden;
 }
 
 .stf__page {
@@ -267,37 +223,58 @@ html, body {
     box-shadow: none !important;
 }
 
-/* Center spine/binding effect */
-.stf__wrapper > div::after {
+/* Center spine - contained within book */
+.stf__block::after {
     content: '';
     position: absolute;
     top: 0;
     left: 50%;
     transform: translateX(-50%);
-    width: 20px;
+    width: 12px;
     height: 100%;
     background: linear-gradient(to right,
         transparent 0%,
-        rgba(0, 0, 0, 0.05) 20%,
-        rgba(0, 0, 0, 0.15) 40%,
-        rgba(0, 0, 0, 0.2) 50%,
-        rgba(0, 0, 0, 0.15) 60%,
-        rgba(0, 0, 0, 0.05) 80%,
+        var(--spine) 40%,
+        var(--spine) 60%,
         transparent 100%);
     pointer-events: none;
-    z-index: 100;
+    z-index: 10;
 }
 
-/* Inner page shadows for depth */
+/* Page edges for depth */
+.stf__wrapper::before {
+    content: '';
+    position: absolute;
+    bottom: -5px;
+    left: 0;
+    right: 0;
+    height: 5px;
+    background: #e5e3de;
+    z-index: -1;
+}
+
+/* Side edge */
+.stf__wrapper::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: -3px;
+    bottom: -5px;
+    width: 3px;
+    background: #e5e3de;
+    z-index: -1;
+}
+
+/* Inner page shadows */
 .left-page::after {
     content: '';
     position: absolute;
     top: 0;
     right: 0;
     bottom: 0;
-    width: 30px;
+    width: 20px;
     background: linear-gradient(to left,
-        rgba(0, 0, 0, 0.05) 0%,
+        rgba(0, 0, 0, 0.03) 0%,
         transparent 100%);
     pointer-events: none;
 }
@@ -308,37 +285,37 @@ html, body {
     top: 0;
     left: 0;
     bottom: 0;
-    width: 30px;
+    width: 20px;
     background: linear-gradient(to right,
-        rgba(0, 0, 0, 0.05) 0%,
+        rgba(0, 0, 0, 0.03) 0%,
         transparent 100%);
     pointer-events: none;
 }
 
-/* Navigation arrows - below book like target */
+/* Navigation arrows - clean and below book */
 #navigation-arrows {
     position: fixed;
-    bottom: 10%;
+    bottom: 8%;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
-    gap: 40px;
+    gap: 35px;
     z-index: 1000;
 }
 
 .nav-arrow {
-    width: 36px;
-    height: 36px;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.8);
-    border: 1px solid rgba(0, 0, 0, 0.1);
-    color: #666;
+    width: 32px;
+    height: 32px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    color: #555;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    transition: all 0.2s;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+    transition: all 0.15s;
 }
 
 .nav-arrow:hover {
@@ -347,8 +324,8 @@ html, body {
 }
 
 .nav-arrow svg {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
 }
 
 .nav-arrow:disabled {
@@ -358,61 +335,65 @@ html, body {
 
 /* Page flip animation */
 .stf__page__flipping {
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2) !important;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15) !important;
 }
 
 /* Continuation text */
 .continuation-from {
-    font-size: 9px;
+    font-size: 8px;
     font-style: italic;
-    color: #999;
-    margin-bottom: 10px;
+    color: #888;
+    margin-bottom: 5px;
 }
 
-/* Hide UI overlays */
+/* Hide overlays */
 .swipe-hint,
 .flip-hint,
-.ui-overlay {
+.ui-overlay,
+.page-overlay {
     display: none !important;
 }
 
-/* Responsive adjustments */
+/* Responsive */
 @media (max-width: 768px) {
     .page-content {
-        padding: 30px 25px 40px 25px;
+        padding: 20px 15px 30px 15px;
     }
     
     .page-title {
-        font-size: 14px !important;
+        font-size: 12px !important;
     }
     
     .page-text,
     .text-content {
-        font-size: 10px !important;
-    }
-    
-    .qr-code {
-        width: 40px;
-        height: 40px;
+        font-size: 8px !important;
     }
 }
 
-/* Ensure clean rendering */
-.flipbook-page * {
-    max-width: 100%;
-    word-wrap: break-word;
+/* Ensure text fills the page */
+.text-content {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    height: 100%;
 }
 
-/* Remove any default margins that might interfere */
-h1, h2, h3, h4, h5, h6 {
-    margin: 0 0 10px 0;
+/* Remove decoration that doesn't belong */
+.cover-decoration {
+    display: none;
 }
 
-/* Section breaks */
+/* Clean paragraph formatting */
+p {
+    orphans: 2;
+    widows: 2;
+}
+
+/* Section divider */
 .section-break {
-    width: 30%;
+    width: 25%;
     height: 1px;
     background: #ddd;
-    margin: 15px auto;
+    margin: 10px auto;
     border: none;
 }
