@@ -1,17 +1,19 @@
-/* Memoir Flipbook Styles - Full Viewport Book Spread */
+/* Memoir Flipbook - Professional Book Typography */
 
 :root {
-    /* Colors from Tokens */
-    --bg-primary: #F6F1E8;
-    --bg-wash: #EDE6DA;
-    --ink: #2F2A25;
-    --accent: #7C5C3A;
-    --accent-soft: #C9B6A0;
-    --paper: #fdfdf8;
-    --shadow: rgba(0, 0, 0, 0.12);
-    --spine-color: #8B7355;
-    --page-edge-highlight: rgba(255, 255, 255, 0.8);
-    --gutter-shadow: rgba(0, 0, 0, 0.25);
+    /* Colors */
+    --ink: #1a1a1a;
+    --ink-light: #4a4a4a;
+    --paper: #fffef9;
+    --caption: #666666;
+    --rule: rgba(0, 0, 0, 0.1);
+    --shadow: rgba(0, 0, 0, 0.15);
+    --gutter-shadow: rgba(0, 0, 0, 0.2);
+}
+
+* {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
 body {
@@ -20,8 +22,8 @@ body {
     width: 100vw;
     height: 100vh;
     overflow: hidden;
-    background: #f5f5f5; /* Neutral reading background */
-    font-family: 'Georgia', 'Times New Roman', serif;
+    background: #e8e8e8;
+    font-family: 'New York', 'Georgia', 'Times New Roman', serif;
 }
 
 #book-container {
@@ -37,10 +39,10 @@ body {
 }
 
 #book {
-    width: 90vw;  /* Dominate viewport */
-    height: 85vh; /* Full height with room for controls */
-    max-width: 1400px; /* Max width for large screens */
-    max-height: 900px; /* Max height for large screens */
+    width: 90vw;
+    height: 88vh;
+    max-width: 1400px;
+    max-height: 900px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -49,18 +51,18 @@ body {
     position: relative;
 }
 
-/* Page Styles - Authentic book pages */
+/* Base page styles */
 .flipbook-page {
-    background: #fdfdf8; /* Slightly off-white paper */
-    border-radius: 0; /* Square corners for real book look */
-    box-shadow: none; /* Shadow handled by container */
+    background: var(--paper);
+    border-radius: 0;
+    box-shadow: none;
     overflow: hidden;
     position: relative;
     width: 100%;
     height: 100%;
 }
 
-/* Page content container - Classic book margins */
+/* Page content container with book margins */
 .page-content {
     height: 100%;
     box-sizing: border-box;
@@ -70,191 +72,241 @@ body {
     position: relative;
 }
 
-/* Left page margins - larger inner margin for gutter */
+/* Left page margins - wider inner gutter */
 .left-page .page-content {
-    padding: 60px 50px 80px 70px; /* top right bottom left */
+    padding: 72px 60px 90px 80px; /* top outer bottom inner */
 }
 
-/* Right page margins - larger inner margin for gutter */
+/* Right page margins - wider inner gutter */
 .right-page .page-content {
-    padding: 60px 70px 80px 50px; /* top right bottom left */
+    padding: 72px 80px 90px 60px; /* top inner bottom outer */
 }
 
-/* Page numbers */
-.page-number {
-    position: absolute;
-    bottom: 40px;
-    font-family: 'Georgia', serif;
-    font-size: 11px;
-    color: var(--accent);
-}
+/* TYPOGRAPHY SYSTEM */
 
-.page-number.left {
-    left: 70px;
-}
-
-.page-number.right {
-    right: 70px;
-}
-
-/* Typography - Professional Book Styling */
+/* Chapter/Section Titles - centered, generous spacing */
 .page-title {
-    font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 22px; /* Slightly larger for viewport scale */
-    font-weight: 600;
+    font-family: 'New York', 'Georgia', serif;
+    font-size: 26pt;
+    font-weight: 500;
     color: var(--ink);
-    margin-bottom: 24px;
-    line-height: 1.3;
     text-align: center;
-    letter-spacing: 0.5px;
+    margin: 0 0 36px 0;
+    line-height: 1.3;
+    letter-spacing: 0.02em;
 }
 
-.page-caption {
-    font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 14px; /* Professional book font size */
+/* Subtitles */
+.page-subtitle {
+    font-family: 'New York', 'Georgia', serif;
+    font-size: 18pt;
+    font-weight: 400;
+    font-style: italic;
+    color: var(--ink-light);
+    text-align: center;
+    margin: -24px 0 36px 0;
+    line-height: 1.3;
+}
+
+/* Body text - optimal reading width */
+.page-text,
+.text-content {
+    font-family: 'New York', 'Georgia', serif;
+    font-size: 16pt;
     font-weight: 400;
     color: var(--ink);
-    line-height: 1.7;
-    margin-top: 16px;
+    line-height: 1.5;
     text-align: justify;
     text-justify: inter-word;
     hyphens: auto;
     -webkit-hyphens: auto;
-    word-spacing: 0.05em;
+    max-width: 38em; /* ~60-75 chars per line */
+    margin: 0 auto;
+    width: 100%;
 }
 
-/* Text pages - Professional book layout */
-.text-page .page-content,
-.left-page .page-content {
-    padding: 60px 50px 80px 70px; /* Classic book margins */
+/* Paragraphs - no extra spacing, just indents */
+.page-text p,
+.text-content p {
+    margin: 0;
+    text-indent: 1.5em;
 }
 
-.text-page .page-title,
-.left-page .page-title {
-    font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 24px;
-    font-weight: 600;
-    color: var(--ink);
-    margin-bottom: 30px;
-    line-height: 1.3;
-    text-align: center;
-    letter-spacing: 0.5px;
-}
-
-.text-page .page-text,
-.left-page .page-text {
-    font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 15px;
-    font-weight: 400;
-    color: var(--ink);
-    line-height: 1.8;
-    text-align: justify;
-    text-justify: inter-word;
-    hyphens: auto;
-    -webkit-hyphens: auto;
-    word-spacing: 0.05em;
-    flex: 1;
-    overflow: hidden;
-}
-
-/* Paragraph styling */
-.text-page p,
-.left-page p {
-    margin: 0 0 16px 0;
-    text-indent: 2em;
-}
-
-.text-page p:first-child,
-.left-page p:first-child {
+/* First paragraph after title - no indent */
+.page-text p:first-child,
+.text-content p:first-child,
+.page-title + p,
+.page-subtitle + p,
+.figure-block + p {
     text-indent: 0;
 }
 
-/* Drop cap for first letter */
-.text-page p:first-child::first-letter,
-.left-page p:first-child::first-letter {
-    float: left;
-    font-size: 56px;
-    line-height: 48px;
-    padding-right: 8px;
-    margin-top: 4px;
-    font-weight: 600;
+/* Remove drop caps - too decorative */
+.page-text p:first-child::first-letter,
+.text-content p:first-child::first-letter {
+    /* No special styling */
+    font-size: inherit;
+    float: none;
+    line-height: inherit;
+    padding: 0;
+    margin: 0;
+    font-weight: inherit;
 }
 
-/* Photo container - Professional layout */
+/* FIGURE BLOCKS - Images with captions */
+.figure-block {
+    margin: 32px auto;
+    width: 70%;
+    max-width: 400px;
+}
+
+.figure-image {
+    width: 100%;
+    height: auto;
+    display: block;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.figure-caption {
+    font-family: 'New York', 'Georgia', serif;
+    font-size: 12pt;
+    font-style: italic;
+    color: var(--caption);
+    text-align: center;
+    margin-top: 12px;
+    line-height: 1.4;
+}
+
+/* Rule/separator between sections */
+.section-break {
+    width: 30%;
+    height: 1px;
+    background: var(--rule);
+    margin: 32px auto;
+    border: none;
+}
+
+/* Photo container refactor to figure block */
 .photo-container {
-    border-radius: 0; /* Square for book aesthetic */
+    margin: 32px auto;
+    width: 65%;
+    max-width: 380px;
+    border-radius: 0;
     overflow: hidden;
-    background: var(--bg-wash);
-    position: relative;
-    margin: 20px 0;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    max-height: 240px; /* Larger for viewport scale */
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
 .photo-container img {
     width: 100%;
-    height: 100%;
+    height: auto;
+    display: block;
     object-fit: cover;
 }
 
 .photo-placeholder {
     width: 100%;
-    height: 200px; /* Fixed height for consistency */
+    height: 240px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, var(--bg-wash) 0%, var(--accent-soft) 100%);
-    color: var(--paper);
-    font-size: 36px;
+    background: #f5f5f5;
+    color: #999;
+    font-size: 24px;
 }
 
-/* Cover page - Clean book cover */
+/* Page caption becomes figure caption style */
+.page-caption {
+    font-family: 'New York', 'Georgia', serif;
+    font-size: 12pt;
+    font-style: italic;
+    color: var(--caption);
+    text-align: center;
+    margin-top: 12px;
+    line-height: 1.4;
+    hyphens: none;
+}
+
+/* COVER PAGE - Clean, centered */
 .cover-page {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     text-align: center;
-    gap: 24px;
-    height: 100%;
-    background: #fdfdf8;
     padding: 80px;
+    height: 100%;
+    background: var(--paper);
 }
 
 .cover-title {
-    font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 42px;
-    font-weight: 600;
+    font-family: 'New York', 'Georgia', serif;
+    font-size: 36pt;
+    font-weight: 400;
     color: var(--ink);
     line-height: 1.2;
-    letter-spacing: 2px;
-    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 24px;
+    text-transform: none; /* Remove uppercase */
 }
 
 .cover-subtitle {
-    font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 20px;
+    font-family: 'New York', 'Georgia', serif;
+    font-size: 20pt;
     font-weight: 400;
-    color: var(--accent);
     font-style: italic;
-    margin-top: -10px;
+    color: var(--ink-light);
+    margin-top: 0;
 }
 
 .cover-accent {
-    width: 80px;
-    height: 3px;
-    background: var(--accent-soft);
-    border-radius: 0;
-    margin: 20px auto;
+    width: 60px;
+    height: 1px;
+    background: var(--rule);
+    margin: 32px auto;
 }
 
 .cover-decoration {
-    margin-top: 40px;
-    color: var(--accent-soft);
-    opacity: 0.5;
+    display: none; /* Remove decorative elements */
 }
 
-/* StPageFlip overrides - Book spread appearance */
+/* Page numbers - smaller, subtle */
+.page-number {
+    position: absolute;
+    bottom: 48px;
+    font-family: 'New York', 'Georgia', serif;
+    font-size: 11pt;
+    color: var(--caption);
+}
+
+.page-number.left {
+    left: 80px;
+}
+
+.page-number.right {
+    right: 80px;
+}
+
+/* Continuation indicators */
+.continued-indicator {
+    position: absolute;
+    bottom: 48px;
+    right: 80px;
+    font-family: 'New York', 'Georgia', serif;
+    font-size: 11pt;
+    font-style: italic;
+    color: var(--caption);
+}
+
+.continuation-from {
+    font-family: 'New York', 'Georgia', serif;
+    font-size: 11pt;
+    font-style: italic;
+    color: var(--caption);
+    margin-bottom: 18px;
+    text-align: center;
+}
+
+/* StPageFlip overrides */
 .stf__parent {
     background: transparent !important;
     width: 100% !important;
@@ -263,7 +315,7 @@ body {
 
 .stf__wrapper {
     background: transparent !important;
-    box-shadow: 0 15px 50px rgba(0, 0, 0, 0.3) !important;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25) !important;
     width: 100% !important;
     height: 100% !important;
 }
@@ -279,108 +331,100 @@ body {
 }
 
 .stf__page__content {
-    background: #fdfdf8 !important;
+    background: var(--paper) !important;
     border: none !important;
     box-shadow: none !important;
 }
 
 .stf__page__hard {
-    background: #fdfdf8 !important;
-    border-radius: 0 !important; /* Square corners */
+    background: var(--paper) !important;
+    border-radius: 0 !important;
     box-shadow: none !important;
 }
 
-/* Book gutter/spine effect - Central shadow */
+/* Book gutter/spine - subtle but present */
 .stf__wrapper::after {
     content: '';
     position: absolute;
     top: 0;
     left: 50%;
     transform: translateX(-50%);
-    width: 30px;
+    width: 24px;
     height: 100%;
     background: linear-gradient(to right,
         transparent 0%,
-        rgba(0, 0, 0, 0.05) 20%,
-        rgba(0, 0, 0, 0.15) 40%,
-        rgba(0, 0, 0, 0.25) 50%,
-        rgba(0, 0, 0, 0.15) 60%,
-        rgba(0, 0, 0, 0.05) 80%,
+        rgba(0, 0, 0, 0.03) 20%,
+        rgba(0, 0, 0, 0.08) 40%,
+        rgba(0, 0, 0, 0.12) 50%,
+        rgba(0, 0, 0, 0.08) 60%,
+        rgba(0, 0, 0, 0.03) 80%,
         transparent 100%);
     pointer-events: none;
     z-index: 100;
 }
 
-/* Page edge effects for depth */
-.stf__page--left {
-    border-right: 1px solid rgba(0, 0, 0, 0.05);
-}
-
-.stf__page--right {
-    border-left: 1px solid rgba(0, 0, 0, 0.05);
-}
-
-/* Page edges gradient */
-.stf__page__content::before {
+/* Page edges - very subtle */
+.left-page::after {
     content: '';
     position: absolute;
     top: 0;
-    bottom: 0;
-    width: 20px;
-    pointer-events: none;
-}
-
-.left-page .stf__page__content::before {
     right: 0;
-    background: linear-gradient(to left, rgba(0, 0, 0, 0.03) 0%, transparent 100%);
+    bottom: 0;
+    width: 1px;
+    background: rgba(0, 0, 0, 0.05);
 }
 
-.right-page .stf__page__content::before {
+.right-page::before {
+    content: '';
+    position: absolute;
+    top: 0;
     left: 0;
-    background: linear-gradient(to right, rgba(0, 0, 0, 0.03) 0%, transparent 100%);
+    bottom: 0;
+    width: 1px;
+    background: rgba(0, 0, 0, 0.05);
 }
 
-/* Page curl effect */
+/* Page flip animation */
 .stf__page__flipping {
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2) !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15) !important;
 }
 
-/* Navigation arrows - Minimal, outside content */
+/* Navigation arrows - minimal */
 #navigation-arrows {
     position: fixed;
-    bottom: 30px;
+    bottom: 24px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
-    gap: 60px;
+    gap: 48px;
     z-index: 1000;
 }
 
 .nav-arrow {
-    width: 36px;
-    height: 36px;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.9);
-    border: 1px solid rgba(0, 0, 0, 0.1);
+    width: 32px;
+    height: 32px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(0, 0, 0, 0.08);
     color: #666;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    transition: all 0.2s ease;
-    opacity: 0.6;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    transition: all 0.15s ease;
+    opacity: 0.5;
 }
 
 .nav-arrow svg {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
 }
 
 .nav-arrow:hover {
     background: rgba(255, 255, 255, 1);
-    opacity: 1;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    opacity: 0.9;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
 }
 
 .nav-arrow:active {
@@ -390,90 +434,73 @@ body {
 .nav-arrow:disabled {
     opacity: 0.2;
     cursor: not-allowed;
-    transform: none;
 }
 
-/* Continuation indicators */
-.continued-indicator {
-    position: absolute;
-    bottom: 40px;
-    right: 70px;
-    font-family: 'Georgia', serif;
-    font-size: 11px;
-    font-style: italic;
-    color: var(--accent);
-}
-
-.continuation-from {
-    font-family: 'Georgia', serif;
-    font-size: 11px;
-    font-style: italic;
-    color: var(--accent);
-    margin-bottom: 12px;
-}
-
-/* Responsive adjustments - Maintain book proportions */
+/* Responsive - maintain readability */
 @media (max-width: 768px) {
     #book {
         width: 95vw;
-        height: 80vh;
+        height: 85vh;
     }
     
     .left-page .page-content {
-        padding: 40px 35px 60px 50px;
+        padding: 48px 40px 60px 50px;
     }
     
     .right-page .page-content {
-        padding: 40px 50px 60px 35px;
+        padding: 48px 50px 60px 40px;
     }
     
-    .text-page .page-title,
-    .left-page .page-title {
-        font-size: 20px;
+    .page-title {
+        font-size: 22pt;
     }
     
-    .text-page .page-text,
-    .left-page .page-text,
-    .page-caption {
-        font-size: 13px;
+    .page-text,
+    .text-content {
+        font-size: 15pt;
     }
     
     .cover-title {
-        font-size: 32px;
+        font-size: 30pt;
     }
     
-    .photo-container {
-        max-height: 180px;
+    .figure-block {
+        width: 80%;
     }
 }
 
-/* Mobile adjustments */
+/* Mobile */
 @media (max-width: 480px) {
     #book {
         width: 100vw;
-        height: 75vh;
+        height: 80vh;
     }
     
     .left-page .page-content,
     .right-page .page-content {
-        padding: 30px 25px 50px 35px;
+        padding: 36px 28px 48px 32px;
     }
     
-    #navigation-arrows {
-        bottom: 20px;
-        gap: 40px;
+    .page-text,
+    .text-content {
+        font-size: 14pt;
+        line-height: 1.5;
     }
     
-    .nav-arrow {
-        width: 32px;
-        height: 32px;
+    .page-title {
+        font-size: 20pt;
+        margin-bottom: 24px;
+    }
+    
+    .figure-block {
+        width: 90%;
     }
 }
 
-/* Center single pages (cover and ending) */
+/* Single page mode (cover) */
 .stf__single-mode .stf__page,
 .stf__single-mode .stf__page__content {
     margin: 0 auto !important;
     width: 50% !important;
-    max-width: 700px !important;
+    max-width: 650px !important;
 }

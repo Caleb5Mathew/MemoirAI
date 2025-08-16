@@ -682,8 +682,9 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
             const continuationHtml = isContinuation ? '<div class="continuation-from">(continued)</div>' : '';
             const textContent = text || caption || '';
             
-            // Format text with proper paragraphs
-            const formattedText = textContent.split('\n\n').map((para, index) => 
+            // Format text with proper paragraphs - clean typography
+            const paragraphs = textContent.split('\n\n').filter(p => p.trim());
+            const formattedText = paragraphs.map((para, index) => 
                 `<p>${para.trim()}</p>`
             ).join('');
             
@@ -692,7 +693,7 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
                     <div class="page-content">
                         ${continuationHtml}
                         ${!isContinuation && title ? `<div class="page-title">${title}</div>` : ''}
-                        <div class="page-text">
+                        <div class="text-content">
                             ${formattedText}
                         </div>
                         ${pageNumberHtml}
@@ -705,28 +706,41 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
             return `
                 <div class="flipbook-page right-page">
                     <div class="page-content">
-                        <div class="page-title">${title || ''}</div>
-                        <div class="photo-container">
-                            ${createImageElement(imageBase64, imageName)}
+                        ${title ? `<div class="page-title">${title}</div>` : ''}
+                        <div class="figure-block">
+                            <div class="photo-container">
+                                ${createImageElement(imageBase64, imageName)}
+                            </div>
+                            ${caption ? `<div class="figure-caption">${caption}</div>` : ''}
                         </div>
-                        <div class="page-caption">${caption || ''}</div>
                         ${rightPageNumber}
                     </div>
                 </div>
             `;
             
         case 'mixed':
+            const mixedPageNumber = pageNumber ? `<div class="page-number left">${pageNumber}</div>` : '';
+            const mixedText = text || caption || '';
+            const mixedParagraphs = mixedText.split('\n\n').filter(p => p.trim());
+            const mixedFormattedText = mixedParagraphs.map(para => 
+                `<p>${para.trim()}</p>`
+            ).join('');
+            
             return `
-                <div class="flipbook-page">
+                <div class="flipbook-page text-page left-page">
                     <div class="page-content">
-                        <div class="mixed-content">
-                            <div class="mixed-bars">
-                                ${generateParagraphBars(5)}
-                            </div>
-                            <div class="photo-container small-photo">
-                                ${createImageElement(imageBase64, imageName)}
-                            </div>
+                        ${title ? `<div class="page-title">${title}</div>` : ''}
+                        <div class="text-content">
+                            ${mixedFormattedText}
                         </div>
+                        ${imageName || imageBase64 ? `
+                            <div class="figure-block">
+                                <div class="photo-container">
+                                    ${createImageElement(imageBase64, imageName)}
+                                </div>
+                            </div>
+                        ` : ''}
+                        ${mixedPageNumber}
                     </div>
                 </div>
             `;
@@ -743,17 +757,9 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
     }
 }
 
-// Generate paragraph bars with varied lengths
-function generateParagraphBars(count = 12) {
-    const patterns = [0.92, 0.78, 0.86, 0.70, 0.95, 0.82, 0.65, 0.90, 0.74, 0.88, 0.68, 0.96];
-    let html = '';
-    
-    for (let i = 0; i < count; i++) {
-        const width = patterns[i % patterns.length] * 100;
-        html += `<div class="paragraph-bar" style="width: ${width}%;"></div>`;
-    }
-    
-    return html;
+// Section break for chapter divisions
+function createSectionBreak() {
+    return '<hr class="section-break" />';
 }
 
 // Create image element from base64 or name
