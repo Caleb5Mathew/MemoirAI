@@ -3,7 +3,7 @@ import WebKit
 
 // MARK: - Main Storybook View
 struct StorybookView: View {
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.presentationMode) var presentationMode
     @EnvironmentObject var profileVM: ProfileViewModel
 
     @State private var currentPage = 0
@@ -180,7 +180,7 @@ struct StorybookView: View {
     private var headerView: some View {
         GeometryReader { geo in
             HStack(alignment: .top) {
-                Button(action: { dismiss() }) {
+                Button(action: { presentationMode.wrappedValue.dismiss() }) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 18, weight: .medium))
                         .foregroundColor(Tokens.ink.opacity(0.7))
@@ -303,7 +303,7 @@ struct StorybookView: View {
 struct PageZoomView: View {
     let pageIndex: Int
     let pages: [FlipPage]
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.presentationMode) var presentationMode
     @State private var isEditing = false
     @State private var editedTitle: String = ""
     @State private var editedText: String = ""
@@ -331,7 +331,7 @@ struct PageZoomView: View {
             VStack(spacing: 0) {
                 // Navigation header
                 HStack {
-                    Button(action: { dismiss() }) {
+                    Button(action: { presentationMode.wrappedValue.dismiss() }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 28))
                             .foregroundColor(Tokens.ink.opacity(0.8))
