@@ -171,7 +171,9 @@ struct StorybookView: View {
                 }
             }
             .navigationBarHidden(true)
+            .navigationBarBackButtonHidden(true)
         }
+        .navigationViewStyle(StackNavigationViewStyle())
         .sheet(isPresented: $showPhotoPicker) {
             PhotoPickerSheet(
                 isPresented: $showPhotoPicker,

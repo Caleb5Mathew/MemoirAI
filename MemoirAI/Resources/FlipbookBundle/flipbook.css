@@ -39,6 +39,8 @@ html, body {
     justify-content: center;
     position: relative;
     background: transparent; /* Remove any background */
+    border: none; /* Remove any border */
+    box-shadow: none; /* Remove any shadow */
 }
 
 #book {
@@ -49,6 +51,8 @@ html, body {
     position: relative;
     transition: transform 0.3s ease;
     background: transparent; /* Ensure transparent background */
+    border: none; /* Remove any border */
+    box-shadow: none; /* Remove container shadow */
 }
 
 /* Base page with realistic paper texture */
@@ -141,15 +145,16 @@ html, body {
     text-indent: 0;
 }
 
-/* Drop cap for first letter */
-.page-text p:first-child::first-letter,
-.text-content p:first-child::first-letter {
+/* Drop cap for first letter - only on story starts */
+.story-start .page-text p:first-child::first-letter,
+.story-start .text-content p:first-child::first-letter {
     float: left;
     font-size: 24px;
     line-height: 20px;
     padding-right: 2px;
     margin-top: -2px;
     font-weight: 400;
+    text-transform: uppercase;
 }
 
 /* Page numbers */
@@ -262,14 +267,13 @@ html, body {
 
 .stf__wrapper {
     background: transparent !important;
-    /* Realistic book shadow */
+    /* Subtle book shadow */
     box-shadow: 
-        0 20px 50px rgba(0, 0, 0, 0.4),
-        0 10px 20px rgba(0, 0, 0, 0.3),
-        0 5px 10px rgba(0, 0, 0, 0.2) !important;
+        0 10px 30px rgba(0, 0, 0, 0.2),
+        0 5px 15px rgba(0, 0, 0, 0.15) !important;
     position: relative;
-    /* Book border - leather binding */
-    border: 3px solid var(--leather-dark);
+    /* No border for seamless blend */
+    border: none;
     border-radius: 3px 8px 8px 3px;
 }
 
@@ -293,22 +297,24 @@ html, body {
     position: relative;
 }
 
-/* Center spine shadow - PROPERLY CONTAINED */
+/* Center spine shadow - only on actual book pages */
 .stf__block::after {
     content: '';
     position: absolute;
-    top: 3%;
-    bottom: 3%;
+    top: 0;
+    bottom: 0;
     left: calc(50% - 5px);
     width: 10px;
     background: linear-gradient(to right,
         transparent 0%,
-        rgba(0, 0, 0, 0.15) 20%,
-        rgba(0, 0, 0, 0.25) 50%,
-        rgba(0, 0, 0, 0.15) 80%,
+        rgba(0, 0, 0, 0.1) 20%,
+        rgba(0, 0, 0, 0.15) 50%,
+        rgba(0, 0, 0, 0.1) 80%,
         transparent 100%);
     pointer-events: none;
     z-index: 100;
+    /* Clip to actual page content area */
+    clip-path: inset(0 0 0 0);
 }
 
 .stf__page {

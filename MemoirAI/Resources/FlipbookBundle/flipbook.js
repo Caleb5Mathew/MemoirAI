@@ -820,8 +820,11 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
                 `<p>${para.trim()}</p>`
             ).join('');
             
+            // Add story-start class only if it's not a continuation and has a title (new story)
+            const storyStartClass = !isContinuation && title ? 'story-start' : '';
+            
             return `
-                <div class="flipbook-page text-page left-page">
+                <div class="flipbook-page text-page left-page ${storyStartClass}">
                     <div class="page-content">
                         ${continuationHtml}
                         ${!isContinuation && title ? `<div class="page-title">${title}</div>` : ''}
