@@ -57,7 +57,7 @@ struct UserMemoriesBookView: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     // Add percentage-based spacing to move book down
                     Spacer()
-                        .frame(height: geometry.size.height * 0.03) // 3% of screen height
+                        .frame(height: UIScreen.main.bounds.height * 0.03) // 3% of screen height
                     
                     GeometryReader { geo in
                         let bookSize = calculateBookSize(for: geo.size)
@@ -137,7 +137,7 @@ struct UserMemoriesBookView: View {
             loadUserMemories()
         }
         .fullScreenCover(isPresented: $showZoomedPage) {
-            PageZoomView(pageIndex: zoomedPageIndex, pages: $flipbookPages)
+            PageZoomView(pageIndex: zoomedPageIndex, pages: flipbookPages)
         }
     }
     
@@ -385,8 +385,8 @@ struct UserMemoriesBookView: View {
     }
 }
 
-// MARK: - Tokens (reuse from StorybookView)
-private struct Tokens {
+// MARK: - Local Tokens for UserMemoriesBookView
+private struct UserMemoriesTokens {
     static let bgWash = Color(red: 0.98, green: 0.96, blue: 0.94)
     static let bgPrimary = Color(red: 0.96, green: 0.93, blue: 0.88)
     static let ink = Color(red: 0.2, green: 0.2, blue: 0.2)
@@ -402,3 +402,6 @@ private struct Tokens {
         static let button = Font.system(size: 16, weight: .semibold, design: .rounded)
     }
 }
+
+// Use the UserMemoriesTokens throughout the file
+fileprivate typealias Tokens = UserMemoriesTokens
