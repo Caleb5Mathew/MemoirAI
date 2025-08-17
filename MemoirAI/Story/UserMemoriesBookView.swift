@@ -137,7 +137,7 @@ struct UserMemoriesBookView: View {
             loadUserMemories()
         }
         .fullScreenCover(isPresented: $showZoomedPage) {
-            PageZoomView(pageIndex: zoomedPageIndex, pages: $flipbookPages)
+            PageZoomView(pageIndex: zoomedPageIndex, pages: flipbookPages)
         }
     }
     
