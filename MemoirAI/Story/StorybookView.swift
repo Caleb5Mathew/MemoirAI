@@ -223,8 +223,8 @@ struct StorybookView: View {
     // MARK: - Action Buttons View
     private var actionButtonsView: some View {
         VStack(spacing: Tokens.buttonSpacing) {
-            // Primary: gradient-outline pill (navigates to creation flow)
-            NavigationLink(destination: StoryPage().environmentObject(profileVM)) {
+            // Primary: gradient-outline pill (navigates to user memories book view)
+            NavigationLink(destination: UserMemoriesBookView().environmentObject(profileVM)) {
                 Text("Create your own book")
                     .font(Tokens.Typography.button)
                     .foregroundColor(Tokens.ink)
