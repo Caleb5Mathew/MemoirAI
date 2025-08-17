@@ -277,19 +277,28 @@ html, body {
     border-radius: 3px 8px 8px 3px;
 }
 
-/* Book spine highlight - removed to prevent conflicts */
+/* Book spine highlight */
+.stf__wrapper::before {
+    content: '';
+    position: absolute;
+    left: 48%;
+    top: 0;
+    bottom: 0;
+    width: 4%;
+    background: linear-gradient(to right,
+        rgba(0, 0, 0, 0.2) 0%,
+        rgba(255, 255, 255, 0.1) 50%,
+        rgba(0, 0, 0, 0.2) 100%);
+    pointer-events: none;
+}
 
 .stf__block {
     background: transparent !important;
     position: relative;
 }
 
-/* Center spine shadow - using a different approach since we removed ::after */
-.stf__block {
-    position: relative;
-}
-
-.stf__block::before {
+/* Center spine shadow - only on book spine between pages */
+.stf__wrapper::after {
     content: '';
     position: absolute;
     top: 0;
@@ -325,14 +334,40 @@ html, body {
     box-shadow: none !important;
 }
 
-/* Remove page thickness effects that extend beyond book */
+/* Page thickness effect - stacked pages */
 .stf__wrapper::after {
-    display: none !important; /* Remove bottom page stack */
+    content: '';
+    position: absolute;
+    bottom: -4px;
+    left: 2px;
+    right: 2px;
+    height: 4px;
+    background: repeating-linear-gradient(
+        to bottom,
+        var(--paper-edge) 0px,
+        var(--paper-edge) 1px,
+        #fff 1px,
+        #fff 2px
+    );
+    border-radius: 0 0 3px 3px;
 }
 
-/* Remove right edge page stack */
+/* Right edge pages stack */
 .stf__wrapper::before {
-    display: none !important; /* Remove right page stack */
+    content: '';
+    position: absolute;
+    top: 2px;
+    right: -3px;
+    bottom: 2px;
+    width: 3px;
+    background: repeating-linear-gradient(
+        to right,
+        var(--paper-edge) 0px,
+        var(--paper-edge) 1px,
+        #fff 1px,
+        #fff 2px
+    );
+    border-radius: 0 2px 2px 0;
 }
 
 /* Inner page shadows for depth */
@@ -363,7 +398,7 @@ html, body {
 }
 
 /* Single page mode - centered */
-.stf__single-mode .stf__block::before {
+.stf__single-mode .stf__wrapper::after {
     display: none !important; /* No spine shadow for single page */
 }
 
