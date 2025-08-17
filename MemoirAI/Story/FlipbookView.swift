@@ -208,10 +208,33 @@ struct FlipbookView: UIViewRepresentable {
     
     private func renderPages(webView: WKWebView) {
         do {
-            let jsonData = try JSONEncoder().encode(pages)
+            // Convert pages with image names to base64
+            let pagesWithBase64 = pages.map { page -> FlipPage in
+                if let imageName = page.imageName, page.imageBase64 == nil {
+                    // Try to load image from Assets and convert to base64
+                    if let uiImage = UIImage(named: imageName),
+                       let imageData = uiImage.jpegData(compressionQuality: 0.8) {
+                        let base64String = imageData.base64EncodedString()
+                        print("FlipbookView: Converted \(imageName) to base64 (length: \(base64String.count))")
+                        return FlipPage(
+                            type: page.type,
+                            title: page.title,
+                            caption: page.caption,
+                            text: page.text,
+                            imageBase64: base64String,
+                            imageName: page.imageName
+                        )
+                    } else {
+                        print("FlipbookView: Could not load image: \(imageName)")
+                    }
+                }
+                return page
+            }
+            
+            let jsonData = try JSONEncoder().encode(pagesWithBase64)
             let jsonString = String(data: jsonData, encoding: .utf8) ?? "[]"
             
-            print("FlipbookView: JSON data to render: \(jsonString)")
+            print("FlipbookView: JSON data to render: \(jsonString.prefix(200))...")
             
             // Use a safer approach to pass JSON data
             let escapedJSON = jsonString.replacingOccurrences(of: "\\", with: "\\\\")
@@ -221,7 +244,7 @@ struct FlipbookView: UIViewRepresentable {
                                         .replacingOccurrences(of: "\r", with: "\\r")
             
             let jsCode = "window.renderPages('\(escapedJSON)')"
-            print("FlipbookView: Executing JS: \(jsCode)")
+            print("FlipbookView: Executing JS (length: \(jsCode.count))")
             
             webView.evaluateJavaScript(jsCode) { result, error in
                 if let error = error {
@@ -238,8 +261,27 @@ struct FlipbookView: UIViewRepresentable {
     }
     
     private func renderPagesAlternative(webView: WKWebView, jsonString: String) {
-        // Alternative approach using base64 encoding
-        if let jsonData = jsonString.data(using: .utf8) {
+        // Alternative approach - convert pages with images before encoding
+        do {
+            let pagesWithBase64 = pages.map { page -> FlipPage in
+                if let imageName = page.imageName, page.imageBase64 == nil {
+                    if let uiImage = UIImage(named: imageName),
+                       let imageData = uiImage.jpegData(compressionQuality: 0.8) {
+                        let base64String = imageData.base64EncodedString()
+                        return FlipPage(
+                            type: page.type,
+                            title: page.title,
+                            caption: page.caption,
+                            text: page.text,
+                            imageBase64: base64String,
+                            imageName: page.imageName
+                        )
+                    }
+                }
+                return page
+            }
+            
+            let jsonData = try JSONEncoder().encode(pagesWithBase64)
             let base64String = jsonData.base64EncodedString()
             let jsCode = """
                 (function() {
@@ -260,6 +302,8 @@ struct FlipbookView: UIViewRepresentable {
                     print("FlipbookView: Pages rendered successfully (alternative method)")
                 }
             }
+        } catch {
+            print("Error in alternative rendering: \(error)")
         }
     }
     
