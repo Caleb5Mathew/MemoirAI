@@ -119,6 +119,22 @@ html, body {
     font-variant: small-caps;
 }
 
+/* Continued page titles - smaller and with marker */
+.page-title.continued-title {
+    font-size: 8px !important; /* Half the size of regular title */
+    margin: 0 0 4px 0;
+}
+
+.continuation-marker {
+    display: block;
+    font-size: 6px !important;
+    font-style: italic;
+    font-variant: normal;
+    text-transform: lowercase;
+    margin-top: 2px;
+    opacity: 0.7;
+}
+
 /* Body text - professional book size */
 .page-text,
 .text-content {
@@ -302,8 +318,8 @@ html, body {
 
 /* Removed page thickness effects to eliminate white edges */
 
-/* Inner page shadows create spine effect at the center */
-.left-page::after {
+/* Inner page shadows create spine effect - using PageFlip's actual positioning classes */
+.stf__item.--left .flipbook-page::after {
     content: '';
     position: absolute;
     top: 0;
@@ -318,7 +334,7 @@ html, body {
     z-index: 100;
 }
 
-.right-page::before {
+.stf__item.--right .flipbook-page::before {
     content: '';
     position: absolute;
     top: 0;

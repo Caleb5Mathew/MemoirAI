@@ -129,10 +129,58 @@ struct GradientOutlineCapsule: ViewModifier {
     }
 }
 
+// Animated gradient outline for buttons
+struct AnimatedGradientOutlineCapsule: ViewModifier {
+    var lineWidth: CGFloat = Tokens.gradientStrokeWidth
+    @State private var animationProgress: CGFloat = 0.0
+    
+    var animatedGradient: LinearGradient {
+        let colors = [
+            Color(red: 1.0, green: 0.8, blue: 0.0),  // Yellow
+            Color(red: 1.0, green: 0.5, blue: 0.0),  // Orange
+            Color(red: 1.0, green: 0.2, blue: 0.0),  // Red-orange
+            Color(red: 1.0, green: 0.5, blue: 0.0),  // Orange
+            Color(red: 1.0, green: 0.8, blue: 0.0),  // Yellow (loop)
+        ]
+        
+        let stops = colors.enumerated().map { index, color in
+            Gradient.Stop(
+                color: color,
+                location: (CGFloat(index) / CGFloat(colors.count - 1)) + animationProgress
+            )
+        }
+        
+        return LinearGradient(
+            gradient: Gradient(stops: stops),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+    
+    func body(content: Content) -> some View {
+        content.overlay(
+            Capsule().stroke(animatedGradient, lineWidth: lineWidth)
+        )
+        .onAppear {
+            withAnimation(
+                Animation.linear(duration: 3.0)
+                    .repeatForever(autoreverses: false)
+            ) {
+                animationProgress = 1.0
+            }
+        }
+    }
+}
+
 extension View {
     /// Applies the brand gradient outline (yellow→orange→red) to a capsule-shaped button.
     func primaryGradientOutline(lineWidth: CGFloat = Tokens.gradientStrokeWidth) -> some View {
         self.modifier(GradientOutlineCapsule(lineWidth: lineWidth))
+    }
+    
+    /// Applies an animated flowing gradient outline to a capsule-shaped button.
+    func animatedGradientOutline(lineWidth: CGFloat = Tokens.gradientStrokeWidth) -> some View {
+        self.modifier(AnimatedGradientOutlineCapsule(lineWidth: lineWidth))
     }
 
     /// A soft drop shadow used across the UI.

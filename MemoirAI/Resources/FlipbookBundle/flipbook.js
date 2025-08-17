@@ -811,7 +811,6 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
         case 'leftBars':
         case 'text':
             const pageNumberHtml = pageNumber ? `<div class="page-number left">${pageNumber}</div>` : '';
-            const continuationHtml = isContinuation ? '<div class="continuation-from">(continued)</div>' : '';
             const textContent = text || caption || '';
             
             // Format text with proper paragraphs - clean typography
@@ -823,11 +822,20 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
             // Add story-start class only if it's not a continuation and has a title (new story)
             const storyStartClass = !isContinuation && title ? 'story-start' : '';
             
+            // Show title on all pages, with different styling for continued pages
+            let titleHtml = '';
+            if (title) {
+                if (isContinuation) {
+                    titleHtml = `<div class="page-title continued-title">${title}<span class="continuation-marker">(continued)</span></div>`;
+                } else {
+                    titleHtml = `<div class="page-title">${title}</div>`;
+                }
+            }
+            
             return `
-                <div class="flipbook-page text-page left-page ${storyStartClass}">
+                <div class="flipbook-page text-page ${storyStartClass}">
                     <div class="page-content">
-                        ${continuationHtml}
-                        ${!isContinuation && title ? `<div class="page-title">${title}</div>` : ''}
+                        ${titleHtml}
                         <div class="text-content">
                             ${formattedText}
                         </div>
@@ -839,7 +847,7 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
         case 'rightPhoto':
             const rightPageNumber = pageNumber ? `<div class="page-number right">${pageNumber}</div>` : '';
             return `
-                <div class="flipbook-page right-page">
+                <div class="flipbook-page">
                     <div class="page-content">
                         ${title ? `<div class="page-title">${title}</div>` : ''}
                         <div class="figure-block">
@@ -862,7 +870,7 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
             ).join('');
             
             return `
-                <div class="flipbook-page text-page left-page">
+                <div class="flipbook-page text-page">
                     <div class="page-content">
                         ${title ? `<div class="page-title">${title}</div>` : ''}
                         <div class="text-content">

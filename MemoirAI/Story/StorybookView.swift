@@ -233,7 +233,7 @@ struct StorybookView: View {
                     .background(
                         Capsule().fill(Color.clear)
                     )
-                    .primaryGradientOutline(lineWidth: Tokens.gradientStrokeWidth)
+                    .animatedGradientOutline(lineWidth: Tokens.gradientStrokeWidth)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Create your own book")
