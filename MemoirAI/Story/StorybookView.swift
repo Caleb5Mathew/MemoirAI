@@ -199,7 +199,7 @@ struct StorybookView: View {
                         .font(Tokens.Typography.subtitle)
                         .foregroundColor(Tokens.ink.opacity(0.7))
                 }
-                .padding(.top, geo.size.height * 0.02) // Add percentage-based top padding
+                .padding(.top, geo.size.height * 0.10) // Moved down significantly (was 0.02)
 
                 Spacer()
 
@@ -311,6 +311,47 @@ struct PageZoomView: View {
     var currentPage: FlipPage? {
         guard pageIndex >= 0 && pageIndex < pages.count else { return nil }
         return pages[pageIndex]
+    }
+    
+    // Check if this is a continued page based on previous pages having the same title
+    var isContinuedPage: Bool {
+        guard pageIndex > 0,
+              let currentTitle = currentPage?.title,
+              let previousTitle = pages[pageIndex - 1].title else { return false }
+        return currentTitle == previousTitle
+    }
+    
+    // Get the displayed text for this page (approximately 150 words if it's a text page)
+    var displayedText: String {
+        guard let fullText = currentPage?.text else { return "" }
+        
+        // If it's a text page, we need to calculate which portion to show
+        // Based on the JavaScript splitting at ~150 words
+        let wordsPerPage = 150
+        let words = fullText.split(separator: " ")
+        
+        if words.count <= wordsPerPage {
+            // Short text, show all
+            return fullText
+        }
+        
+        // Calculate which "page" of text this is
+        var pageNumber = 0
+        for i in 0..<pageIndex {
+            if pages[i].title == currentPage?.title {
+                pageNumber += 1
+            }
+        }
+        
+        let startIndex = pageNumber * wordsPerPage
+        let endIndex = min(startIndex + wordsPerPage, words.count)
+        
+        if startIndex >= words.count {
+            return fullText // Fallback to full text if calculation is off
+        }
+        
+        let pageWords = words[startIndex..<endIndex]
+        return pageWords.joined(separator: " ")
     }
     
     var body: some View {
@@ -427,7 +468,7 @@ struct PageZoomView: View {
         .onAppear {
             if let page = currentPage {
                 editedTitle = page.title ?? ""
-                editedText = page.text ?? ""
+                editedText = displayedText // Use the displayed text, not full text
                 editedCaption = page.caption ?? ""
             }
         }
@@ -459,22 +500,39 @@ struct PageZoomView: View {
         case .text, .leftBars:
             VStack(alignment: .leading, spacing: 12) {
                 if let title = page.title {
-                    Text(title)
-                        .font(.system(size: 12, weight: .regular, design: .serif))
-                        .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
-                        .textCase(.uppercase)
-                        .kerning(0.5)
-                        .frame(maxWidth: .infinity)
+                    // Show title with different styling for continued pages
+                    if isContinuedPage {
+                        VStack(spacing: 4) {
+                            Text(title)
+                                .font(.system(size: 8, weight: .regular, design: .serif)) // Smaller for continued
+                                .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                                .textCase(.uppercase)
+                                .kerning(0.5)
+                                .frame(maxWidth: .infinity)
+                            Text("(continued)")
+                                .font(.system(size: 6, weight: .light, design: .serif))
+                                .italic()
+                                .foregroundColor(Color(red: 122/255, green: 122/255, blue: 122/255))
+                                .frame(maxWidth: .infinity)
+                        }
                         .padding(.bottom, 8)
+                    } else {
+                        Text(title)
+                            .font(.system(size: 12, weight: .regular, design: .serif))
+                            .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                            .textCase(.uppercase)
+                            .kerning(0.5)
+                            .frame(maxWidth: .infinity)
+                            .padding(.bottom, 8)
+                    }
                 }
                 
-                if let text = page.text {
-                    Text(text)
-                        .font(.system(size: 6, weight: .light, design: .serif)) // Book size
-                        .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
-                        .lineSpacing(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                // Use the calculated displayed text instead of full text
+                Text(displayedText)
+                    .font(.system(size: 10, weight: .light, design: .serif)) // Slightly larger for readability in zoom
+                    .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             
         case .rightPhoto, .mixed:
@@ -517,47 +575,108 @@ struct PageZoomView: View {
         switch page.type {
         case .cover:
             VStack(spacing: 16) {
-                TextField("Title", text: $editedTitle)
+                Spacer()
+                TextField("", text: $editedTitle)
                     .font(.system(size: 24, weight: .medium, design: .serif))
+                    .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
                     .multilineTextAlignment(.center)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .padding(.vertical, 8)
+                    .background(Color.clear)
+                    .overlay(
+                        Rectangle()
+                            .frame(height: 1)
+                            .foregroundColor(Color(red: 200/255, green: 190/255, blue: 180/255).opacity(0.5))
+                            .offset(y: 20),
+                        alignment: .bottom
+                    )
                 
-                TextField("Subtitle", text: $editedCaption)
+                TextField("", text: $editedCaption)
                     .font(.system(size: 14, weight: .light, design: .serif))
+                    .italic()
+                    .foregroundColor(Color(red: 122/255, green: 122/255, blue: 122/255))
                     .multilineTextAlignment(.center)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .padding(.vertical, 4)
+                    .background(Color.clear)
+                Spacer()
             }
             
         case .text, .leftBars:
             VStack(alignment: .leading, spacing: 12) {
-                TextField("Title", text: $editedTitle)
-                    .font(.system(size: 12, weight: .regular, design: .serif))
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                // Title with book-like editing
+                TextField("", text: $editedTitle)
+                    .font(.system(size: isContinuedPage ? 8 : 12, weight: .regular, design: .serif))
+                    .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                    .textCase(.uppercase)
+                    .multilineTextAlignment(.center)
+                    .padding(.vertical, 4)
+                    .background(
+                        Color(red: 250/255, green: 248/255, blue: 243/255).opacity(0.5)
+                    )
+                    .overlay(
+                        Rectangle()
+                            .frame(height: 1)
+                            .foregroundColor(Color(red: 200/255, green: 190/255, blue: 180/255))
+                            .offset(y: 15),
+                        alignment: .bottom
+                    )
                 
+                // Text editor styled like book page
                 TextEditor(text: $editedText)
                     .font(.system(size: 10, weight: .light, design: .serif))
+                    .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                    .lineSpacing(4)
+                    .padding(8)
+                    .background(Color.clear)
                     .frame(minHeight: 300)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                    .scrollContentBackground(.hidden) // iOS 16+ to hide default background
+                    .background(
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color(red: 250/255, green: 248/255, blue: 243/255).opacity(0.3))
                     )
             }
             
         case .rightPhoto, .mixed:
             VStack(spacing: 16) {
-                TextField("Title", text: $editedTitle)
+                TextField("", text: $editedTitle)
                     .font(.system(size: 12, weight: .regular, design: .serif))
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                    .textCase(.uppercase)
+                    .multilineTextAlignment(.center)
+                    .padding(.vertical, 4)
+                    .background(Color.clear)
+                    .overlay(
+                        Rectangle()
+                            .frame(height: 1)
+                            .foregroundColor(Color(red: 200/255, green: 190/255, blue: 180/255).opacity(0.5))
+                            .offset(y: 12),
+                        alignment: .bottom
+                    )
                 
-                if page.imageName != nil {
-                    Text("Image: \(page.imageName ?? "")")
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                if let imageName = page.imageName {
+                    Image(imageName)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxHeight: 250)
+                        .cornerRadius(4)
+                        .overlay(
+                            Text("Tap to change image")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                                .padding(4)
+                                .background(Color.black.opacity(0.6))
+                                .cornerRadius(4)
+                                .opacity(0.8),
+                            alignment: .bottom
+                        )
                 }
                 
-                TextField("Caption", text: $editedCaption)
+                TextField("", text: $editedCaption)
                     .font(.system(size: 8, weight: .light, design: .serif))
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .italic()
+                    .foregroundColor(Color(red: 122/255, green: 122/255, blue: 122/255))
+                    .multilineTextAlignment(.center)
+                    .padding(.vertical, 4)
+                    .background(Color.clear)
             }
             
         case .html:
