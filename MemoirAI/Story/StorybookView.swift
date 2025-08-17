@@ -342,7 +342,7 @@ struct PageZoomView: View {
                     Spacer()
                     
                     if !isEditing {
-                        Button(action: { startEditing() }) {
+                        Button(action: { isEditing = true }) {
                             HStack(spacing: 6) {
                                 Image(systemName: "pencil")
                                 Text("Edit")
@@ -356,7 +356,15 @@ struct PageZoomView: View {
                         .padding()
                     } else {
                         HStack(spacing: 12) {
-                            Button(action: { cancelEditing() }) {
+                            Button(action: { 
+                                isEditing = false
+                                // Reset to original values
+                                if let page = currentPage {
+                                    editedTitle = page.title ?? ""
+                                    editedText = page.text ?? ""
+                                    editedCaption = page.caption ?? ""
+                                }
+                            }) {
                                 Text("Cancel")
                                     .font(.system(size: 16, weight: .medium))
                                     .foregroundColor(Tokens.ink.opacity(0.7))
@@ -365,7 +373,11 @@ struct PageZoomView: View {
                                     .background(Capsule().fill(Color.white.opacity(0.9)))
                             }
                             
-                            Button(action: { saveChanges() }) {
+                            Button(action: { 
+                                // TODO: Implement saving changes back to the page model
+                                // This would require passing a binding or callback to update the pages array
+                                isEditing = false
+                            }) {
                                 Text("Done")
                                     .font(.system(size: 16, weight: .medium))
                                     .foregroundColor(.white)
@@ -556,26 +568,6 @@ struct PageZoomView: View {
         }
     }
     
-    // MARK: - Helper Functions
-    private func startEditing() {
-        isEditing = true
-    }
-    
-    private func cancelEditing() {
-        isEditing = false
-        // Reset to original values
-        if let page = currentPage {
-            editedTitle = page.title ?? ""
-            editedText = page.text ?? ""
-            editedCaption = page.caption ?? ""
-        }
-    }
-    
-    private func saveChanges() {
-        // TODO: Implement saving changes back to the page model
-        // This would require passing a binding or callback to update the pages array
-        isEditing = false
-    }
 }
 
 // MARK: - FlipbookView Wrapper
