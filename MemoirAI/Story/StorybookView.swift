@@ -49,7 +49,8 @@ struct StorybookView: View {
     }
 
     var body: some View {
-        ZStack {
+        GeometryReader { geometry in
+            ZStack {
                 // Warm parchment gradient background
                 LinearGradient(
                     colors: [Tokens.bgPrimary, Tokens.bgWash],
@@ -57,25 +58,13 @@ struct StorybookView: View {
                     endPoint: .bottom
                 )
                 .ignoresSafeArea()
-                
-                // Download button in top-right
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button(action: downloadBook) {
-                            Image(systemName: "arrow.down.circle.fill")
-                                .font(.system(size: 24))
-                                .foregroundColor(Tokens.ink.opacity(0.7))
-                                .background(Circle().fill(Color.white.opacity(0.9)))
-                        }
-                        .padding(.trailing, 20)
-                        .padding(.top, 50)
-                    }
-                    Spacer()
-                }
 
                 VStack(spacing: 0) {
                     headerView
+
+                    // Add percentage-based spacing to move book down
+                    Spacer()
+                        .frame(height: geometry.size.height * 0.03) // 3% of screen height
 
                     GeometryReader { geo in
                         let bookSize = calculateBookSize(for: geo.size)
@@ -167,7 +156,9 @@ struct StorybookView: View {
                         .padding(.horizontal, 8)  // Reduced from 16 to give more space
                         .clipped() // Ensure content doesn't overflow
                     }
+                    }
                 }
+            }
         }
         .navigationBarHidden(true)
         .navigationBarBackButtonHidden(true)
@@ -181,43 +172,53 @@ struct StorybookView: View {
         }
         .onAppear { currentPage = 0 }
         .fullScreenCover(isPresented: $showZoomedPage) {
-            ZoomedPageView(pageIndex: zoomedPageIndex, pages: flipbookPages)
+            PageZoomView(pageIndex: zoomedPageIndex, pages: flipbookPages)
         }
     }
 
     // MARK: - Header View
     private var headerView: some View {
-        HStack {
-            Button(action: { dismiss() }) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(Tokens.ink.opacity(0.7))
-                    .padding(10)
-                    .background(Tokens.bgWash)
-                    .clipShape(Circle())
+        GeometryReader { geo in
+            HStack(alignment: .top) {
+                Button(action: { dismiss() }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(Tokens.ink.opacity(0.7))
+                        .padding(10)
+                        .background(Tokens.bgWash)
+                        .clipShape(Circle())
+                }
+
+                Spacer()
+
+                VStack(spacing: 20) { // Increased from headerSpacing (12) to 20
+                    Text("Create your book")
+                        .font(Tokens.Typography.title)
+                        .foregroundColor(Tokens.ink)
+
+                    Text("Flip through a finished book")
+                        .font(Tokens.Typography.subtitle)
+                        .foregroundColor(Tokens.ink.opacity(0.7))
+                }
+                .padding(.top, geo.size.height * 0.02) // Add percentage-based top padding
+
+                Spacer()
+
+                // Download button aligned with back button
+                Button(action: downloadBook) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(Tokens.ink.opacity(0.7))
+                        .padding(10)
+                        .background(Tokens.bgWash)
+                        .clipShape(Circle())
+                }
             }
-
-            Spacer()
-
-            VStack(spacing: Tokens.headerSpacing) {
-                Text("Create your book")
-                    .font(Tokens.Typography.title)
-                    .foregroundColor(Tokens.ink)
-
-                Text("Flip through a finished book")
-                    .font(Tokens.Typography.subtitle)
-                    .foregroundColor(Tokens.ink.opacity(0.7))
-            }
-
-            Spacer()
-
-            // Spacer to balance back button
-            Color.clear
-                .frame(width: 38, height: 38)
+            .padding(.horizontal, 20)
+            .padding(.top, geo.safeAreaInsets.top > 0 ? geo.size.height * 0.06 : geo.size.height * 0.08) // 6-8% from top
+            .padding(.bottom, 20)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
-        .padding(.bottom, 20)
+        .frame(height: 120) // Fixed height for header
     }
 
     // MARK: - Action Buttons View
@@ -299,10 +300,14 @@ struct StorybookView: View {
 }
 
 // MARK: - Zoomed Page View
-struct ZoomedPageView: View {
+struct PageZoomView: View {
     let pageIndex: Int
     let pages: [FlipPage]
     @Environment(\.dismiss) private var dismiss
+    @State private var isEditing = false
+    @State private var editedTitle: String = ""
+    @State private var editedText: String = ""
+    @State private var editedCaption: String = ""
     
     var currentPage: FlipPage? {
         guard pageIndex >= 0 && pageIndex < pages.count else { return nil }
@@ -311,127 +316,265 @@ struct ZoomedPageView: View {
     
     var body: some View {
         ZStack {
-            // Dark background
-            Color.black.opacity(0.95)
-                .ignoresSafeArea()
+            // Soft blur background with parchment color
+            LinearGradient(
+                colors: [Tokens.bgPrimary.opacity(0.98), Tokens.bgWash.opacity(0.98)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            .overlay(
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+            )
             
             VStack(spacing: 0) {
-                // Close button header
+                // Navigation header
                 HStack {
-                    Spacer()
                     Button(action: { dismiss() }) {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(.white)
-                            .background(Circle().fill(Color.white.opacity(0.2)))
+                            .font(.system(size: 28))
+                            .foregroundColor(Tokens.ink.opacity(0.8))
+                            .background(Circle().fill(Color.white.opacity(0.9)))
                     }
                     .padding()
-                }
-                
-                // Page content
-                ScrollView {
-                    if let page = currentPage {
-                        VStack(alignment: .center, spacing: 24) {
-                            // Handle different page types
-                            switch page.type {
-                            case .cover:
-                                // Cover page display
-                                VStack(spacing: 16) {
-                                    Text(page.title ?? "Life Stories")
-                                        .font(.system(size: 36, weight: .medium, design: .serif))
-                                        .foregroundColor(.white)
-                                        .multilineTextAlignment(.center)
-                                    
-                                    if let caption = page.caption {
-                                        Text(caption)
-                                            .font(.system(size: 20, weight: .light, design: .serif))
-                                            .italic()
-                                            .foregroundColor(.white.opacity(0.8))
-                                            .multilineTextAlignment(.center)
-                                    }
-                                }
-                                .padding(.vertical, 60)
-                                
-                            case .text, .leftBars:
-                                // Text page display
-                                VStack(alignment: .leading, spacing: 20) {
-                                    if let title = page.title {
-                                        Text(title)
-                                            .font(.system(size: 28, weight: .medium, design: .serif))
-                                            .foregroundColor(.white)
-                                            .frame(maxWidth: .infinity, alignment: .center)
-                                    }
-                                    
-                                    if let text = page.text {
-                                        Text(text)
-                                            .font(.system(size: 18, weight: .light, design: .serif))
-                                            .foregroundColor(.white.opacity(0.95))
-                                            .lineSpacing(10)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-                                    
-                                    if let caption = page.caption {
-                                        Text(caption)
-                                            .font(.system(size: 16, weight: .light, design: .serif))
-                                            .italic()
-                                            .foregroundColor(.white.opacity(0.7))
-                                    }
-                                }
-                                
-                            case .rightPhoto, .mixed:
-                                // Photo page display
-                                VStack(spacing: 20) {
-                                    if let title = page.title {
-                                        Text(title)
-                                            .font(.system(size: 28, weight: .medium, design: .serif))
-                                            .foregroundColor(.white)
-                                    }
-                                    
-                                    // Display image if available
-                                    if let imageName = page.imageName {
-                                        Image(imageName)
-                                            .resizable()
-                                            .aspectRatio(contentMode: .fit)
-                                            .frame(maxHeight: 400)
-                                            .cornerRadius(8)
-                                    }
-                                    
-                                    if let caption = page.caption {
-                                        Text(caption)
-                                            .font(.system(size: 16, weight: .light, design: .serif))
-                                            .italic()
-                                            .foregroundColor(.white.opacity(0.8))
-                                            .multilineTextAlignment(.center)
-                                    }
-                                    
-                                    if let text = page.text {
-                                        Text(text)
-                                            .font(.system(size: 18, weight: .light, design: .serif))
-                                            .foregroundColor(.white.opacity(0.95))
-                                            .lineSpacing(10)
-                                    }
-                                }
-                                
-                            case .html:
-                                // HTML page (fallback)
-                                Text(page.text ?? "")
-                                    .font(.system(size: 18, weight: .light, design: .serif))
-                                    .foregroundColor(.white.opacity(0.9))
+                    
+                    Spacer()
+                    
+                    if !isEditing {
+                        Button(action: { startEditing() }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "pencil")
+                                Text("Edit")
+                            }
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(Tokens.accent))
+                        }
+                        .padding()
+                    } else {
+                        HStack(spacing: 12) {
+                            Button(action: { cancelEditing() }) {
+                                Text("Cancel")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(Tokens.ink.opacity(0.7))
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(Capsule().fill(Color.white.opacity(0.9)))
+                            }
+                            
+                            Button(action: { saveChanges() }) {
+                                Text("Done")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(Capsule().fill(Color.blue))
                             }
                         }
-                        .padding(.horizontal, 40)
-                        .padding(.bottom, 40)
-                    } else {
-                        // Error state
-                        Text("Page not found")
-                            .font(.system(size: 20, weight: .medium, design: .serif))
-                            .foregroundColor(.white.opacity(0.5))
-                            .padding()
+                        .padding()
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                
+                // Page content - displayed like the actual book page
+                GeometryReader { geo in
+                    ScrollView {
+                        if let page = currentPage {
+                            // Book page appearance
+                            VStack {
+                                ZStack {
+                                    // Page background with realistic paper texture
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color(red: 250/255, green: 248/255, blue: 243/255)) // Paper color
+                                        .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
+                                    
+                                    // Page content with proper book formatting
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        if isEditing {
+                                            // Edit mode
+                                            editablePageContent(page: page)
+                                        } else {
+                                            // Display mode - exactly as it appears in the book
+                                            displayPageContent(page: page)
+                                        }
+                                    }
+                                    .padding(40) // Book page margins
+                                }
+                                .frame(width: min(geo.size.width * 0.85, 500)) // Max width for readability
+                                .frame(minHeight: geo.size.height * 0.7)
+                                .padding(.vertical, 40)
+                                
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                    }
+                }
             }
         }
+        .onAppear {
+            if let page = currentPage {
+                editedTitle = page.title ?? ""
+                editedText = page.text ?? ""
+                editedCaption = page.caption ?? ""
+            }
+        }
+    }
+    
+    // MARK: - Display Page Content (Read-only)
+    @ViewBuilder
+    private func displayPageContent(page: FlipPage) -> some View {
+        switch page.type {
+        case .cover:
+            VStack(spacing: 16) {
+                Spacer()
+                Text(page.title ?? "Life Stories")
+                    .font(.system(size: 24, weight: .medium, design: .serif))
+                    .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                    .multilineTextAlignment(.center)
+                    .textCase(.uppercase)
+                
+                if let caption = page.caption {
+                    Text(caption)
+                        .font(.system(size: 14, weight: .light, design: .serif))
+                        .italic()
+                        .foregroundColor(Color(red: 122/255, green: 122/255, blue: 122/255))
+                        .multilineTextAlignment(.center)
+                }
+                Spacer()
+            }
+            
+        case .text, .leftBars:
+            VStack(alignment: .leading, spacing: 12) {
+                if let title = page.title {
+                    Text(title)
+                        .font(.system(size: 12, weight: .regular, design: .serif))
+                        .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                        .textCase(.uppercase)
+                        .kerning(0.5)
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, 8)
+                }
+                
+                if let text = page.text {
+                    Text(text)
+                        .font(.system(size: 6, weight: .light, design: .serif)) // Book size
+                        .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            
+        case .rightPhoto, .mixed:
+            VStack(spacing: 16) {
+                if let title = page.title {
+                    Text(title)
+                        .font(.system(size: 12, weight: .regular, design: .serif))
+                        .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                        .textCase(.uppercase)
+                        .kerning(0.5)
+                }
+                
+                if let imageName = page.imageName {
+                    Image(imageName)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxHeight: 300)
+                        .cornerRadius(4)
+                }
+                
+                if let caption = page.caption {
+                    Text(caption)
+                        .font(.system(size: 8, weight: .light, design: .serif))
+                        .italic()
+                        .foregroundColor(Color(red: 122/255, green: 122/255, blue: 122/255))
+                        .multilineTextAlignment(.center)
+                }
+            }
+            
+        case .html:
+            Text(page.text ?? "")
+                .font(.system(size: 6, weight: .light, design: .serif))
+                .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+        }
+    }
+    
+    // MARK: - Editable Page Content
+    @ViewBuilder
+    private func editablePageContent(page: FlipPage) -> some View {
+        switch page.type {
+        case .cover:
+            VStack(spacing: 16) {
+                TextField("Title", text: $editedTitle)
+                    .font(.system(size: 24, weight: .medium, design: .serif))
+                    .multilineTextAlignment(.center)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                
+                TextField("Subtitle", text: $editedCaption)
+                    .font(.system(size: 14, weight: .light, design: .serif))
+                    .multilineTextAlignment(.center)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+            }
+            
+        case .text, .leftBars:
+            VStack(alignment: .leading, spacing: 12) {
+                TextField("Title", text: $editedTitle)
+                    .font(.system(size: 12, weight: .regular, design: .serif))
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                
+                TextEditor(text: $editedText)
+                    .font(.system(size: 10, weight: .light, design: .serif))
+                    .frame(minHeight: 300)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                    )
+            }
+            
+        case .rightPhoto, .mixed:
+            VStack(spacing: 16) {
+                TextField("Title", text: $editedTitle)
+                    .font(.system(size: 12, weight: .regular, design: .serif))
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                
+                if page.imageName != nil {
+                    Text("Image: \(page.imageName ?? "")")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+                
+                TextField("Caption", text: $editedCaption)
+                    .font(.system(size: 8, weight: .light, design: .serif))
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+            }
+            
+        case .html:
+            TextEditor(text: $editedText)
+                .font(.system(size: 10, weight: .light, design: .serif))
+                .frame(minHeight: 300)
+        }
+    }
+    
+    // MARK: - Helper Functions
+    private func startEditing() {
+        isEditing = true
+    }
+    
+    private func cancelEditing() {
+        isEditing = false
+        // Reset to original values
+        if let page = currentPage {
+            editedTitle = page.title ?? ""
+            editedText = page.text ?? ""
+            editedCaption = page.caption ?? ""
+        }
+    }
+    
+    private func saveChanges() {
+        // TODO: Implement saving changes back to the page model
+        // This would require passing a binding or callback to update the pages array
+        isEditing = false
     }
 }
 
