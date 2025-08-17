@@ -1,6 +1,7 @@
 {
   "images" : [
     {
+      "filename" : "paris.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
