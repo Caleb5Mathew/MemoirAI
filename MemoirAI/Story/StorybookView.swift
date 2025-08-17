@@ -15,10 +15,10 @@ struct StorybookView: View {
     @State private var webView: WKWebView?
     @State private var showZoomedPage = false
     @State private var zoomedPageIndex: Int = 0
+    @State private var flipbookPages = FlipPage.samplePages
 
     // Sample pages for the finished book preview
     private let samplePages = MockBookPage.samplePages
-    private let flipbookPages = FlipPage.samplePages
     
     // Helper function to calculate book size outside ViewBuilder context
     private func calculateBookSize(for size: CGSize) -> CGSize {
@@ -171,7 +171,7 @@ struct StorybookView: View {
         }
         .onAppear { currentPage = 0 }
         .fullScreenCover(isPresented: $showZoomedPage) {
-            PageZoomView(pageIndex: zoomedPageIndex, pages: flipbookPages)
+            PageZoomView(pageIndex: zoomedPageIndex, pages: $flipbookPages)
         }
     }
 
@@ -301,7 +301,7 @@ struct StorybookView: View {
 // MARK: - Zoomed Page View
 struct PageZoomView: View {
     let pageIndex: Int
-    let pages: [FlipPage]
+    @Binding var pages: [FlipPage]
     @Environment(\.presentationMode) var presentationMode
     @State private var isEditing = false
     @State private var editedTitle: String = ""
