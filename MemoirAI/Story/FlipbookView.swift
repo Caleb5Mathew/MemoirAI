@@ -212,18 +212,40 @@ struct FlipbookView: UIViewRepresentable {
             let pagesWithBase64 = pages.map { page -> FlipPage in
                 if let imageName = page.imageName, page.imageBase64 == nil {
                     // Try to load image from Assets and convert to base64
-                    if let uiImage = UIImage(named: imageName),
-                       let imageData = uiImage.jpegData(compressionQuality: 0.8) {
-                        let base64String = imageData.base64EncodedString()
-                        print("FlipbookView: Converted \(imageName) to base64 (length: \(base64String.count))")
-                        return FlipPage(
-                            type: page.type,
-                            title: page.title,
-                            caption: page.caption,
-                            text: page.text,
-                            imageBase64: base64String,
-                            imageName: page.imageName
-                        )
+                    if let uiImage = UIImage(named: imageName) {
+                        // Resize large images to reasonable dimensions for flipbook
+                        let maxSize: CGFloat = 800
+                        let resizedImage: UIImage
+                        
+                        if uiImage.size.width > maxSize || uiImage.size.height > maxSize {
+                            let scale = min(maxSize / uiImage.size.width, maxSize / uiImage.size.height)
+                            let newSize = CGSize(width: uiImage.size.width * scale, height: uiImage.size.height * scale)
+                            
+                            UIGraphicsBeginImageContextWithOptions(newSize, false, 0.0)
+                            uiImage.draw(in: CGRect(origin: .zero, size: newSize))
+                            resizedImage = UIGraphicsGetImageFromCurrentImageContext() ?? uiImage
+                            UIGraphicsEndImageContext()
+                            
+                            print("FlipbookView: Resized \(imageName) from \(uiImage.size) to \(newSize)")
+                        } else {
+                            resizedImage = uiImage
+                        }
+                        
+                        // Use higher compression for better performance
+                        if let imageData = resizedImage.jpegData(compressionQuality: 0.6) {
+                            let base64String = imageData.base64EncodedString()
+                            print("FlipbookView: Converted \(imageName) to base64 (length: \(base64String.count))")
+                            return FlipPage(
+                                type: page.type,
+                                title: page.title,
+                                caption: page.caption,
+                                text: page.text,
+                                imageBase64: base64String,
+                                imageName: page.imageName
+                            )
+                        } else {
+                            print("FlipbookView: Could not compress image: \(imageName)")
+                        }
                     } else {
                         print("FlipbookView: Could not load image: \(imageName)")
                     }
@@ -265,17 +287,35 @@ struct FlipbookView: UIViewRepresentable {
         do {
             let pagesWithBase64 = pages.map { page -> FlipPage in
                 if let imageName = page.imageName, page.imageBase64 == nil {
-                    if let uiImage = UIImage(named: imageName),
-                       let imageData = uiImage.jpegData(compressionQuality: 0.8) {
-                        let base64String = imageData.base64EncodedString()
-                        return FlipPage(
-                            type: page.type,
-                            title: page.title,
-                            caption: page.caption,
-                            text: page.text,
-                            imageBase64: base64String,
-                            imageName: page.imageName
-                        )
+                    if let uiImage = UIImage(named: imageName) {
+                        // Resize large images to reasonable dimensions for flipbook
+                        let maxSize: CGFloat = 800
+                        let resizedImage: UIImage
+                        
+                        if uiImage.size.width > maxSize || uiImage.size.height > maxSize {
+                            let scale = min(maxSize / uiImage.size.width, maxSize / uiImage.size.height)
+                            let newSize = CGSize(width: uiImage.size.width * scale, height: uiImage.size.height * scale)
+                            
+                            UIGraphicsBeginImageContextWithOptions(newSize, false, 0.0)
+                            uiImage.draw(in: CGRect(origin: .zero, size: newSize))
+                            resizedImage = UIGraphicsGetImageFromCurrentImageContext() ?? uiImage
+                            UIGraphicsEndImageContext()
+                        } else {
+                            resizedImage = uiImage
+                        }
+                        
+                        // Use higher compression for better performance
+                        if let imageData = resizedImage.jpegData(compressionQuality: 0.6) {
+                            let base64String = imageData.base64EncodedString()
+                            return FlipPage(
+                                type: page.type,
+                                title: page.title,
+                                caption: page.caption,
+                                text: page.text,
+                                imageBase64: base64String,
+                                imageName: page.imageName
+                            )
+                        }
                     }
                 }
                 return page

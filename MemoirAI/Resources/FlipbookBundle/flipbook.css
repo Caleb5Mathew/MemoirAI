@@ -283,7 +283,7 @@ html, body {
 }
 
 /* Center spine shadow - only on book spine between pages */
-.stf__wrapper::after {
+.stf__block::after {
     content: '';
     position: absolute;
     top: 0;
@@ -299,6 +299,7 @@ html, body {
         transparent 100%);
     pointer-events: none;
     z-index: 1000;
+    display: block !important;
 }
 
 /* Remove shadow from individual items/pages */
@@ -306,9 +307,7 @@ html, body {
     display: none !important;
 }
 
-.stf__block::after {
-    display: none !important;
-}
+/* Spine shadow styling moved to .stf__block::after above */
 
 .stf__page {
     background: transparent !important;
