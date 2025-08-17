@@ -49,8 +49,7 @@ struct StorybookView: View {
     }
 
     var body: some View {
-        NavigationView {
-            ZStack {
+        ZStack {
                 // Warm parchment gradient background
                 LinearGradient(
                     colors: [Tokens.bgPrimary, Tokens.bgWash],
@@ -169,11 +168,9 @@ struct StorybookView: View {
                         .clipped() // Ensure content doesn't overflow
                     }
                 }
-            }
-            .navigationBarHidden(true)
-            .navigationBarBackButtonHidden(true)
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .navigationBarHidden(true)
+        .navigationBarBackButtonHidden(true)
         .sheet(isPresented: $showPhotoPicker) {
             PhotoPickerSheet(
                 isPresented: $showPhotoPicker,
