@@ -14,7 +14,7 @@ struct UserMemoriesBookView: View {
     @State private var flipbookError = false
     @State private var webView: WKWebView?
     @State private var showZoomedPage = false
-    @State private var zoomedPageIndex: Int = -1
+    @State private var zoomedPageIndex: Int = 0
     @State private var flipbookPages: [FlipPage] = []
     
     @StateObject private var memoryViewModel = MemoryEntryViewModel()
