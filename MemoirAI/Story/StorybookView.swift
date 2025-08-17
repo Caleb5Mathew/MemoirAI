@@ -156,7 +156,6 @@ struct StorybookView: View {
                         .padding(.horizontal, 8)  // Reduced from 16 to give more space
                         .clipped() // Ensure content doesn't overflow
                     }
-                    }
                 }
             }
         }
