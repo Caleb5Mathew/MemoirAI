@@ -199,7 +199,7 @@ struct StorybookView: View {
                         .font(Tokens.Typography.subtitle)
                         .foregroundColor(Tokens.ink.opacity(0.7))
                 }
-                .padding(.top, geo.size.height * 0.10) // Moved down significantly (was 0.02)
+                .padding(.top, geo.size.height * 0.20) // Moved down more (20% from top)
 
                 Spacer()
 
