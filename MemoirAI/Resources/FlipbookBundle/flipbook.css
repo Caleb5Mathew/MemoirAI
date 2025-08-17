@@ -282,25 +282,7 @@ html, body {
         0 5px 15px rgba(0, 0, 0, 0.15) !important;
 }
 
-/* Center spine shadow - only on book spine between pages */
-.stf__block::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 12px;
-    background: linear-gradient(to right,
-        transparent 0%,
-        rgba(0, 0, 0, 0.08) 15%,
-        rgba(0, 0, 0, 0.12) 50%,
-        rgba(0, 0, 0, 0.08) 85%,
-        transparent 100%);
-    pointer-events: none;
-    z-index: 1000;
-    display: block !important;
-}
+/* Removed center spine shadow from block - will use page shadows instead */
 
 /* Remove shadow from individual items/pages */
 .stf__item::after {
@@ -320,18 +302,20 @@ html, body {
 
 /* Removed page thickness effects to eliminate white edges */
 
-/* Inner page shadows for depth */
+/* Inner page shadows create spine effect at the center */
 .left-page::after {
     content: '';
     position: absolute;
     top: 0;
     right: 0;
     bottom: 0;
-    width: 20px;
+    width: 8px;
     background: linear-gradient(to left,
-        rgba(0, 0, 0, 0.08) 0%,
+        rgba(0, 0, 0, 0.12) 0%,
+        rgba(0, 0, 0, 0.08) 30%,
         transparent 100%);
     pointer-events: none;
+    z-index: 100;
 }
 
 .right-page::before {
@@ -340,11 +324,29 @@ html, body {
     top: 0;
     left: 0;
     bottom: 0;
-    width: 20px;
+    width: 8px;
     background: linear-gradient(to right,
-        rgba(0, 0, 0, 0.08) 0%,
+        rgba(0, 0, 0, 0.12) 0%,
+        rgba(0, 0, 0, 0.08) 30%,
         transparent 100%);
     pointer-events: none;
+    z-index: 100;
+}
+
+/* Additional center spine shadow for the book fold */
+.stf__item.--right:first-of-type::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -2px;
+    width: 4px;
+    background: linear-gradient(to right,
+        transparent 0%,
+        rgba(0, 0, 0, 0.1) 50%,
+        transparent 100%);
+    pointer-events: none;
+    z-index: 101;
 }
 
 /* Single page mode - centered */
