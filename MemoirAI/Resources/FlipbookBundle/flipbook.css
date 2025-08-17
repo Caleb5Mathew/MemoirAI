@@ -299,6 +299,11 @@ html, body {
 
 /* Center spine shadow - only on actual book pages */
 .stf__block::after {
+    display: none !important; /* Remove from block */
+}
+
+/* Add spine shadow directly to the pages */
+.stf__item::after {
     content: '';
     position: absolute;
     top: 0;
@@ -313,8 +318,7 @@ html, body {
         transparent 100%);
     pointer-events: none;
     z-index: 100;
-    /* Clip to actual page content area */
-    clip-path: inset(0 0 0 0);
+    height: 100%;
 }
 
 .stf__page {
@@ -390,8 +394,8 @@ html, body {
 }
 
 /* Single page mode - centered */
-.stf__single-mode .stf__block::after {
-    display: none !important;
+.stf__single-mode .stf__item::after {
+    display: none !important; /* No spine shadow for single page */
 }
 
 .stf__single-mode .stf__wrapper {
