@@ -483,36 +483,38 @@ struct PageZoomView: View {
                     }
                 }
                 
-                // Page content - displayed like the actual book page
-                GeometryReader { geo in
-                    ScrollView {
-                        if let page = currentPage {
-                            // Book page appearance
-                            VStack {
-                                ZStack {
-                                    // Page background with realistic paper texture
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(Color(red: 250/255, green: 248/255, blue: 243/255)) // Paper color
-                                        .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
-                                    
-                                    // Page content with proper book formatting
-                                    VStack(alignment: .leading, spacing: 0) {
-                                        if isEditing {
-                                            // Edit mode
-                                            editablePageContent(page: page)
-                                        } else {
-                                            // Display mode - exactly as it appears in the book
-                                            displayPageContent(page: page)
+                        // Page content - displayed like the actual book page
+                        GeometryReader { geo in
+                            ScrollView {
+                                if let page = currentPage {
+                                    // Book page appearance
+                                    VStack {
+                                        ZStack {
+                                            // Page background with realistic paper texture
+                                            RoundedRectangle(cornerRadius: 4)
+                                                .fill(Color(red: 250/255, green: 248/255, blue: 243/255)) // Paper color
+                                                .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
+                                            
+                                            // Page content with proper book formatting
+                                            VStack(alignment: .leading, spacing: 0) {
+                                                if isEditing {
+                                                    // Edit mode
+                                                    editablePageContent(page: page)
+                                                } else {
+                                                    // Display mode - exactly as it appears in the book
+                                                    displayPageContent(page: page)
+                                                }
+                                            }
+                                            .padding(40) // Book page margins
                                         }
+                                        .frame(width: min(geo.size.width * 0.85, 500)) // Max width for readability
+                                        .frame(minHeight: geo.size.height * 0.7)
+                                        .padding(.vertical, 40)
+                                        
                                     }
-                                    .padding(40) // Book page margins
+                                    .frame(maxWidth: .infinity)
                                 }
-                                .frame(width: min(geo.size.width * 0.85, 500)) // Max width for readability
-                                .frame(minHeight: geo.size.height * 0.7)
-                                .padding(.vertical, 40)
-                                
                             }
-                            .frame(maxWidth: .infinity)
                         }
                     }
                     .tag(index)
