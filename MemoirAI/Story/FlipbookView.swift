@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import PDFKit
 
 // MARK: - Flipbook View (WKWebView wrapper)
 struct FlipbookView: UIViewRepresentable {
@@ -493,12 +494,80 @@ struct FlipbookView: UIViewRepresentable {
         private func handlePDFDownload(pages: [String], filename: String) {
             print("FlipbookView: Handling PDF download with \(pages.count) pages")
             
-            // Create PDF from page images
-            // This would typically be handled by creating a PDFDocument
-            // and saving it to the user's files
+            // Create PDF document
+            let pdfDocument = PDFDocument()
             
-            // For now, just log the action
-            print("FlipbookView: PDF download requested: \(filename)")
+            // Process each page image
+            for (index, pageDataString) in pages.enumerated() {
+                // Remove data URL prefix if present
+                let base64String: String
+                if pageDataString.hasPrefix("data:image/jpeg;base64,") {
+                    base64String = String(pageDataString.dropFirst("data:image/jpeg;base64,".count))
+                } else if pageDataString.hasPrefix("data:image/png;base64,") {
+                    base64String = String(pageDataString.dropFirst("data:image/png;base64,".count))
+                } else {
+                    base64String = pageDataString
+                }
+                
+                // Decode base64 to image data
+                guard let imageData = Data(base64Encoded: base64String),
+                      let image = UIImage(data: imageData) else {
+                    print("FlipbookView: Failed to decode page \(index + 1)")
+                    continue
+                }
+                
+                // Create PDF page from image
+                if let pdfPage = PDFPage(image: image) {
+                    pdfDocument.insert(pdfPage, at: index)
+                    print("FlipbookView: Added page \(index + 1) to PDF")
+                }
+            }
+            
+            // Check if we have pages
+            guard pdfDocument.pageCount > 0 else {
+                print("FlipbookView: No pages were added to PDF")
+                return
+            }
+            
+            // Get PDF data
+            guard let pdfData = pdfDocument.dataRepresentation() else {
+                print("FlipbookView: Failed to generate PDF data")
+                return
+            }
+            
+            // Create activity view controller for sharing/saving
+            DispatchQueue.main.async {
+                let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+                
+                do {
+                    try pdfData.write(to: tempURL)
+                    
+                    // Create share sheet
+                    let activityVC = UIActivityViewController(
+                        activityItems: [tempURL],
+                        applicationActivities: nil
+                    )
+                    
+                    // Present from the current window's root view controller
+                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let rootVC = windowScene.windows.first?.rootViewController {
+                        
+                        // Configure for iPad
+                        if let popover = activityVC.popoverPresentationController {
+                            popover.sourceView = rootVC.view
+                            popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: rootVC.view.bounds.midY, width: 0, height: 0)
+                            popover.permittedArrowDirections = []
+                        }
+                        
+                        rootVC.present(activityVC, animated: true) {
+                            print("FlipbookView: Share sheet presented for PDF: \(filename)")
+                        }
+                    }
+                    
+                } catch {
+                    print("FlipbookView: Error saving PDF: \(error)")
+                }
+            }
         }
     }
 }

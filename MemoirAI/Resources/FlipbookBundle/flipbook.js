@@ -94,85 +94,196 @@ function handlePageTap(pageIndex) {
     }
 }
 
-// PDF Download functionality
-window.downloadPDF = function() {
-    console.log('Flipbook: Starting PDF download...');
+// PDF Download functionality - captures actual rendered pages
+window.downloadPDF = async function() {
+    console.log('Flipbook: Starting PDF download with page capture...');
     
-    // Check if we have pages to export
+    if (!pageFlip) {
+        console.error('Flipbook: PageFlip not initialized');
+        return;
+    }
+    
+    // Check if html2canvas is available
+    if (typeof html2canvas === 'undefined') {
+        console.error('Flipbook: html2canvas library not loaded');
+        // Fallback to basic implementation
+        downloadPDFBasic();
+        return;
+    }
+    
+    const totalPages = pageFlip.getPageCount ? pageFlip.getPageCount() : 0;
+    if (totalPages === 0) {
+        console.error('Flipbook: No pages to download');
+        return;
+    }
+    
+    // Store current page to restore later
+    const currentPageIndex = pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() : 0;
+    const pdfContent = [];
+    const bookElement = document.getElementById('book');
+    
+    // Hide navigation arrows temporarily
+    const navArrows = document.getElementById('navigation-arrows');
+    if (navArrows) navArrows.style.display = 'none';
+    
+    try {
+        console.log(`Flipbook: Capturing ${totalPages} pages...`);
+        
+        // Capture each page
+        for (let i = 0; i < totalPages; i++) {
+            console.log(`Flipbook: Capturing page ${i + 1} of ${totalPages}`);
+            
+            // Navigate to the page
+            pageFlip.flip(i);
+            
+            // Wait for page flip animation to complete
+            await new Promise(resolve => setTimeout(resolve, 800));
+            
+            // Find the actual visible page elements (not the container)
+            let pageToCapture = null;
+            
+            // Check if we're on cover page (single page mode)
+            if (i === 0) {
+                // Cover page - look for the visible page
+                pageToCapture = bookElement.querySelector('.stf__item.--right .flipbook-page.cover-page') ||
+                               bookElement.querySelector('.flipbook-page.cover-page');
+            } else {
+                // Regular pages - find the visible page(s)
+                const visiblePages = bookElement.querySelectorAll('.stf__item .flipbook-page');
+                if (visiblePages.length > 0) {
+                    // For spread view, create a container with both pages
+                    if (visiblePages.length === 2) {
+                        // Create temporary container for spread
+                        const spreadContainer = document.createElement('div');
+                        spreadContainer.style.display = 'flex';
+                        spreadContainer.style.backgroundColor = '#faf8f3';
+                        spreadContainer.style.width = '100%';
+                        spreadContainer.style.height = '100%';
+                        
+                        // Clone and append both pages
+                        visiblePages.forEach(page => {
+                            const clone = page.cloneNode(true);
+                            spreadContainer.appendChild(clone);
+                        });
+                        
+                        // Temporarily add to DOM for capture
+                        bookElement.appendChild(spreadContainer);
+                        pageToCapture = spreadContainer;
+                    } else {
+                        // Single page
+                        pageToCapture = visiblePages[0];
+                    }
+                }
+            }
+            
+            // Fallback to book element if no specific page found
+            if (!pageToCapture) {
+                console.warn(`Flipbook: Could not find specific page element for page ${i + 1}, using book container`);
+                pageToCapture = bookElement;
+            }
+            
+            console.log(`Flipbook: Capturing element:`, pageToCapture.className || 'spread container');
+            
+            // Capture with higher quality settings
+            const canvas = await html2canvas(pageToCapture, {
+                backgroundColor: '#faf8f3', // Paper color
+                scale: 3, // Increased from 2 to 3 for better text quality
+                logging: false,
+                useCORS: true,
+                allowTaint: true,
+                letterRendering: true, // Better text rendering
+                imageTimeout: 0, // No timeout for images
+                width: pageToCapture.scrollWidth,
+                height: pageToCapture.scrollHeight
+            });
+            
+            // Clean up temporary spread container if created
+            if (pageToCapture.parentElement === bookElement && !pageToCapture.classList.contains('stf__item')) {
+                pageToCapture.remove();
+            }
+            
+            // Convert to JPEG with high quality
+            const imageData = canvas.toDataURL('image/jpeg', 0.95);
+            pdfContent.push(imageData);
+        }
+        
+        console.log('Flipbook: All pages captured successfully');
+        
+        // Create filename with timestamp
+        const timestamp = new Date().toISOString().slice(0, 10);
+        const filename = `memoir-book-${timestamp}.pdf`;
+        
+        // Send to Swift for PDF generation
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+            window.webkit.messageHandlers.native.postMessage({
+                type: 'downloadPDF',
+                pages: pdfContent,
+                filename: filename,
+                pageCount: totalPages
+            });
+            console.log('Flipbook: Sent captured pages to Swift for PDF generation');
+        } else {
+            console.error('Flipbook: Unable to communicate with native app');
+        }
+        
+    } catch (error) {
+        console.error('Flipbook: Error capturing pages:', error);
+    } finally {
+        // Restore navigation arrows
+        if (navArrows) navArrows.style.display = 'flex';
+        
+        // Return to original page
+        pageFlip.flip(currentPageIndex);
+        
+        console.log('Flipbook: PDF download process completed');
+    }
+};
+
+// Fallback basic PDF implementation (without html2canvas)
+function downloadPDFBasic() {
+    console.log('Flipbook: Using basic PDF generation (fallback)');
+    
     if (!globalPagesData || globalPagesData.length === 0) {
         console.error('Flipbook: No pages available for PDF export');
         return;
     }
     
-    // Create a temporary canvas for rendering pages
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
+    canvas.width = 612;
+    canvas.height = 792;
     
-    // Set canvas size (standard letter size at 72 DPI)
-    const pageWidth = 612; // 8.5 inches
-    const pageHeight = 792; // 11 inches
-    canvas.width = pageWidth;
-    canvas.height = pageHeight;
-    
-    // Create PDF data
     const pdfContent = [];
     
     globalPagesData.forEach((page, index) => {
-        // Clear canvas
-        ctx.fillStyle = '#faf8f3'; // Paper color
-        ctx.fillRect(0, 0, pageWidth, pageHeight);
-        
-        // Set text properties
-        ctx.fillStyle = '#3a3a3a'; // Ink color
+        ctx.fillStyle = '#faf8f3';
+        ctx.fillRect(0, 0, 612, 792);
+        ctx.fillStyle = '#3a3a3a';
         ctx.font = '12px Baskerville, Georgia, serif';
-        ctx.textAlign = 'left';
         
-        // Render page content
-        let yPosition = 60;
-        
-        // Title
+        let y = 60;
         if (page.title) {
             ctx.font = 'bold 18px Baskerville, Georgia, serif';
-            ctx.fillText(page.title, 60, yPosition);
-            yPosition += 30;
+            ctx.fillText(page.title, 60, y);
+            y += 30;
         }
         
-        // Text content
-        if (page.text) {
+        if (page.text || page.caption) {
             ctx.font = '11px Baskerville, Georgia, serif';
-            const lines = wrapText(ctx, page.text, pageWidth - 120);
+            const text = page.text || page.caption || '';
+            const lines = wrapText(ctx, text, 492);
             lines.forEach(line => {
-                ctx.fillText(line, 60, yPosition);
-                yPosition += 16;
-                if (yPosition > pageHeight - 60) {
-                    // Start new page if needed
-                    yPosition = 60;
-                }
+                ctx.fillText(line, 60, y);
+                y += 16;
             });
         }
         
-        // Caption
-        if (page.caption) {
-            ctx.font = 'italic 10px Baskerville, Georgia, serif';
-            ctx.fillStyle = '#5a5a5a';
-            yPosition += 10;
-            ctx.fillText(page.caption, 60, yPosition);
-        }
-        
-        // Page number
-        ctx.font = '9px Baskerville, Georgia, serif';
-        ctx.fillStyle = '#7a7a7a';
-        ctx.fillText(String(index + 1), pageWidth / 2, pageHeight - 30);
-        
-        // Store page data
         pdfContent.push(canvas.toDataURL('image/jpeg', 0.95));
     });
     
-    // Create download link
     const timestamp = new Date().toISOString().slice(0, 10);
-    const filename = `memoir-book-${timestamp}.pdf`;
+    const filename = `memoir-book-basic-${timestamp}.pdf`;
     
-    // Send to Swift for native PDF generation
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
         window.webkit.messageHandlers.native.postMessage({
             type: 'downloadPDF',
@@ -180,9 +291,7 @@ window.downloadPDF = function() {
             filename: filename
         });
     }
-    
-    console.log('Flipbook: PDF download initiated');
-};
+}
 
 // Helper function to wrap text
 function wrapText(context, text, maxWidth) {

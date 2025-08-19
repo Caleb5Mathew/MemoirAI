@@ -90,6 +90,10 @@ struct StoryPage: View {
     @State private var showRegenerateConfirmation = false
     @State private var isDownloading = false
     
+    // Track actual preview dimensions for accurate PDF generation
+    @State private var actualPreviewWidth: CGFloat = 0
+    @State private var actualPreviewHeight: CGFloat = 0
+    
     // NEW: Paywall state - exactly like MemoirView
     @State private var showPaywall = false
     
@@ -222,6 +226,11 @@ struct StoryPage: View {
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
+                .onAppear {
+                    // Capture actual preview dimensions for PDF generation
+                    actualPreviewWidth = bookFrameWidth * 0.9
+                    actualPreviewHeight = (bookFrameWidth * 0.9) * bookAspectRatio
+                }
                 .frame(
                     width: bookFrameWidth * 0.9,
                     height: (bookFrameWidth * 0.9) * bookAspectRatio
@@ -567,6 +576,11 @@ struct StoryPage: View {
                                 width: bookContentAreaWidth,
                                 height: bookContentHeightInsideFrame
                             )
+                            .onAppear {
+                                // Capture actual dimensions for PDF generation
+                                actualPreviewWidth = bookContentAreaWidth
+                                actualPreviewHeight = bookContentHeightInsideFrame
+                            }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .position(
@@ -761,7 +775,11 @@ struct StoryPage: View {
         isDownloading = true
         
         Task {
-            guard let pdfURL = vm.downloadStorybook() else {
+            // Pass actual preview dimensions for pixel-perfect PDF
+            guard let pdfURL = vm.downloadStorybook(
+                previewWidth: actualPreviewWidth > 0 ? actualPreviewWidth : nil,
+                previewHeight: actualPreviewHeight > 0 ? actualPreviewHeight : nil
+            ) else {
                 await MainActor.run { isDownloading = false }
                 return
             }

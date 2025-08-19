@@ -153,16 +153,38 @@ class StoryPageViewModel: ObservableObject {
     }
     
     // NEW: Download storybook as PDF – pixel-perfect snapshot of SwiftUI pages
-    func downloadStorybook() -> URL? {
+    func downloadStorybook(previewWidth: CGFloat? = nil, previewHeight: CGFloat? = nil) -> URL? {
         guard !pageItems.isEmpty else { return nil }
 
-        // 1. Decide a render size consistent with on-screen look
-        let bookWidth: CGFloat = 768
+        // 1. Use actual preview dimensions if provided, otherwise calculate based on device
+        let bookWidth: CGFloat
+        let bookHeight: CGFloat
         let isKids = currentArtStyle == .kidsBook
-        let aspect: CGFloat = isKids ? (9.0/16.0) : (4.0/3.0)
-        let bookHeight: CGFloat = bookWidth * aspect
-
-        let pdfBounds = CGRect(x: 0, y: 0, width: bookWidth, height: bookHeight)
+        
+        if let width = previewWidth, let height = previewHeight {
+            // Use exact preview dimensions for perfect match
+            bookWidth = width
+            bookHeight = height
+        } else {
+            // Fallback: Calculate based on screen size to match preview
+            let screenWidth = UIScreen.main.bounds.width
+            // Match the preview calculation: geo.size.width * 0.92 * 0.9
+            let calculatedWidth = screenWidth * 0.92 * 0.9
+            let aspect: CGFloat = isKids ? (9.0/16.0) : (4.0/3.0)
+            
+            bookWidth = calculatedWidth
+            bookHeight = calculatedWidth * aspect
+        }
+        
+        // 2. Set proper orientation for PDF bounds
+        let pdfBounds: CGRect
+        if isKids {
+            // Landscape orientation for kids books
+            pdfBounds = CGRect(x: 0, y: 0, width: max(bookWidth, bookHeight), height: min(bookWidth, bookHeight))
+        } else {
+            // Portrait orientation for other styles
+            pdfBounds = CGRect(x: 0, y: 0, width: bookWidth, height: bookHeight)
+        }
         let renderer = UIGraphicsPDFRenderer(bounds: pdfBounds)
 
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
