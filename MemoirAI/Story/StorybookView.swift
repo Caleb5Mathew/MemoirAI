@@ -319,24 +319,20 @@ struct PageZoomView: View {
     @State private var textExceeded = false
     @State private var captionExceeded = false
     
-    // Character limits based on page type
-    var titleCharLimit: Int {
-        guard let page = currentPage else { return 30 }
-        switch page.type {
-        case .cover: return 20  // Shorter for cover due to larger font
-        default: return 30
+    // Dynamic character limits based on page content
+    var dynamicLimits: PageLimits {
+        guard let page = currentPage else {
+            return PageLimits(titleCharLimit: 30, captionCharLimit: 50, textWordLimit: 150, availableTextHeight: 300)
         }
+        // Estimate page size based on screen dimensions
+        let screenSize = UIScreen.main.bounds.size
+        let pageSize = CGSize(width: screenSize.width * 0.8, height: screenSize.height * 0.6)
+        return PageLimits.calculate(for: page, pageSize: pageSize)
     }
     
-    var captionCharLimit: Int {
-        guard let page = currentPage else { return 50 }
-        switch page.type {
-        case .cover: return 40  // Subtitle on cover
-        default: return 50
-        }
-    }
-    
-    let textWordLimit = 150  // Already implemented
+    var titleCharLimit: Int { dynamicLimits.titleCharLimit }
+    var captionCharLimit: Int { dynamicLimits.captionCharLimit }
+    var textWordLimit: Int { dynamicLimits.textWordLimit }
     
     var currentPage: FlipPage? {
         guard currentViewedIndex >= 0 && currentViewedIndex < pages.count else { return nil }
@@ -702,19 +698,18 @@ struct PageZoomView: View {
                             alignment: .bottom
                         )
                         .onChange(of: editedTitle) { newValue in
-                            if newValue.count > titleCharLimit {
-                                editedTitle = String(newValue.prefix(titleCharLimit))
+                            let limit = titleCharLimit
+                            if newValue.count > limit {
+                                editedTitle = String(newValue.prefix(limit))
                                 titleExceeded = true
                             } else {
                                 titleExceeded = false
+                                // Recalculate limits as title changes
+                                _ = dynamicLimits
                             }
                         }
                     
-                    if titleExceeded {
-                        Text("\(titleCharLimit) character limit")
-                            .font(.caption2)
-                            .foregroundColor(.red.opacity(0.8))
-                    }
+                    TextLimitIndicator(text: editedTitle, limit: titleCharLimit, countWords: false)
                 }
                 
                 VStack(spacing: 4) {
@@ -734,11 +729,7 @@ struct PageZoomView: View {
                             }
                         }
                     
-                    if captionExceeded {
-                        Text("\(captionCharLimit) character limit")
-                            .font(.caption2)
-                            .foregroundColor(.red.opacity(0.8))
-                    }
+                    TextLimitIndicator(text: editedCaption, limit: captionCharLimit, countWords: false)
                 }
                 Spacer()
             }
@@ -764,19 +755,18 @@ struct PageZoomView: View {
                             alignment: .bottom
                         )
                         .onChange(of: editedTitle) { newValue in
-                            if newValue.count > titleCharLimit {
-                                editedTitle = String(newValue.prefix(titleCharLimit))
+                            let limit = titleCharLimit
+                            if newValue.count > limit {
+                                editedTitle = String(newValue.prefix(limit))
                                 titleExceeded = true
                             } else {
                                 titleExceeded = false
+                                // Recalculate limits as title changes
+                                _ = dynamicLimits
                             }
                         }
                     
-                    if titleExceeded {
-                        Text("\(titleCharLimit) character limit")
-                            .font(.caption2)
-                            .foregroundColor(.red.opacity(0.8))
-                    }
+                    TextLimitIndicator(text: editedTitle, limit: titleCharLimit, countWords: false)
                 }
                 
                 // Text editor styled like book page with word limit
@@ -805,11 +795,7 @@ struct PageZoomView: View {
                             }
                         }
                     
-                    if textExceeded {
-                        Text("\(textWordLimit) word limit")
-                            .font(.caption2)
-                            .foregroundColor(.red.opacity(0.8))
-                    }
+                    TextLimitIndicator(text: editedText, limit: textWordLimit, countWords: true)
                 }
                     .background(
                         RoundedRectangle(cornerRadius: 2)
