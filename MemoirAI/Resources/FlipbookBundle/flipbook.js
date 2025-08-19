@@ -322,10 +322,6 @@ document.addEventListener('DOMContentLoaded', function() {
             // Listen for flip events and notify Swift
             pageFlip.on('flip', function(e) {
                 console.log('PageFlip: Page flipped to index:', e.data);
-                
-                // Apply centering for cover/last pages
-                applyCoverCentering();
-                
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
                     window.webkit.messageHandlers.native.postMessage({
                         type: 'flip',
@@ -665,11 +661,6 @@ window.renderPages = function(pagesJSON) {
             });
         }
         
-        // Apply cover centering on initial load
-        setTimeout(() => {
-            applyCoverCentering();
-        }, 100);
-        
         // DEBUG: Log page navigation details
         console.log('Flipbook: Total pages in array:', pages.length);
         console.log('Flipbook: PageFlip page count:', pageFlip.getPageCount ? pageFlip.getPageCount() : 'N/A');
@@ -779,38 +770,6 @@ window.goToPage = function(pageIndex) {
         pageFlip.flip(pageIndex);
     }
 };
-
-// Apply centering for cover and last pages when shown alone
-function applyCoverCentering() {
-    if (!pageFlip) return;
-    
-    const bookContainer = document.getElementById('book-container');
-    const bookElement = document.getElementById('book');
-    if (!bookContainer || !bookElement) return;
-    
-    const currentIndex = pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() : 0;
-    const totalPages = pageFlip.getPageCount ? pageFlip.getPageCount() : 0;
-    
-    // Check if we're on cover (index 0) or last page
-    const isCoverPage = currentIndex === 0;
-    const isLastPage = currentIndex === totalPages - 1;
-    
-    console.log('Flipbook: Applying cover centering:', {
-        currentIndex,
-        totalPages,
-        isCoverPage,
-        isLastPage
-    });
-    
-    // Apply or remove centering class
-    if (isCoverPage || isLastPage) {
-        bookContainer.classList.add('cover-single-view');
-        console.log('Flipbook: Added cover-single-view class');
-    } else {
-        bookContainer.classList.remove('cover-single-view');
-        console.log('Flipbook: Removed cover-single-view class');
-    }
-}
 
 // Text content splitting function for pagination
 function splitTextIntoPages(text, wordsPerPage = 150) {
