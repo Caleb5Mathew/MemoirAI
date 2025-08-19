@@ -255,35 +255,30 @@ struct UserMemoriesBookView: View {
             case .cover:
                 return MockBookPage(
                     type: .cover,
-                    title: page.title ?? "Memories",
-                    content: page.caption ?? "",
+                    content: page.title ?? "Memories",
                     imageName: nil
                 )
             case .text, .leftBars:
                 return MockBookPage(
-                    type: .textOnly,
-                    title: page.title,
+                    type: .text,
                     content: page.text ?? page.caption ?? "",
                     imageName: nil
                 )
             case .rightPhoto:
                 return MockBookPage(
-                    type: .imageOnly,
-                    title: page.title,
-                    content: page.caption,
+                    type: .photo,
+                    content: page.caption ?? "",
                     imageName: page.imageName
                 )
             case .mixed:
                 return MockBookPage(
-                    type: .textWithImage,
-                    title: page.title,
+                    type: .mixed,
                     content: page.text ?? page.caption ?? "",
                     imageName: page.imageName
                 )
             default:
                 return MockBookPage(
-                    type: .textOnly,
-                    title: page.title,
+                    type: .text,
                     content: page.text ?? page.caption ?? "",
                     imageName: nil
                 )
@@ -385,23 +380,5 @@ struct UserMemoriesBookView: View {
     }
 }
 
-// MARK: - Local Tokens for UserMemoriesBookView
-private struct UserMemoriesTokens {
-    static let bgWash = Color(red: 0.98, green: 0.96, blue: 0.94)
-    static let bgPrimary = Color(red: 0.96, green: 0.93, blue: 0.88)
-    static let ink = Color(red: 0.2, green: 0.2, blue: 0.2)
-    static let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
-    
-    static let buttonSpacing: CGFloat = 12
-    static let bottomPadding: CGFloat = 24
-    static let gradientStrokeWidth: CGFloat = 2
-    
-    struct Typography {
-        static let title = Font.system(size: 24, weight: .bold, design: .serif)
-        static let subtitle = Font.system(size: 16, weight: .medium, design: .serif)
-        static let button = Font.system(size: 16, weight: .semibold, design: .rounded)
-    }
-}
-
-// Use the UserMemoriesTokens throughout the file
-fileprivate typealias Tokens = UserMemoriesTokens
+// UserMemoriesBookView uses the Tokens from StorybookView
+// which is already defined in the same module
