@@ -93,13 +93,17 @@ html, body {
     position: relative;
 }
 
-/* Cover page content - wider to use more horizontal space */
+/* Cover page content - optimized for text display */
 .cover-page .page-content {
-    width: 90%; /* Use 90% of cover page width */
+    width: 95%; /* Maximum width usage */
     max-width: none;
-    padding: 20px 10px; /* Reduced horizontal padding */
+    padding: 30px 15px; /* Balanced padding */
     box-sizing: border-box;
     margin: 0 auto; /* Center the content box */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
 }
 
 /* Left page margins - closer to spine */
@@ -264,31 +268,30 @@ html, body {
 }
 
 .cover-title {
-    font-size: 18px !important; /* Slightly smaller for better fit */
+    font-size: 24px !important; /* Increased for 8-9 chars per line */
     font-weight: 400;
     color: rgba(212, 175, 55, 1.0); /* Gold color - full opacity */
-    margin-bottom: 8px;
+    margin-bottom: 12px;
     text-align: center;
-    line-height: 1.3; /* Slightly increased for better readability */
-    letter-spacing: 0.02em; /* Minimal letter spacing to save horizontal space */
+    line-height: 1.4; /* Good line spacing */
+    letter-spacing: 0.01em; /* Very minimal letter spacing */
     text-transform: uppercase;
     /* Enhanced text shadow for better visibility */
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8),
                  0 0 20px rgba(212, 175, 55, 0.3),
                  0 0 40px rgba(0, 0, 0, 0.5);
-    /* Full width usage with smart overflow handling */
+    /* Full width usage */
     width: 100%;
+    max-width: 100%;
     display: block;
     box-sizing: border-box;
-    padding: 0 2px; /* Minimal padding */
-    /* Smart text wrapping for long titles */
+    padding: 0 8px; /* Small padding to prevent edge touching */
+    /* Smart text wrapping */
     white-space: normal;
     word-wrap: break-word;
-    overflow-wrap: anywhere; /* More aggressive word breaking */
-    word-break: break-word; /* Ensure words break when needed */
-    hyphens: auto;
-    -webkit-hyphens: auto;
-    -moz-hyphens: auto;
+    overflow-wrap: break-word;
+    word-break: normal; /* Normal word breaking for better appearance */
+    hyphens: manual; /* Only break where explicitly marked */
     /* No ellipsis - allow full wrapping */
     overflow: visible;
     /* Ensure text is above background */
@@ -297,27 +300,37 @@ html, body {
 }
 
 .cover-subtitle {
-    font-size: 11px;
+    font-size: 12px;
     font-style: italic;
-    color: rgba(212, 175, 55, 0.9); /* Increased opacity */
+    color: rgba(212, 175, 55, 0.95); /* High opacity */
     text-align: center;
     margin-top: 4px;
     font-weight: 300;
     /* Enhanced shadow for visibility */
     text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7),
                  0 0 10px rgba(0, 0, 0, 0.4);
-    /* Ensure visibility */
-    overflow: visible;
+    /* Limit to 25 characters visually */
     max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 10px;
     position: relative;
     z-index: 10;
 }
 
 .cover-accent {
-    width: 40px;
-    height: 1px;
-    background: rgba(212, 175, 55, 0.5);
+    width: 60px;
+    height: 2px;
+    background: linear-gradient(90deg, 
+        transparent 0%, 
+        rgba(212, 175, 55, 0.6) 20%,
+        rgba(212, 175, 55, 0.8) 50%,
+        rgba(212, 175, 55, 0.6) 80%,
+        transparent 100%);
     margin: 15px auto;
+    border: none;
+    border-radius: 0;
 }
 
 /* PageFlip overrides for realistic book */
@@ -462,7 +475,7 @@ html, body {
     animation: bookOpen 0.8s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Navigation arrows */
+/* Navigation arrows - hidden by default, shown via JavaScript */
 #navigation-arrows {
     position: fixed;
     bottom: 8%;
@@ -471,12 +484,16 @@ html, body {
     display: flex;
     gap: 40px;
     z-index: 1000;
+    /* Ensure no circular shadows or decorations */
+    background: none;
+    border: none;
+    box-shadow: none;
 }
 
 .nav-arrow {
     width: 36px;
     height: 36px;
-    border-radius: 3px;
+    border-radius: 3px; /* Square corners, not circular */
     background: var(--leather);
     border: 1px solid var(--leather-dark);
     color: rgba(212, 175, 55, 0.8);
@@ -486,6 +503,11 @@ html, body {
     justify-content: center;
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
     transition: all 0.2s;
+    /* Ensure button shape */
+    outline: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
 }
 
 .nav-arrow:hover {

@@ -797,13 +797,6 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
                         <div class="cover-title">${title || 'Memories'}</div>
                         ${subtitle}
                         <div class="cover-accent"></div>
-                        <div class="cover-decoration">
-                            <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
-                                <circle cx="30" cy="30" r="28" stroke="currentColor" stroke-width="1" opacity="0.3"/>
-                                <circle cx="30" cy="30" r="20" stroke="currentColor" stroke-width="1" opacity="0.2"/>
-                                <circle cx="30" cy="30" r="12" stroke="currentColor" stroke-width="1" opacity="0.1"/>
-                            </svg>
-                        </div>
                     </div>
                 </div>
             `;

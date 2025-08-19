@@ -32,7 +32,7 @@ struct FlipPage: Codable, Identifiable {
 // MARK: - Sample FlipPages with Rich Content
 extension FlipPage {
     static let samplePages: [FlipPage] = [
-        // Cover page
+        // Cover page (caption limited to 25 chars)
         FlipPage(type: .cover, title: "Life Stories", caption: "A Collection of Memories"),
         
         // Story 1: The Summer of Discovery (Extended 4x)

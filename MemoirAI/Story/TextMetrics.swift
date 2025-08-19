@@ -66,9 +66,9 @@ struct PageLimits {
             let titleHeight = TextMetrics.height(for: page.title ?? "", font: titleFont, width: pageWidth)
             let captionHeight = TextMetrics.height(for: page.caption ?? "", font: captionFont, width: pageWidth)
             
-            // Cover page doesn't have body text, so limits are more generous
+            // Cover page doesn't have body text, so limits are set
             let titleLimit = titleHeight < 60 ? 20 : 15
-            let captionLimit = captionHeight < 40 ? 40 : 30
+            let captionLimit = 25  // Fixed 25 character limit for subtitle
             
             return PageLimits(
                 titleCharLimit: titleLimit,
