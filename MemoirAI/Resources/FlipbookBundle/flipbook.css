@@ -93,6 +93,15 @@ html, body {
     position: relative;
 }
 
+/* Cover page content - wider to use more horizontal space */
+.cover-page .page-content {
+    width: 90%; /* Use 90% of cover page width */
+    max-width: none;
+    padding: 20px 10px; /* Reduced horizontal padding */
+    box-sizing: border-box;
+    margin: 0 auto; /* Center the content box */
+}
+
 /* Left page margins - closer to spine */
 .left-page .page-content {
     padding-left: 30px;
@@ -229,7 +238,7 @@ html, body {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 25px; /* Reduced from 50px for more horizontal space */
+    padding: 15px; /* Further reduced for maximum horizontal space */
     height: 100%;
     background: linear-gradient(135deg,
         var(--leather) 0%,
@@ -241,40 +250,47 @@ html, body {
     overflow: visible; /* Ensure content is not clipped */
 }
 
-/* Gold embossing effect for cover */
+/* Gold embossing effect for cover - adjusted for new padding */
 .cover-page::before {
     content: '';
     position: absolute;
-    top: 20px;
-    left: 20px;
-    right: 20px;
-    bottom: 20px;
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
     border: 2px solid rgba(212, 175, 55, 0.3);
     border-radius: 2px;
     pointer-events: none;
 }
 
 .cover-title {
-    font-size: 20px !important; /* 3/5 of 32px */
+    font-size: 18px !important; /* Slightly smaller for better fit */
     font-weight: 400;
     color: rgba(212, 175, 55, 1.0); /* Gold color - full opacity */
     margin-bottom: 8px;
     text-align: center;
-    line-height: 1.2;
-    letter-spacing: 0.05em; /* Reduced from 0.08em for more horizontal space */
+    line-height: 1.3; /* Slightly increased for better readability */
+    letter-spacing: 0.02em; /* Minimal letter spacing to save horizontal space */
     text-transform: uppercase;
     /* Enhanced text shadow for better visibility */
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8),
                  0 0 20px rgba(212, 175, 55, 0.3),
                  0 0 40px rgba(0, 0, 0, 0.5);
-    /* Allow text wrapping for multi-word titles */
-    overflow: visible; /* Changed to visible to ensure text shows */
-    white-space: normal; /* Allow wrapping */
-    max-width: 100%; /* Increased from 90% to use full width */
-    margin-left: auto;
-    margin-right: auto;
-    word-break: break-word;
-    overflow-wrap: break-word;
+    /* Full width usage with smart overflow handling */
+    width: 100%;
+    display: block;
+    box-sizing: border-box;
+    padding: 0 2px; /* Minimal padding */
+    /* Smart text wrapping for long titles */
+    white-space: normal;
+    word-wrap: break-word;
+    overflow-wrap: anywhere; /* More aggressive word breaking */
+    word-break: break-word; /* Ensure words break when needed */
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    -moz-hyphens: auto;
+    /* No ellipsis - allow full wrapping */
+    overflow: visible;
     /* Ensure text is above background */
     position: relative;
     z-index: 10;
