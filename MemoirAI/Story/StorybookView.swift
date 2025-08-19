@@ -402,20 +402,20 @@ struct PageZoomView: View {
             TabView(selection: $currentViewedIndex) {
                 ForEach(pages.indices, id: \.self) { index in
                     VStack(spacing: 0) {
-                // Navigation header
-                HStack {
-                    Button(action: { presentationMode.wrappedValue.dismiss() }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 28))
-                            .foregroundColor(Tokens.ink.opacity(0.8))
-                            .background(Circle().fill(Color.white.opacity(0.9)))
-                    }
-                    .padding()
-                    
-                    Spacer()
-                    
-                    if !isEditing {
-                        HStack(spacing: 12) {
+                        // Navigation header
+                        HStack {
+                            Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 28))
+                                    .foregroundColor(Tokens.ink.opacity(0.8))
+                                    .background(Circle().fill(Color.white.opacity(0.9)))
+                            }
+                            .padding()
+                            
+                            Spacer()
+                            
+                            if !isEditing {
+                                HStack(spacing: 12) {
                             // Delete button on the left
                             Button(action: { showDeleteConfirmation = true }) {
                                 HStack(spacing: 6) {
@@ -515,7 +515,6 @@ struct PageZoomView: View {
                             .frame(maxWidth: .infinity)
                         }
                     }
-                }
                     .tag(index)
                 }
             }
