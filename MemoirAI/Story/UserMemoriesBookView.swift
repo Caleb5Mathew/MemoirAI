@@ -314,7 +314,7 @@ struct UserMemoriesBookView: View {
                 
                 Spacer()
                 
-                // Download button
+                // Download button with circle overlay to match StorybookView
                 Button(action: downloadBook) {
                     Image(systemName: "arrow.down.circle.fill")
                         .font(.system(size: 18, weight: .medium))
@@ -322,6 +322,10 @@ struct UserMemoriesBookView: View {
                         .padding(10)
                         .background(Tokens.bgWash)
                         .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Tokens.ink.opacity(0.1), lineWidth: 1)
+                        )
                 }
             }
             .padding(.horizontal, 20)

@@ -211,6 +211,10 @@ struct StorybookView: View {
                         .padding(10)
                         .background(Tokens.bgWash)
                         .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Tokens.ink.opacity(0.1), lineWidth: 1)
+                        )
                 }
             }
             .padding(.horizontal, 20)
@@ -308,6 +312,30 @@ struct PageZoomView: View {
     @State private var editedText: String = ""
     @State private var editedCaption: String = ""
     @State private var showDeleteConfirmation = false
+    
+    // Character limit states
+    @State private var titleExceeded = false
+    @State private var textExceeded = false
+    @State private var captionExceeded = false
+    
+    // Character limits based on page type
+    private var titleCharLimit: Int {
+        guard let page = currentPage else { return 30 }
+        switch page.type {
+        case .cover: return 20  // Shorter for cover due to larger font
+        default: return 30
+        }
+    }
+    
+    private var captionCharLimit: Int {
+        guard let page = currentPage else { return 50 }
+        switch page.type {
+        case .cover: return 40  // Subtitle on cover
+        default: return 50
+        }
+    }
+    
+    private let textWordLimit = 150  // Already implemented
     
     var currentPage: FlipPage? {
         guard pageIndex >= 0 && pageIndex < pages.count else { return nil }
@@ -608,59 +636,130 @@ struct PageZoomView: View {
         case .cover:
             VStack(spacing: 16) {
                 Spacer()
-                TextField("", text: $editedTitle)
-                    .font(.system(size: 24, weight: .medium, design: .serif))
-                    .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
-                    .multilineTextAlignment(.center)
-                    .padding(.vertical, 8)
-                    .background(Color.clear)
-                    .overlay(
-                        Rectangle()
-                            .frame(height: 1)
-                            .foregroundColor(Color(red: 200/255, green: 190/255, blue: 180/255).opacity(0.5))
-                            .offset(y: 20),
-                        alignment: .bottom
-                    )
+                VStack(spacing: 4) {
+                    TextField("", text: $editedTitle)
+                        .font(.system(size: 24, weight: .medium, design: .serif))
+                        .foregroundColor(titleExceeded ? Color.red : Color(red: 58/255, green: 58/255, blue: 58/255))
+                        .multilineTextAlignment(.center)
+                        .padding(.vertical, 8)
+                        .background(Color.clear)
+                        .overlay(
+                            Rectangle()
+                                .frame(height: 1)
+                                .foregroundColor(titleExceeded ? Color.red.opacity(0.5) : Color(red: 200/255, green: 190/255, blue: 180/255).opacity(0.5))
+                                .offset(y: 20),
+                            alignment: .bottom
+                        )
+                        .onChange(of: editedTitle) { newValue in
+                            if newValue.count > titleCharLimit {
+                                editedTitle = String(newValue.prefix(titleCharLimit))
+                                titleExceeded = true
+                            } else {
+                                titleExceeded = false
+                            }
+                        }
+                    
+                    if titleExceeded {
+                        Text("\(titleCharLimit) character limit")
+                            .font(.caption2)
+                            .foregroundColor(.red.opacity(0.8))
+                    }
+                }
                 
-                TextField("", text: $editedCaption)
-                    .font(.system(size: 14, weight: .light, design: .serif))
-                    .italic()
-                    .foregroundColor(Color(red: 122/255, green: 122/255, blue: 122/255))
-                    .multilineTextAlignment(.center)
-                    .padding(.vertical, 4)
-                    .background(Color.clear)
+                VStack(spacing: 4) {
+                    TextField("", text: $editedCaption)
+                        .font(.system(size: 14, weight: .light, design: .serif))
+                        .italic()
+                        .foregroundColor(captionExceeded ? Color.red : Color(red: 122/255, green: 122/255, blue: 122/255))
+                        .multilineTextAlignment(.center)
+                        .padding(.vertical, 4)
+                        .background(Color.clear)
+                        .onChange(of: editedCaption) { newValue in
+                            if newValue.count > captionCharLimit {
+                                editedCaption = String(newValue.prefix(captionCharLimit))
+                                captionExceeded = true
+                            } else {
+                                captionExceeded = false
+                            }
+                        }
+                    
+                    if captionExceeded {
+                        Text("\(captionCharLimit) character limit")
+                            .font(.caption2)
+                            .foregroundColor(.red.opacity(0.8))
+                    }
+                }
                 Spacer()
             }
             
         case .text, .leftBars:
             VStack(alignment: .leading, spacing: 12) {
                 // Title with book-like editing
-                TextField("", text: $editedTitle)
-                    .font(.system(size: isContinuedPage ? 8 : 12, weight: .regular, design: .serif))
-                    .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
-                    .textCase(.uppercase)
-                    .multilineTextAlignment(.center)
-                    .padding(.vertical, 4)
-                    .background(
-                        Color(red: 250/255, green: 248/255, blue: 243/255).opacity(0.5)
-                    )
-                    .overlay(
-                        Rectangle()
-                            .frame(height: 1)
-                            .foregroundColor(Color(red: 200/255, green: 190/255, blue: 180/255))
-                            .offset(y: 15),
-                        alignment: .bottom
-                    )
+                VStack(spacing: 4) {
+                    TextField("", text: $editedTitle)
+                        .font(.system(size: isContinuedPage ? 8 : 12, weight: .regular, design: .serif))
+                        .foregroundColor(titleExceeded ? Color.red : Color(red: 58/255, green: 58/255, blue: 58/255))
+                        .textCase(.uppercase)
+                        .multilineTextAlignment(.center)
+                        .padding(.vertical, 4)
+                        .background(
+                            Color(red: 250/255, green: 248/255, blue: 243/255).opacity(0.5)
+                        )
+                        .overlay(
+                            Rectangle()
+                                .frame(height: 1)
+                                .foregroundColor(titleExceeded ? Color.red.opacity(0.5) : Color(red: 200/255, green: 190/255, blue: 180/255))
+                                .offset(y: 15),
+                            alignment: .bottom
+                        )
+                        .onChange(of: editedTitle) { newValue in
+                            if newValue.count > titleCharLimit {
+                                editedTitle = String(newValue.prefix(titleCharLimit))
+                                titleExceeded = true
+                            } else {
+                                titleExceeded = false
+                            }
+                        }
+                    
+                    if titleExceeded {
+                        Text("\(titleCharLimit) character limit")
+                            .font(.caption2)
+                            .foregroundColor(.red.opacity(0.8))
+                    }
+                }
                 
-                // Text editor styled like book page
-                TextEditor(text: $editedText)
-                    .font(.system(size: 10, weight: .light, design: .serif))
-                    .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
-                    .lineSpacing(4)
-                    .padding(8)
-                    .background(Color.clear)
-                    .frame(minHeight: 300)
-                    .scrollContentBackground(.hidden) // iOS 16+ to hide default background
+                // Text editor styled like book page with word limit
+                VStack(spacing: 4) {
+                    TextEditor(text: $editedText)
+                        .font(.system(size: 10, weight: .light, design: .serif))
+                        .foregroundColor(textExceeded ? Color.red : Color(red: 58/255, green: 58/255, blue: 58/255))
+                        .lineSpacing(4)
+                        .padding(8)
+                        .background(Color.clear)
+                        .frame(minHeight: 300)
+                        .scrollContentBackground(.hidden) // iOS 16+ to hide default background
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(textExceeded ? Color.red.opacity(0.5) : Color.clear, lineWidth: 1)
+                        )
+                        .onChange(of: editedText) { newValue in
+                            let wordCount = newValue.split(separator: " ").count
+                            if wordCount > textWordLimit {
+                                // Trim to word limit
+                                let words = newValue.split(separator: " ").prefix(textWordLimit)
+                                editedText = words.joined(separator: " ")
+                                textExceeded = true
+                            } else {
+                                textExceeded = false
+                            }
+                        }
+                    
+                    if textExceeded {
+                        Text("\(textWordLimit) word limit")
+                            .font(.caption2)
+                            .foregroundColor(.red.opacity(0.8))
+                    }
+                }
                     .background(
                         RoundedRectangle(cornerRadius: 2)
                             .fill(Color(red: 250/255, green: 248/255, blue: 243/255).opacity(0.3))
