@@ -66,6 +66,7 @@ class ProfileViewModel: ObservableObject {
         profiles.append(profile)
         selectedProfileIndex = profiles.count - 1
         saveProfiles()
+        syncProfileToCloudKit(profile)
         
         print("✅ Profile added successfully. Total profiles: \(profiles.count)")
         return true
@@ -88,6 +89,7 @@ class ProfileViewModel: ObservableObject {
         guard profiles.indices.contains(selectedProfileIndex) else { return }
         profiles[selectedProfileIndex] = newProfile
         saveProfiles()
+        syncProfileToCloudKit(newProfile)
     }
 
     func updateName(for profile: Profile, to newName: String) {
@@ -174,5 +176,65 @@ class ProfileViewModel: ObservableObject {
         // Backup to iCloud for persistence across app deletion/reinstall
         NSUbiquitousKeyValueStore.default.set(selectedProfileIndex, forKey: "memoir_selectedProfileIndex")
         NSUbiquitousKeyValueStore.default.synchronize()
+    }
+    
+    // MARK: - CloudKit Sync Methods
+    
+    private func syncProfileToCloudKit(_ profile: Profile) {
+        // Sync individual profile fields to CloudKit for enhanced persistence
+        let profileKey = "memoir_profile_\(profile.id.uuidString)"
+        
+        // Store profile data
+        if let profileData = try? JSONEncoder().encode(profile) {
+            NSUbiquitousKeyValueStore.default.set(profileData, forKey: profileKey)
+        }
+        
+        // Store individual fields for easier access
+        NSUbiquitousKeyValueStore.default.set(profile.name, forKey: "\(profileKey)_name")
+        
+        if let birthdate = profile.birthdate {
+            NSUbiquitousKeyValueStore.default.set(birthdate, forKey: "\(profileKey)_birthdate")
+        }
+        
+        if let ethnicity = profile.ethnicity {
+            NSUbiquitousKeyValueStore.default.set(ethnicity, forKey: "\(profileKey)_ethnicity")
+        }
+        
+        if let gender = profile.gender {
+            NSUbiquitousKeyValueStore.default.set(gender, forKey: "\(profileKey)_gender")
+        }
+        
+        if let photoData = profile.photoData {
+            NSUbiquitousKeyValueStore.default.set(photoData, forKey: "\(profileKey)_photo")
+        }
+        
+        NSUbiquitousKeyValueStore.default.synchronize()
+        print("✅ Profile synced to CloudKit: \(profile.name)")
+    }
+    
+    private func restoreProfileFromCloudKit(_ profileId: UUID) -> Profile? {
+        let profileKey = "memoir_profile_\(profileId.uuidString)"
+        
+        // Try to restore full profile data first
+        if let profileData = NSUbiquitousKeyValueStore.default.data(forKey: profileKey),
+           let profile = try? JSONDecoder().decode(Profile.self, from: profileData) {
+            return profile
+        }
+        
+        // Fallback to restoring individual fields
+        let name = NSUbiquitousKeyValueStore.default.string(forKey: "\(profileKey)_name") ?? "Restored Profile"
+        let birthdate = NSUbiquitousKeyValueStore.default.object(forKey: "\(profileKey)_birthdate") as? Date
+        let ethnicity = NSUbiquitousKeyValueStore.default.string(forKey: "\(profileKey)_ethnicity")
+        let gender = NSUbiquitousKeyValueStore.default.string(forKey: "\(profileKey)_gender")
+        let photoData = NSUbiquitousKeyValueStore.default.data(forKey: "\(profileKey)_photo")
+        
+        return Profile(
+            id: profileId,
+            name: name,
+            photoData: photoData,
+            birthdate: birthdate,
+            ethnicity: ethnicity,
+            gender: gender
+        )
     }
 }

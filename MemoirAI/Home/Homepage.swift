@@ -44,6 +44,7 @@ struct HomepageView: View {
     private static let cameraWiggleDisabledKey = "cameraWiggleDisabledKey_v1"
 
     @State private var showingAddProfile = false
+    @State private var showProfileEdit = false
 
     @State private var showMemoryRecoveryAlert = false
     @State private var recoveredMemoryCount = 0
@@ -93,6 +94,14 @@ struct HomepageView: View {
                         }
                     }
                     Spacer()
+                    
+                    // Profile Icon Button
+                    Button {
+                        showProfileEdit = true
+                    } label: {
+                        ProfileIconView(profile: profileVM.selectedProfile)
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
                 .padding(.horizontal)
 
@@ -265,6 +274,9 @@ struct HomepageView: View {
                 CropSheetView(photoData: wrapper.data) { croppedData in
                     // profileVM.addProfile(...) as needed
                 }
+            }
+            .sheet(isPresented: $showProfileEdit) {
+                ProfileEditView(profileVM: profileVM)
             }
             .alert("Memories Recovered!", isPresented: $showMemoryRecoveryAlert) {
                 Button("Great!") {}
