@@ -96,7 +96,7 @@ struct ProfileEditView: View {
                                 .foregroundColor(.black)
                             
                             TextField("Enter your name", text: $name)
-                                .textFieldStyle(AppTextFieldStyle())
+                                .textFieldStyle(ProfileTextFieldStyle())
                         }
                         
                         // Birthday Section
@@ -156,7 +156,7 @@ struct ProfileEditView: View {
         }
         .sheet(isPresented: $showCropper) {
             if let photo = currentPhoto {
-                ImageCropperView(image: photo) { croppedImage in
+                ProfileImageCropperView(image: photo) { croppedImage in
                     currentPhoto = croppedImage
                 }
             }
@@ -332,7 +332,7 @@ struct ProfileEditView: View {
                     .font(.subheadline)
                     .foregroundColor(.gray)
                 TextField("e.g., Hispanic, Asian, Black", text: $ethnicity)
-                    .textFieldStyle(AppTextFieldStyle())
+                    .textFieldStyle(ProfileTextFieldStyle())
             }
             
             // Gender
@@ -353,7 +353,7 @@ struct ProfileEditView: View {
                 
                 if selectedGenderOption == .other {
                     TextField("Please specify", text: $customGender)
-                        .textFieldStyle(AppTextFieldStyle())
+                        .textFieldStyle(ProfileTextFieldStyle())
                         .onChange(of: customGender) {
                             updateGenderBinding()
                         }
@@ -526,7 +526,7 @@ private struct ImagePicker: UIViewControllerRepresentable {
     }
 }
 
-private struct ImageCropperView: View {
+private struct ProfileImageCropperView: View {
     let image: UIImage
     var onFinished: (UIImage) -> Void
     
@@ -608,7 +608,7 @@ private struct ImageCropperView: View {
     }
 }
 
-private struct AppTextFieldStyle: TextFieldStyle {
+private struct ProfileTextFieldStyle: TextFieldStyle {
     func _body(configuration: TextField<Self._Label>) -> some View {
         configuration
             .font(.system(size: 16, design: .default))
