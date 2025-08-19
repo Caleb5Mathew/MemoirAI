@@ -312,6 +312,7 @@ struct PageZoomView: View {
     @State private var editedText: String = ""
     @State private var editedCaption: String = ""
     @State private var showDeleteConfirmation = false
+    @State private var currentViewedIndex: Int = 0
     
     // Character limit states
     @State private var titleExceeded = false
@@ -338,15 +339,15 @@ struct PageZoomView: View {
     private let textWordLimit = 150  // Already implemented
     
     var currentPage: FlipPage? {
-        guard pageIndex >= 0 && pageIndex < pages.count else { return nil }
-        return pages[pageIndex]
+        guard currentViewedIndex >= 0 && currentViewedIndex < pages.count else { return nil }
+        return pages[currentViewedIndex]
     }
     
     // Check if this is a continued page based on previous pages having the same title
     var isContinuedPage: Bool {
-        guard pageIndex > 0,
+        guard currentViewedIndex > 0,
               let currentTitle = currentPage?.title,
-              let previousTitle = pages[pageIndex - 1].title else { return false }
+              let previousTitle = pages[currentViewedIndex - 1].title else { return false }
         return currentTitle == previousTitle
     }
     
@@ -397,7 +398,10 @@ struct PageZoomView: View {
                     .ignoresSafeArea()
             )
             
-            VStack(spacing: 0) {
+            // TabView for swipe navigation
+            TabView(selection: $currentViewedIndex) {
+                ForEach(pages.indices, id: \.self) { index in
+                    VStack(spacing: 0) {
                 // Navigation header
                 HStack {
                     Button(action: { presentationMode.wrappedValue.dismiss() }) {
@@ -459,8 +463,12 @@ struct PageZoomView: View {
                             }
                             
                             Button(action: { 
-                                // TODO: Implement saving changes back to the page model
-                                // This would require passing a binding or callback to update the pages array
+                                // Save changes back to the page model
+                                if currentViewedIndex >= 0 && currentViewedIndex < pages.count {
+                                    pages[currentViewedIndex].title = editedTitle.isEmpty ? nil : editedTitle
+                                    pages[currentViewedIndex].text = editedText.isEmpty ? nil : editedText
+                                    pages[currentViewedIndex].caption = editedCaption.isEmpty ? nil : editedCaption
+                                }
                                 isEditing = false
                             }) {
                                 Text("Done")
@@ -508,6 +516,20 @@ struct PageZoomView: View {
                         }
                     }
                 }
+                    .tag(index)
+                }
+            }
+            .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+            .onAppear {
+                currentViewedIndex = pageIndex
+            }
+            .onChange(of: currentViewedIndex) { _ in
+                // Update edited fields when page changes
+                if let page = currentPage {
+                    editedTitle = page.title ?? ""
+                    editedText = displayedText
+                    editedCaption = page.caption ?? ""
+                }
             }
         }
         .onAppear {
@@ -529,8 +551,8 @@ struct PageZoomView: View {
     
     // MARK: - Delete Page Function
     private func deletePage() {
-        guard pageIndex >= 0 && pageIndex < pages.count else { return }
-        pages.remove(at: pageIndex)
+        guard currentViewedIndex >= 0 && currentViewedIndex < pages.count else { return }
+        pages.remove(at: currentViewedIndex)
         presentationMode.wrappedValue.dismiss()
     }
     

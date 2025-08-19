@@ -117,11 +117,13 @@ html, body {
     letter-spacing: 0.03em;
     text-transform: uppercase;
     font-variant: small-caps;
-    /* Prevent overflow */
+    /* Allow controlled wrapping */
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
+    white-space: normal; /* Allow wrapping for longer titles */
+    max-width: 95%;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 /* Continued page titles - smaller and with marker */
@@ -262,12 +264,15 @@ html, body {
     text-transform: uppercase;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5),
                  0 0 20px rgba(212, 175, 55, 0.2);
-    /* Prevent text overflow */
+    /* Allow text wrapping for multi-word titles */
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
-    word-wrap: break-word;
+    white-space: normal; /* Changed from nowrap to allow wrapping */
+    max-width: 90%; /* Give some margin */
+    margin-left: auto;
+    margin-right: auto;
+    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 .cover-subtitle {

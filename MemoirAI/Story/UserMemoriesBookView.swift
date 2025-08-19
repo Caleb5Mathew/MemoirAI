@@ -54,10 +54,11 @@ struct UserMemoriesBookView: View {
             VStack(spacing: 0) {
                 headerView
                 
+                // Add percentage-based spacing to move book down
+                Spacer()
+                    .frame(height: UIScreen.main.bounds.height * 0.03) // 3% of screen height
+                
                 ScrollView(.vertical, showsIndicators: false) {
-                    // Add percentage-based spacing to move book down
-                    Spacer()
-                        .frame(height: UIScreen.main.bounds.height * 0.03) // 3% of screen height
                     
                     GeometryReader { geo in
                         let bookSize = calculateBookSize(for: geo.size)
@@ -119,15 +120,16 @@ struct UserMemoriesBookView: View {
                             }
                             
                             Spacer()
-                            
-                            actionButtonsView
-                                .padding(.bottom, Tokens.bottomPadding)
+                                .frame(minHeight: 20)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, 8)
                         .clipped()
                     }
                 }
+                
+                actionButtonsView
+                    .padding(.bottom, Tokens.bottomPadding)
             }
         }
         .navigationBarHidden(true)

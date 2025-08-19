@@ -132,41 +132,41 @@ struct GradientOutlineCapsule: ViewModifier {
 // Animated gradient outline for buttons
 struct AnimatedGradientOutlineCapsule: ViewModifier {
     var lineWidth: CGFloat = Tokens.gradientStrokeWidth
-    @State private var animationProgress: CGFloat = 0.0
+    @State private var animationPhase: Double = 0.0
     
-    var animatedGradient: LinearGradient {
+    var animatedGradient: AngularGradient {
+        // Create a smooth angular gradient that rotates
         let colors = [
             Color(red: 1.0, green: 0.8, blue: 0.0),  // Yellow
+            Color(red: 1.0, green: 0.65, blue: 0.0), // Yellow-orange
             Color(red: 1.0, green: 0.5, blue: 0.0),  // Orange
+            Color(red: 1.0, green: 0.35, blue: 0.0), // Orange-red
             Color(red: 1.0, green: 0.2, blue: 0.0),  // Red-orange
+            Color(red: 1.0, green: 0.35, blue: 0.0), // Orange-red (going back)
             Color(red: 1.0, green: 0.5, blue: 0.0),  // Orange
-            Color(red: 1.0, green: 0.8, blue: 0.0),  // Yellow (loop)
+            Color(red: 1.0, green: 0.65, blue: 0.0), // Yellow-orange
+            Color(red: 1.0, green: 0.8, blue: 0.0),  // Yellow (complete loop)
         ]
         
-        let stops = colors.enumerated().map { index, color in
-            Gradient.Stop(
-                color: color,
-                location: (CGFloat(index) / CGFloat(colors.count - 1)) + animationProgress
-            )
-        }
-        
-        return LinearGradient(
-            gradient: Gradient(stops: stops),
-            startPoint: .leading,
-            endPoint: .trailing
+        return AngularGradient(
+            gradient: Gradient(colors: colors),
+            center: .center,
+            startAngle: .degrees(animationPhase),
+            endAngle: .degrees(animationPhase + 360)
         )
     }
     
     func body(content: Content) -> some View {
         content.overlay(
-            Capsule().stroke(animatedGradient, lineWidth: lineWidth)
+            Capsule()
+                .strokeBorder(animatedGradient, lineWidth: lineWidth)
         )
         .onAppear {
             withAnimation(
-                Animation.linear(duration: 3.0)
+                Animation.linear(duration: 4.0)
                     .repeatForever(autoreverses: false)
             ) {
-                animationProgress = 1.0
+                animationPhase = 360
             }
         }
     }
