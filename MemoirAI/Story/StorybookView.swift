@@ -320,7 +320,7 @@ struct PageZoomView: View {
     @State private var captionExceeded = false
     
     // Character limits based on page type
-    private var titleCharLimit: Int {
+    var titleCharLimit: Int {
         guard let page = currentPage else { return 30 }
         switch page.type {
         case .cover: return 20  // Shorter for cover due to larger font
@@ -328,7 +328,7 @@ struct PageZoomView: View {
         }
     }
     
-    private var captionCharLimit: Int {
+    var captionCharLimit: Int {
         guard let page = currentPage else { return 50 }
         switch page.type {
         case .cover: return 40  // Subtitle on cover
@@ -336,7 +336,7 @@ struct PageZoomView: View {
         }
     }
     
-    private let textWordLimit = 150  // Already implemented
+    let textWordLimit = 150  // Already implemented
     
     var currentPage: FlipPage? {
         guard currentViewedIndex >= 0 && currentViewedIndex < pages.count else { return nil }
@@ -550,7 +550,7 @@ struct PageZoomView: View {
     }
     
     // MARK: - Delete Page Function
-    private func deletePage() {
+    func deletePage() {
         guard currentViewedIndex >= 0 && currentViewedIndex < pages.count else { return }
         pages.remove(at: currentViewedIndex)
         presentationMode.wrappedValue.dismiss()
@@ -558,7 +558,7 @@ struct PageZoomView: View {
     
     // MARK: - Display Page Content (Read-only)
     @ViewBuilder
-    private func displayPageContent(page: FlipPage) -> some View {
+    func displayPageContent(page: FlipPage) -> some View {
         switch page.type {
         case .cover:
             VStack(spacing: 16) {
@@ -653,7 +653,7 @@ struct PageZoomView: View {
     
     // MARK: - Editable Page Content
     @ViewBuilder
-    private func editablePageContent(page: FlipPage) -> some View {
+    func editablePageContent(page: FlipPage) -> some View {
         switch page.type {
         case .cover:
             VStack(spacing: 16) {
