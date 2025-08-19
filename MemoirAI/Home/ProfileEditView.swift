@@ -347,14 +347,14 @@ struct ProfileEditView: View {
                     }
                 }
                 .pickerStyle(SegmentedPickerStyle())
-                .onChange(of: selectedGenderOption) { _ in
+                .onChange(of: selectedGenderOption) {
                     updateGenderBinding()
                 }
                 
                 if selectedGenderOption == .other {
                     TextField("Please specify", text: $customGender)
                         .textFieldStyle(AppTextFieldStyle())
-                        .onChange(of: customGender) { _ in
+                        .onChange(of: customGender) {
                             updateGenderBinding()
                         }
                 }
@@ -490,7 +490,8 @@ extension DateFormatter {
     }()
 }
 
-// Reuse components from ProfileSetupView
+// MARK: - Shared Components
+
 private struct ImagePicker: UIViewControllerRepresentable {
     var source: UIImagePickerController.SourceType
     var allowsCropping: Bool
@@ -620,3 +621,4 @@ private struct AppTextFieldStyle: TextFieldStyle {
             )
     }
 }
+
