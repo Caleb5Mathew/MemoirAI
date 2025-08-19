@@ -468,6 +468,49 @@ html, body {
     justify-content: center !important;
 }
 
+/* Center single cover/end pages */
+.cover-single-view .stf__wrapper {
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+}
+
+.cover-single-view .stf__block {
+    position: relative !important;
+    left: auto !important;
+    right: auto !important;
+    margin: 0 auto !important;
+    width: 50% !important;
+    max-width: 500px !important;
+}
+
+.cover-single-view .stf__item {
+    position: relative !important;
+    left: auto !important;
+    right: auto !important;
+    margin: 0 auto !important;
+}
+
+/* Override right-side positioning for cover page */
+.cover-single-view .stf__item.--right {
+    position: relative !important;
+    left: auto !important;
+    right: auto !important;
+    margin: 0 auto !important;
+}
+
+.cover-single-view .stf__page {
+    position: relative !important;
+    left: auto !important;
+    right: auto !important;
+    margin: 0 auto !important;
+}
+
+/* Ensure cover page shadow looks correct when centered */
+.cover-single-view .stf__item.--right .flipbook-page::before {
+    display: none !important;
+}
+
 /* Book opening animation */
 @keyframes bookOpen {
     from {
