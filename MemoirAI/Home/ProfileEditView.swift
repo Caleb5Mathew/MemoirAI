@@ -81,47 +81,49 @@ struct ProfileEditView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                colors.softCream
-                    .ignoresSafeArea()
+                // Modern gradient background
+                LinearGradient(
+                    colors: [
+                        Color(.systemBackground),
+                        Color(.systemGray6).opacity(0.3)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
                 
-                ScrollView {
-                    VStack(spacing: 24) {
-                        // Profile Photo Section
-                        profilePhotoSection
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(spacing: 0) {
+                        // Header with large profile photo
+                        profileHeaderSection
+                            .padding(.bottom, 32)
                         
-                        // Name Section
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Name")
-                                .font(.headline)
-                                .foregroundColor(.black)
+                        // Form sections in cards
+                        VStack(spacing: 20) {
+                            nameFormCard
+                            birthdayFormCard
+                            personalDetailsFormCard
                             
-                            TextField("Enter your name", text: $name)
-                                .textFieldStyle(ProfileTextFieldStyle())
+                            // Delete section (if applicable)
+                            if profileVM.profiles.count > 1 {
+                                deleteProfileCard
+                                    .padding(.top, 20)
+                            }
                         }
+                        .padding(.horizontal, 20)
                         
-                        // Birthday Section
-                        birthdaySection
-                        
-                        // Personal Details Section
-                        personalDetailsSection
-                        
-                        // Delete Profile Button (if multiple profiles exist)
-                        if profileVM.profiles.count > 1 {
-                            deleteProfileButton
-                        }
-                        
-                        Spacer(minLength: 50)
+                        Spacer(minLength: 100)
                     }
-                    .padding()
                 }
             }
             .navigationTitle("Edit Profile")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .foregroundColor(.primary)
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -130,6 +132,7 @@ struct ProfileEditView: View {
                         dismiss()
                     }
                     .fontWeight(.semibold)
+                    .foregroundColor(.accentColor)
                 }
             }
         }
@@ -163,52 +166,217 @@ struct ProfileEditView: View {
         }
     }
     
-    private var profilePhotoSection: some View {
-        VStack(spacing: 16) {
-            Text("Profile Photo")
-                .font(.headline)
-                .foregroundColor(.black)
-            
-            if let photo = currentPhoto {
-                Image(uiImage: photo)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 120, height: 120)
-                    .clipShape(Circle())
-                    .shadow(radius: 4)
+    private var profileHeaderSection: some View {
+        VStack(spacing: 24) {
+            // Large profile photo with elegant styling
+            ZStack {
+                if let photo = currentPhoto {
+                    Image(uiImage: photo)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 140, height: 140)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(
+                                    LinearGradient(
+                                        colors: [.white.opacity(0.3), .clear],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 2
+                                )
+                        )
+                        .shadow(color: .black.opacity(0.1), radius: 12, x: 0, y: 4)
+                } else {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(.systemGray5),
+                                    Color(.systemGray4)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 140, height: 140)
+                        .overlay(
+                            Image(systemName: "person.fill")
+                                .font(.system(size: 60, weight: .light))
+                                .foregroundColor(.secondary)
+                        )
+                        .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+                }
                 
+                // Edit overlay button
+                Button {
+                    showSourceChooser = true
+                } label: {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.white)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            Circle()
+                                .fill(.black.opacity(0.7))
+                                .overlay(
+                                    Circle()
+                                        .stroke(.white.opacity(0.2), lineWidth: 1)
+                                )
+                        )
+                        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+                }
+                .offset(x: 50, y: 50)
+            }
+            
+            // Photo action buttons (only show if photo exists)
+            if currentPhoto != nil {
                 HStack(spacing: 16) {
                     Button("Crop") {
                         showCropper = true
                     }
-                    .buttonStyle(SecondaryButtonStyle())
+                    .buttonStyle(ModernSecondaryButtonStyle())
                     
                     Button("Replace") {
                         showSourceChooser = true
                     }
-                    .buttonStyle(SecondaryButtonStyle())
+                    .buttonStyle(ModernSecondaryButtonStyle())
                     
                     Button("Remove") {
-                        currentPhoto = nil
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            currentPhoto = nil
+                        }
                     }
-                    .buttonStyle(DestructiveButtonStyle())
+                    .buttonStyle(ModernDestructiveButtonStyle())
+                }
+            }
+        }
+        .padding(.top, 20)
+    }
+    
+    // MARK: - Modern Form Cards
+    
+    private var nameFormCard: some View {
+        ModernFormCard(title: "Name", icon: "person.fill") {
+            ModernTextField(
+                placeholder: "Enter your name",
+                text: $name
+            )
+        }
+    }
+    
+    private var birthdayFormCard: some View {
+        ModernFormCard(title: "Birthday", icon: "calendar") {
+            if let birthdate = selectedBirthdate {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(DateFormatter.elegantStyle.string(from: birthdate))
+                            .font(.system(size: 16, weight: .medium, design: .rounded))
+                            .foregroundColor(.primary)
+                        
+                        Text("Tap to change")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    Button {
+                        showDatePicker.toggle()
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.accentColor)
+                            .frame(width: 28, height: 28)
+                            .background(Color.accentColor.opacity(0.1))
+                            .clipShape(Circle())
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    showDatePicker.toggle()
                 }
             } else {
                 Button {
-                    showSourceChooser = true
+                    showDatePicker = true
                 } label: {
-                    VStack(spacing: 8) {
-                        Image(systemName: "person.crop.square")
-                            .font(.system(size: 40))
-                            .foregroundColor(.gray)
-                        Text("Add Photo")
-                            .font(.subheadline)
-                            .foregroundColor(.black)
+                    HStack {
+                        Text("Set birthday")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.accentColor)
+                        
+                        Spacer()
+                        
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(.accentColor)
                     }
-                    .frame(width: 120, height: 120)
-                    .background(colors.subtleBG)
-                    .clipShape(Circle())
                 }
+            }
+            
+            if showDatePicker {
+                modernBirthdayPicker
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.95)),
+                        removal: .opacity
+                    ))
+            }
+        }
+    }
+    
+    private var personalDetailsFormCard: some View {
+        ModernFormCard(title: "Personal Details", icon: "person.text.rectangle") {
+            VStack(spacing: 20) {
+                // Ethnicity field
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Ethnicity / Race")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.secondary)
+                    
+                    ModernTextField(
+                        placeholder: "e.g., Hispanic, Asian, Black",
+                        text: $ethnicity,
+                        isOptional: true
+                    )
+                }
+                
+                // Gender selection
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Gender")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.secondary)
+                    
+                    modernGenderPicker
+                    
+                    if selectedGenderOption == .other {
+                        ModernTextField(
+                            placeholder: "Please specify",
+                            text: $customGender,
+                            isOptional: true
+                        )
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .scale(scale: 0.95)),
+                            removal: .opacity
+                        ))
+                    }
+                }
+            }
+        }
+    }
+    
+    private var deleteProfileCard: some View {
+        ModernFormCard(title: "", icon: "", isDestructive: true) {
+            VStack(spacing: 12) {
+                Button("Delete Profile") {
+                    profileVM.deleteSelectedProfile()
+                    dismiss()
+                }
+                .buttonStyle(ModernDestructiveButtonStyle())
+                
+                Text("This action cannot be undone")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
     }
@@ -442,6 +610,202 @@ fileprivate enum GenderOption: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+// MARK: - Modern UI Components
+
+    private var modernGenderPicker: some View {
+    HStack(spacing: 8) {
+        ForEach(GenderOption.allCases) { option in
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    selectedGenderOption = option
+                    updateGenderBinding()
+                }
+            } label: {
+                Text(option.rawValue)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(selectedGenderOption == option ? .white : .primary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20)
+                            .fill(selectedGenderOption == option ? Color.accentColor : Color(.systemGray6))
+                    )
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        Spacer()
+    }
+}
+
+    private var modernBirthdayPicker: some View {
+    VStack(spacing: 20) {
+        VStack(spacing: 16) {
+            // Year Picker
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Year")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.secondary)
+                
+                Picker("Year", selection: $selectedYear) {
+                    ForEach(years.reversed(), id: \.self) { year in
+                        Text(String(year))
+                            .font(.system(size: 16, weight: .medium, design: .rounded))
+                            .tag(year)
+                    }
+                }
+                .pickerStyle(.wheel)
+                .frame(height: 120)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            
+            // Month Picker
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Month")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.secondary)
+                
+                Picker("Month", selection: $selectedMonth) {
+                    ForEach(months.indices, id: \.self) { index in
+                        Text(months[index])
+                            .font(.system(size: 16, weight: .medium, design: .rounded))
+                            .tag(index as Int?)
+                    }
+                }
+                .pickerStyle(.wheel)
+                .frame(height: 120)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            
+            // Day Picker
+            if selectedMonth != nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Day")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.secondary)
+                    
+                    Picker("Day", selection: $selectedDay) {
+                        ForEach(daysInMonth, id: \.self) { day in
+                            Text(String(day))
+                                .font(.system(size: 16, weight: .medium, design: .rounded))
+                                .tag(day as Int?)
+                        }
+                    }
+                    .pickerStyle(.wheel)
+                    .frame(height: 120)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+            }
+        }
+        
+        // Action buttons
+        HStack(spacing: 12) {
+            Button("Cancel") {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showDatePicker = false
+                    resetDatePickers()
+                }
+            }
+            .buttonStyle(ModernSecondaryButtonStyle())
+            
+            Button("Set Birthday") {
+                if let date = composedDate {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedBirthdate = date
+                        showDatePicker = false
+                    }
+                }
+            }
+            .buttonStyle(ModernPrimaryButtonStyle())
+            .disabled(composedDate == nil)
+        }
+    }
+    .padding(20)
+    .background(
+        RoundedRectangle(cornerRadius: 16)
+            .fill(Color(.systemBackground))
+            .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+    )
+    .padding(.top, 12)
+}
+
+struct ModernFormCard<Content: View>: View {
+    let title: String
+    let icon: String
+    let isDestructive: Bool
+    let content: Content
+    
+    init(title: String, icon: String, isDestructive: Bool = false, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.isDestructive = isDestructive
+        self.content = content()
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if !title.isEmpty {
+                HStack(spacing: 12) {
+                    if !icon.isEmpty {
+                        Image(systemName: icon)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(isDestructive ? .red : .accentColor)
+                            .frame(width: 24, height: 24)
+                    }
+                    
+                    Text(title)
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        .foregroundColor(isDestructive ? .red : .primary)
+                }
+            }
+            
+            content
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color(.systemBackground))
+                .shadow(color: .black.opacity(0.03), radius: 8, x: 0, y: 2)
+        )
+    }
+}
+
+struct ModernTextField: View {
+    let placeholder: String
+    @Binding var text: String
+    let isOptional: Bool
+    
+    init(placeholder: String, text: Binding<String>, isOptional: Bool = false) {
+        self.placeholder = placeholder
+        self._text = text
+        self.isOptional = isOptional
+    }
+    
+    var body: some View {
+        TextField(placeholder, text: $text)
+            .font(.system(size: 16, weight: .medium, design: .default))
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.systemGray6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color(.systemGray4), lineWidth: 0.5)
+                    )
+            )
+            .overlay(
+                HStack {
+                    Spacer()
+                    if isOptional {
+                        Text("Optional")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.trailing, 12)
+                    }
+                }
+            )
+    }
+}
+
 // Custom button styles
 fileprivate struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -488,6 +852,67 @@ extension DateFormatter {
         formatter.dateStyle = .long
         return formatter
     }()
+    
+    static let elegantStyle: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .full
+        return formatter
+    }()
+}
+
+// Modern Button Styles
+struct ModernPrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 16, weight: .semibold, design: .rounded))
+            .foregroundColor(.white)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.accentColor)
+                    .shadow(color: Color.accentColor.opacity(0.3), radius: 4, x: 0, y: 2)
+            )
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+struct ModernSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 14, weight: .medium, design: .rounded))
+            .foregroundColor(.primary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(.systemGray6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color(.systemGray5), lineWidth: 0.5)
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+struct ModernDestructiveButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 16, weight: .semibold, design: .rounded))
+            .foregroundColor(.white)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.red)
+                    .shadow(color: Color.red.opacity(0.3), radius: 4, x: 0, y: 2)
+            )
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+    }
 }
 
 // MARK: - Shared Components
