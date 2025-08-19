@@ -307,6 +307,7 @@ struct PageZoomView: View {
     @State private var editedTitle: String = ""
     @State private var editedText: String = ""
     @State private var editedCaption: String = ""
+    @State private var showDeleteConfirmation = false
     
     var currentPage: FlipPage? {
         guard pageIndex >= 0 && pageIndex < pages.count else { return nil }
@@ -382,16 +383,32 @@ struct PageZoomView: View {
                     Spacer()
                     
                     if !isEditing {
-                        Button(action: { isEditing = true }) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "pencil")
-                                Text("Edit")
+                        HStack(spacing: 12) {
+                            // Delete button on the left
+                            Button(action: { showDeleteConfirmation = true }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "trash")
+                                    Text("Delete")
+                                }
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(Capsule().fill(Color.red.opacity(0.9)))
                             }
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Capsule().fill(Tokens.accent))
+                            
+                            // Edit button on the right
+                            Button(action: { isEditing = true }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "pencil")
+                                    Text("Edit")
+                                }
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(Capsule().fill(Tokens.accent))
+                            }
                         }
                         .padding()
                     } else {
@@ -472,6 +489,21 @@ struct PageZoomView: View {
                 editedCaption = page.caption ?? ""
             }
         }
+        .alert("Delete Page", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                deletePage()
+            }
+        } message: {
+            Text("Are you sure you want to delete this page? This action cannot be undone.")
+        }
+    }
+    
+    // MARK: - Delete Page Function
+    private func deletePage() {
+        guard pageIndex >= 0 && pageIndex < pages.count else { return }
+        pages.remove(at: pageIndex)
+        presentationMode.wrappedValue.dismiss()
     }
     
     // MARK: - Display Page Content (Read-only)

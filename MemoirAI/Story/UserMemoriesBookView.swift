@@ -302,7 +302,7 @@ struct UserMemoriesBookView: View {
                 Spacer()
                 
                 VStack(spacing: 20) {
-                    Text("Your Memory Book")
+                    Text("Your Book")
                         .font(Tokens.Typography.title)
                         .foregroundColor(Tokens.ink)
                     
@@ -314,9 +314,9 @@ struct UserMemoriesBookView: View {
                 
                 Spacer()
                 
-                // Info button
-                Button(action: showInfo) {
-                    Image(systemName: "info.circle.fill")
+                // Download button
+                Button(action: downloadBook) {
+                    Image(systemName: "arrow.down.circle.fill")
                         .font(.system(size: 18, weight: .medium))
                         .foregroundColor(Tokens.ink.opacity(0.7))
                         .padding(10)
@@ -370,9 +370,11 @@ struct UserMemoriesBookView: View {
         .padding(.horizontal, 20)
     }
     
-    private func showInfo() {
-        // Show information about the memory book feature
-        print("Info: This preview shows your recorded memories in book format")
+    private func downloadBook() {
+        // Trigger JavaScript PDF download for user's memory book
+        if let webView = webView {
+            webView.evaluateJavaScript("window.downloadPDF()")
+        }
     }
     
     private var geometry: CGSize {
