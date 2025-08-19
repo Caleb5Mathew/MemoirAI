@@ -4,11 +4,11 @@ import Foundation
 struct FlipPage: Codable, Identifiable {
     let id = UUID()
     let type: PageType
-    let title: String?
-    let caption: String?
-    let text: String? // Full text content for text pages
-    let imageBase64: String?
-    let imageName: String?
+    var title: String?
+    var caption: String?
+    var text: String? // Full text content for text pages
+    var imageBase64: String?
+    var imageName: String?
     
     enum PageType: String, Codable, CaseIterable {
         case cover = "cover"
