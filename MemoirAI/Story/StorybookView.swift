@@ -384,140 +384,168 @@ struct PageZoomView: View {
         return pageWords.joined(separator: " ")
     }
     
+    // MARK: - Background View
+    var backgroundView: some View {
+        LinearGradient(
+            colors: [Tokens.bgPrimary.opacity(0.98), Tokens.bgWash.opacity(0.98)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea()
+        .overlay(
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
+        )
+    }
+    
+    // MARK: - Page Content View
+    @ViewBuilder
+    func pageContentView(at index: Int) -> some View {
+        VStack(spacing: 0) {
+            navigationHeaderView(at: index)
+            pageDisplayView(at: index)
+        }
+        .tag(index)
+    }
+    
+    // MARK: - Navigation Header View
+    @ViewBuilder
+    func navigationHeaderView(at index: Int) -> some View {
+        HStack {
+            Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundColor(Tokens.ink.opacity(0.8))
+                    .background(Circle().fill(Color.white.opacity(0.9)))
+            }
+            .padding()
+            
+            Spacer()
+            
+            if !isEditing {
+                editingButtonsView
+            } else {
+                doneButtonsView
+            }
+        }
+    }
+    
+    // MARK: - Editing Buttons View
+    var editingButtonsView: some View {
+        HStack(spacing: 12) {
+            // Delete button on the left
+            Button(action: { showDeleteConfirmation = true }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "trash")
+                    Text("Delete")
+                }
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(Color.red.opacity(0.9)))
+            }
+            
+            // Edit button on the right
+            Button(action: { isEditing = true }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "pencil")
+                    Text("Edit")
+                }
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(Tokens.accent))
+            }
+        }
+        .padding()
+    }
+    
+    // MARK: - Done Buttons View
+    var doneButtonsView: some View {
+        HStack(spacing: 12) {
+            Button(action: { 
+                isEditing = false
+                // Reset to original values
+                if let page = currentPage {
+                    editedTitle = page.title ?? ""
+                    editedText = page.text ?? ""
+                    editedCaption = page.caption ?? ""
+                }
+            }) {
+                Text("Cancel")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(Tokens.ink.opacity(0.7))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.white.opacity(0.9)))
+            }
+            
+            Button(action: { 
+                // Save changes back to the page model
+                if currentViewedIndex >= 0 && currentViewedIndex < pages.count {
+                    pages[currentViewedIndex].title = editedTitle.isEmpty ? nil : editedTitle
+                    pages[currentViewedIndex].text = editedText.isEmpty ? nil : editedText
+                    pages[currentViewedIndex].caption = editedCaption.isEmpty ? nil : editedCaption
+                }
+                isEditing = false
+            }) {
+                Text("Done")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.blue))
+            }
+        }
+        .padding()
+    }
+    
+    // MARK: - Page Display View
+    @ViewBuilder
+    func pageDisplayView(at index: Int) -> some View {
+        GeometryReader { geo in
+            ScrollView {
+                if let page = currentPage {
+                    // Book page appearance
+                    VStack {
+                        ZStack {
+                            // Page background with realistic paper texture
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color(red: 250/255, green: 248/255, blue: 243/255)) // Paper color
+                                .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
+                            
+                            // Page content with proper book formatting
+                            VStack(alignment: .leading, spacing: 0) {
+                                if isEditing {
+                                    // Edit mode
+                                    editablePageContent(page: page)
+                                } else {
+                                    // Display mode - exactly as it appears in the book
+                                    displayPageContent(page: page)
+                                }
+                            }
+                            .padding(40) // Book page margins
+                        }
+                        .frame(width: min(geo.size.width * 0.85, 500)) // Max width for readability
+                        .frame(minHeight: geo.size.height * 0.7)
+                        .padding(.vertical, 40)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+    
     var body: some View {
         ZStack {
-            // Soft blur background with parchment color
-            LinearGradient(
-                colors: [Tokens.bgPrimary.opacity(0.98), Tokens.bgWash.opacity(0.98)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-            .overlay(
-                Color.black.opacity(0.3)
-                    .ignoresSafeArea()
-            )
+            backgroundView
             
             // TabView for swipe navigation
             TabView(selection: $currentViewedIndex) {
                 ForEach(pages.indices, id: \.self) { index in
-                    VStack(spacing: 0) {
-                        // Navigation header
-                        HStack {
-                            Button(action: { presentationMode.wrappedValue.dismiss() }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 28))
-                                    .foregroundColor(Tokens.ink.opacity(0.8))
-                                    .background(Circle().fill(Color.white.opacity(0.9)))
-                            }
-                            .padding()
-                            
-                            Spacer()
-                            
-                            if !isEditing {
-                                HStack(spacing: 12) {
-                            // Delete button on the left
-                            Button(action: { showDeleteConfirmation = true }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "trash")
-                                    Text("Delete")
-                                }
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(Capsule().fill(Color.red.opacity(0.9)))
-                            }
-                            
-                            // Edit button on the right
-                            Button(action: { isEditing = true }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "pencil")
-                                    Text("Edit")
-                                }
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(Capsule().fill(Tokens.accent))
-                            }
-                        }
-                        .padding()
-                    } else {
-                        HStack(spacing: 12) {
-                            Button(action: { 
-                                isEditing = false
-                                // Reset to original values
-                                if let page = currentPage {
-                                    editedTitle = page.title ?? ""
-                                    editedText = page.text ?? ""
-                                    editedCaption = page.caption ?? ""
-                                }
-                            }) {
-                                Text("Cancel")
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundColor(Tokens.ink.opacity(0.7))
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(Capsule().fill(Color.white.opacity(0.9)))
-                            }
-                            
-                            Button(action: { 
-                                // Save changes back to the page model
-                                if currentViewedIndex >= 0 && currentViewedIndex < pages.count {
-                                    pages[currentViewedIndex].title = editedTitle.isEmpty ? nil : editedTitle
-                                    pages[currentViewedIndex].text = editedText.isEmpty ? nil : editedText
-                                    pages[currentViewedIndex].caption = editedCaption.isEmpty ? nil : editedCaption
-                                }
-                                isEditing = false
-                            }) {
-                                Text("Done")
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(Capsule().fill(Color.blue))
-                            }
-                        }
-                        .padding()
-                    }
-                }
-                
-                        // Page content - displayed like the actual book page
-                        GeometryReader { geo in
-                            ScrollView {
-                                if let page = currentPage {
-                                    // Book page appearance
-                                    VStack {
-                                        ZStack {
-                                            // Page background with realistic paper texture
-                                            RoundedRectangle(cornerRadius: 4)
-                                                .fill(Color(red: 250/255, green: 248/255, blue: 243/255)) // Paper color
-                                                .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
-                                            
-                                            // Page content with proper book formatting
-                                            VStack(alignment: .leading, spacing: 0) {
-                                                if isEditing {
-                                                    // Edit mode
-                                                    editablePageContent(page: page)
-                                                } else {
-                                                    // Display mode - exactly as it appears in the book
-                                                    displayPageContent(page: page)
-                                                }
-                                            }
-                                            .padding(40) // Book page margins
-                                        }
-                                        .frame(width: min(geo.size.width * 0.85, 500)) // Max width for readability
-                                        .frame(minHeight: geo.size.height * 0.7)
-                                        .padding(.vertical, 40)
-                                        
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                }
-                            }
-                        }
-                    }
-                    .tag(index)
+                    pageContentView(at: index)
                 }
             }
             .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
