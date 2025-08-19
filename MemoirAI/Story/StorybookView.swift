@@ -418,10 +418,13 @@ struct PageZoomView: View {
             
             Spacer()
             
-            if !isEditing {
-                editingButtonsView
-            } else {
-                doneButtonsView
+            // Only show edit/delete buttons if we're viewing the current index
+            if index == currentViewedIndex {
+                if !isEditing {
+                    editingButtonsView
+                } else {
+                    doneButtonsView
+                }
             }
         }
     }
@@ -503,14 +506,16 @@ struct PageZoomView: View {
     func pageDisplayView(at index: Int) -> some View {
         GeometryReader { geo in
             ScrollView {
-                if let page = currentPage {
+                // Use the page at the specific index, not currentPage
+                let page = index >= 0 && index < pages.count ? pages[index] : nil
+                if let page = page {
                     // Book page appearance
                     VStack {
                         ZStack {
                             // Page background with realistic paper texture
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(Color(red: 250/255, green: 248/255, blue: 243/255)) // Paper color
-                                .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
+                                // Shadow removed to eliminate visible line behind navigation
                             
                             // Page content with proper book formatting
                             VStack(alignment: .leading, spacing: 0) {
