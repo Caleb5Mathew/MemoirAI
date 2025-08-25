@@ -39,7 +39,9 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>We need to record your voice so you can capture your memory as audio.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>We need to access your photo library so you can attach pictures to your memories.</string>
+	<string>We need to access your photo library so you can attach pictures to your memories and save your book pages as images.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>We need permission to save your book pages as images to your photo library.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>We need to transcribe your audio recordings into text for you to read later.</string>
 	<key>NSUserTrackingUsageDescription</key>

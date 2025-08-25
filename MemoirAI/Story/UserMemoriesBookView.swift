@@ -16,8 +16,10 @@ struct UserMemoriesBookView: View {
     @State private var showZoomedPage = false
     @State private var zoomedPageIndex: Int = 0
     @State private var flipbookPages: [FlipPage] = []
+    @State private var showDownloadOptions = false
     
     @StateObject private var memoryViewModel = MemoryEntryViewModel()
+    @StateObject private var downloadManager = BookDownloadManager()
     
     // Helper function to calculate book size outside ViewBuilder context
     private func calculateBookSize(for size: CGSize) -> CGSize {
@@ -141,6 +143,21 @@ struct UserMemoriesBookView: View {
         .fullScreenCover(isPresented: $showZoomedPage) {
             PageZoomView(pageIndex: zoomedPageIndex, pages: $flipbookPages)
         }
+        .overlay(
+            Group {
+                if showDownloadOptions {
+                    DownloadOptionsView(
+                        isPresented: $showDownloadOptions,
+                        onSaveToPhotos: {
+                            handleSaveToPhotos()
+                        },
+                        onSaveToFiles: {
+                            handleSaveToFiles()
+                        }
+                    )
+                }
+            }
+        )
     }
     
     // MARK: - Load User Memories
@@ -377,10 +394,30 @@ struct UserMemoriesBookView: View {
     }
     
     private func downloadBook() {
-        // Trigger JavaScript PDF download for user's memory book
-        if let webView = webView {
-            webView.evaluateJavaScript("window.downloadPDF()")
+        // Show download options popup
+        showDownloadOptions = true
+    }
+    
+    private func handleSaveToPhotos() {
+        // Get the current view controller
+        var presentingViewController: UIViewController?
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            presentingViewController = rootVC
         }
+        
+        downloadManager.saveToPhotos(webView: webView, from: presentingViewController)
+    }
+    
+    private func handleSaveToFiles() {
+        // Get the current view controller
+        var presentingViewController: UIViewController?
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            presentingViewController = rootVC
+        }
+        
+        downloadManager.saveToFiles(webView: webView, from: presentingViewController)
     }
     
     private var geometry: CGSize {

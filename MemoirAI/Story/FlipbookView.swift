@@ -6,13 +6,15 @@ import PDFKit
 struct FlipbookView: UIViewRepresentable {
     let pages: [FlipPage]
     @Binding var currentPage: Int
+    @Binding var webView: WKWebView?
     let onReady: (() -> Void)?
     let onFlip: ((Int) -> Void)?
     let onPageTap: ((Int) -> Void)?
     
-    init(pages: [FlipPage], currentPage: Binding<Int>, onReady: (() -> Void)? = nil, onFlip: ((Int) -> Void)? = nil, onPageTap: ((Int) -> Void)? = nil) {
+    init(pages: [FlipPage], currentPage: Binding<Int>, webView: Binding<WKWebView?> = .constant(nil), onReady: (() -> Void)? = nil, onFlip: ((Int) -> Void)? = nil, onPageTap: ((Int) -> Void)? = nil) {
         self.pages = pages
         self._currentPage = currentPage
+        self._webView = webView
         self.onReady = onReady
         self.onFlip = onFlip
         self.onPageTap = onPageTap
@@ -47,8 +49,13 @@ struct FlipbookView: UIViewRepresentable {
         // Ensure webview background is transparent
         webView.scrollView.backgroundColor = .clear
         
-        // Store reference to webView in coordinator
+        // Store reference to webView in coordinator and binding
         context.coordinator.webView = webView
+        
+        // Set the webView in the binding so parent views can access it
+        DispatchQueue.main.async {
+            self.webView = webView
+        }
         
         print("FlipbookView: Created WKWebView with frame: \(webView.frame)")
         
@@ -494,80 +501,19 @@ struct FlipbookView: UIViewRepresentable {
         private func handlePDFDownload(pages: [String], filename: String) {
             print("FlipbookView: Handling PDF download with \(pages.count) pages")
             
-            // Create PDF document
-            let pdfDocument = PDFDocument()
-            
-            // Process each page image
-            for (index, pageDataString) in pages.enumerated() {
-                // Remove data URL prefix if present
-                let base64String: String
-                if pageDataString.hasPrefix("data:image/jpeg;base64,") {
-                    base64String = String(pageDataString.dropFirst("data:image/jpeg;base64,".count))
-                } else if pageDataString.hasPrefix("data:image/png;base64,") {
-                    base64String = String(pageDataString.dropFirst("data:image/png;base64,".count))
-                } else {
-                    base64String = pageDataString
-                }
-                
-                // Decode base64 to image data
-                guard let imageData = Data(base64Encoded: base64String),
-                      let image = UIImage(data: imageData) else {
-                    print("FlipbookView: Failed to decode page \(index + 1)")
-                    continue
-                }
-                
-                // Create PDF page from image
-                if let pdfPage = PDFPage(image: image) {
-                    pdfDocument.insert(pdfPage, at: index)
-                    print("FlipbookView: Added page \(index + 1) to PDF")
-                }
+            // Get the presenting view controller
+            var presentingViewController: UIViewController?
+            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+               let rootVC = windowScene.windows.first?.rootViewController {
+                presentingViewController = rootVC
             }
             
-            // Check if we have pages
-            guard pdfDocument.pageCount > 0 else {
-                print("FlipbookView: No pages were added to PDF")
-                return
-            }
-            
-            // Get PDF data
-            guard let pdfData = pdfDocument.dataRepresentation() else {
-                print("FlipbookView: Failed to generate PDF data")
-                return
-            }
-            
-            // Create activity view controller for sharing/saving
-            DispatchQueue.main.async {
-                let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
-                
-                do {
-                    try pdfData.write(to: tempURL)
-                    
-                    // Create share sheet
-                    let activityVC = UIActivityViewController(
-                        activityItems: [tempURL],
-                        applicationActivities: nil
-                    )
-                    
-                    // Present from the current window's root view controller
-                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let rootVC = windowScene.windows.first?.rootViewController {
-                        
-                        // Configure for iPad
-                        if let popover = activityVC.popoverPresentationController {
-                            popover.sourceView = rootVC.view
-                            popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: rootVC.view.bounds.midY, width: 0, height: 0)
-                            popover.permittedArrowDirections = []
-                        }
-                        
-                        rootVC.present(activityVC, animated: true) {
-                            print("FlipbookView: Share sheet presented for PDF: \(filename)")
-                        }
-                    }
-                    
-                } catch {
-                    print("FlipbookView: Error saving PDF: \(error)")
-                }
-            }
+            // Use the BookDownloadHandler to handle the PDF
+            BookDownloadHandler.handlePDFDownload(
+                pages: pages,
+                filename: filename,
+                presentingView: presentingViewController
+            )
         }
     }
 }
@@ -603,7 +549,8 @@ struct FlipbookView_Previews: PreviewProvider {
     static var previews: some View {
         FlipbookView(
             pages: FlipPage.samplePages,
-            currentPage: .constant(0)
+            currentPage: .constant(0),
+            webView: .constant(nil)
         )
         .frame(width: 300, height: 400)
     }

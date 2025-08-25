@@ -16,6 +16,8 @@ struct StorybookView: View {
     @State private var showZoomedPage = false
     @State private var zoomedPageIndex: Int = 0
     @State private var flipbookPages = FlipPage.samplePages
+    @State private var showDownloadOptions = false
+    @StateObject private var downloadManager = BookDownloadManager()
 
     // Sample pages for the finished book preview
     private let samplePages = MockBookPage.samplePages
@@ -173,6 +175,21 @@ struct StorybookView: View {
         .fullScreenCover(isPresented: $showZoomedPage) {
             PageZoomView(pageIndex: zoomedPageIndex, pages: $flipbookPages)
         }
+        .overlay(
+            Group {
+                if showDownloadOptions {
+                    DownloadOptionsView(
+                        isPresented: $showDownloadOptions,
+                        onSaveToPhotos: {
+                            handleSaveToPhotos()
+                        },
+                        onSaveToFiles: {
+                            handleSaveToFiles()
+                        }
+                    )
+                }
+            }
+        )
     }
 
     // MARK: - Header View
@@ -295,10 +312,30 @@ struct StorybookView: View {
     }
     
     private func downloadBook() {
-        // Trigger JavaScript PDF download
-        if let webView = webView {
-            webView.evaluateJavaScript("window.downloadPDF()")
+        // Show download options popup
+        showDownloadOptions = true
+    }
+    
+    private func handleSaveToPhotos() {
+        // Get the current view controller
+        var presentingViewController: UIViewController?
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            presentingViewController = rootVC
         }
+        
+        downloadManager.saveToPhotos(webView: webView, from: presentingViewController)
+    }
+    
+    private func handleSaveToFiles() {
+        // Get the current view controller
+        var presentingViewController: UIViewController?
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            presentingViewController = rootVC
+        }
+        
+        downloadManager.saveToFiles(webView: webView, from: presentingViewController)
     }
 }
 
@@ -874,6 +911,7 @@ struct FlipbookViewWithWebView: View {
         FlipbookView(
             pages: pages,
             currentPage: $currentPage,
+            webView: $webView,
             onReady: onReady,
             onFlip: onFlip,
             onPageTap: onPageTap
