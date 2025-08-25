@@ -81,6 +81,95 @@ function updatePageFlipDimensions() {
 // Store pages data globally for PDF generation
 let globalPagesData = [];
 
+// Function to fix page positioning for single pages
+function fixPagePositioning() {
+    console.log('Flipbook: Checking and fixing page positioning...');
+    
+    // Get current page index
+    const currentIndex = pageFlip ? pageFlip.getCurrentPageIndex() : 0;
+    const totalPages = pageFlip ? pageFlip.getPageCount() : 0;
+    
+    console.log(`Flipbook: Current page ${currentIndex} of ${totalPages}`);
+    
+    // Check visible pages
+    const visibleItems = document.querySelectorAll('.stf__item:not([style*="display: none"])');
+    const singleMode = document.querySelector('.stf__single-mode');
+    
+    console.log(`Flipbook: Visible items: ${visibleItems.length}, Single mode: ${!!singleMode}`);
+    
+    // If we have a single visible page
+    if (visibleItems.length === 1 || singleMode) {
+        const singleItem = visibleItems[0];
+        if (!singleItem) return;
+        
+        const isCoverPage = singleItem.querySelector('.flipbook-page.cover-page');
+        const isLastPage = currentIndex === totalPages - 1;
+        const isRightSide = singleItem.classList.contains('--right');
+        const isLeftSide = singleItem.classList.contains('--left');
+        
+        console.log(`Flipbook: Single page - Cover: ${!!isCoverPage}, Last: ${isLastPage}, Right: ${isRightSide}, Left: ${isLeftSide}`);
+        
+        // Determine if page should be on left or right
+        let shouldBeOnLeft = false;
+        
+        // Cover pages should always be on the left
+        if (isCoverPage) {
+            shouldBeOnLeft = true;
+            console.log('Flipbook: Cover page should be on left');
+        }
+        // In a book, odd pages (1, 3, 5...) are typically on the right
+        // Even pages (0, 2, 4...) are on the left
+        // But for single page display:
+        // - First page (cover, index 0) should be on left
+        // - Last page if odd total should be on left
+        else if (totalPages % 2 === 1 && isLastPage) {
+            shouldBeOnLeft = true;
+            console.log('Flipbook: Last page with odd total should be on left');
+        }
+        // Regular single pages follow even/odd rule
+        else {
+            shouldBeOnLeft = currentIndex % 2 === 0;
+            console.log(`Flipbook: Page ${currentIndex} should be on ${shouldBeOnLeft ? 'left' : 'right'}`);
+        }
+        
+        // Apply positioning fix if needed
+        if (shouldBeOnLeft && isRightSide) {
+            console.log('Flipbook: Fixing page position - moving from right to left');
+            
+            singleItem.classList.add('force-left-position');
+            
+            const block = singleItem.closest('.stf__block');
+            if (block) {
+                block.style.justifyContent = 'flex-start';
+                singleItem.style.marginLeft = '0';
+                singleItem.style.marginRight = 'auto';
+            }
+        } else if (!shouldBeOnLeft && isLeftSide) {
+            console.log('Flipbook: Fixing page position - moving from left to right');
+            
+            singleItem.classList.add('force-right-position');
+            
+            const block = singleItem.closest('.stf__block');
+            if (block) {
+                block.style.justifyContent = 'flex-end';
+                singleItem.style.marginLeft = 'auto';
+                singleItem.style.marginRight = '0';
+            }
+        } else {
+            console.log('Flipbook: Page is correctly positioned');
+        }
+    }
+    // For double page spreads
+    else if (visibleItems.length === 2) {
+        console.log('Flipbook: Double page spread detected - no positioning fix needed');
+    }
+}
+
+// Backward compatibility - keep the old function name but use new logic
+function fixCoverPagePosition() {
+    fixPagePositioning();
+}
+
 // Page tap handler for native iOS zoom
 function handlePageTap(pageIndex) {
     console.log('Flipbook: Page tapped, index:', pageIndex);
@@ -391,7 +480,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     width: dimensions.width,
                     height: dimensions.height,
                     size: "stretch",
-                    showCover: true  // Show single cover page instead of spread
+                    showCover: true,  // Show single cover page instead of spread
+                    startPage: 0,     // Start at cover page
+                    drawShadow: true,
+                    flippingTime: 1000,
+                    usePortrait: false,
+                    startZIndex: 0,
+                    autoSize: true,
+                    maxShadowOpacity: 0.3
                 });
                 console.log('Flipbook: PageFlip initialized with minimal config (reverted)');
                 console.log('Flipbook: PageFlip initialized successfully with minimal config:', pageFlip);
@@ -428,6 +524,11 @@ document.addEventListener('DOMContentLoaded', function() {
             // DEBUG: Verify cover page configuration
             console.log('Flipbook: Cover page should be first page with showCover: true');
             
+            // Fix cover page positioning after PageFlip initializes
+            setTimeout(() => {
+                fixCoverPagePosition();
+            }, 100);
+            
             // Listen for flip events and notify Swift
             pageFlip.on('flip', function(e) {
                 console.log('PageFlip: Page flipped to index:', e.data);
@@ -437,6 +538,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         index: e.data
                     });
                 }
+                
+                // Fix page positioning after flip
+                setTimeout(() => {
+                    fixPagePositioning();
+                }, 100);
             });
 
             // Listen for state changes
@@ -770,6 +876,11 @@ window.renderPages = function(pagesJSON) {
             });
         }
         
+        // Fix cover page position after pages are loaded
+        setTimeout(() => {
+            fixCoverPagePosition();
+        }, 200);
+        
         // DEBUG: Log page navigation details
         console.log('Flipbook: Total pages in array:', pages.length);
         console.log('Flipbook: PageFlip page count:', pageFlip.getPageCount ? pageFlip.getPageCount() : 'N/A');
@@ -853,7 +964,10 @@ function setupNavigationArrows() {
             canGoNext: pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() < (pageFlip.getPageCount ? pageFlip.getPageCount() - 1 : 0) : false,
             canGoPrev: pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() > 0 : false
         });
-        setTimeout(updateNavigationState, 100); // Small delay to ensure state is updated
+        setTimeout(() => {
+            updateNavigationState();
+            fixPagePositioning(); // Also fix positioning after navigation
+        }, 100); // Small delay to ensure state is updated
     });
     
     // Initial state update
@@ -901,7 +1015,7 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
         case 'cover':
             const subtitle = caption ? `<div class="cover-subtitle">${caption}</div>` : '';
             return `
-                <div class="flipbook-page cover-page">
+                <div class="flipbook-page cover-page" data-page-position="left" data-page-type="cover">
                     <div class="page-content">
                         <div class="cover-title">${title || 'Memories'}</div>
                         ${subtitle}

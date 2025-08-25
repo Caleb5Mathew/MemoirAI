@@ -256,6 +256,49 @@ html, body {
     overflow: visible; /* Ensure content is not clipped */
 }
 
+/* Special positioning for cover page when it appears alone */
+.stf__item.--right:first-child:last-child .flipbook-page.cover-page {
+    /* When cover is the only visible page and incorrectly on right, adjust its position */
+    position: relative;
+    left: -50%;
+}
+
+/* JavaScript-applied fix for forcing left position */
+.stf__item.force-left-position {
+    margin-left: 0 !important;
+    margin-right: auto !important;
+    position: relative !important;
+    left: 0 !important;
+    transform: none !important;
+}
+
+.stf__item.force-left-position .flipbook-page {
+    margin-left: 0 !important;
+}
+
+/* JavaScript-applied fix for forcing right position */
+.stf__item.force-right-position {
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    position: relative !important;
+    right: 0 !important;
+    left: auto !important;
+    transform: none !important;
+}
+
+.stf__item.force-right-position .flipbook-page {
+    margin-right: 0 !important;
+}
+
+/* Backward compatibility */
+.stf__item.cover-on-right-fix {
+    margin-left: 0 !important;
+    margin-right: auto !important;
+    position: relative !important;
+    left: 0 !important;
+    transform: none !important;
+}
+
 /* Gold embossing effect for cover - adjusted for new padding */
 .cover-page::before {
     content: '';
@@ -441,31 +484,57 @@ html, body {
 .stf__single-mode .stf__wrapper {
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3) !important;
     display: flex !important;
-    justify-content: center !important;
+    justify-content: flex-start !important; /* Changed from center to flex-start for left positioning */
     align-items: center !important;
 }
 
 .stf__single-mode .stf__block {
     display: flex !important;
-    justify-content: center !important;
+    justify-content: flex-start !important; /* Changed from center to flex-start */
     align-items: center !important;
     width: 100% !important;
 }
 
+/* Special handling for cover pages in single mode - force left position */
 .stf__single-mode .stf__page {
-    margin: 0 auto !important;
+    margin: 0 !important;
+    margin-left: 0 !important; /* Force left alignment */
     width: 50% !important;
     max-width: 500px !important;
     position: relative !important;
     left: 0 !important;
-    right: 0 !important;
+    right: auto !important;
 }
 
-/* Ensure single page is truly centered */
+/* Ensure single page is positioned on the left */
 .stf__single-mode .stf__item {
-    margin: 0 auto !important;
+    margin: 0 !important;
+    margin-left: 0 !important; /* Force left alignment */
     display: flex !important;
-    justify-content: center !important;
+    justify-content: flex-start !important; /* Changed from center to flex-start */
+}
+
+/* Special rules for cover pages - force them to be treated as left pages */
+.cover-page[data-page-position="left"],
+.stf__item.--right .cover-page {
+    /* Force cover page to left position even if PageFlip puts it on right */
+    margin-right: auto !important;
+    margin-left: 0 !important;
+}
+
+/* Override PageFlip's positioning for cover pages */
+.stf__item.--right:has(.cover-page) {
+    justify-content: flex-start !important;
+}
+
+/* When only cover page is visible, ensure it's on the left */
+.stf__block:has(.cover-page:only-child) {
+    justify-content: flex-start !important;
+}
+
+.stf__block:has(.cover-page:only-child) .stf__item {
+    margin-left: 0 !important;
+    margin-right: auto !important;
 }
 
 /* Book opening animation */
