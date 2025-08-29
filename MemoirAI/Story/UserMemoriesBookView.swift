@@ -17,6 +17,8 @@ struct UserMemoriesBookView: View {
     @State private var zoomedPageIndex: Int = 0
     @State private var flipbookPages: [FlipPage] = []
     @State private var showDownloadOptions = false
+    @State private var showPhotoLayoutSheet = false
+    @State private var selectedPhotoTemplate: PhotoLayoutType?
     
     @StateObject private var memoryViewModel = MemoryEntryViewModel()
     @StateObject private var downloadManager = BookDownloadManager()
@@ -145,6 +147,17 @@ struct UserMemoriesBookView: View {
         }
         .overlay(
             Group {
+                if showPhotoLayoutSheet {
+                    PhotoLayoutBottomSheet(
+                        isPresented: $showPhotoLayoutSheet,
+                        selectedTemplate: $selectedPhotoTemplate,
+                        onTemplateSelected: { template in
+                            handleTemplateSelected(template)
+                        }
+                    )
+                    .zIndex(2)
+                }
+                
                 if showDownloadOptions {
                     DownloadOptionsView(
                         isPresented: $showDownloadOptions,
@@ -370,25 +383,31 @@ struct UserMemoriesBookView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Record a memory")
             
-            // Secondary: Create finished book
-            NavigationLink(destination: StoryPage().environmentObject(profileVM)) {
-                Text("Create finished book")
-                    .font(Tokens.Typography.button)
-                    .fontWeight(.medium)
-                    .foregroundColor(Tokens.ink)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(
-                        Capsule()
-                            .fill(Tokens.bgPrimary)
-                            .overlay(
-                                Capsule()
-                                    .stroke(Tokens.ink.opacity(0.1), lineWidth: 1)
-                            )
-                    )
+            // Secondary: Add photos
+            Button(action: { 
+                showPhotoLayoutSheet = true 
+            }) {
+                HStack(spacing: 8) {
+                    Image(systemName: "photo.badge.plus")
+                        .font(.system(size: 16))
+                    Text("Add photos")
+                        .font(Tokens.Typography.button)
+                        .fontWeight(.medium)
+                }
+                .foregroundColor(Tokens.ink)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(
+                    Capsule()
+                        .fill(Tokens.bgPrimary)
+                        .overlay(
+                            Capsule()
+                                .stroke(Tokens.ink.opacity(0.1), lineWidth: 1)
+                        )
+                )
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Create finished book from memories")
+            .accessibilityLabel("Add photos to your book")
         }
         .padding(.horizontal, 20)
     }
@@ -418,6 +437,43 @@ struct UserMemoriesBookView: View {
         }
         
         downloadManager.saveToFiles(webView: webView, from: presentingViewController)
+    }
+    
+    // MARK: - Photo Layout Handling
+    private func handleTemplateSelected(_ template: PhotoLayoutType) {
+        // Create a new photo layout on the current page
+        guard currentPage >= 0 && currentPage < flipbookPages.count else { return }
+        
+        // Calculate default position for the new layout (center of page)
+        let pageWidth: CGFloat = 300 // Approximate page width
+        let pageHeight: CGFloat = 400 // Approximate page height
+        let layoutSize = template.defaultSize
+        
+        let frame = CGRect(
+            x: (pageWidth - layoutSize.width) / 2,
+            y: (pageHeight - layoutSize.height) / 2,
+            width: layoutSize.width,
+            height: layoutSize.height
+        )
+        
+        let newLayout = PhotoLayout(type: template, frame: frame)
+        
+        // Add the layout to the current page
+        if flipbookPages[currentPage].photoLayouts == nil {
+            flipbookPages[currentPage].photoLayouts = []
+        }
+        flipbookPages[currentPage].photoLayouts?.append(newLayout)
+        
+        // Update the page type if needed
+        if flipbookPages[currentPage].type != .photoLayout {
+            flipbookPages[currentPage].type = .photoLayout
+        }
+        
+        // Haptic feedback
+        let impact = UIImpactFeedbackGenerator(style: .medium)
+        impact.impactOccurred()
+        
+        print("Added \(template.rawValue) layout to page \(currentPage)")
     }
     
     private var geometry: CGSize {

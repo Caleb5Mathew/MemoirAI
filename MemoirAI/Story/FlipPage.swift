@@ -9,6 +9,7 @@ struct FlipPage: Codable, Identifiable {
     var text: String? // Full text content for text pages
     var imageBase64: String?
     var imageName: String?
+    var photoLayouts: [PhotoLayout]? // Photo layouts on this page
     
     enum PageType: String, Codable, CaseIterable {
         case cover = "cover"
@@ -17,15 +18,17 @@ struct FlipPage: Codable, Identifiable {
         case rightPhoto = "rightPhoto"
         case mixed = "mixed"
         case html = "html"
+        case photoLayout = "photoLayout" // New type for custom photo layouts
     }
     
-    init(type: PageType, title: String? = nil, caption: String? = nil, text: String? = nil, imageBase64: String? = nil, imageName: String? = nil) {
+    init(type: PageType, title: String? = nil, caption: String? = nil, text: String? = nil, imageBase64: String? = nil, imageName: String? = nil, photoLayouts: [PhotoLayout]? = nil) {
         self.type = type
         self.title = title
         self.caption = caption
         self.text = text
         self.imageBase64 = imageBase64
         self.imageName = imageName
+        self.photoLayouts = photoLayouts
     }
 }
 
