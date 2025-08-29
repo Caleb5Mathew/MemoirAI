@@ -728,6 +728,21 @@ struct PageZoomView: View {
             Text(page.text ?? "")
                 .font(.system(size: 6, weight: .light, design: .serif))
                 .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                
+        case .photoLayout:
+            // Display photo layouts
+            VStack(spacing: 12) {
+                if let layouts = page.photoLayouts, !layouts.isEmpty {
+                    Text("Photo Page (\(layouts.count) photos)")
+                        .font(.system(size: 10, weight: .light, design: .serif))
+                        .foregroundColor(Color(red: 122/255, green: 122/255, blue: 122/255))
+                } else {
+                    Text("Tap 'Add Photos' to add images")
+                        .font(.system(size: 10, weight: .light, design: .serif))
+                        .italic()
+                        .foregroundColor(Color(red: 122/255, green: 122/255, blue: 122/255))
+                }
+            }
         }
     }
     
@@ -906,6 +921,28 @@ struct PageZoomView: View {
             TextEditor(text: $editedText)
                 .font(.system(size: 10, weight: .light, design: .serif))
                 .frame(minHeight: 300)
+                
+        case .photoLayout:
+            // Editable photo layout page
+            VStack(spacing: 16) {
+                Text("Photo Layout Editor")
+                    .font(.system(size: 12, weight: .medium, design: .serif))
+                    .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
+                
+                if let layouts = flipbookPages[currentPage].photoLayouts, !layouts.isEmpty {
+                    Text("\(layouts.count) photo(s) on this page")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                } else {
+                    Text("Tap 'Add Photos' button to add images")
+                        .font(.caption)
+                        .italic()
+                        .foregroundColor(.gray)
+                }
+                
+                Spacer()
+            }
+            .padding()
         }
     }
     

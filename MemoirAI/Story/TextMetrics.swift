@@ -124,6 +124,18 @@ struct PageLimits {
                 textWordLimit: 500,
                 availableTextHeight: pageHeight * 0.8
             )
+            
+        case .photoLayout:
+            // Photo layouts have minimal text, mostly visual content
+            titleFont = UIFont.systemFont(ofSize: 12, weight: .regular)
+            captionFont = UIFont.italicSystemFont(ofSize: 8)
+            
+            return PageLimits(
+                titleCharLimit: 30,
+                captionCharLimit: 50,
+                textWordLimit: 50,  // Small amount of text allowed
+                availableTextHeight: pageHeight * 0.2  // Most space reserved for photos
+            )
         }
     }
 }

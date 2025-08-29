@@ -308,6 +308,13 @@ struct UserMemoriesBookView: View {
                     content: page.text ?? page.caption ?? "",
                     imageName: page.imageName
                 )
+            case .html, .photoLayout:
+                // Convert HTML and photo layout pages to mixed type
+                return MockBookPage(
+                    type: .mixed,
+                    content: page.text ?? "Photo Collection",
+                    imageName: page.imageName
+                )
             default:
                 return MockBookPage(
                     type: .text,
