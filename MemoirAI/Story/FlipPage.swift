@@ -3,7 +3,7 @@ import Foundation
 // MARK: - FlipPage Model
 struct FlipPage: Codable, Identifiable {
     let id = UUID()
-    let type: PageType
+    var type: PageType  // Changed from 'let' to 'var' to allow type changes when adding photo layouts
     var title: String?
     var caption: String?
     var text: String? // Full text content for text pages
