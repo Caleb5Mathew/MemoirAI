@@ -929,7 +929,7 @@ struct PageZoomView: View {
                     .font(.system(size: 12, weight: .medium, design: .serif))
                     .foregroundColor(Color(red: 58/255, green: 58/255, blue: 58/255))
                 
-                if let layouts = flipbookPages[currentPage].photoLayouts, !layouts.isEmpty {
+                if let layouts = page.photoLayouts, !layouts.isEmpty {
                     Text("\(layouts.count) photo(s) on this page")
                         .font(.caption)
                         .foregroundColor(.gray)
