@@ -895,7 +895,7 @@ class StoryPageViewModel: ObservableObject {
         return nil // Return nil on failure
     }
 
-    func generateStorybook(forProfileID id: UUID) async {
+    func generateStorybook(forProfileID id: UUID, overridePageCount: Int? = nil) async {
         currentProfileID = id // Set current profile
         isLoading = true
         errorMessage = nil
@@ -908,7 +908,9 @@ class StoryPageViewModel: ObservableObject {
 
         do {
             let entries = try await fetchMemoryEntries(for: id)
-            let chosen  = await rankMemoriesWithLLM(entries, top: pageCountSetting)
+            // Use override page count if provided, otherwise use settings
+            let targetPageCount = overridePageCount ?? pageCountSetting
+            let chosen  = await rankMemoriesWithLLM(entries, top: targetPageCount)
             
             guard !chosen.isEmpty else {
                 throw NSError(domain: "MemoirAI", code: 1, userInfo: [NSLocalizedDescriptionKey: "No memories were selected to generate the story."])

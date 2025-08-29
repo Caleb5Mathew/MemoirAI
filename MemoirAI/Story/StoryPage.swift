@@ -344,7 +344,13 @@ struct StoryPage: View {
     }
         
     private func generateStorybookWithPaywallCheck() {
-        let pagesToAttempt = vm.expectedPageCount()
+        var pagesToAttempt = vm.expectedPageCount()
+
+        // Auto-adjust to 1 image for free tier users
+        if !isSubscribed {
+            pagesToAttempt = FreePreviewConfig.maxPagesWithoutSubscription // Always use 1 for free users
+            print("StoryPage: Free user - automatically using \(pagesToAttempt) image for generation")
+        }
 
         guard pagesToAttempt > 0 else {
             vm.errorMessage = "Please select at least 1 memory to generate."
@@ -366,12 +372,11 @@ struct StoryPage: View {
                 return
             }
 
-            // 2️⃣ First (allowed) preview must be exactly ONE page
+            // 2️⃣ No need to check page count anymore since we auto-set it to 1
+            // The validation is kept for safety but should never trigger
             if pagesToAttempt > FreePreviewConfig.maxPagesWithoutSubscription {
-                vm.errorMessage = "Without a subscription you can generate up to \(FreePreviewConfig.maxPagesWithoutSubscription) images as a preview. Reduce the slider or subscribe to unlock full books."
-                vm.isLoading = false
-                hasRequestedGeneration = false
-                return
+                // This should never happen now, but keep as safety check
+                pagesToAttempt = FreePreviewConfig.maxPagesWithoutSubscription
             }
         }
         
@@ -422,8 +427,9 @@ struct StoryPage: View {
         }
         
         let currentProfileID = profileVM.selectedProfile.id
+        let finalPageCount = pagesExpected // Pass the adjusted page count
         Task {
-            await vm.generateStorybook(forProfileID: currentProfileID)
+            await vm.generateStorybook(forProfileID: currentProfileID, overridePageCount: finalPageCount)
             
             await MainActor.run {
                 cancellableTimer?.cancel()

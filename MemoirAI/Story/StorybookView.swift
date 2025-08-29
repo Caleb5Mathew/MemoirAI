@@ -17,6 +17,7 @@ struct StorybookView: View {
     @State private var zoomedPageIndex: Int = 0
     @State private var flipbookPages = FlipPage.samplePages
     @State private var showDownloadOptions = false
+    @State private var fallbackTimer: Timer?
     @StateObject private var downloadManager = BookDownloadManager()
 
     // Sample pages for the finished book preview
@@ -107,6 +108,9 @@ struct StorybookView: View {
                                         webView: $webView,
                                         onReady: {
                                             print("StorybookView: Flipbook ready!")
+                                            // Cancel the fallback timer since flipbook is ready
+                                            fallbackTimer?.invalidate()
+                                            fallbackTimer = nil
                                             flipbookReady = true
                                         },
                                         onFlip: { pageIndex in
@@ -114,6 +118,9 @@ struct StorybookView: View {
                                             if pageIndex == -1 {
                                                 // Error occurred
                                                 print("StorybookView: Flipbook error detected, falling back to native")
+                                                // Cancel timer if error occurs
+                                                fallbackTimer?.invalidate()
+                                                fallbackTimer = nil
                                                 flipbookError = true
                                                 useFallback = true
                                             } else {
@@ -138,9 +145,10 @@ struct StorybookView: View {
                                     print("StorybookView: FlipbookView frame should be: \(bookSize)")
                                     
                                     // Set a timeout to fallback if flipbook doesn't load
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { // Reduced timeout for faster fallback
-                                        if !flipbookReady || flipbookError {
-                                            print("StorybookView: Flipbook timeout or error - falling back to native")
+                                    // Use Timer instead of DispatchQueue for better control
+                                    fallbackTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
+                                        if !flipbookReady && !flipbookError {
+                                            print("StorybookView: Flipbook timeout - falling back to native")
                                             useFallback = true
                                         }
                                     }
@@ -172,6 +180,11 @@ struct StorybookView: View {
             )
         }
         .onAppear { currentPage = 0 }
+        .onDisappear {
+            // Clean up timer when view disappears
+            fallbackTimer?.invalidate()
+            fallbackTimer = nil
+        }
         .fullScreenCover(isPresented: $showZoomedPage) {
             PageZoomView(pageIndex: zoomedPageIndex, pages: $flipbookPages)
         }
