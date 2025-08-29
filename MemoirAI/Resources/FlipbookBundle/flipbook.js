@@ -109,54 +109,67 @@ function fixPagePositioning() {
         
         console.log(`Flipbook: Single page - Cover: ${!!isCoverPage}, Last: ${isLastPage}, Right: ${isRightSide}, Left: ${isLeftSide}`);
         
-        // Determine if page should be on left or right
-        let shouldBeOnLeft = false;
-        
-        // Cover pages should always be on the left
+        // Cover pages should always be centered
         if (isCoverPage) {
-            shouldBeOnLeft = true;
-            console.log('Flipbook: Cover page should be on left');
+            console.log('Flipbook: Cover page should be centered');
+            
+            // Remove any existing position classes
+            singleItem.classList.remove('force-left-position', 'force-right-position');
+            singleItem.classList.add('force-center-position');
+            
+            const block = singleItem.closest('.stf__block');
+            if (block) {
+                block.style.justifyContent = 'center';
+                singleItem.style.margin = '0 auto';
+            }
         }
-        // In a book, odd pages (1, 3, 5...) are typically on the right
-        // Even pages (0, 2, 4...) are on the left
-        // But for single page display:
-        // - First page (cover, index 0) should be on left
-        // - Last page if odd total should be on left
-        else if (totalPages % 2 === 1 && isLastPage) {
-            shouldBeOnLeft = true;
-            console.log('Flipbook: Last page with odd total should be on left');
-        }
-        // Regular single pages follow even/odd rule
+        // Non-cover single pages positioning
         else {
-            shouldBeOnLeft = currentIndex % 2 === 0;
-            console.log(`Flipbook: Page ${currentIndex} should be on ${shouldBeOnLeft ? 'left' : 'right'}`);
-        }
-        
-        // Apply positioning fix if needed
-        if (shouldBeOnLeft && isRightSide) {
-            console.log('Flipbook: Fixing page position - moving from right to left');
+            // Determine if page should be on left or right
+            let shouldBeOnLeft = false;
             
-            singleItem.classList.add('force-left-position');
-            
-            const block = singleItem.closest('.stf__block');
-            if (block) {
-                block.style.justifyContent = 'flex-start';
-                singleItem.style.marginLeft = '0';
-                singleItem.style.marginRight = 'auto';
+            // In a book, odd pages (1, 3, 5...) are typically on the right
+            // Even pages (0, 2, 4...) are on the left
+            // But for single page display:
+            // - Last page if odd total should be on left
+            if (totalPages % 2 === 1 && isLastPage) {
+                shouldBeOnLeft = true;
+                console.log('Flipbook: Last page with odd total should be on left');
             }
-        } else if (!shouldBeOnLeft && isLeftSide) {
-            console.log('Flipbook: Fixing page position - moving from left to right');
-            
-            singleItem.classList.add('force-right-position');
-            
-            const block = singleItem.closest('.stf__block');
-            if (block) {
-                block.style.justifyContent = 'flex-end';
-                singleItem.style.marginLeft = 'auto';
-                singleItem.style.marginRight = '0';
+            // Regular single pages follow even/odd rule
+            else {
+                shouldBeOnLeft = currentIndex % 2 === 0;
+                console.log(`Flipbook: Page ${currentIndex} should be on ${shouldBeOnLeft ? 'left' : 'right'}`);
             }
-        } else {
-            console.log('Flipbook: Page is correctly positioned');
+            
+            // Apply positioning fix if needed
+            if (shouldBeOnLeft && isRightSide) {
+                console.log('Flipbook: Fixing page position - moving from right to left');
+                
+                singleItem.classList.remove('force-center-position', 'force-right-position');
+                singleItem.classList.add('force-left-position');
+                
+                const block = singleItem.closest('.stf__block');
+                if (block) {
+                    block.style.justifyContent = 'flex-start';
+                    singleItem.style.marginLeft = '0';
+                    singleItem.style.marginRight = 'auto';
+                }
+            } else if (!shouldBeOnLeft && isLeftSide) {
+                console.log('Flipbook: Fixing page position - moving from left to right');
+                
+                singleItem.classList.remove('force-center-position', 'force-left-position');
+                singleItem.classList.add('force-right-position');
+                
+                const block = singleItem.closest('.stf__block');
+                if (block) {
+                    block.style.justifyContent = 'flex-end';
+                    singleItem.style.marginLeft = 'auto';
+                    singleItem.style.marginRight = '0';
+                }
+            } else {
+                console.log('Flipbook: Page is correctly positioned');
+            }
         }
     }
     // For double page spreads
