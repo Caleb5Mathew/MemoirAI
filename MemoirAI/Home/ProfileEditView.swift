@@ -115,7 +115,7 @@ struct ProfileEditView: View {
                     .padding()
                 }
             }
-            .navigationTitle("Edit Profile")
+            .navigationTitle(Text("Edit Profile"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
