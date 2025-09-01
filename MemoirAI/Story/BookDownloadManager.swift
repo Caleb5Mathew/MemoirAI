@@ -66,8 +66,9 @@ class BookDownloadManager: NSObject, ObservableObject {
         
         isProcessing = true
         
-        // Trigger JavaScript PDF generation
-        webView.evaluateJavaScript("window.downloadPDF()") { [weak self] _, error in
+        // Trigger JavaScript PDF generation with orientation info
+        let jsCode = "window.downloadPDF(\(isKidsBook ? "true" : "false"))"
+        webView.evaluateJavaScript(jsCode) { [weak self] _, error in
             if let error = error {
                 self?.isProcessing = false
                 self?.showErrorAlert("Failed to generate PDF: \(error.localizedDescription)")
@@ -255,16 +256,8 @@ struct BookDownloadHandler {
                 continue
             }
             
-            // Create PDF page from image with proper orientation
+            // Create PDF page from image (already in correct orientation from JS capture)
             if let pdfPage = PDFPage(image: image) {
-                // Set rotation for kids books (landscape orientation)
-                if isKidsBook {
-                    // Rotate 90 degrees for landscape if the image is in portrait
-                    let imageAspectRatio = image.size.width / image.size.height
-                    if imageAspectRatio < 1.0 {  // Image is portrait, needs rotation
-                        pdfPage.rotation = 90
-                    }
-                }
                 pdfDocument.insert(pdfPage, at: index)
             }
         }

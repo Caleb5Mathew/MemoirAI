@@ -218,8 +218,8 @@ function handlePhotoFrameClick(frameId, frameIndex) {
 }
 
 // PDF Download functionality - captures actual rendered pages
-window.downloadPDF = async function() {
-    console.log('Flipbook: Starting PDF download with page capture...');
+window.downloadPDF = async function(isKidsBook = false) {
+    console.log('Flipbook: Starting PDF download with page capture... Kids book:', isKidsBook);
     
     if (!pageFlip) {
         console.error('Flipbook: PageFlip not initialized');
@@ -230,7 +230,7 @@ window.downloadPDF = async function() {
     if (typeof html2canvas === 'undefined') {
         console.error('Flipbook: html2canvas library not loaded');
         // Fallback to basic implementation
-        downloadPDFBasic();
+        downloadPDFBasic(isKidsBook);
         return;
     }
     
@@ -307,18 +307,36 @@ window.downloadPDF = async function() {
             
             console.log(`Flipbook: Capturing element:`, pageToCapture.className || 'spread container');
             
-            // Capture with higher quality settings
-            const canvas = await html2canvas(pageToCapture, {
+            // Determine canvas dimensions based on book type
+            let canvasOptions = {
                 backgroundColor: '#faf8f3', // Paper color
                 scale: 3, // Increased from 2 to 3 for better text quality
                 logging: false,
                 useCORS: true,
                 allowTaint: true,
                 letterRendering: true, // Better text rendering
-                imageTimeout: 0, // No timeout for images
-                width: pageToCapture.scrollWidth,
-                height: pageToCapture.scrollHeight
-            });
+                imageTimeout: 0 // No timeout for images
+            };
+            
+            // Set dimensions based on book type
+            if (isKidsBook) {
+                // Kids books: landscape orientation (16:9 ratio)
+                const targetWidth = 1920;  // HD width
+                const targetHeight = 1080; // HD height (16:9)
+                canvasOptions.width = targetWidth;
+                canvasOptions.height = targetHeight;
+                console.log(`Flipbook: Using kids book dimensions: ${targetWidth}x${targetHeight}`);
+            } else {
+                // Regular books: portrait orientation (4:3 ratio)
+                const targetWidth = 1200;  // Portrait width
+                const targetHeight = 1600; // Portrait height (4:3)
+                canvasOptions.width = targetWidth;
+                canvasOptions.height = targetHeight;
+                console.log(`Flipbook: Using regular book dimensions: ${targetWidth}x${targetHeight}`);
+            }
+            
+            // Capture with configured settings
+            const canvas = await html2canvas(pageToCapture, canvasOptions);
             
             // Clean up temporary spread container if created
             if (pageToCapture.parentElement === bookElement && !pageToCapture.classList.contains('stf__item')) {
@@ -363,8 +381,8 @@ window.downloadPDF = async function() {
 };
 
 // Fallback basic PDF implementation (without html2canvas)
-function downloadPDFBasic() {
-    console.log('Flipbook: Using basic PDF generation (fallback)');
+function downloadPDFBasic(isKidsBook = false) {
+    console.log('Flipbook: Using basic PDF generation (fallback), Kids book:', isKidsBook);
     
     if (!globalPagesData || globalPagesData.length === 0) {
         console.error('Flipbook: No pages available for PDF export');
