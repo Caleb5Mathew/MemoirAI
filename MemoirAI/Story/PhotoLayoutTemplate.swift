@@ -1,7 +1,8 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Photo Layout Template System
-enum PhotoLayoutType: String, CaseIterable, Codable {
+enum PhotoLayoutType: String, CaseIterable, Codable, Transferable {
     case portrait = "Portrait"
     case landscape = "Landscape"
     case square = "Square"
@@ -41,6 +42,11 @@ enum PhotoLayoutType: String, CaseIterable, Codable {
         case .square: return "Instagram style"
         case .custom: return "Free resize"
         }
+    }
+    
+    // MARK: - Transferable Conformance
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .plainText)
     }
 }
 
