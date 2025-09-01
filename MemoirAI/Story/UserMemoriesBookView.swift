@@ -540,7 +540,7 @@ struct UserMemoriesBookView: View {
             
             // Update the specific photo layout
             if var layouts = flipbookPages[pageIndex].photoLayouts {
-                if let layoutIndex = layouts.firstIndex(where: { $0.id == frameId }) {
+                if let layoutIndex = layouts.firstIndex(where: { $0.id.uuidString == frameId }) {
                     layouts[layoutIndex].imageData = base64String
                     
                     // Create a copy of pages to trigger update
