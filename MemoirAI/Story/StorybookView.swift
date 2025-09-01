@@ -18,6 +18,15 @@ struct StorybookView: View {
     @State private var flipbookPages = FlipPage.samplePages
     @State private var showDownloadOptions = false
     @State private var fallbackTimer: Timer?
+    
+    // Read art style from AppStorage to match user's preference for downloads
+    @AppStorage("memoirArtStyle") private var artStyleRaw = ArtStyle.realistic.rawValue
+    
+    private var isKidsBook: Bool {
+        // For sample content, check user's art style preference
+        return ArtStyle(rawValue: artStyleRaw) == .kidsBook
+    }
+    
     @StateObject private var downloadManager = BookDownloadManager()
 
     // Sample pages for the finished book preview
@@ -106,6 +115,7 @@ struct StorybookView: View {
                                         pages: flipbookPages,
                                         currentPage: $currentPage,
                                         webView: $webView,
+                                        isKidsBook: isKidsBook,
                                         onReady: {
                                             print("StorybookView: Flipbook ready!")
                                             // Cancel the fallback timer since flipbook is ready
@@ -337,6 +347,8 @@ struct StorybookView: View {
             presentingViewController = rootVC
         }
         
+        // Set the book type before saving
+        downloadManager.setBookType(isKidsBook: isKidsBook)
         downloadManager.saveToPhotos(webView: webView, from: presentingViewController)
     }
     
@@ -348,6 +360,8 @@ struct StorybookView: View {
             presentingViewController = rootVC
         }
         
+        // Set the book type before saving
+        downloadManager.setBookType(isKidsBook: isKidsBook)
         downloadManager.saveToFiles(webView: webView, from: presentingViewController)
     }
 }
@@ -953,18 +967,22 @@ struct FlipbookViewWithWebView: View {
     let pages: [FlipPage]
     @Binding var currentPage: Int
     @Binding var webView: WKWebView?
+    let isKidsBook: Bool
     let onReady: (() -> Void)?
     let onFlip: ((Int) -> Void)?
     let onPageTap: ((Int) -> Void)?
+    let onPhotoFrameTap: ((Int, String, Int) -> Void)?
     
     var body: some View {
         FlipbookView(
             pages: pages,
             currentPage: $currentPage,
             webView: $webView,
+            isKidsBook: isKidsBook,
             onReady: onReady,
             onFlip: onFlip,
-            onPageTap: onPageTap
+            onPageTap: onPageTap,
+            onPhotoFrameTap: onPhotoFrameTap
         )
         .onAppear {
             // WebView will be set by FlipbookView internally

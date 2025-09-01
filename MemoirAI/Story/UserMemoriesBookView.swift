@@ -19,6 +19,16 @@ struct UserMemoriesBookView: View {
     @State private var showDownloadOptions = false
     @State private var showPhotoLayoutSheet = false
     @State private var selectedPhotoTemplate: PhotoLayoutType?
+    @State private var selectedPhotoFrameId: String?
+    @State private var selectedPhotoFramePageIndex: Int?
+    @State private var showPhotoPickerForFrame = false
+    
+    // Read art style from AppStorage to determine book orientation
+    @AppStorage("memoirArtStyle") private var artStyleRaw = ArtStyle.realistic.rawValue
+    
+    private var isKidsBook: Bool {
+        return ArtStyle(rawValue: artStyleRaw) == .kidsBook
+    }
     
     @StateObject private var memoryViewModel = MemoryEntryViewModel()
     @StateObject private var downloadManager = BookDownloadManager()
@@ -86,6 +96,7 @@ struct UserMemoriesBookView: View {
                                         pages: flipbookPages,
                                         currentPage: $currentPage,
                                         webView: $webView,
+                                        isKidsBook: isKidsBook,
                                         onReady: {
                                             print("UserMemoriesBookView: Flipbook ready!")
                                             flipbookReady = true
@@ -104,6 +115,9 @@ struct UserMemoriesBookView: View {
                                         onPageTap: { index in
                                             zoomedPageIndex = index
                                             showZoomedPage = true
+                                        },
+                                        onPhotoFrameTap: { pageIndex, frameId, frameIndex in
+                                            handlePhotoFrameTap(pageIndex: pageIndex, frameId: frameId, frameIndex: frameIndex)
                                         }
                                     )
                                     .frame(width: bookSize.width, height: bookSize.height)
@@ -144,6 +158,14 @@ struct UserMemoriesBookView: View {
         }
         .fullScreenCover(isPresented: $showZoomedPage) {
             PageZoomView(pageIndex: zoomedPageIndex, pages: $flipbookPages)
+        }
+        .sheet(isPresented: $showPhotoPickerForFrame) {
+            PhotoPickerSheet(
+                isPresented: $showPhotoPickerForFrame,
+                onPhotosSelected: { photos in
+                    handlePhotosSelectedForFrame(photos)
+                }
+            )
         }
         .overlay(
             Group {
@@ -432,6 +454,8 @@ struct UserMemoriesBookView: View {
             presentingViewController = rootVC
         }
         
+        // Set the book type before saving
+        downloadManager.setBookType(isKidsBook: isKidsBook)
         downloadManager.saveToPhotos(webView: webView, from: presentingViewController)
     }
     
@@ -443,6 +467,8 @@ struct UserMemoriesBookView: View {
             presentingViewController = rootVC
         }
         
+        // Set the book type before saving
+        downloadManager.setBookType(isKidsBook: isKidsBook)
         downloadManager.saveToFiles(webView: webView, from: presentingViewController)
     }
     
@@ -492,6 +518,44 @@ struct UserMemoriesBookView: View {
     
     private var geometry: CGSize {
         UIScreen.main.bounds.size
+    }
+    
+    // MARK: - Photo Frame Handling
+    private func handlePhotoFrameTap(pageIndex: Int, frameId: String, frameIndex: Int) {
+        print("UserMemoriesBookView: Photo frame tapped - page: \(pageIndex), frame: \(frameId)")
+        selectedPhotoFrameId = frameId
+        selectedPhotoFramePageIndex = pageIndex
+        showPhotoPickerForFrame = true
+    }
+    
+    private func handlePhotosSelectedForFrame(_ photos: [UIImage]) {
+        guard let frameId = selectedPhotoFrameId,
+              let pageIndex = selectedPhotoFramePageIndex,
+              pageIndex >= 0 && pageIndex < flipbookPages.count,
+              let photo = photos.first else { return }
+        
+        // Convert UIImage to base64
+        if let imageData = photo.jpegData(compressionQuality: 0.6) {
+            let base64String = "data:image/jpeg;base64," + imageData.base64EncodedString()
+            
+            // Update the specific photo layout
+            if var layouts = flipbookPages[pageIndex].photoLayouts {
+                if let layoutIndex = layouts.firstIndex(where: { $0.id == frameId }) {
+                    layouts[layoutIndex].imageData = base64String
+                    
+                    // Create a copy of pages to trigger update
+                    var updatedPages = flipbookPages
+                    updatedPages[pageIndex].photoLayouts = layouts
+                    flipbookPages = updatedPages
+                    
+                    print("UserMemoriesBookView: Added photo to frame \(frameId) on page \(pageIndex)")
+                }
+            }
+        }
+        
+        // Reset selection
+        selectedPhotoFrameId = nil
+        selectedPhotoFramePageIndex = nil
     }
 }
 

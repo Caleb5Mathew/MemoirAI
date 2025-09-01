@@ -10,14 +10,18 @@ struct FlipbookView: UIViewRepresentable {
     let onReady: (() -> Void)?
     let onFlip: ((Int) -> Void)?
     let onPageTap: ((Int) -> Void)?
+    let onPhotoFrameTap: ((Int, String, Int) -> Void)?
+    let isKidsBook: Bool
     
-    init(pages: [FlipPage], currentPage: Binding<Int>, webView: Binding<WKWebView?> = .constant(nil), onReady: (() -> Void)? = nil, onFlip: ((Int) -> Void)? = nil, onPageTap: ((Int) -> Void)? = nil) {
+    init(pages: [FlipPage], currentPage: Binding<Int>, webView: Binding<WKWebView?> = .constant(nil), isKidsBook: Bool = false, onReady: (() -> Void)? = nil, onFlip: ((Int) -> Void)? = nil, onPageTap: ((Int) -> Void)? = nil, onPhotoFrameTap: ((Int, String, Int) -> Void)? = nil) {
         self.pages = pages
         self._currentPage = currentPage
         self._webView = webView
+        self.isKidsBook = isKidsBook
         self.onReady = onReady
         self.onFlip = onFlip
         self.onPageTap = onPageTap
+        self.onPhotoFrameTap = onPhotoFrameTap
     }
     
     func makeUIView(context: Context) -> WKWebView {
@@ -481,6 +485,14 @@ struct FlipbookView: UIViewRepresentable {
                     parent.onPageTap?(index)
                 }
                 
+            case "photoFrameTapped":
+                if let pageIndex = body["pageIndex"] as? Int,
+                   let frameId = body["frameId"] as? String,
+                   let frameIndex = body["frameIndex"] as? Int {
+                    print("FlipbookView: Photo frame tapped - page: \(pageIndex), frame: \(frameId), index: \(frameIndex)")
+                    parent.onPhotoFrameTap?(pageIndex, frameId, frameIndex)
+                }
+                
             case "zoomOpened":
                 print("FlipbookView: Zoom opened")
                 
@@ -509,11 +521,12 @@ struct FlipbookView: UIViewRepresentable {
                 presentingViewController = rootVC
             }
             
-            // Use the BookDownloadHandler to handle the PDF
+            // Use the BookDownloadHandler to handle the PDF with book type info
             BookDownloadHandler.handlePDFDownload(
                 pages: pages,
                 filename: filename,
-                presentingView: presentingViewController
+                presentingView: presentingViewController,
+                isKidsBook: parent.isKidsBook
             )
         }
     }

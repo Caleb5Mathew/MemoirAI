@@ -14,11 +14,18 @@ class BookDownloadManager: NSObject, ObservableObject {
     private weak var presentingViewController: UIViewController?
     private var webView: WKWebView?
     private var completion: (() -> Void)?
+    private var isKidsBook: Bool = false  // Track if this is a kids book for orientation
     
     // MARK: - Initialization
-    init(webView: WKWebView? = nil) {
+    init(webView: WKWebView? = nil, isKidsBook: Bool = false) {
         self.webView = webView
+        self.isKidsBook = isKidsBook
         super.init()
+    }
+    
+    // MARK: - Set Book Type
+    func setBookType(isKidsBook: Bool) {
+        self.isKidsBook = isKidsBook
     }
     
     // MARK: - Public Methods
@@ -192,7 +199,7 @@ class BookDownloadManager: NSObject, ObservableObject {
 
 // MARK: - PDF Handling Extension
 extension BookDownloadManager {
-    func presentPDFSaveDialog(with pdfData: Data, filename: String, from viewController: UIViewController) {
+    func presentPDFSaveDialog(with pdfData: Data, filename: String, from viewController: UIViewController, isKidsBook: Bool? = nil) {
         // Save to temporary directory first
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
         
@@ -225,7 +232,7 @@ extension BookDownloadManager: UIDocumentPickerDelegate {
 
 // MARK: - SwiftUI Integration
 struct BookDownloadHandler {
-    static func handlePDFDownload(pages: [String], filename: String, presentingView: UIViewController?) {
+    static func handlePDFDownload(pages: [String], filename: String, presentingView: UIViewController?, isKidsBook: Bool = false) {
         // Create PDF document
         let pdfDocument = PDFDocument()
         
@@ -248,8 +255,16 @@ struct BookDownloadHandler {
                 continue
             }
             
-            // Create PDF page from image
+            // Create PDF page from image with proper orientation
             if let pdfPage = PDFPage(image: image) {
+                // Set rotation for kids books (landscape orientation)
+                if isKidsBook {
+                    // Rotate 90 degrees for landscape if the image is in portrait
+                    let imageAspectRatio = image.size.width / image.size.height
+                    if imageAspectRatio < 1.0 {  // Image is portrait, needs rotation
+                        pdfPage.rotation = 90
+                    }
+                }
                 pdfDocument.insert(pdfPage, at: index)
             }
         }
@@ -268,8 +283,8 @@ struct BookDownloadHandler {
         
         // Present save dialog
         if let viewController = presentingView {
-            let manager = BookDownloadManager()
-            manager.presentPDFSaveDialog(with: pdfData, filename: filename, from: viewController)
+            let manager = BookDownloadManager(isKidsBook: isKidsBook)
+            manager.presentPDFSaveDialog(with: pdfData, filename: filename, from: viewController, isKidsBook: isKidsBook)
         }
     }
 }

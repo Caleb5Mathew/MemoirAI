@@ -55,7 +55,7 @@ struct PhotoLayout: Codable, Identifiable {
     let id: UUID
     var type: PhotoLayoutType
     var frame: CGRect  // Position and size on the page
-    var imageData: Data?  // The actual photo data
+    var imageData: String?  // Base64 encoded image data
     var imageName: String?  // Optional name/caption
     var rotation: Double = 0  // Rotation angle in degrees
     var borderStyle: BorderStyle = .none

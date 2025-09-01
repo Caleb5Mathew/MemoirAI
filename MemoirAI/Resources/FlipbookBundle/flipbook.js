@@ -196,6 +196,27 @@ function handlePageTap(pageIndex) {
     }
 }
 
+// Photo frame click handler
+function handlePhotoFrameClick(frameId, frameIndex) {
+    console.log('Flipbook: Photo frame clicked, id:', frameId, 'index:', frameIndex);
+    
+    // Prevent event from bubbling to page tap
+    event.stopPropagation();
+    
+    // Get current page index
+    const currentPageIndex = pageFlip ? pageFlip.getCurrentPageIndex() : 0;
+    
+    // Notify Swift to open photo picker for this specific frame
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+        window.webkit.messageHandlers.native.postMessage({
+            type: 'photoFrameTapped',
+            pageIndex: currentPageIndex,
+            frameId: frameId,
+            frameIndex: frameIndex
+        });
+    }
+}
+
 // PDF Download functionality - captures actual rendered pages
 window.downloadPDF = async function() {
     console.log('Flipbook: Starting PDF download with page capture...');
@@ -1113,6 +1134,55 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
                             </div>
                         ` : ''}
                         ${mixedPageNumber}
+                    </div>
+                </div>
+            `;
+            
+        case 'photoLayout':
+            // Render photo layout page with photo frames
+            const photoLayouts = page.photoLayouts || [];
+            const photoFramesHtml = photoLayouts.map((layout, index) => {
+                const hasPhoto = layout.imageData || layout.imageBase64;
+                const frameStyle = `
+                    left: ${layout.frame[0][0]}px;
+                    top: ${layout.frame[0][1]}px;
+                    width: ${layout.frame[1][0]}px;
+                    height: ${layout.frame[1][1]}px;
+                    transform: rotate(${layout.rotation || 0}deg);
+                `;
+                
+                const imageHtml = hasPhoto 
+                    ? `<img src="${layout.imageData || layout.imageBase64}" alt="Photo" class="photo-frame-image" />`
+                    : `<div class="photo-frame-placeholder">
+                         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                           <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                           <circle cx="8.5" cy="8.5" r="1.5"/>
+                           <polyline points="21 15 16 10 5 21"/>
+                         </svg>
+                         <span>Tap to add photo</span>
+                       </div>`;
+                
+                return `
+                    <div class="photo-frame photo-frame-${layout.type.toLowerCase()}" 
+                         style="${frameStyle}"
+                         data-frame-id="${layout.id}"
+                         data-frame-index="${index}"
+                         data-has-photo="${hasPhoto ? 'true' : 'false'}"
+                         onclick="handlePhotoFrameClick('${layout.id}', ${index})">
+                        ${imageHtml}
+                    </div>
+                `;
+            }).join('');
+            
+            const layoutPageNumberHtml = pageNumber ? `<div class="page-number right">${pageNumber}</div>` : '';
+            return `
+                <div class="flipbook-page photo-layout-page">
+                    <div class="page-content">
+                        <div class="photo-frames-container">
+                            ${photoFramesHtml}
+                        </div>
+                        ${caption ? `<div class="photo-caption">${caption}</div>` : ''}
+                        ${layoutPageNumberHtml}
                     </div>
                 </div>
             `;
