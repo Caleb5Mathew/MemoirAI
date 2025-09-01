@@ -140,7 +140,8 @@ struct StorybookView: View {
                                         onPageTap: { index in
                                             zoomedPageIndex = index
                                             showZoomedPage = true
-                                        }
+                                        },
+                                        onPhotoFrameTap: nil  // Photo frames not used in AI-generated storybooks
                                     )
                                     .frame(width: bookSize.width, height: bookSize.height)
                                     
