@@ -28,7 +28,7 @@ struct ChapterJourneyView: View {
     // Which prompts are done for this profile & chapter
     var completedPromptIDs: Set<UUID> {
         let entriesForProfileAndChapter = allEntries.filter {
-            $0.profileID == profileVM.selectedProfile.id &&
+            $0.profileID == profileVM.selectedProfile.id.uuidString &&
             $0.chapter == chapter.title
         }
         let texts = entriesForProfileAndChapter.compactMap { $0.prompt }
@@ -182,7 +182,7 @@ struct ChapterJourneyView: View {
         if isCompleted {
             // select existing entry to push detail
             if let entry = allEntries.first(where: {
-                $0.profileID == profileVM.selectedProfile.id &&
+                $0.profileID == profileVM.selectedProfile.id.uuidString &&
                 $0.chapter == chapter.title &&
                 $0.prompt == prompt.text
             }) {
