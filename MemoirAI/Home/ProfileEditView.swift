@@ -115,9 +115,13 @@ struct ProfileEditView: View {
                     .padding()
                 }
             }
-            .navigationTitle(Text("Edit Profile"))
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("Edit Profile")
+                        .font(.headline)
+                        .foregroundColor(.black)
+                }
+                
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         dismiss()
@@ -132,6 +136,7 @@ struct ProfileEditView: View {
                     .fontWeight(.semibold)
                 }
             }
+            .navigationBarTitleDisplayMode(.inline)
         }
         .onAppear {
             setupInitialState()
