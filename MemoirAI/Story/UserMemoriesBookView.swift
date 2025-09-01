@@ -153,7 +153,7 @@ struct UserMemoriesBookView: View {
         .navigationBarHidden(true)
         .navigationBarBackButtonHidden(true)
         .onAppear {
-            currentPage = 0
+            // Don't reset currentPage here to preserve page position when sheets are dismissed
             loadUserMemories()
         }
         .fullScreenCover(isPresented: $showZoomedPage) {

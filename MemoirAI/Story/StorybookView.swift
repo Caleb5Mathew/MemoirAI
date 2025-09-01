@@ -5,6 +5,9 @@ import WebKit
 struct StorybookView: View {
     @Environment(\.presentationMode) var presentationMode
     @EnvironmentObject var profileVM: ProfileViewModel
+    
+    // Flag to distinguish between memory preview and create mode
+    let isMemoryPreview: Bool
 
     @State private var currentPage = 0
     @State private var showPhotoPicker = false
@@ -31,6 +34,11 @@ struct StorybookView: View {
 
     // Sample pages for the finished book preview
     private let samplePages = MockBookPage.samplePages
+    
+    // Default initializer
+    init(isMemoryPreview: Bool = false) {
+        self.isMemoryPreview = isMemoryPreview
+    }
     
     // Helper function to calculate book size outside ViewBuilder context
     private func calculateBookSize(for size: CGSize) -> CGSize {
@@ -284,24 +292,27 @@ struct StorybookView: View {
             .accessibilityLabel("Create your own book")
 
             // Secondary: soft cream filled pill (opens photo picker)
-            Button(action: { showPhotoPicker = true }) {
-                Text("Add photos")
-                    .font(Tokens.Typography.button)
-                    .fontWeight(.medium)
-                    .foregroundColor(Tokens.ink)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(
-                        Capsule()
-                            .fill(Tokens.bgPrimary)
-                            .shadow(color: Tokens.shadow.opacity(Tokens.softShadow.opacity),
-                                    radius: Tokens.softShadow.radius,
-                                    x: 0,
-                                    y: Tokens.softShadow.y)
-                    )
+            // Only show in create mode, not in memory preview
+            if !isMemoryPreview {
+                Button(action: { showPhotoPicker = true }) {
+                    Text("Add photos")
+                        .font(Tokens.Typography.button)
+                        .fontWeight(.medium)
+                        .foregroundColor(Tokens.ink)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(
+                            Capsule()
+                                .fill(Tokens.bgPrimary)
+                                .shadow(color: Tokens.shadow.opacity(Tokens.softShadow.opacity),
+                                        radius: Tokens.softShadow.radius,
+                                        x: 0,
+                                        y: Tokens.softShadow.y)
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add photos")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Add photos")
         }
         .padding(.horizontal, 20)
     }

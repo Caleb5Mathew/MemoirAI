@@ -175,7 +175,7 @@ struct HomepageView: View {
                         }
 
                         // 📖 LIVE MEMOIR PREVIEW
-                        NavigationLink(destination: StorybookView()
+                        NavigationLink(destination: StorybookView(isMemoryPreview: true)
                             .environmentObject(profileVM)
                         ) {
                             HStack {
