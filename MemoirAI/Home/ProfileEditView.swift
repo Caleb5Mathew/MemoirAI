@@ -2,7 +2,7 @@
 //  ProfileEditView.swift
 //  MemoirAI
 //
-//  Comprehensive profile editing interface
+//  Elegant profile editing interface matching design specs
 //
 
 import SwiftUI
@@ -19,21 +19,12 @@ struct ProfileEditView: View {
     @State private var gender: String
     @State private var currentPhoto: UIImage?
     
-    // Date picker state
-    @State private var selectedYear: Int = Calendar.current.component(.year, from: Date()) - 30
-    @State private var selectedMonth: Int? = nil
-    @State private var selectedDay: Int? = nil
-    @State private var showDatePicker = false
-    
-    // Photo picker state
-    @State private var showSourceChooser = false
+    // UI State
+    @State private var showMoreOptions = false
+    @State private var showBirthdayPicker = false
     @State private var showImagePicker = false
-    @State private var showCropper = false
     @State private var pickerSource: UIImagePickerController.SourceType = .photoLibrary
-    
-    // Gender picker
     @State private var selectedGenderOption: GenderOption = .male
-    @State private var customGender: String = ""
     
     private let profile: Profile
     
@@ -45,380 +36,310 @@ struct ProfileEditView: View {
         self._name = State(initialValue: profile.name)
         self._selectedBirthdate = State(initialValue: profile.birthdate)
         self._ethnicity = State(initialValue: profile.ethnicity ?? "")
-        self._gender = State(initialValue: profile.gender ?? "")
+        self._gender = State(initialValue: profile.gender ?? "Male")
         self._currentPhoto = State(initialValue: profile.uiImage)
-    }
-    
-    private let colors = LocalColors()
-    
-    private var years: [Int] {
-        Array(1930...Calendar.current.component(.year, from: Date()))
-    }
-    
-    private var months: [String] {
-        Calendar.current.monthSymbols
-    }
-    
-    private var daysInMonth: [Int] {
-        guard let month = selectedMonth else { return [] }
-        var components = DateComponents()
-        components.year = selectedYear
-        components.month = month + 1
-        let calendar = Calendar.current
-        guard let date = calendar.date(from: components),
-              let range = calendar.range(of: .day, in: .month, for: date) else {
-            return []
+        
+        // Set initial gender option
+        if let initialGender = profile.gender {
+            if initialGender == "Male" {
+                self._selectedGenderOption = State(initialValue: .male)
+            } else if initialGender == "Female" {
+                self._selectedGenderOption = State(initialValue: .female)
+            } else {
+                self._selectedGenderOption = State(initialValue: .other)
+            }
         }
-        return Array(range)
-    }
-    
-    private var composedDate: Date? {
-        guard let month = selectedMonth, let day = selectedDay else { return nil }
-        let components = DateComponents(year: selectedYear, month: month + 1, day: day)
-        return Calendar.current.date(from: components)
     }
     
     var body: some View {
-        NavigationStack {
-            ZStack {
-                colors.softCream
-                    .ignoresSafeArea()
+        ZStack {
+            // Cream gradient background
+            LinearGradient(
+                colors: [
+                    Color(hex: "#FAE6D8"),
+                    Color(hex: "#FFF9F3")
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                // Custom Navigation Bar
+                HStack {
+                    Text("Edit profile")
+                        .font(.custom("Georgia", size: 28))
+                        .foregroundColor(DesignTokens.darkText)
+                    
+                    Spacer()
+                    
+                    Button("Save") {
+                        saveProfile()
+                        dismiss()
+                    }
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundColor(DesignTokens.darkText)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 60)
+                .padding(.bottom, 30)
                 
-                ScrollView {
-                    VStack(spacing: 24) {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 32) {
                         // Profile Photo Section
                         profilePhotoSection
                         
-                        // Name Section
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Name")
-                                .font(.headline)
-                                .foregroundColor(.black)
-                            
-                            TextField("Enter your name", text: $name)
-                                .textFieldStyle(ProfileTextFieldStyle())
-                        }
+                        // About You Section
+                        aboutYouSection
                         
-                        // Birthday Section
+                        // More Section (expandable)
+                        moreSection
+                        
+                        // Birthday Button
                         birthdaySection
                         
                         // Personal Details Section
                         personalDetailsSection
                         
-                        // Delete Profile Button (if multiple profiles exist)
-                        if profileVM.profiles.count > 1 {
-                            deleteProfileButton
-                        }
-                        
-                        Spacer(minLength: 50)
+                        Spacer(minLength: 100)
                     }
-                    .padding()
+                    .padding(.horizontal, 24)
                 }
             }
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("Edit Profile")
-                        .font(.headline)
-                        .foregroundColor(.black)
-                }
-                
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        saveProfile()
-                        dismiss()
-                    }
-                    .fontWeight(.semibold)
-                }
-            }
-            .navigationBarTitleDisplayMode(.inline)
-        }
-        .onAppear {
-            setupInitialState()
-        }
-        .confirmationDialog("Add Photo", isPresented: $showSourceChooser) {
-            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                Button("Take Photo") {
-                    pickerSource = .camera
-                    showImagePicker = true
-                }
-            }
-            Button("Choose from Library") {
-                pickerSource = .photoLibrary
-                showImagePicker = true
-            }
-            Button("Cancel", role: .cancel) { }
         }
         .sheet(isPresented: $showImagePicker) {
             ImagePicker(source: pickerSource, allowsCropping: true) { image in
                 currentPhoto = image
             }
         }
-        .sheet(isPresented: $showCropper) {
-            if let photo = currentPhoto {
-                ProfileImageCropperView(image: photo) { croppedImage in
-                    currentPhoto = croppedImage
-                }
-            }
+        .sheet(isPresented: $showBirthdayPicker) {
+            BirthdayPickerSheet(selectedDate: $selectedBirthdate)
         }
     }
     
+    // MARK: - Profile Photo Section
     private var profilePhotoSection: some View {
         VStack(spacing: 16) {
-            Text("Profile Photo")
-                .font(.headline)
-                .foregroundColor(.black)
+            Text("PROFILE PHOTO")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(DesignTokens.labelText)
+                .kerning(1.2)
             
-            if let photo = currentPhoto {
-                Image(uiImage: photo)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 120, height: 120)
-                    .clipShape(Circle())
-                    .shadow(radius: 4)
-                
-                HStack(spacing: 16) {
-                    Button("Crop") {
-                        showCropper = true
+            Button {
+                showImagePicker = true
+            } label: {
+                ZStack(alignment: .bottomTrailing) {
+                    // Avatar Circle
+                    if let photo = currentPhoto {
+                        Image(uiImage: photo)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 120, height: 120)
+                            .clipShape(Circle())
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.white, lineWidth: 3)
+                            )
+                    } else {
+                        ZStack {
+                            Circle()
+                                .fill(DesignTokens.avatarBG)
+                                .frame(width: 120, height: 120)
+                            
+                            Image(systemName: "person.fill")
+                                .font(.system(size: 50))
+                                .foregroundColor(DesignTokens.avatarIcon)
+                        }
                     }
-                    .buttonStyle(SecondaryButtonStyle())
                     
-                    Button("Replace") {
-                        showSourceChooser = true
+                    // Orange + Badge
+                    ZStack {
+                        Circle()
+                            .fill(DesignTokens.primaryOrange)
+                            .frame(width: 36, height: 36)
+                        
+                        Image(systemName: "plus")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white)
                     }
-                    .buttonStyle(SecondaryButtonStyle())
-                    
-                    Button("Remove") {
-                        currentPhoto = nil
-                    }
-                    .buttonStyle(DestructiveButtonStyle())
-                }
-            } else {
-                Button {
-                    showSourceChooser = true
-                } label: {
-                    VStack(spacing: 8) {
-                        Image(systemName: "person.crop.square")
-                            .font(.system(size: 40))
-                            .foregroundColor(.gray)
-                        Text("Add Photo")
-                            .font(.subheadline)
-                            .foregroundColor(.black)
-                    }
-                    .frame(width: 120, height: 120)
-                    .background(colors.subtleBG)
-                    .clipShape(Circle())
+                    .offset(x: -5, y: -5)
                 }
             }
+            .buttonStyle(.plain)
         }
     }
     
-    private var birthdaySection: some View {
+    // MARK: - About You Section
+    private var aboutYouSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Birthday")
-                .font(.headline)
-                .foregroundColor(.black)
+            Text("About You")
+                .font(.custom("Georgia", size: 20))
+                .foregroundColor(DesignTokens.darkText)
             
-            if let birthdate = selectedBirthdate {
+            // Name Field in White Card
+            VStack {
+                TextField("Grandparent", text: $name)
+                    .font(.system(size: 18))
+                    .foregroundColor(DesignTokens.darkText)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 18)
+            }
+            .background(Color.white)
+            .cornerRadius(12)
+            .shadow(color: DesignTokens.softShadow, radius: 8, x: 0, y: 2)
+        }
+    }
+    
+    // MARK: - More Section
+    private var moreSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    showMoreOptions.toggle()
+                }
+            } label: {
                 HStack {
-                    Text(DateFormatter.longStyle.string(from: birthdate))
-                        .font(.body)
-                        .foregroundColor(.black)
+                    Text("More")
+                        .font(.custom("Georgia", size: 20))
+                        .foregroundColor(DesignTokens.darkText)
                     
                     Spacer()
                     
-                    Button("Change") {
-                        showDatePicker = true
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
+                    Image(systemName: showMoreOptions ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(DesignTokens.labelText)
                 }
-                .padding()
-                .background(colors.subtleBG)
-                .cornerRadius(10)
-            } else {
-                Button("Set Birthday") {
-                    showDatePicker = true
-                }
-                .buttonStyle(PrimaryButtonStyle())
             }
+            .buttonStyle(.plain)
             
-            if showDatePicker {
-                birthdayPickerView
+            if showMoreOptions {
+                VStack(spacing: 16) {
+                    // Additional fields would go here
+                    Text("Additional options")
+                        .font(.system(size: 14))
+                        .foregroundColor(DesignTokens.labelText)
+                        .padding(.top, 12)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }
     
-    private var birthdayPickerView: some View {
-        VStack(spacing: 16) {
-            // Year Picker
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Year")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                
-                Picker("Year", selection: $selectedYear) {
-                    ForEach(years.reversed(), id: \.self) { year in
-                        Text(String(year)).tag(year)
-                    }
-                }
-                .pickerStyle(WheelPickerStyle())
-                .frame(height: 100)
-            }
+    // MARK: - Birthday Section
+    private var birthdaySection: some View {
+        HStack {
+            Spacer()
             
-            // Month Picker
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Month")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                
-                Picker("Month", selection: $selectedMonth) {
-                    ForEach(months.indices, id: \.self) { index in
-                        Text(months[index]).tag(index as Int?)
-                    }
+            Button {
+                showBirthdayPicker = true
+            } label: {
+                HStack {
+                    Text(selectedBirthdate != nil ? 
+                         DateFormatter.birthdayFormat.string(from: selectedBirthdate!) : 
+                         "Set Birthday")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.white)
                 }
-                .pickerStyle(WheelPickerStyle())
-                .frame(height: 100)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 14)
+                .background(DesignTokens.primaryOrange)
+                .cornerRadius(25)
+                .shadow(color: DesignTokens.orangeShadow, radius: 8, x: 0, y: 4)
             }
+            .buttonStyle(.plain)
             
-            // Day Picker
-            if selectedMonth != nil {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Day")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                    
-                    Picker("Day", selection: $selectedDay) {
-                        ForEach(daysInMonth, id: \.self) { day in
-                            Text(String(day)).tag(day as Int?)
-                        }
-                    }
-                    .pickerStyle(WheelPickerStyle())
-                    .frame(height: 100)
-                }
-            }
-            
-            HStack(spacing: 12) {
-                Button("Cancel") {
-                    showDatePicker = false
-                    resetDatePickers()
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                
-                Button("Set Birthday") {
-                    if let date = composedDate {
-                        selectedBirthdate = date
-                        showDatePicker = false
-                    }
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(composedDate == nil)
-            }
+            Spacer()
         }
-        .padding()
-        .background(Color.white)
-        .cornerRadius(12)
-        .shadow(radius: 4)
     }
     
+    // MARK: - Personal Details Section
     private var personalDetailsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Personal Details")
-                .font(.headline)
-                .foregroundColor(.black)
+        VStack(alignment: .leading, spacing: 20) {
+            Text("PERSONAL DETAILS")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(DesignTokens.labelText)
+                .kerning(1.2)
             
-            // Ethnicity
-            VStack(alignment: .leading, spacing: 4) {
+            // More Options Navigation
+            Button {
+                // Handle more options
+            } label: {
+                HStack {
+                    Text("More Options")
+                        .font(.system(size: 18))
+                        .foregroundColor(DesignTokens.darkText)
+                    
+                    Spacer()
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(DesignTokens.labelText)
+                }
+                .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+            
+            // Ethnicity Field
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Ethnicity / Race (Optional)")
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
-                TextField("e.g., Hispanic, Asian, Black", text: $ethnicity)
-                    .textFieldStyle(ProfileTextFieldStyle())
+                    .font(.system(size: 14))
+                    .foregroundColor(DesignTokens.labelText)
+                
+                VStack {
+                    TextField("", text: $ethnicity)
+                        .font(.system(size: 18))
+                        .foregroundColor(DesignTokens.darkText)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 18)
+                }
+                .background(Color.white)
+                .cornerRadius(12)
+                .shadow(color: DesignTokens.softShadow, radius: 8, x: 0, y: 2)
             }
             
-            // Gender
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Gender (Optional)")
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
+            // Gender Selector
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Gender")
+                    .font(.system(size: 14))
+                    .foregroundColor(DesignTokens.labelText)
                 
-                Picker("Gender", selection: $selectedGenderOption) {
-                    ForEach(GenderOption.allCases) { option in
-                        Text(option.rawValue).tag(option)
+                HStack(spacing: 0) {
+                    ForEach(GenderOption.allCases, id: \.self) { option in
+                        Button {
+                            selectedGenderOption = option
+                            gender = option.rawValue
+                        } label: {
+                            Text(option.rawValue)
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(selectedGenderOption == option ? .white : DesignTokens.darkText)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(
+                                    selectedGenderOption == option ? 
+                                    DesignTokens.primaryOrange : 
+                                    Color.white
+                                )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
-                .pickerStyle(SegmentedPickerStyle())
-                .onChange(of: selectedGenderOption) {
-                    updateGenderBinding()
-                }
-                
-                if selectedGenderOption == .other {
-                    TextField("Please specify", text: $customGender)
-                        .textFieldStyle(ProfileTextFieldStyle())
-                        .onChange(of: customGender) {
-                            updateGenderBinding()
-                        }
-                }
+                .cornerRadius(25)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 25)
+                        .stroke(DesignTokens.borderColor, lineWidth: 1)
+                )
+                .shadow(color: DesignTokens.softShadow, radius: 4, x: 0, y: 2)
             }
         }
     }
     
-    private var deleteProfileButton: some View {
-        VStack(spacing: 8) {
-            Button("Delete Profile") {
-                profileVM.deleteSelectedProfile()
-                dismiss()
-            }
-            .buttonStyle(DestructiveButtonStyle())
-            
-            Text("This action cannot be undone")
-                .font(.caption)
-                .foregroundColor(.gray)
-        }
-    }
-    
-    private func setupInitialState() {
-        // Initialize date pickers if birthday exists
-        if let birthdate = selectedBirthdate {
-            let calendar = Calendar.current
-            selectedYear = calendar.component(.year, from: birthdate)
-            selectedMonth = calendar.component(.month, from: birthdate) - 1
-            selectedDay = calendar.component(.day, from: birthdate)
-        }
-        
-        // Initialize gender picker
-        if let standardOption = GenderOption(rawValue: gender) {
-            selectedGenderOption = standardOption
-        } else if !gender.isEmpty {
-            selectedGenderOption = .other
-            customGender = gender
-        }
-    }
-    
-    private func resetDatePickers() {
-        selectedMonth = nil
-        selectedDay = nil
-    }
-    
-    private func updateGenderBinding() {
-        switch selectedGenderOption {
-        case .male, .female:
-            gender = selectedGenderOption.rawValue
-        case .other:
-            gender = customGender
-        }
-    }
-    
+    // MARK: - Save Profile
     private func saveProfile() {
         let photoData = currentPhoto?.jpegData(compressionQuality: 0.8)
         
         let updatedProfile = Profile(
             id: profile.id,
-            name: name.isEmpty ? "Unnamed" : name,
+            name: name.isEmpty ? "Grandparent" : name,
             photoData: photoData,
             birthdate: selectedBirthdate,
             ethnicity: ethnicity.isEmpty ? nil : ethnicity,
@@ -431,78 +352,81 @@ struct ProfileEditView: View {
     }
 }
 
-// MARK: - Supporting Types and Extensions
-
-fileprivate struct LocalColors {
-    let softCream = Color(red: 0.98, green: 0.96, blue: 0.89)
-    let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
-    let subtleBG = Color.black.opacity(0.05)
+// MARK: - Design Tokens
+private struct DesignTokens {
+    static let primaryOrange = Color(hex: "#C9652F")
+    static let avatarBG = Color(hex: "#F5E6D8")
+    static let avatarIcon = Color(hex: "#D4A574")
+    static let darkText = Color(hex: "#2C2C2C")
+    static let labelText = Color(hex: "#7A7A7A")
+    static let borderColor = Color(hex: "#E8DAC3")
+    static let softShadow = Color.black.opacity(0.08)
+    static let orangeShadow = Color(hex: "#C9652F").opacity(0.3)
 }
 
-fileprivate enum GenderOption: String, CaseIterable, Identifiable {
+// MARK: - Gender Options
+private enum GenderOption: String, CaseIterable {
     case male = "Male"
     case female = "Female"
     case other = "Other"
+}
+
+// MARK: - Birthday Picker Sheet
+private struct BirthdayPickerSheet: View {
+    @Binding var selectedDate: Date?
+    @Environment(\.dismiss) private var dismiss
+    @State private var tempDate = Date()
     
-    var id: Self { self }
-}
-
-// Custom button styles
-fileprivate struct PrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.subheadline.weight(.semibold))
-            .foregroundColor(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color(red: 0.82, green: 0.45, blue: 0.32))
-            .cornerRadius(8)
-            .opacity(configuration.isPressed ? 0.8 : 1.0)
+    var body: some View {
+        NavigationStack {
+            VStack {
+                DatePicker(
+                    "Birthday",
+                    selection: $tempDate,
+                    in: ...Date(),
+                    displayedComponents: .date
+                )
+                .datePickerStyle(WheelDatePickerStyle())
+                .labelsHidden()
+                .padding()
+                
+                Spacer()
+            }
+            .navigationTitle("Select Birthday")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        selectedDate = tempDate
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+        .onAppear {
+            if let date = selectedDate {
+                tempDate = date
+            }
+        }
     }
 }
 
-fileprivate struct SecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.subheadline)
-            .foregroundColor(.black)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.black.opacity(0.05))
-            .cornerRadius(8)
-            .opacity(configuration.isPressed ? 0.8 : 1.0)
-    }
-}
-
-fileprivate struct DestructiveButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.subheadline)
-            .foregroundColor(.red)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.red.opacity(0.1))
-            .cornerRadius(8)
-            .opacity(configuration.isPressed ? 0.8 : 1.0)
-    }
-}
-
-extension DateFormatter {
-    static let longStyle: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .long
-        return formatter
-    }()
-}
-
-// MARK: - Shared Components
-
+// MARK: - Image Picker
 private struct ImagePicker: UIViewControllerRepresentable {
     var source: UIImagePickerController.SourceType
     var allowsCropping: Bool
     var onPicked: (UIImage) -> Void
     
-    func makeCoordinator() -> Coordinator { Coordinator(onPicked: onPicked) }
+    func makeCoordinator() -> Coordinator { 
+        Coordinator(onPicked: onPicked) 
+    }
     
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
@@ -516,12 +440,17 @@ private struct ImagePicker: UIViewControllerRepresentable {
     
     final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
         var onPicked: (UIImage) -> Void
-        init(onPicked: @escaping (UIImage) -> Void) { self.onPicked = onPicked }
+        
+        init(onPicked: @escaping (UIImage) -> Void) { 
+            self.onPicked = onPicked 
+        }
         
         func imagePickerController(_ picker: UIImagePickerController,
                                    didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
             let key: UIImagePickerController.InfoKey = picker.allowsEditing ? .editedImage : .originalImage
-            if let img = info[key] as? UIImage { onPicked(img) }
+            if let img = info[key] as? UIImage { 
+                onPicked(img) 
+            }
             picker.dismiss(animated: true)
         }
         
@@ -531,99 +460,37 @@ private struct ImagePicker: UIViewControllerRepresentable {
     }
 }
 
-private struct ProfileImageCropperView: View {
-    let image: UIImage
-    var onFinished: (UIImage) -> Void
-    
-    @Environment(\.dismiss) private var dismiss
-    
-    @State private var scale: CGFloat = 1
-    @State private var offset: CGSize = .zero
-    @State private var lastScale: CGFloat = 1
-    @State private var lastOffset: CGSize = .zero
-    
-    var body: some View {
-        NavigationStack {
-            GeometryReader { geo in
-                ZStack {
-                    Color.black.opacity(0.9).ignoresSafeArea()
-                    
-                    Color.clear
-                        .frame(width: geo.size.width, height: geo.size.width)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 2)
-                                .stroke(Color.white, lineWidth: 2)
-                        )
-                        .clipped()
-                        .overlay(
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                                .offset(offset)
-                                .scaleEffect(scale)
-                                .gesture(
-                                    DragGesture()
-                                        .onChanged { value in
-                                            offset = CGSize(width: lastOffset.width + value.translation.width,
-                                                             height: lastOffset.height + value.translation.height)
-                                        }
-                                        .onEnded { _ in lastOffset = offset }
-                                )
-                                .gesture(
-                                    MagnificationGesture()
-                                        .onChanged { newScale in
-                                            scale = lastScale * newScale
-                                        }
-                                        .onEnded { _ in lastScale = scale }
-                                )
-                        )
-                        .frame(maxHeight: .infinity, alignment: .center)
-                }
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Cancel") { dismiss() }
-                            .foregroundColor(.white)
-                    }
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Save") {
-                            let cropped = renderCropped(in: geo.size)
-                            onFinished(cropped)
-                            dismiss()
-                        }
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                    }
-                }
-            }
+// MARK: - Extensions
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
         }
-        .statusBarHidden(true)
-    }
-    
-    private func renderCropped(in geoSize: CGSize) -> UIImage {
-        let renderer = ImageRenderer(content:
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFill()
-                .offset(offset)
-                .scaleEffect(scale)
-                .frame(width: geoSize.width, height: geoSize.width)
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
         )
-        renderer.scale = 1
-        return renderer.uiImage ?? image
     }
 }
 
-private struct ProfileTextFieldStyle: TextFieldStyle {
-    func _body(configuration: TextField<Self._Label>) -> some View {
-        configuration
-            .font(.system(size: 16, design: .default))
-            .padding(12)
-            .background(Color.black.opacity(0.05))
-            .cornerRadius(10)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-            )
-    }
+extension DateFormatter {
+    static let birthdayFormat: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMMM d, yyyy"
+        return formatter
+    }()
 }
-
