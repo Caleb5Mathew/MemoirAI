@@ -465,22 +465,29 @@ struct UserMemoriesBookView: View {
         
         let newLayout = PhotoLayout(type: template, frame: frame)
         
+        // Create a copy of the pages array to trigger SwiftUI update
+        var updatedPages = flipbookPages
+        
         // Add the layout to the current page
-        if flipbookPages[currentPage].photoLayouts == nil {
-            flipbookPages[currentPage].photoLayouts = []
+        if updatedPages[currentPage].photoLayouts == nil {
+            updatedPages[currentPage].photoLayouts = []
         }
-        flipbookPages[currentPage].photoLayouts?.append(newLayout)
+        updatedPages[currentPage].photoLayouts?.append(newLayout)
         
         // Update the page type if needed
-        if flipbookPages[currentPage].type != .photoLayout {
-            flipbookPages[currentPage].type = .photoLayout
+        if updatedPages[currentPage].type != .photoLayout {
+            updatedPages[currentPage].type = .photoLayout
         }
+        
+        // Replace the entire array to ensure SwiftUI detects the change
+        flipbookPages = updatedPages
         
         // Haptic feedback
         let impact = UIImpactFeedbackGenerator(style: .medium)
         impact.impactOccurred()
         
         print("Added \(template.rawValue) layout to page \(currentPage)")
+        print("Page \(currentPage) now has \(flipbookPages[currentPage].photoLayouts?.count ?? 0) photo layouts")
     }
     
     private var geometry: CGSize {

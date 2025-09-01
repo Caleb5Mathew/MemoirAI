@@ -152,6 +152,7 @@ struct FlipbookView: UIViewRepresentable {
         }
         
         // If the webview is ready and we have pages, render them
+        // Always re-render when ready to ensure updates are reflected
         if context.coordinator.isReady && !pages.isEmpty {
             renderPages(webView: webView)
         }
