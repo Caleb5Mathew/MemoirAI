@@ -772,9 +772,20 @@ window.renderPages = function(pagesJSON) {
         console.log('Flipbook: Book innerHTML BEFORE PageFlip:', bookElementBefore?.innerHTML);
         console.log('Flipbook: Book children BEFORE PageFlip:', bookElementBefore?.children?.length);
         
-        // Save current page before reloading
-        const currentPageIndex = pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() : 0;
-        console.log('Flipbook: Saving current page index before reload:', currentPageIndex);
+        // Save current page before reloading (only if pages are already loaded)
+        let currentPageIndex = 0;
+        try {
+            // Check if pageFlip has pages loaded before trying to get current index
+            if (pageFlip && pageFlip.getPageCount && pageFlip.getPageCount() > 0) {
+                currentPageIndex = pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() : 0;
+                console.log('Flipbook: Saving current page index before reload:', currentPageIndex);
+            } else {
+                console.log('Flipbook: No pages loaded yet, skipping page save');
+            }
+        } catch (error) {
+            console.log('Flipbook: Could not get current page (first load):', error.message);
+            currentPageIndex = 0;
+        }
         
         try {
             console.log('Flipbook: Calling pageFlip.loadFromHTML...');
