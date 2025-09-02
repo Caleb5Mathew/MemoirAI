@@ -8,7 +8,7 @@ struct PhotoFrameEditorView: View {
     let pageIndex: Int
     var onPhotoSelected: ((UIImage) -> Void)?
     
-    @State private var selectedItem: PhotosPickerItem?
+    @State private var selectedItems: [PhotosPickerItem] = []
     @State private var selectedImage: UIImage?
     @State private var imageScale: CGFloat = 1.0
     @State private var imageOffset: CGSize = .zero
@@ -98,7 +98,7 @@ struct PhotoFrameEditorView: View {
                 
                 // Photo picker button
                 PhotosPicker(
-                    selection: $selectedItem,
+                    selection: $selectedItems,
                     maxSelectionCount: 1,
                     matching: .images
                 ) {
@@ -161,8 +161,8 @@ struct PhotoFrameEditorView: View {
             .background(Tokens.bgPrimary)
             .navigationBarHidden(true)
         }
-        .onChange(of: selectedItem) { newItem in
-            guard let newItem = newItem else { return }
+        .onChange(of: selectedItems) { newItems in
+            guard let newItem = newItems.first else { return }
             Task {
                 if let data = try? await newItem.loadTransferable(type: Data.self),
                    let image = UIImage(data: data) {
