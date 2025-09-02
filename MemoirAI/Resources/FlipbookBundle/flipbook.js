@@ -772,10 +772,22 @@ window.renderPages = function(pagesJSON) {
         console.log('Flipbook: Book innerHTML BEFORE PageFlip:', bookElementBefore?.innerHTML);
         console.log('Flipbook: Book children BEFORE PageFlip:', bookElementBefore?.children?.length);
         
+        // Save current page before reloading
+        const currentPageIndex = pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() : 0;
+        console.log('Flipbook: Saving current page index before reload:', currentPageIndex);
+        
         try {
             console.log('Flipbook: Calling pageFlip.loadFromHTML...');
             pageFlip.loadFromHTML(domPages);
             console.log('Flipbook: loadFromHTML completed successfully');
+            
+            // Restore the page after loading
+            if (currentPageIndex > 0) {
+                setTimeout(() => {
+                    console.log('Flipbook: Restoring page to index:', currentPageIndex);
+                    pageFlip.flip(currentPageIndex);
+                }, 100); // Small delay to ensure pages are loaded
+            }
             
             // DEBUG: Check book element immediately after PageFlip
             const bookElementAfter = document.getElementById('book');
