@@ -52,8 +52,8 @@ struct PhotoFrameView: View {
             }
             .onChange(of: selectedItem) { newItem in
                 Task {
-                    if let data = try? await newItem?.loadTransferable(type: Data.self) {
-                        layout.imageData = data
+                    if let data = try? await newItem.loadTransferable(type: Data.self) {
+                        layout.imageData = data.base64EncodedString()
                         image = UIImage(data: data)
                     }
                 }
@@ -64,7 +64,9 @@ struct PhotoFrameView: View {
     // MARK: - Frame Content
     @ViewBuilder
     private var frameContent: some View {
-        if let imageData = layout.imageData, let uiImage = UIImage(data: imageData) {
+        if let imageData = layout.imageData, 
+           let data = Data(base64Encoded: imageData),
+           let uiImage = UIImage(data: data) {
             // Show the photo
             Image(uiImage: uiImage)
                 .resizable()
