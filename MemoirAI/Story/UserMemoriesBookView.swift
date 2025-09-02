@@ -164,12 +164,21 @@ struct UserMemoriesBookView: View {
             PageZoomView(pageIndex: zoomedPageIndex, pages: $flipbookPages)
         }
         .sheet(isPresented: $showPhotoPickerForFrame) {
-            PhotoPickerSheet(
-                isPresented: $showPhotoPickerForFrame,
-                onPhotosSelected: { photos in
-                    handlePhotosSelectedForFrame(photos)
-                }
-            )
+            if let pageIndex = selectedPhotoFramePageIndex,
+               let frameId = selectedPhotoFrameId,
+               pageIndex >= 0 && pageIndex < flipbookPages.count {
+                // Find the specific layout being edited
+                let layout = flipbookPages[pageIndex].photoLayouts?.first(where: { $0.id.uuidString == frameId })
+                
+                PhotoFrameEditorView(
+                    isPresented: $showPhotoPickerForFrame,
+                    frameLayout: layout,
+                    pageIndex: pageIndex,
+                    onPhotoSelected: { photo in
+                        handlePhotoSelectedForFrame(photo)
+                    }
+                )
+            }
         }
         .overlay(
             Group {
@@ -532,11 +541,10 @@ struct UserMemoriesBookView: View {
         showPhotoPickerForFrame = true
     }
     
-    private func handlePhotosSelectedForFrame(_ photos: [UIImage]) {
+    private func handlePhotoSelectedForFrame(_ photo: UIImage) {
         guard let frameId = selectedPhotoFrameId,
               let pageIndex = selectedPhotoFramePageIndex,
-              pageIndex >= 0 && pageIndex < flipbookPages.count,
-              let photo = photos.first else { return }
+              pageIndex >= 0 && pageIndex < flipbookPages.count else { return }
         
         // Convert UIImage to base64
         if let imageData = photo.jpegData(compressionQuality: 0.6) {
