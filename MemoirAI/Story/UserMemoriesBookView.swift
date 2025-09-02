@@ -22,6 +22,7 @@ struct UserMemoriesBookView: View {
     @State private var selectedPhotoFrameId: String?
     @State private var selectedPhotoFramePageIndex: Int?
     @State private var showPhotoPickerForFrame = false
+    @State private var flipbookInitialized = false
     
     // Read art style from AppStorage to determine book orientation
     @AppStorage("memoirArtStyle") private var artStyleRaw = ArtStyle.realistic.rawValue
@@ -123,16 +124,19 @@ struct UserMemoriesBookView: View {
                                     .frame(width: bookSize.width, height: bookSize.height)
                                 }
                                 .onAppear {
-                                    print("UserMemoriesBookView: Flipbook view appeared")
-                                    print("UserMemoriesBookView: Geometry size: \(geo.size)")
-                                    print("UserMemoriesBookView: Calculated book size: \(bookSize)")
-                                    
-                                    // Set a timeout to fallback if flipbook doesn't load
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                                        if !flipbookReady || flipbookError {
-                                            print("UserMemoriesBookView: Flipbook timeout or error - falling back to native")
-                                            useFallback = true
+                                    if !flipbookInitialized {
+                                        print("UserMemoriesBookView: Flipbook view appeared")
+                                        print("UserMemoriesBookView: Geometry size: \(geo.size)")
+                                        print("UserMemoriesBookView: Calculated book size: \(bookSize)")
+                                        
+                                        // Set a timeout to fallback if flipbook doesn't load
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                                            if !flipbookReady || flipbookError {
+                                                print("UserMemoriesBookView: Flipbook timeout or error - falling back to native")
+                                                useFallback = true
+                                            }
                                         }
+                                        flipbookInitialized = true
                                     }
                                 }
                             }
