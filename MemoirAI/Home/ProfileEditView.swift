@@ -56,8 +56,8 @@ struct ProfileEditView: View {
             // Cream gradient background
             LinearGradient(
                 colors: [
-                    Color(hex: "#FAE6D8"),
-                    Color(hex: "#FFF9F3")
+                    Color(hex: "#FAE6D8") ?? Color(red: 0.98, green: 0.90, blue: 0.85),
+                    Color(hex: "#FFF9F3") ?? Color(red: 1.0, green: 0.98, blue: 0.95)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -354,14 +354,14 @@ struct ProfileEditView: View {
 
 // MARK: - Design Tokens
 private struct DesignTokens {
-    static let primaryOrange = Color(hex: "#C9652F")
-    static let avatarBG = Color(hex: "#F5E6D8")
-    static let avatarIcon = Color(hex: "#D4A574")
-    static let darkText = Color(hex: "#2C2C2C")
-    static let labelText = Color(hex: "#7A7A7A")
-    static let borderColor = Color(hex: "#E8DAC3")
+    static let primaryOrange = Color(hex: "#C9652F") ?? Color(red: 0.79, green: 0.40, blue: 0.18)
+    static let avatarBG = Color(hex: "#F5E6D8") ?? Color(red: 0.96, green: 0.90, blue: 0.85)
+    static let avatarIcon = Color(hex: "#D4A574") ?? Color(red: 0.83, green: 0.65, blue: 0.45)
+    static let darkText = Color(hex: "#2C2C2C") ?? Color(red: 0.17, green: 0.17, blue: 0.17)
+    static let labelText = Color(hex: "#7A7A7A") ?? Color(red: 0.48, green: 0.48, blue: 0.48)
+    static let borderColor = Color(hex: "#E8DAC3") ?? Color(red: 0.91, green: 0.85, blue: 0.76)
     static let softShadow = Color.black.opacity(0.08)
-    static let orangeShadow = Color(hex: "#C9652F").opacity(0.3)
+    static let orangeShadow = (Color(hex: "#C9652F") ?? Color(red: 0.79, green: 0.40, blue: 0.18)).opacity(0.3)
 }
 
 // MARK: - Gender Options
@@ -461,32 +461,6 @@ private struct ImagePicker: UIViewControllerRepresentable {
 }
 
 // MARK: - Extensions
-extension Color {
-    init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch hex.count {
-        case 3: // RGB (12-bit)
-            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6: // RGB (24-bit)
-            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8: // ARGB (32-bit)
-            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default:
-            (a, r, g, b) = (255, 0, 0, 0)
-        }
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue: Double(b) / 255,
-            opacity: Double(a) / 255
-        )
-    }
-}
-
 extension DateFormatter {
     static let birthdayFormat: DateFormatter = {
         let formatter = DateFormatter()
