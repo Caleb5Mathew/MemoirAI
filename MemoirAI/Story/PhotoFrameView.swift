@@ -51,6 +51,7 @@ struct PhotoFrameView: View {
                 Text("Select Photo")
             }
             .onChange(of: selectedItem) { newItem in
+                guard let newItem = newItem else { return }
                 Task {
                     if let data = try? await newItem.loadTransferable(type: Data.self) {
                         layout.imageData = data.base64EncodedString()
