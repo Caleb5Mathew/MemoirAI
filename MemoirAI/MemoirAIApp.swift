@@ -7,6 +7,8 @@ import SwiftUI
 import RevenueCat
 import Mixpanel
 import FBSDKCoreKit            // ← 1. add import
+import FirebaseCore
+import GoogleSignIn
 
 // MARK: - UIKit delegate wrapper
 final class FBAppDelegate: NSObject, UIApplicationDelegate {
@@ -15,6 +17,9 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil
     ) -> Bool {
+
+        // Initialize Firebase FIRST
+        FirebaseConfig.shared.configure()
 
         // 2. Boot the Facebook SDK
         ApplicationDelegate.shared.application(
@@ -30,14 +35,34 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
-    // Needed only if you use FB Login / App Links
+    // Needed only if you use FB Login / App Links / Google Sign-In
     func application(
         _ app: UIApplication,
         open url: URL,
         options: [UIApplication.OpenURLOptionsKey : Any] = [:]
     ) -> Bool {
+        if url.scheme == "memoirai" {
+            if url.host == "order-complete" {
+                let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                let sessionId = components?.queryItems?.first(where: { $0.name == "session_id" })?.value
+                if let sessionId = sessionId {
+                    print("[Order] Stripe return — session_id: \(sessionId)")
+                    UserDefaults.standard.set(sessionId, forKey: "lastCompletedStripeSessionId")
+                }
+                NotificationCenter.default.post(name: .orderComplete, object: nil, userInfo: ["url": url, "sessionId": sessionId as Any])
+            } else if url.host == "order-cancelled" {
+                NotificationCenter.default.post(name: .orderCancelled, object: nil)
+            }
+            return true
+        }
+        if GIDSignIn.sharedInstance.handle(url) { return true }
         return ApplicationDelegate.shared.application(app, open: url, options: options)
     }
+}
+
+extension Notification.Name {
+    static let orderComplete = Notification.Name("orderComplete")
+    static let orderCancelled = Notification.Name("orderCancelled")
 }
 
 @main

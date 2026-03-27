@@ -1,9 +1,13 @@
 import SwiftUI
+import RevenueCat
+import RevenueCatUI
+import FirebaseAuth
+import FirebaseFirestore
 
 // ArtStyle Enum - ensure this is defined once globally or is accessible.
 enum ArtStyle: String, CaseIterable, Identifiable {
     case realistic = "Realistic"
-    case cartoon = "Cartoon"
+    case comic = "Comic"
     case kidsBook = "Kid's Book"
     case custom = "Custom"
     
@@ -12,83 +16,192 @@ enum ArtStyle: String, CaseIterable, Identifiable {
     var placeholderSymbolName: String {
         switch self {
         case .realistic: return "photo.artframe"
-        case .cartoon: return "face.smiling.fill"
+        case .comic: return "book.pages"
         case .kidsBook: return "book.closed.fill"
         case .custom: return "wand.and.stars.inverse"
         }
     }
 }
 
+enum GeminiImageModelOption: String, CaseIterable, Identifiable {
+    case gemini3ProPreview = "gemini-3-pro-image-preview"
+    case gemini25FlashImage = "gemini-2.5-flash-image"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .gemini3ProPreview:
+            return "Gemini 3 Pro Preview"
+        case .gemini25FlashImage:
+            return "Gemini 2.5 Flash"
+        }
+    }
+}
+
+enum StyleReferencePreset: String, CaseIterable, Identifiable {
+    case normal = "normal"
+    case ref1 = "ref1"
+    case ref2 = "ref2"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .normal:
+            return "Normal"
+        case .ref1:
+            return "Ref 1"
+        case .ref2:
+            return "Ref 2"
+        }
+    }
+}
+
+// MARK: - Circular Progress Ring
+struct CircularProgressRing: View {
+    let progress: Double // 0.0 to 1.0 (1.0 = full allowance remaining)
+    let lineWidth: CGFloat
+    let size: CGFloat
+    
+    // Orange/Yellow gradient colors
+    private let gradientColors = [
+        Color(red: 1.0, green: 0.6, blue: 0.2),  // Orange
+        Color(red: 1.0, green: 0.8, blue: 0.3),  // Yellow-orange
+        Color(red: 1.0, green: 0.55, blue: 0.1)  // Deep orange
+    ]
+    
+    var body: some View {
+        ZStack {
+            // Background ring
+            Circle()
+                .stroke(
+                    Color.gray.opacity(0.15),
+                    lineWidth: lineWidth
+                )
+            
+            // Progress ring with gradient
+            Circle()
+                .trim(from: 0, to: CGFloat(progress))
+                .stroke(
+                    AngularGradient(
+                        gradient: Gradient(colors: gradientColors),
+                        center: .center,
+                        startAngle: .degrees(-90),
+                        endAngle: .degrees(270)
+                    ),
+                    style: StrokeStyle(
+                        lineWidth: lineWidth,
+                        lineCap: .round
+                    )
+                )
+                .rotationEffect(.degrees(-90))
+                .animation(.easeInOut(duration: 0.5), value: progress)
+        }
+        .frame(width: size, height: size)
+    }
+}
+
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var subscriptionManager: RCSubscriptionManager
+    @EnvironmentObject var profileVM: ProfileViewModel
     
-    // Define colors directly
+    // Colors
     let softCream = Color(red: 0.98, green: 0.96, blue: 0.89)
     let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
-    let subtleGray = Color.gray.opacity(0.5)
-    let darkText = Color.black.opacity(0.8)
-    let textFieldBackgroundColor = Color.white.opacity(0.5)
+    let darkText = Color.black.opacity(0.85)
     
-    // Settings States linked to AppStorage for persistence
-    @AppStorage("memoirPageCount") var pageCountSetting: Int = 2   // ✅ OK
+    // Settings States
+    @AppStorage("memoirPageCount") var pageCountSetting: Int = 2
     @AppStorage("memoirArtStyle") private var selectedArtStyleRawValue: String = ArtStyle.realistic.rawValue
     @AppStorage("memoirCustomArtStyleText") private var customArtStyleText: String = ""
+    @AppStorage("memoirMemorySource") var memorySourceSetting: String = "all"
+    @AppStorage("memoirGeminiModelOverride") private var geminiModelOverrideRawValue: String = GeminiImageModelOption.gemini3ProPreview.rawValue
+    @AppStorage("memoirStyleReferencePreset") private var styleReferencePresetRawValue: String = StyleReferencePreset.normal.rawValue
     
-    // New AppStorage variables for advanced settings
-    @AppStorage("memoirEthnicity") private var ethnicity: String = ""
-    @AppStorage("memoirGender") private var gender: String = ""
-    @AppStorage("memoirOtherPersonalDetails") private var otherPersonalDetails: String = ""
-    
-    // Local @State to bridge Double for Slider and Int for AppStorage
     @State private var sliderPageCount: Double = 2.0
-    
-    // State to control visibility of advanced settings
-    @State private var showAdvancedSettings: Bool = false
-    @State private var generationAdvice: String? = nil
     
     // Developer Key
     @State private var devKey: String = ""
-    @State private var showDevSuccess: Bool = false
-    @State private var devSectionRevealed: Bool = false
+    @State private var showDevSheet: Bool = false
+    @State private var devResult: DevUnlockResult? = nil
+    @State private var devTapCount: Int = 0
     
-    // Computed property to GET the ArtStyle enum
+    // Paywall
+    @State private var showPaywall: Bool = false
+    
+    // Character Management
+    @State private var showCharacterManagement: Bool = false
+    @State private var showDevDashboard: Bool = false
+    @State private var hasUnseenOrders = false
+    @State private var orderBadgeListener: ListenerRegistration?
+    
+    private enum DevUnlockResult {
+        case success
+        case incorrect
+    }
+    
     private var currentSelectedArtStyle: ArtStyle {
         ArtStyle(rawValue: selectedArtStyleRawValue) ?? .realistic
     }
-    
-    private let artStyleColumns: [GridItem] = [
-        GridItem(.flexible(), spacing: 16),
-        GridItem(.flexible(), spacing: 16)
-    ]
-    
-    private func customSerifFont(size: CGFloat) -> Font {
-        .system(size: size, design: .serif)
+
+    private var isInternalDeveloperBuild: Bool {
+#if DEBUG
+        return true
+#else
+        return false
+#endif
+    }
+
+    private var canAccessDeveloperGeminiToggle: Bool {
+        isInternalDeveloperBuild && subscriptionManager.isDeveloperUnlocked
+    }
+
+    private var canAccessDevDashboard: Bool {
+        subscriptionManager.isDeveloperUnlocked
+    }
+
+    private var isSubscribed: Bool {
+        subscriptionManager.hasActiveSubscription
     }
     
-    private var isSubscribed: Bool { 
-        subscriptionManager.hasActiveSubscription 
+    private var maxAllowance: Int {
+        isSubscribed ? 100 : FreePreviewConfig.maxPagesWithoutSubscription
     }
     
-    private var maxSelectablePages: Int { 
-        isSubscribed ? 50 : FreePreviewConfig.maxPagesWithoutSubscription 
+    // For free users, limit to what they have remaining (minimum 1 to prevent slider crash)
+    private var maxSelectablePages: Int {
+        if isSubscribed {
+            return max(1, subscriptionManager.remainingAllowance)
+        } else {
+            // Minimum 1 to prevent slider range crash (1...0 is invalid)
+            return max(1, FreePreviewConfig.freeImagesRemaining)
+        }
     }
     
-    // ✨ Computed properties for warnings
-    private var generationWarning: String? {
-        subscriptionManager.getGenerationAdvice(for: pageCountSetting)
+    // Actual remaining images (works for both subscribed and free users)
+    private var actualRemainingImages: Int {
+        isSubscribed ? subscriptionManager.remainingAllowance : FreePreviewConfig.freeImagesRemaining
     }
     
-    private var isLargeGeneration: Bool {
-        subscriptionManager.isLargeGeneration(pages: pageCountSetting)
+    // Whether user can generate at all
+    private var canGenerate: Bool {
+        isSubscribed ? subscriptionManager.remainingAllowance > 0 : FreePreviewConfig.canGenerateFreePreview
     }
     
-    // Utility – keep the stored value inside the current allowed range
+    // Progress for the ring (remaining / total)
+    private var allowanceProgress: Double {
+        let total = Double(maxAllowance)
+        let remaining = Double(actualRemainingImages)
+        guard total > 0 else { return 1.0 }
+        return remaining / total
+    }
+    
     private func clampPageCountIfNeeded() {
-        let maxAllowed = isSubscribed ? 50 : FreePreviewConfig.maxPagesWithoutSubscription
-        if pageCountSetting > maxAllowed {
-            pageCountSetting = maxAllowed
-            sliderPageCount = Double(maxAllowed)
+        if pageCountSetting > maxSelectablePages {
+            pageCountSetting = maxSelectablePages
+            sliderPageCount = Double(maxSelectablePages)
         }
     }
     
@@ -96,326 +209,757 @@ struct SettingsView: View {
         ZStack {
             softCream
                 .ignoresSafeArea()
-                .overlay(
-                    Image("paper_texture") // Ensure this image is in your asset catalog
-                        .resizable()
-                        .scaledToFill()
-                        .opacity(0.05)
-                        .ignoresSafeArea()
-                )
             
-            VStack(spacing: 20) {
-                HStack {
-                    Button(action: { dismiss() }) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundColor(darkText)
-                            .padding(10)
-                            .background(Color.black.opacity(0.07))
-                            .clipShape(Circle())
-                    }
-                    
-                    Spacer()
-                    
-                    Text("Settings")
-                        .font(customSerifFont(size: 24))
-                        .foregroundColor(darkText)
-                    
-                    Spacer()
-                    
-                    Circle().fill(Color.clear).frame(width: 38, height: 38) // Balance visually
-                }
-                .padding(.horizontal)
-                .padding(.top, 12)
+            VStack(spacing: 0) {
+                // Header
+                headerView
                 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 30) {
-                        // ✨ ENHANCED: Smart page count section with 1-50 range
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Number of Memories")
-                                .font(customSerifFont(size: 20))
-                                .foregroundColor(darkText)
-                            
-                            // ✨ Clear explanation - Add safety check here
-                            if isSubscribed {
-                                Text("Each memory generates 1 AI image. You have \(subscriptionManager.remainingAllowance)/50 images remaining this month.")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.gray)
-                            } else {
-                                Text("Each memory generates 1 AI image.")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.gray)
-                            }
-                            
-                            HStack {
-                                Text("Memories: \(pageCountSetting)")
-                                    .font(.system(size: 16, design: .rounded))
-                                    .foregroundColor(darkText)
-                                
-                                Spacer()
-                                
-                                // ✨ Image cost indicator with color coding
-                                HStack(spacing: 4) {
-                                    Image(systemName: "photo")
-                                        .font(.caption)
-                                    Text("\(pageCountSetting) images")
-                                        .font(.caption)
-                                }
-                                .foregroundColor(isLargeGeneration ? .orange : .gray)
-                            }
-                            
-                            // ✨ 1-50 slider with visual feedback
-                            VStack(spacing: 16) {
-                                HStack {
-                                    Text("Memoir Pages")
-                                        .font(.headline)
-                                    
-                                    Spacer()
-                                    
-                                    // ✨ Show monthly allowance status
-                                    if isSubscribed {
-                                        Text(subscriptionManager.monthlyAllowanceStatus)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                                
-                                HStack {
-                                    Text("1")
-                                    if isSubscribed {
-                                        Slider(value: $sliderPageCount, in: 1...50, step: 1)
-                                            .onChange(of: sliderPageCount) { _, newValue in
-                                                pageCountSetting = Int(newValue)
-                                                if let advice = subscriptionManager.getGenerationAdvice(for: Int(newValue)) {
-                                                    generationAdvice = advice
-                                                } else { 
-                                                    generationAdvice = nil 
-                                                }
-                                            }
-                                    } else {
-                                        Slider(value: $sliderPageCount, in: 1...Double(FreePreviewConfig.maxPagesWithoutSubscription), step: 1)
-                                            .onChange(of: sliderPageCount) { _, newValue in 
-                                                pageCountSetting = Int(newValue)
-                                                generationAdvice = nil 
-                                            }
-                                    }
-                                    Text(isSubscribed ? "50" : "\(FreePreviewConfig.maxPagesWithoutSubscription)")
-                                }
-                                
-                                Text("Pages: \(Int(sliderPageCount))")
-                                    .font(.subheadline)
-                                
-                                // ✨ Show advice if any
-                                if let advice = generationAdvice {
-                                    Text(advice)
-                                        .font(.caption)
-                                        .foregroundColor(.orange)
-                                        .multilineTextAlignment(.center)
-                                        .padding(.horizontal)
-                                }
-                            }
-                            
-                            // ✨ Subscription trial notice
-                            if !isSubscribed {
-                                HStack(alignment: .top, spacing: 8) {
-                                    Image(systemName: "info.circle.fill")
-                                        .foregroundColor(.blue)
-                                        .font(.system(size: 14))
-                                    Text("Free users can generate up to \(FreePreviewConfig.maxPagesWithoutSubscription) images in their preview. Subscribe to unlock 50 new images every month.")
-                                        .font(.system(size: 13))
-                                        .foregroundColor(.gray)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                .padding(.top, 4)
-                            }
-                            
-                            // ✨ Smart warnings based on selection (subscribers only)
-                            if isSubscribed, let warning = generationWarning {
-                                HStack(alignment: .top, spacing: 8) {
-                                    Image(systemName: isLargeGeneration ? "exclamationmark.triangle.fill" : "info.circle.fill")
-                                        .foregroundColor(isLargeGeneration ? .orange : .blue)
-                                        .font(.system(size: 14))
-                                    
-                                    Text(warning)
-                                        .font(.system(size: 13))
-                                        .foregroundColor(.gray)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                .padding(.top, 4)
-                                .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                                .animation(.easeInOut(duration: 0.2), value: generationWarning)
-                            }
-                            
-                            // ✨ Visual allowance meter (subscribers only)
-                            if isSubscribed {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Monthly Image Allowance")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                    
-                                    GeometryReader { geometry in
-                                        ZStack(alignment: .leading) {
-                                            Rectangle()
-                                                .fill(Color.gray.opacity(0.2))
-                                                .frame(height: 6)
-                                                .cornerRadius(3)
-                                            
-                                            // Used portion
-                                            Rectangle()
-                                                .fill(Color.red.opacity(0.3))
-                                                .frame(
-                                                    width: geometry.size.width * (Double(pageCountSetting) / 50.0),
-                                                    height: 6
-                                                )
-                                                .cornerRadius(3)
-                                            
-                                            // Remaining portion
-                                            Rectangle()
-                                                .fill(subscriptionManager.remainingAllowance <= 10 ? Color.red : terracotta)
-                                                .frame(
-                                                    width: geometry.size.width * (Double(subscriptionManager.remainingAllowance) / 50.0),
-                                                    height: 6
-                                                )
-                                                .cornerRadius(3)
-                                        }
-                                    }
-                                    .frame(height: 6)
-                                    
-                                    HStack {
-                                        Text("\(subscriptionManager.remainingAllowance) remaining")
-                                            .font(.caption2)
-                                            .foregroundColor(subscriptionManager.remainingAllowance <= 10 ? .red : .gray)
-                                        
-                                        Spacer()
-                                        
-                                        if pageCountSetting > subscriptionManager.remainingAllowance {
-                                            Text("Not enough!")
-                                                .font(.caption2)
-                                                .foregroundColor(.red)
-                                        } else {
-                                            Text("Will use \(pageCountSetting)")
-                                                .font(.caption2)
-                                                .foregroundColor(isLargeGeneration ? .orange : .gray)
-                                        }
-                                    }
-                                }
-                                .padding(.top, 8)
-                            }
-                        }
-                        .padding()
-                        .background(Color.black.opacity(0.03))
-                        .cornerRadius(12)
-                        .overlay(
-                            Group {
-                                if isSubscribed {
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .stroke(
-                                            pageCountSetting > subscriptionManager.remainingAllowance ?
-                                            Color.red.opacity(0.5) : (isLargeGeneration ? Color.orange.opacity(0.3) : Color.clear),
-                                            lineWidth: 2
-                                        )
-                                }
-                            }
-                        )
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 28) {
+                        // Usage Ring Card
+                        usageCard
                         
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Choose Art Style")
-                                .font(customSerifFont(size: 20))
-                                .foregroundColor(darkText)
-                            
-                            LazyVGrid(columns: artStyleColumns, spacing: 16) {
-                                ForEach(ArtStyle.allCases) { style in
-                                    ArtStyleButton(
-                                        style: style,
-                                        isSelected: currentSelectedArtStyle == style,
-                                        selectedBorderColor: terracotta,
-                                        selectedBackgroundColor: terracotta.opacity(0.15),
-                                        defaultBackgroundColor: Color.white.opacity(0.4),
-                                        defaultBorderColor: subtleGray.opacity(0.5),
-                                        selectedTextColor: terracotta,
-                                        defaultTextColor: darkText.opacity(0.9),
-                                        selectedSymbolColor: terracotta,
-                                        defaultSymbolColor: darkText.opacity(0.7)
-                                    ) {
-                                        self.selectedArtStyleRawValue = style.rawValue
-                                    }
-                                }
-                            }
-                            
-                            // Custom art style text field when selected
-                            if currentSelectedArtStyle == .custom {
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text("Describe your custom style:")
-                                        .font(.system(size: 14, weight: .medium, design: .rounded))
-                                        .foregroundColor(darkText.opacity(0.8))
-                                        .padding(.top, 10)
-                                    
-                                    TextField("e.g., 'impressionistic oil painting', 'vintage sci-fi poster'", text: $customArtStyleText, axis: .vertical)
-                                        .font(.system(size: 15))
-                                        .padding(10)
-                                        .background(textFieldBackgroundColor)
-                                        .cornerRadius(8)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .stroke(subtleGray.opacity(0.7), lineWidth: 1)
-                                        )
-                                        .lineLimit(1...3)
-                                        .tint(terracotta)
-                                }
-                                .padding(.top, 5)
-                                .transition(.opacity.combined(with: .slide))
-                            }
-                        }
-                        .padding()
-                        .background(Color.black.opacity(0.03))
-                        .cornerRadius(12)
-                        .animation(.easeInOut, value: currentSelectedArtStyle)
+                        // Page Count Section
+                        pageCountSection
                         
-                        Spacer() // Pushes content to the top
-                        
-                        // ─── Developer Unlock (hidden) ───────────────
-                        VStack(spacing: 8) {
-                            Text("Developer Key")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                            
-                            SecureField("Enter key", text: $devKey)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                            
-                            Button("Unlock") {
-                                if devKey == "Apologist123!" {
-                                    RCSubscriptionManager.shared.unlockDeveloperMode()
-                                    showDevSuccess = true
-                                    devKey = ""
-                                }
-                            }
-                            .disabled(devKey.isEmpty)
-                            .alert("Developer mode unlocked – unlimited images!", isPresented: $showDevSuccess) {
-                                Button("OK", role: .cancel) {}
-                            }
+                        // Art Style Section
+                        artStyleSection
+
+                        // Optional style reference image for Gemini
+                        styleReferenceSection
+
+                        // Developer-only model override
+                        if canAccessDeveloperGeminiToggle {
+                            geminiModelSection
                         }
-                        .padding(.top, 40)
-                        .opacity(devSectionRevealed ? 1 : 0.5) // subtle until revealed
-                        .onLongPressGesture(minimumDuration: 1) { // reveal after long press
-                            withAnimation { devSectionRevealed = true }
+                        
+                        // Memory Source Section
+                        memorySourceSection
+                        
+                        // Characters Section
+                        charactersSection
+                        
+                        // Account Section
+                        accountSection
+
+                        // Developer dashboard entry at the very bottom
+                        if canAccessDevDashboard {
+                            devDashboardSection
                         }
                     }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .padding(.bottom, 100)
                 }
             }
+            
         }
         .navigationBarBackButtonHidden(true)
         .onAppear {
             sliderPageCount = Double(pageCountSetting)
             clampPageCountIfNeeded()
+            if !canAccessDeveloperGeminiToggle {
+                geminiModelOverrideRawValue = GeminiImageModelOption.gemini3ProPreview.rawValue
+            }
+            // UI tests pass -uitesting; auto-show dev sheet to skip 5-tap
+            if ProcessInfo.processInfo.arguments.contains("-uitesting") {
+                showDevSheet = true
+            }
+            loadOrderBadge()
         }
-        // React if subscription state changes while view is up
+        .onDisappear {
+            orderBadgeListener?.remove()
+        }
         .onChange(of: subscriptionManager.hasActiveSubscription) { _, _ in
             clampPageCountIfNeeded()
         }
+        .sheet(isPresented: $showDevSheet) {
+            devUnlockSheet
+        }
+        .fullScreenCover(isPresented: $showPaywall) {
+            PaywallView(displayCloseButton: true)
+        }
+        .sheet(isPresented: $showCharacterManagement) {
+            CharacterManagementView()
+                .environmentObject(profileVM)
+        }
+        .fullScreenCover(isPresented: $showDevDashboard) {
+            NavigationStack {
+                DevDashboardView()
+            }
+        }
+    }
+    
+    // MARK: - Dev Unlock Sheet
+    private var devUnlockSheet: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            Image(systemName: "key.fill")
+                .font(.system(size: 32))
+                .foregroundColor(.gray.opacity(0.4))
+            
+            Text("Developer Access")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.gray)
+            
+            SecureField("Enter key", text: $devKey)
+                .font(.system(size: 15))
+                .accessibilityIdentifier("devPasswordField")
+                .padding(12)
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(10)
+                .padding(.horizontal, 40)
+            
+            // Result message
+            if let result = devResult {
+                HStack(spacing: 6) {
+                    Image(systemName: result == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    Text(result == .success ? "Unlocked!" : "Incorrect")
+                }
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(result == .success ? .green : .red)
+                .transition(.opacity.combined(with: .scale))
+            }
+            
+            Button(action: {
+                if devKey == "Apologist123!" {
+                    RCSubscriptionManager.shared.unlockDeveloperMode()
+                    withAnimation { devResult = .success }
+                    devKey = ""
+                    // Auto dismiss after success
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        showDevSheet = false
+                        devResult = nil
+                    }
+                } else {
+                    withAnimation { devResult = .incorrect }
+                    // Clear incorrect message after delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        withAnimation { devResult = nil }
+                    }
+                }
+            }) {
+                Text("Unlock")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 120)
+                    .padding(.vertical, 12)
+                    .background(devKey.isEmpty ? Color.gray.opacity(0.3) : terracotta)
+                    .cornerRadius(10)
+            }
+            .accessibilityIdentifier("devUnlockButton")
+            .disabled(devKey.isEmpty)
+            
+            Spacer()
+            Spacer()
+        }
+        .presentationDetents([.height(320)])
+        .presentationDragIndicator(.visible)
+        .onDisappear {
+            devKey = ""
+            devResult = nil
+        }
+    }
+    
+    // MARK: - Header
+    private var headerView: some View {
+        HStack {
+            Button(action: { dismiss() }) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(darkText)
+                    .frame(width: 40, height: 40)
+                    .background(Color.black.opacity(0.05))
+                    .clipShape(Circle())
+            }
+            .accessibilityIdentifier("settingsBack")
+            
+            Spacer()
+            
+            Text("Settings")
+                .font(.system(size: 20, weight: .semibold, design: .serif))
+                .foregroundColor(darkText)
+                .accessibilityIdentifier("settingsHeaderTitle")
+                .onTapGesture {
+#if DEBUG
+                    devTapCount += 1
+                    if devTapCount >= 5 {
+                        showDevSheet = true
+                        devTapCount = 0
+                    }
+                    // Reset after 2 seconds if not completed
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        if devTapCount < 5 { devTapCount = 0 }
+                    }
+#endif
+                }
+            
+            Spacer()
+            
+            Circle().fill(Color.clear).frame(width: 40, height: 40)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+    }
+    
+    // MARK: - Usage Card with Ring
+    private var usageCard: some View {
+        VStack(spacing: 16) {
+            HStack(alignment: .center, spacing: 20) {
+                // Circular Progress Ring
+                ZStack {
+                    CircularProgressRing(
+                        progress: allowanceProgress,
+                        lineWidth: 10,
+                        size: 90
+                    )
+                    
+                    VStack(spacing: 2) {
+                        if isSubscribed {
+                            Text("\(subscriptionManager.remainingAllowance)")
+                                .font(.system(size: 24, weight: .bold, design: .rounded))
+                                .foregroundColor(darkText)
+                            Text("left")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.gray)
+                        } else {
+                            // Show ACTUAL remaining free preview images
+                            Text("\(FreePreviewConfig.freeImagesRemaining)")
+                                .font(.system(size: 24, weight: .bold, design: .rounded))
+                                .foregroundColor(FreePreviewConfig.freeImagesRemaining > 0 ? darkText : .red)
+                            Text(FreePreviewConfig.freeImagesRemaining > 0 ? "left" : "images")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.gray)
+                        }
+                    }
+                }
+                
+                // Usage Info
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(isSubscribed ? "Image Allowance" : "Free Preview")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(darkText)
+                    
+                    if isSubscribed {
+                        Text("\(subscriptionManager.remainingAllowance) of 100 images")
+                            .font(.system(size: 14))
+                            .foregroundColor(.gray)
+                        
+                        Text("Resets \(subscriptionManager.getRenewalDateString())")
+                            .font(.system(size: 12))
+                            .foregroundColor(.gray.opacity(0.8))
+                    } else {
+                        // Show actual remaining for free users
+                        let remaining = FreePreviewConfig.freeImagesRemaining
+                        let total = FreePreviewConfig.maxPagesWithoutSubscription
+                        
+                        if remaining > 0 {
+                            Text("\(remaining) of \(total) free images left")
+                                .font(.system(size: 14))
+                                .foregroundColor(.gray)
+                        } else {
+                            Text("Free preview used")
+                                .font(.system(size: 14))
+                                .foregroundColor(.red.opacity(0.8))
+                        }
+                        
+                        Text("Subscribe for 100 images / month")
+                            .font(.system(size: 12))
+                            .foregroundColor(terracotta)
+                    }
+                }
+                
+                Spacer()
+            }
+        }
+        .padding(20)
+        .background(Color.white.opacity(0.6))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+    }
+    
+    // MARK: - Page Count Section
+    private var pageCountSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Memories to Generate")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(darkText)
+            
+            HStack(spacing: 10) {
+                Text("\(pageCountSetting)")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundColor(canGenerate ? terracotta : .gray)
+                    .frame(width: 36, alignment: .center)
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.2), value: pageCountSetting)
+                
+                Slider(value: $sliderPageCount, in: 1...Double(max(2, maxSelectablePages)), step: 1)
+                    .tint(canGenerate ? terracotta : .gray)
+                    .disabled(!canGenerate || maxSelectablePages <= 1)
+                    .onChange(of: sliderPageCount) { _, newValue in
+                        pageCountSetting = Int(newValue)
+                    }
+                
+                Text("\(maxSelectablePages)")
+                    .font(.system(size: 13))
+                    .foregroundColor(.gray)
+            }
+            .opacity(canGenerate ? 1.0 : 0.5)
+            
+            // Warning if exceeding allowance (subscribed users)
+            if isSubscribed && pageCountSetting > subscriptionManager.remainingAllowance {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 12))
+                    Text("Exceeds remaining allowance")
+                        .font(.system(size: 12))
+                }
+                .foregroundColor(.red.opacity(0.8))
+                .padding(.top, 4)
+            }
+            
+            // Warning for free users who have exhausted their preview
+            if !isSubscribed && !canGenerate {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.red.opacity(0.7))
+                    
+                    Text("No images left. ")
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray)
+                    + Text("Subscribe")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.blue)
+                    + Text(" to continue")
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray)
+                }
+                .padding(.top, 4)
+                .onTapGesture {
+                    showPaywall = true
+                }
+            }
+        }
+        .padding(20)
+        .background(Color.white.opacity(0.6))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+    }
+    
+    // MARK: - Art Style Section
+    private var artStyleSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Art Style")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(darkText)
+            
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                ForEach(ArtStyle.allCases) { style in
+                    ArtStyleChip(
+                        style: style,
+                        isSelected: currentSelectedArtStyle == style,
+                        accentColor: terracotta
+                    ) {
+                        selectedArtStyleRawValue = style.rawValue
+                    }
+                }
+            }
+            
+            // Custom style input
+            if currentSelectedArtStyle == .custom {
+                TextField("Describe your style...", text: $customArtStyleText, axis: .vertical)
+                    .font(.system(size: 14))
+                    .padding(12)
+                    .background(Color.white.opacity(0.8))
+                    .cornerRadius(10)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                    )
+                    .lineLimit(1...3)
+                    .tint(terracotta)
+                    .padding(.top, 4)
+            }
+        }
+        .padding(20)
+        .background(Color.white.opacity(0.6))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        .animation(.easeInOut(duration: 0.2), value: currentSelectedArtStyle)
+    }
+
+    private var styleReferenceSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Style Reference")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(darkText)
+
+            Picker("Style reference", selection: $styleReferencePresetRawValue) {
+                ForEach(StyleReferencePreset.allCases) { preset in
+                    Text(preset.displayName).tag(preset.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text("When enabled, Gemini receives an additional style image reference. Use this for more consistent kids-book styling across pages.")
+                .font(.system(size: 12))
+                .foregroundColor(.gray)
+
+            if currentSelectedArtStyle != .kidsBook {
+                Text("Tip: This has the strongest effect with Kid's Book style.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.gray.opacity(0.85))
+            }
+        }
+        .padding(20)
+        .background(Color.white.opacity(0.6))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+    }
+    
+    // MARK: - Memory Source Section
+    private var geminiModelSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Developer: Gemini Model")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(darkText)
+
+            Picker("Gemini model", selection: $geminiModelOverrideRawValue) {
+                ForEach(GeminiImageModelOption.allCases) { option in
+                    Text(option.displayName).tag(option.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text("Default users always use Gemini 3 Pro Preview. This override is only active in developer mode.")
+                .font(.system(size: 12))
+                .foregroundColor(.gray)
+        }
+        .padding(20)
+        .background(Color.white.opacity(0.6))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+    }
+
+    // MARK: - Memory Source Section
+    private var memorySourceSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Memory Source")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(darkText)
+            
+            Picker("Source", selection: $memorySourceSetting) {
+                Text("All").tag("all")
+                Text("Chapters").tag("memoir")
+                Text("Recordings").tag("recordings")
+            }
+            .pickerStyle(.segmented)
+            
+            Text("Choose which memories to include when generating your book")
+                .font(.system(size: 13))
+                .foregroundColor(.gray)
+                .padding(.top, 4)
+        }
+        .padding(20)
+        .background(Color.white.opacity(0.6))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+    }
+    
+    // MARK: - Characters Section
+    private var charactersSection: some View {
+        Button(action: {
+            showCharacterManagement = true
+        }) {
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(terracotta.opacity(0.15))
+                        .frame(width: 44, height: 44)
+                    
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(terracotta)
+                }
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("My Characters")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(darkText)
+                    
+                    Text("Manage characters across memories")
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray)
+                }
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.gray.opacity(0.5))
+            }
+            .padding(16)
+            .background(Color.white.opacity(0.6))
+            .cornerRadius(16)
+            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    // MARK: - Account Section
+    private var accountSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Account")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(darkText)
+            
+            if let user = Auth.auth().currentUser {
+                if user.isAnonymous {
+                    // Anonymous user - show link option
+                    HStack(spacing: 12) {
+                        Circle()
+                            .fill(terracotta.opacity(0.2))
+                            .frame(width: 44, height: 44)
+                            .overlay(
+                                Image(systemName: "person.fill")
+                                    .font(.system(size: 18))
+                                    .foregroundColor(terracotta)
+                            )
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Syncing Anonymously")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(darkText)
+                            
+                            Text("Link Google to access on other devices")
+                                .font(.system(size: 12))
+                                .foregroundColor(.gray)
+                        }
+                        
+                        Spacer()
+                        
+                        // Sync indicator
+                        Image(systemName: "checkmark.icloud.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.green.opacity(0.7))
+                    }
+                    
+                    Divider()
+                        .padding(.vertical, 8)
+                    
+                    NavigationLink(destination: OrderHistoryView()) {
+                        HStack {
+                            Image(systemName: "shippingbox")
+                                .font(.system(size: 14))
+                            Text("Print Orders")
+                                .font(.system(size: 14, weight: .medium))
+                            Spacer()
+                            if hasUnseenOrders {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 8, height: 8)
+                            }
+                        }
+                        .foregroundColor(terracotta)
+                    }
+                    
+                    // Link Google account button
+                    Button(action: linkGoogleAccount) {
+                        HStack {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.white)
+                                    .frame(width: 20, height: 20)
+                                Text("G")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(.blue)
+                            }
+                            Text("Link Google Account")
+                                .font(.system(size: 14, weight: .medium))
+                        }
+                        .foregroundColor(terracotta)
+                    }
+                } else {
+                    // Signed in with Google
+                    HStack(spacing: 12) {
+                        Circle()
+                            .fill(terracotta.opacity(0.2))
+                            .frame(width: 44, height: 44)
+                            .overlay(
+                                Text(String((user.displayName ?? user.email ?? "U").prefix(1)).uppercased())
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundColor(terracotta)
+                            )
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(user.displayName ?? "User")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(darkText)
+                            
+                            Text(user.email ?? "")
+                                .font(.system(size: 13))
+                                .foregroundColor(.gray)
+                        }
+                        
+                        Spacer()
+                        
+                        Image(systemName: "checkmark.icloud.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.green.opacity(0.7))
+                    }
+                    
+                    Divider()
+                        .padding(.vertical, 8)
+                    
+                    NavigationLink(destination: OrderHistoryView()) {
+                        HStack {
+                            Image(systemName: "shippingbox")
+                                .font(.system(size: 14))
+                            Text("Print Orders")
+                                .font(.system(size: 14, weight: .medium))
+                            Spacer()
+                            if hasUnseenOrders {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 8, height: 8)
+                            }
+                        }
+                        .foregroundColor(terracotta)
+                    }
+                    
+                    Button(action: signOut) {
+                        HStack {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                                .font(.system(size: 14))
+                            Text("Sign Out")
+                                .font(.system(size: 14, weight: .medium))
+                        }
+                        .foregroundColor(.red.opacity(0.8))
+                    }
+                }
+            } else {
+                // Not signed in yet (loading)
+                HStack(spacing: 12) {
+                    ProgressView()
+                        .frame(width: 44, height: 44)
+                    
+                    Text("Connecting...")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(darkText)
+                    
+                    Spacer()
+                }
+            }
+        }
+        .padding(20)
+        .background(Color.white.opacity(0.6))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+    }
+
+    // MARK: - Dev Dashboard Section
+    private var devDashboardSection: some View {
+        Button(action: {
+            showDevDashboard = true
+        }) {
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(Color(red: 0.24, green: 0.67, blue: 0.92).opacity(0.2))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "gauge.open.with.lines.needle.33percent")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(Color(red: 0.19, green: 0.56, blue: 0.84))
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Dev Dashboard")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(darkText)
+                    Text("Costs, telemetry, reconciliation")
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.gray.opacity(0.5))
+            }
+            .padding(16)
+            .background(Color.white.opacity(0.6))
+            .cornerRadius(16)
+            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    private func linkGoogleAccount() {
+        Task {
+            do {
+                try await AuthenticationService.shared.linkGoogleAccount()
+            } catch {
+                print("❌ Link failed: \(error)")
+            }
+        }
+    }
+    
+    private func loadOrderBadge() {
+        guard let userId = Auth.auth().currentUser?.uid else { return }
+        orderBadgeListener?.remove()
+        orderBadgeListener = OrderService.shared.ordersListener(userId: userId) { orders in
+            hasUnseenOrders = OrderService.hasUnseenStatusUpdate(orders: orders)
+        }
+    }
+
+    private func signOut() {
+        do {
+            try AuthenticationService.shared.signOut()
+        } catch {
+            print("❌ Sign out failed: \(error)")
+        }
+    }
+    
+}
+
+// MARK: - Art Style Chip
+struct ArtStyleChip: View {
+    let style: ArtStyle
+    let isSelected: Bool
+    let accentColor: Color
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: style.placeholderSymbolName)
+                    .font(.system(size: 16))
+                
+                Text(style.rawValue)
+                    .font(.system(size: 14, weight: .medium))
+            }
+            .foregroundColor(isSelected ? .white : Color.black.opacity(0.7))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(isSelected ? accentColor : Color.white.opacity(0.8))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isSelected ? accentColor : Color.gray.opacity(0.15), lineWidth: 1)
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+        .accessibilityIdentifier("artStyle_\(style.rawValue)")
+        .scaleEffect(isSelected ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
     }
 }
 
-// ArtStyleButton struct remains the same
+// Keep existing ArtStyleButton for backward compatibility
 struct ArtStyleButton: View {
     let style: ArtStyle
     let isSelected: Bool
@@ -467,10 +1011,52 @@ struct ArtStyleButton: View {
     }
 }
 
+// MARK: - Settings View With Generate Button
+struct SettingsViewWithGenerate: View {
+    let onGenerate: () -> Void
+    
+    @EnvironmentObject var subscriptionManager: RCSubscriptionManager
+    @EnvironmentObject var profileVM: ProfileViewModel
+    
+    let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
+    let softCream = Color(red: 0.98, green: 0.96, blue: 0.89)
+    
+    var body: some View {
+        ZStack {
+            SettingsView()
+                .environmentObject(subscriptionManager)
+                .environmentObject(profileVM)
+            
+            VStack {
+                Spacer()
+                
+                Button(action: onGenerate) {
+                    Text("Save & Generate")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(terracotta)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .accessibilityIdentifier("saveAndGenerateButton")
+                .padding(.horizontal, 24)
+                .padding(.bottom, 40)
+                .background(
+                    LinearGradient(
+                        colors: [Color.clear, softCream.opacity(0.9), softCream],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 110)
+                )
+            }
+        }
+    }
+}
+
 struct SettingsView_Previews: PreviewProvider {
     static var previews: some View {
-        // It's good practice to wrap views that might be part of a navigation flow
-        // in a NavigationStack or NavigationView for previews.
         NavigationStack {
             SettingsView()
         }

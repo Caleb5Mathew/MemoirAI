@@ -1,0 +1,14 @@
+{
+  "name": "memoirai-functions",
+  "private": true,
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^13.6.1",
+    "firebase-functions": "^7.0.5",
+    "pdf-lib": "^1.17.1",
+    "stripe": "^17.4.0"
+  }
+}
