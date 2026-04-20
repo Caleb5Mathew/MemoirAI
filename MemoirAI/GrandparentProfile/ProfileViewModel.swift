@@ -92,6 +92,13 @@ class ProfileViewModel: ObservableObject {
         syncProfileToCloudKit(newProfile)
     }
 
+    func updateProfile(_ updatedProfile: Profile) {
+        guard let index = profiles.firstIndex(where: { $0.id == updatedProfile.id }) else { return }
+        profiles[index] = updatedProfile
+        saveProfiles()
+        syncProfileToCloudKit(updatedProfile)
+    }
+
     func updateName(for profile: Profile, to newName: String) {
         guard let index = profiles.firstIndex(of: profile) else { return }
         profiles[index].name = newName
@@ -100,8 +107,13 @@ class ProfileViewModel: ObservableObject {
 
     func removePhotoFromSelectedProfile() {
         guard profiles.indices.contains(selectedProfileIndex) else { return }
+        let profileId = profiles[selectedProfileIndex].id
         profiles[selectedProfileIndex].photoData = nil
         saveProfiles()
+        // Clear the separate iCloud KV photo key so it can't resurrect on restore
+        let photoKey = "memoir_profile_\(profileId.uuidString)_photo"
+        NSUbiquitousKeyValueStore.default.removeObject(forKey: photoKey)
+        NSUbiquitousKeyValueStore.default.synchronize()
     }
 
     func selectPreviousProfile() {

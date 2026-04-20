@@ -14,6 +14,7 @@ struct PhotoFrameEditorView: View {
     @State private var imageOffset: CGSize = .zero
     @State private var lastScale: CGFloat = 1.0
     @State private var lastOffset: CGSize = .zero
+    @State private var showPhotoSourcePicker = false
     
     private var frameAspectRatio: CGFloat {
         guard let layout = frameLayout else { return 1.0 }
@@ -97,11 +98,9 @@ struct PhotoFrameEditorView: View {
                 }
                 
                 // Photo picker button
-                PhotosPicker(
-                    selection: $selectedItems,
-                    maxSelectionCount: 1,
-                    matching: .images
-                ) {
+                Button(action: {
+                    showPhotoSourcePicker = true
+                }) {
                     HStack {
                         Image(systemName: selectedImage != nil ? "photo.badge.arrow.down" : "photo.badge.plus")
                         Text(selectedImage != nil ? "Change Photo" : "Select Photo")
@@ -161,18 +160,14 @@ struct PhotoFrameEditorView: View {
             .background(Tokens.bgPrimary)
             .navigationBarHidden(true)
         }
-        .onChange(of: selectedItems) { newItems in
-            guard let newItem = newItems.first else { return }
-            Task {
-                if let data = try? await newItem.loadTransferable(type: Data.self),
-                   let image = UIImage(data: data) {
-                    selectedImage = image
-                    // Reset transform when new image is selected
-                    imageScale = 1.0
-                    imageOffset = .zero
-                    lastScale = 1.0
-                    lastOffset = .zero
-                }
+        .sheet(isPresented: $showPhotoSourcePicker) {
+            PhotoSourcePicker(isPresented: $showPhotoSourcePicker) { image in
+                selectedImage = image
+                // Reset transform when new image is selected
+                imageScale = 1.0
+                imageOffset = .zero
+                lastScale = 1.0
+                lastOffset = .zero
             }
         }
         .onAppear {

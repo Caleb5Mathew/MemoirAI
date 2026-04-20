@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.2</string>
+	<string>3.05</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -31,6 +31,14 @@
 				<string>fb896550005970816</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.171451774395-rj5fhu4khi4ta5f0d2hsrnmdujhrvk5g</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
@@ -38,6 +46,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>We need to record your voice so you can capture your memory as audio.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>We need camera access so you can take a head-shot photo for more accurate portraits in your storybook.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>We need to access your photo library so you can attach pictures to your memories and save your book pages as images.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
@@ -48,8 +58,12 @@
 	<string>This allows us to provide you with better ads and understand which ads lead to subscriptions, helping us improve our service.</string>
 	<key>OPENAI_API_KEY</key>
 	<string></string>
+	<key>GEMINI_API_KEY</key>
+	<string></string>
+	<key>BOOK_RENDER_FUNCTION_URL</key>
+	<string>https://us-central1-memoirai-7db06.cloudfunctions.net/generateBookVersionPdf</string>
 	<key>RevenueCatAPIKey</key>
-	<string>appl_HTtNKyhVPddJOKrcqGCnWtvZcto</string>
+	<string></string>
 	<key>FacebookAppID</key>
 	<string>896550005970816</string>
 	<key>FacebookDisplayName</key>
@@ -284,6 +298,10 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
 	</array>
 	<key>NSUbiquitousContainerIsDocumentScopePublic</key>
 	<true/>

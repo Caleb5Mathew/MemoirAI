@@ -20,7 +20,7 @@ class MemoryEntryViewModel: ObservableObject {
 
         let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \MemoryEntry.createdAt, ascending: false)]
-        request.predicate = NSPredicate(format: "profileID == %@", profileID as CVarArg)
+        request.predicate = MemoryUserScope.profilePredicate(profileID: profileID)
 
         do {
             entries = try context.fetch(request)
@@ -38,6 +38,10 @@ class MemoryEntryViewModel: ObservableObject {
         newEntry.audioFileURL = audioURL?.absoluteString
         newEntry.createdAt = Date()
         newEntry.profileID = profileID
+        newEntry.firebaseUserId = MemoryUserScope.currentFirebaseUserId
+        if newEntry.firebaseUserId == nil {
+            print("⚠️ Saving memory without firebaseUserId in MemoryEntryViewModel")
+        }
 
         currentProfileID = profileID
         save()

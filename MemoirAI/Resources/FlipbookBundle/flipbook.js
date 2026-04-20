@@ -83,13 +83,21 @@ let globalPagesData = [];
 
 // Function to fix page positioning for single pages
 function fixPagePositioning() {
-    console.log('Flipbook: Checking and fixing page positioning...');
+    console.log('🔧 fixPagePositioning() CALLED');
     
     // Get current page index
     const currentIndex = pageFlip ? pageFlip.getCurrentPageIndex() : 0;
     const totalPages = pageFlip ? pageFlip.getPageCount() : 0;
     
-    console.log(`Flipbook: Current page ${currentIndex} of ${totalPages}`);
+    console.log(`🔧 Current page ${currentIndex} of ${totalPages}`);
+    
+    // Log all visible page containers and their positions
+    const containers = document.querySelectorAll('.stf__item');
+    containers.forEach((container, idx) => {
+        const rect = container.getBoundingClientRect();
+        const styles = window.getComputedStyle(container);
+        console.log(`🔧 Container ${idx}: top=${rect.top}px, left=${rect.left}px, display=${styles.display}, position=${styles.position}`);
+    });
     
     // Check visible pages
     const visibleItems = document.querySelectorAll('.stf__item:not([style*="display: none"])');
@@ -185,7 +193,8 @@ function fixCoverPagePosition() {
 
 // Page tap handler for native iOS zoom
 function handlePageTap(pageIndex) {
-    console.log('Flipbook: Page tapped, index:', pageIndex);
+    console.log('📖 JavaScript handlePageTap: Sending page index', pageIndex, 'to Swift');
+    console.log('📖 JavaScript: Total processed pages count:', window.processedPagesCount || 'unknown');
     
     // Notify Swift to show native zoom
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
@@ -196,12 +205,172 @@ function handlePageTap(pageIndex) {
     }
 }
 
+// Photo frame drag state
+let dragState = {
+    isDragging: false,
+    frameId: null,
+    frameIndex: null,
+    startX: 0,
+    startY: 0,
+    offsetX: 0,
+    offsetY: 0,
+    element: null
+};
+
+// Photo frame drag start handler
+function handlePhotoFrameDragStart(event, frameId, frameIndex) {
+    const touch = event.touches[0];
+    const element = event.currentTarget;
+    const rect = element.getBoundingClientRect();
+    const containerRect = element.parentElement.getBoundingClientRect();
+    
+    // CRITICAL: Stop all event propagation to prevent page flip
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    
+    dragState.isDragging = true;
+    dragState.frameId = frameId;
+    dragState.frameIndex = frameIndex;
+    dragState.startX = touch.clientX;
+    dragState.startY = touch.clientY;
+    dragState.offsetX = touch.clientX - rect.left;
+    dragState.offsetY = touch.clientY - rect.top;
+    dragState.element = element;
+    
+    // Disable page flipping during drag
+    if (pageFlip && typeof pageFlip.disable === 'function') {
+        pageFlip.disable();
+    }
+    
+    // Add body class to prevent page interactions
+    document.body.classList.add('dragging-photo-frame');
+    
+    // Add dragging class for visual feedback
+    element.classList.add('photo-frame-dragging');
+}
+
+// Photo frame drag handler
+function handlePhotoFrameDrag(event, frameId, frameIndex) {
+    if (!dragState.isDragging || dragState.frameId !== frameId) {
+        return;
+    }
+    
+    // CRITICAL: Stop all event propagation to prevent page flip
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    
+    const touch = event.touches[0];
+    const element = dragState.element;
+    const containerRect = element.parentElement.getBoundingClientRect();
+    
+    // Calculate new position relative to container
+    let newX = touch.clientX - containerRect.left - dragState.offsetX;
+    let newY = touch.clientY - containerRect.top - dragState.offsetY;
+    
+    // Get original frame dimensions
+    const originalX = parseFloat(element.getAttribute('data-original-x')) || 0;
+    const originalY = parseFloat(element.getAttribute('data-original-y')) || 0;
+    const frameWidth = parseFloat(element.style.width) || 150;
+    const frameHeight = parseFloat(element.style.height) || 200;
+    
+    // Constrain to container bounds (with margin)
+    const margin = 10;
+    newX = Math.max(margin, Math.min(newX, containerRect.width - frameWidth - margin));
+    newY = Math.max(margin, Math.min(newY, containerRect.height - frameHeight - margin));
+    
+    // Update position
+    element.style.left = newX + 'px';
+    element.style.top = newY + 'px';
+}
+
+// Photo frame drag end handler
+function handlePhotoFrameDragEnd(event, frameId, frameIndex) {
+    if (!dragState.isDragging || dragState.frameId !== frameId) {
+        return;
+    }
+    
+    // CRITICAL: Stop all event propagation to prevent page flip
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    
+    const element = dragState.element;
+    const containerRect = element.parentElement.getBoundingClientRect();
+    
+    // Get final position
+    const finalX = parseFloat(element.style.left) || 0;
+    const finalY = parseFloat(element.style.top) || 0;
+    const frameWidth = parseFloat(element.style.width) || 150;
+    const frameHeight = parseFloat(element.style.height) || 200;
+    
+    // Check if we actually moved (not just a tap)
+    const moved = Math.abs(dragState.startX - (event.changedTouches[0]?.clientX || dragState.startX)) > 5 ||
+                  Math.abs(dragState.startY - (event.changedTouches[0]?.clientY || dragState.startY)) > 5;
+    
+    // Re-enable page flipping
+    if (pageFlip && typeof pageFlip.enable === 'function') {
+        pageFlip.enable();
+    }
+    
+    // Remove body class to re-enable page interactions
+    document.body.classList.remove('dragging-photo-frame');
+    
+    // Remove dragging class
+    element.classList.remove('photo-frame-dragging');
+    
+    // Update original position attributes
+    element.setAttribute('data-original-x', finalX.toString());
+    element.setAttribute('data-original-y', finalY.toString());
+    
+    // Get current page index
+    const currentPageIndex = pageFlip ? pageFlip.getCurrentPageIndex() : 0;
+    
+    // Only notify Swift if we actually moved
+    if (moved && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+        window.webkit.messageHandlers.native.postMessage({
+            type: 'photoFrameMoved',
+            pageIndex: currentPageIndex,
+            frameId: frameId,
+            frameIndex: frameIndex,
+            newPosition: {
+                x: finalX,
+                y: finalY,
+                width: frameWidth,
+                height: frameHeight
+            }
+        });
+    }
+    
+    // Reset drag state after a short delay to prevent click from firing
+    setTimeout(() => {
+        dragState.isDragging = false;
+        dragState.frameId = null;
+        dragState.frameIndex = null;
+        dragState.element = null;
+    }, moved ? 0 : 300); // If moved, reset immediately; if tap, wait 300ms
+}
+
 // Photo frame click handler
-function handlePhotoFrameClick(frameId, frameIndex) {
+function handlePhotoFrameClick(event, frameId, frameIndex) {
+    // If we just finished dragging, don't trigger click
+    if (dragState.isDragging || dragState.frameId === frameId) {
+        // Clear drag state to allow future clicks
+        setTimeout(() => {
+            dragState.isDragging = false;
+            dragState.frameId = null;
+        }, 100);
+        return;
+    }
+    
     console.log('Flipbook: Photo frame clicked, id:', frameId, 'index:', frameIndex);
     
     // Prevent event from bubbling to page tap
-    event.stopPropagation();
+    if (event) {
+        event.stopPropagation();
+        event.preventDefault();
+    }
     
     // Get current page index
     const currentPageIndex = pageFlip ? pageFlip.getCurrentPageIndex() : 0;
@@ -262,78 +431,75 @@ window.downloadPDF = async function(isKidsBook = false) {
             // Wait for page flip animation to complete
             await new Promise(resolve => setTimeout(resolve, 800));
             
-            // Find the actual visible page elements (not the container)
-            let pageToCapture = null;
+            // Find the specific page element to capture using data-page-index
+            const pageSelector = `.flipbook-page[data-page-index="${i}"]`;
+            let pageToCapture = bookElement.querySelector(pageSelector);
             
-            // Check if we're on cover page (single page mode)
-            if (i === 0) {
-                // Cover page - look for the visible page
-                pageToCapture = bookElement.querySelector('.stf__item.--right .flipbook-page.cover-page') ||
-                               bookElement.querySelector('.flipbook-page.cover-page');
-            } else {
-                // Regular pages - find the visible page(s)
-                const visiblePages = bookElement.querySelectorAll('.stf__item .flipbook-page');
-                if (visiblePages.length > 0) {
-                    // For spread view, create a container with both pages
-                    if (visiblePages.length === 2) {
-                        // Create temporary container for spread
-                        const spreadContainer = document.createElement('div');
-                        spreadContainer.style.display = 'flex';
-                        spreadContainer.style.backgroundColor = '#faf8f3';
-                        spreadContainer.style.width = '100%';
-                        spreadContainer.style.height = '100%';
-                        
-                        // Clone and append both pages
-                        visiblePages.forEach(page => {
-                            const clone = page.cloneNode(true);
-                            spreadContainer.appendChild(clone);
-                        });
-                        
-                        // Temporarily add to DOM for capture
-                        bookElement.appendChild(spreadContainer);
-                        pageToCapture = spreadContainer;
-                    } else {
-                        // Single page
-                        pageToCapture = visiblePages[0];
+            // If specific page not found (e.g. cover might not have index logic same way), try fallback
+            if (!pageToCapture) {
+                console.warn(`Flipbook: Could not find page with index ${i}, attempting fallback logic`);
+                
+                // Check if we're on cover page (single page mode)
+                if (i === 0) {
+                    // Cover page - look for the visible page
+                    pageToCapture = bookElement.querySelector('.stf__item.--right .flipbook-page.cover-page') ||
+                                   bookElement.querySelector('.flipbook-page.cover-page');
+                } else {
+                    // Regular pages - find the visible page(s)
+                    // Note: This fallback might capture a spread if we fail to find the specific page
+                    const visiblePages = bookElement.querySelectorAll('.stf__item .flipbook-page');
+                    if (visiblePages.length > 0) {
+                        pageToCapture = visiblePages[0]; // Prefer single page capture in fallback
                     }
                 }
             }
             
-            // Fallback to book element if no specific page found
+            // Fallback to book element if absolutely nothing found
             if (!pageToCapture) {
                 console.warn(`Flipbook: Could not find specific page element for page ${i + 1}, using book container`);
                 pageToCapture = bookElement;
             }
             
-            console.log(`Flipbook: Capturing element:`, pageToCapture.className || 'spread container');
+            console.log(`Flipbook: Capturing element:`, pageToCapture.className || 'element');
             
-            // Determine canvas dimensions based on book type
+            // Determine dimensions based on standard book sizes
+            // Comic, Realistic, Custom: 8.5 x 11 inches (portrait) = 8.5/11 aspect ratio
+            // Kids Book: 11 x 8.5 inches (landscape) = 11/8.5 aspect ratio
+            const rect = pageToCapture.getBoundingClientRect();
+            const actualAspectRatio = rect.width / rect.height;
+            console.log(`Flipbook: Page element dimensions: ${rect.width}x${rect.height} (Ratio: ${actualAspectRatio})`);
+            
+            // Standard aspect ratios
+            const targetAspectRatio = isKidsBook ? (11.0 / 8.5) : (8.5 / 11.0);
+            console.log(`Flipbook: Target aspect ratio: ${targetAspectRatio} (${isKidsBook ? 'landscape' : 'portrait'})`);
+            
+            let targetWidth, targetHeight;
+            
+            // Set base dimensions based on book type with correct aspect ratio
+            // Use high resolution: 300 DPI equivalent
+            if (isKidsBook) {
+                // Kids books: 11 x 8.5 inches at 300 DPI = 3300 x 2550 pixels
+                targetWidth = 3300; 
+                targetHeight = 2550;
+            } else {
+                // Regular/Realistic/Comic: 8.5 x 11 inches at 300 DPI = 2550 x 3300 pixels
+                targetWidth = 2550;
+                targetHeight = 3300;
+            }
+            
+            console.log(`Flipbook: Using ${isKidsBook ? 'kids book' : 'regular book'} dimensions: ${targetWidth}x${targetHeight}`);
+            
             let canvasOptions = {
                 backgroundColor: '#faf8f3', // Paper color
-                scale: 3, // Increased from 2 to 3 for better text quality
+                scale: 3, // High quality scale
                 logging: false,
                 useCORS: true,
                 allowTaint: true,
-                letterRendering: true, // Better text rendering
-                imageTimeout: 0 // No timeout for images
+                letterRendering: true, 
+                imageTimeout: 0,
+                width: targetWidth,
+                height: targetHeight
             };
-            
-            // Set dimensions based on book type
-            if (isKidsBook) {
-                // Kids books: landscape orientation (16:9 ratio)
-                const targetWidth = 1920;  // HD width
-                const targetHeight = 1080; // HD height (16:9)
-                canvasOptions.width = targetWidth;
-                canvasOptions.height = targetHeight;
-                console.log(`Flipbook: Using kids book dimensions: ${targetWidth}x${targetHeight}`);
-            } else {
-                // Regular books: portrait orientation (4:3 ratio)
-                const targetWidth = 1200;  // Portrait width
-                const targetHeight = 1600; // Portrait height (4:3)
-                canvasOptions.width = targetWidth;
-                canvasOptions.height = targetHeight;
-                console.log(`Flipbook: Using regular book dimensions: ${targetWidth}x${targetHeight}`);
-            }
             
             // Capture with configured settings
             const canvas = await html2canvas(pageToCapture, canvasOptions);
@@ -391,30 +557,35 @@ function downloadPDFBasic(isKidsBook = false) {
     
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
-    canvas.width = 612;
-    canvas.height = 792;
+    // Keep fallback dimensions aligned with standard export sizes.
+    const pageWidth = isKidsBook ? 792 : 612;
+    const pageHeight = isKidsBook ? 612 : 792;
+    canvas.width = pageWidth;
+    canvas.height = pageHeight;
     
     const pdfContent = [];
     
     globalPagesData.forEach((page, index) => {
         ctx.fillStyle = '#faf8f3';
-        ctx.fillRect(0, 0, 612, 792);
+        ctx.fillRect(0, 0, pageWidth, pageHeight);
         ctx.fillStyle = '#3a3a3a';
         ctx.font = '12px Baskerville, Georgia, serif';
         
-        let y = 60;
+        const margin = 60;
+        const contentWidth = pageWidth - (margin * 2);
+        let y = margin;
         if (page.title) {
             ctx.font = 'bold 18px Baskerville, Georgia, serif';
-            ctx.fillText(page.title, 60, y);
+            ctx.fillText(page.title, margin, y);
             y += 30;
         }
         
         if (page.text || page.caption) {
             ctx.font = '11px Baskerville, Georgia, serif';
             const text = page.text || page.caption || '';
-            const lines = wrapText(ctx, text, 492);
+            const lines = wrapText(ctx, text, contentWidth);
             lines.forEach(line => {
-                ctx.fillText(line, 60, y);
+                ctx.fillText(line, margin, y);
                 y += 16;
             });
         }
@@ -582,24 +753,90 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 100);
             
             // Listen for flip events and notify Swift
+            // CRITICAL: This is the ONLY flip handler - all flip logic goes here
             pageFlip.on('flip', function(e) {
-                console.log('PageFlip: Page flipped to index:', e.data);
+                const debugMsg = `🔄 FLIP EVENT: Flipped to index: ${e.data}`;
+                console.log(debugMsg);
+                
+                // Track if this is a cover transition
+                const isFlippingFromCover = e.data === 1;
+                const isFlippingToCover = e.data === 0;
+                const coverDebug = `🔄 Cover transition? From: ${isFlippingFromCover}, To: ${isFlippingToCover}`;
+                console.log(coverDebug);
+                
+                // CRITICAL: Reset flipping flags AFTER animation completes (1100ms)
+                // The flip animation takes 1000ms, so we wait slightly longer to ensure it's done
+                // This prevents rapid clicks from queuing up multiple flips
+                setTimeout(() => {
+                    globalIsFlipping = false;
+                    console.log('Flipbook: Reset globalIsFlipping flag after animation completed');
+                }, 1100);
+                
+                // Send debug to Swift
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+                    window.webkit.messageHandlers.native.postMessage({
+                        type: 'debug',
+                        message: debugMsg + ' | ' + coverDebug
+                    });
+                    
                     window.webkit.messageHandlers.native.postMessage({
                         type: 'flip',
                         index: e.data
                     });
                 }
                 
-                // Fix page positioning after flip
+                // Fix page positioning after flip, but skip cover transitions to prevent glitches
+                if (!isFlippingFromCover && !isFlippingToCover) {
+                    const willFixMsg = '🔄 Will apply positioning fix in 100ms (non-cover page)';
+                    console.log(willFixMsg);
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+                        window.webkit.messageHandlers.native.postMessage({
+                            type: 'debug',
+                            message: willFixMsg
+                        });
+                    }
+                    setTimeout(() => {
+                        const executingMsg = '🔧 Executing fixPagePositioning() now';
+                        console.log(executingMsg);
+                        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+                            window.webkit.messageHandlers.native.postMessage({
+                                type: 'debug',
+                                message: executingMsg
+                            });
+                        }
+                        fixPagePositioning();
+                    }, 100);
+                } else {
+                    const skipMsg = '🔄 SKIPPING positioning fix (cover transition)';
+                    console.log(skipMsg);
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
+                        window.webkit.messageHandlers.native.postMessage({
+                            type: 'debug',
+                            message: skipMsg
+                        });
+                    }
+                }
+                
+                // Update navigation button states after flip completes
                 setTimeout(() => {
-                    fixPagePositioning();
-                }, 100);
+                    updateNavigationState();
+                }, 1100);
             });
 
             // Listen for state changes
             pageFlip.on('changeState', function(e) {
-                console.log('PageFlip: State changed to:', e.data);
+                console.log('🔄 STATE CHANGE:', e.data);
+                
+                // Log visible pages during state change
+                const visiblePages = document.querySelectorAll('.stf__item:not([style*="display: none"])');
+                console.log('🔄 Visible pages during state change:', visiblePages.length);
+                visiblePages.forEach((item, idx) => {
+                    const page = item.querySelector('.flipbook-page');
+                    const isCover = page && page.classList.contains('cover-page');
+                    const rect = item.getBoundingClientRect();
+                    console.log(`🔄   Page ${idx}: cover=${isCover}, top=${rect.top}px, height=${rect.height}px`);
+                });
+                
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
                     window.webkit.messageHandlers.native.postMessage({
                         type: 'stateChange',
@@ -681,11 +918,15 @@ window.renderPages = function(pagesJSON) {
         const processedPages = [];
         let pageNumber = 1;
         
-        pages.forEach(page => {
+        console.log('📖 JavaScript renderPages: Starting with', pages.length, 'original pages');
+        
+        pages.forEach((page, originalIndex) => {
             if (page.type === 'text' || page.type === 'leftBars') {
                 // Check if text needs to be split across multiple pages
                 const fullText = page.text || page.caption || '';
                 const words = fullText.split(/\s+/).length;
+                
+                console.log(`📖 JS Page ${originalIndex} (${page.title || 'No title'}, type: ${page.type}): ${words} words`);
                 
                 if (words > 150) {
                     // Split text into multiple pages
@@ -702,13 +943,16 @@ window.renderPages = function(pagesJSON) {
                             pageNumber: page.type === 'cover' ? null : pageNumber++,
                             isContinuation
                         });
+                        console.log(`   → JS: Split part ${index + 1}`);
                     });
+                    console.log(`   → JS: Total split into ${textPages.length} pages`);
                 } else {
                     processedPages.push({
                         data: page,
                         pageNumber: page.type === 'cover' ? null : pageNumber++,
                         isContinuation: false
                     });
+                    console.log('   → JS: No split needed (<= 150 words)');
                 }
             } else {
                 processedPages.push({
@@ -716,11 +960,17 @@ window.renderPages = function(pagesJSON) {
                     pageNumber: page.type === 'cover' ? null : pageNumber++,
                     isContinuation: false
                 });
+                console.log(`📖 JS Page ${originalIndex} (${page.type}): Not text/leftBars, no split`);
             }
         });
         
+        console.log('📖 JavaScript renderPages: Created', processedPages.length, 'expanded pages from', pages.length, 'original pages');
+        
+        // Store processed pages count for debugging
+        window.processedPagesCount = processedPages.length;
+        
         // Convert HTML strings to DOM elements
-        const domPages = processedPages.map(pageInfo => {
+        const domPages = processedPages.map((pageInfo, htmlPageIndex) => {
             const htmlString = createPageHTML(pageInfo.data, pageInfo.pageNumber, pageInfo.isContinuation);
             console.log('Flipbook: Generated HTML for page:', pageInfo.data.type, htmlString);
             
@@ -734,6 +984,10 @@ window.renderPages = function(pagesJSON) {
                 console.error('Flipbook: Failed to create DOM element for page:', page.type);
                 return null;
             }
+            
+            // CRITICAL: Add data-page-index to identify which expanded page this is
+            pageElement.setAttribute('data-page-index', htmlPageIndex);
+            console.log(`Flipbook: Set data-page-index=${htmlPageIndex} on page element`);
             
             console.log('Flipbook: Created DOM element:', pageElement);
             console.log('Flipbook: Page element tag name:', pageElement.tagName);
@@ -792,11 +1046,23 @@ window.renderPages = function(pagesJSON) {
             pageFlip.loadFromHTML(domPages);
             console.log('Flipbook: loadFromHTML completed successfully');
             
-            // Restore the page after loading
+            // Restore the page after loading, but only if we're not already on that page
+            // CRITICAL: Set flag before restoring to prevent flip event from triggering another render
             if (currentPageIndex > 0) {
                 setTimeout(() => {
-                    console.log('Flipbook: Restoring page to index:', currentPageIndex);
-                    pageFlip.flip(currentPageIndex);
+                    const currentPage = pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() : 0;
+                    if (currentPage !== currentPageIndex) {
+                        console.log('Flipbook: Restoring page to index:', currentPageIndex, '(from', currentPage, ')');
+                        // Set flag to prevent flip event from causing issues
+                        globalIsFlipping = true;
+                        pageFlip.flip(currentPageIndex);
+                        // Reset flag after animation completes
+                        setTimeout(() => {
+                            globalIsFlipping = false;
+                        }, 1100);
+                    } else {
+                        console.log('Flipbook: Already on page', currentPageIndex, ', skipping restore');
+                    }
                 }, 100); // Small delay to ensure pages are loaded
             }
             
@@ -943,11 +1209,11 @@ window.renderPages = function(pagesJSON) {
             console.log('Flipbook: Could not get PageFlip state after loading:', e.message);
         }
         
-        // Notify Swift that pages are loaded
+        // Notify Swift that pages are loaded (use processedPages.length for expanded count)
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native) {
             window.webkit.messageHandlers.native.postMessage({
                 type: 'pagesLoaded',
-                count: pages.length
+                count: processedPages.length  // Use expanded page count, not original
             });
         }
         
@@ -986,6 +1252,32 @@ Object.defineProperty(window, 'isUpdatingDimensions', {
     }
 });
 
+// Global function to update navigation button states
+// This can be called from anywhere (main flip handler, navigation arrows, etc.)
+function updateNavigationState() {
+    if (!pageFlip) return;
+    
+    const prevButton = document.getElementById('prev-button');
+    const nextButton = document.getElementById('next-button');
+    
+    if (!prevButton || !nextButton) {
+        // Buttons not found yet, skip update
+        return;
+    }
+    
+    const currentPage = pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() : 0;
+    const totalPages = pageFlip.getPageCount ? pageFlip.getPageCount() : 0;
+    
+    console.log('Flipbook: Current page:', currentPage, 'Total pages:', totalPages);
+    
+    prevButton.disabled = currentPage <= 0;
+    nextButton.disabled = currentPage >= totalPages - 1;
+    
+    // Update button visibility
+    prevButton.style.display = totalPages <= 1 ? 'none' : 'flex';
+    nextButton.style.display = totalPages <= 1 ? 'none' : 'flex';
+}
+
 // Navigation arrows functionality
 function setupNavigationArrows() {
     console.log('Flipbook: Setting up navigation arrows...');
@@ -998,51 +1290,67 @@ function setupNavigationArrows() {
         return;
     }
     
-    // Update button states based on current page
-    function updateNavigationState() {
-        if (!pageFlip) return;
+    // Add click handlers with boundary checks
+    // CRITICAL: Check globalIsFlipping flag BEFORE allowing any flip
+    prevButton.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
         
+        // CRITICAL: Check global flag to prevent rapid clicks
+        if (globalIsFlipping) {
+            console.log('Flipbook: Already flipping, ignoring prev click');
+            return;
+        }
+        
+        console.log('Flipbook: Previous button clicked');
+        if (pageFlip && pageFlip.flipPrev && pageFlip.getCurrentPageIndex) {
+            const currentPage = pageFlip.getCurrentPageIndex();
+            // Only flip if not on first page
+            if (currentPage > 0) {
+                // CRITICAL: Set flag BEFORE calling flipPrev to prevent rapid clicks
+                globalIsFlipping = true;
+                pageFlip.flipPrev();
+                // Flag will be reset by the main flip event handler
+            } else {
+                console.log('Flipbook: Already on first page, ignoring prev');
+            }
+        }
+    });
+    
+    nextButton.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // CRITICAL: Check global flag to prevent rapid clicks
+        if (globalIsFlipping) {
+            console.log('Flipbook: Already flipping, ignoring next click');
+            return;
+        }
+        
+        console.log('Flipbook: Next button clicked');
+        if (pageFlip && pageFlip.flipNext && pageFlip.getCurrentPageIndex && pageFlip.getPageCount) {
+            const currentPage = pageFlip.getCurrentPageIndex();
+            const totalPages = pageFlip.getPageCount();
+            // Only flip if not on last page
+            if (currentPage < totalPages - 1) {
+                // CRITICAL: Set flag BEFORE calling flipNext to prevent rapid clicks
+                globalIsFlipping = true;
+                pageFlip.flipNext();
+                // Flag will be reset by the main flip event handler
+            } else {
+                console.log('Flipbook: Already on last page, ignoring next');
+            }
+        }
+    });
+    
+    // NOTE: We removed the duplicate flip handler here - the main handler above handles everything
+    
+    // Prevent boundary swipe attempts from triggering unwanted behavior
+    // Listen for state changes that might indicate a failed flip attempt
+    pageFlip.on('changeState', function(e) {
         const currentPage = pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() : 0;
         const totalPages = pageFlip.getPageCount ? pageFlip.getPageCount() : 0;
-        
-        console.log('Flipbook: Current page:', currentPage, 'Total pages:', totalPages);
-        
-        prevButton.disabled = currentPage <= 0;
-        nextButton.disabled = currentPage >= totalPages - 1;
-        
-        // Update button visibility
-        prevButton.style.display = totalPages <= 1 ? 'none' : 'flex';
-        nextButton.style.display = totalPages <= 1 ? 'none' : 'flex';
-    }
-    
-    // Add click handlers
-    prevButton.addEventListener('click', function() {
-        console.log('Flipbook: Previous button clicked');
-        if (pageFlip && pageFlip.flipPrev) {
-            pageFlip.flipPrev();
-        }
-    });
-    
-    nextButton.addEventListener('click', function() {
-        console.log('Flipbook: Next button clicked');
-        if (pageFlip && pageFlip.flipNext) {
-            pageFlip.flipNext();
-        }
-    });
-    
-    // Listen for page changes to update button states
-    pageFlip.on('flip', function(e) {
-        console.log('Flipbook: Page flipped to index:', e.data);
-        console.log('Flipbook: PageFlip state after flip:', {
-            currentPage: pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() : 'N/A',
-            totalPages: pageFlip.getPageCount ? pageFlip.getPageCount() : 'N/A',
-            canGoNext: pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() < (pageFlip.getPageCount ? pageFlip.getPageCount() - 1 : 0) : false,
-            canGoPrev: pageFlip.getCurrentPageIndex ? pageFlip.getCurrentPageIndex() > 0 : false
-        });
-        setTimeout(() => {
-            updateNavigationState();
-            fixPagePositioning(); // Also fix positioning after navigation
-        }, 100); // Small delay to ensure state is updated
+        console.log('Flipbook: State changed:', e.data, 'Current page:', currentPage, '/', totalPages);
     });
     
     // Initial state update
@@ -1051,15 +1359,49 @@ function setupNavigationArrows() {
     console.log('Flipbook: Navigation arrows setup complete');
 }
 
+// Track flipping state globally
+let globalIsFlipping = false;
+
 window.next = function() {
-    if (pageFlip) {
-        pageFlip.flipNext();
+    // CRITICAL: Check flag BEFORE allowing flip
+    if (globalIsFlipping) {
+        console.log('Flipbook: Already flipping, ignoring next');
+        return;
+    }
+    
+    if (pageFlip && pageFlip.flipNext && pageFlip.getCurrentPageIndex && pageFlip.getPageCount) {
+        const currentPage = pageFlip.getCurrentPageIndex();
+        const totalPages = pageFlip.getPageCount();
+        // Only flip if not on last page
+        if (currentPage < totalPages - 1) {
+            // CRITICAL: Set flag BEFORE calling flipNext
+            globalIsFlipping = true;
+            pageFlip.flipNext();
+            // Flag will be reset by the main flip event handler - no need for setTimeout here
+        } else {
+            console.log('Flipbook: Already on last page, ignoring next');
+        }
     }
 };
 
 window.prev = function() {
-    if (pageFlip) {
-        pageFlip.flipPrev();
+    // CRITICAL: Check flag BEFORE allowing flip
+    if (globalIsFlipping) {
+        console.log('Flipbook: Already flipping, ignoring prev');
+        return;
+    }
+    
+    if (pageFlip && pageFlip.flipPrev && pageFlip.getCurrentPageIndex) {
+        const currentPage = pageFlip.getCurrentPageIndex();
+        // Only flip if not on first page
+        if (currentPage > 0) {
+            // CRITICAL: Set flag BEFORE calling flipPrev
+            globalIsFlipping = true;
+            pageFlip.flipPrev();
+            // Flag will be reset by the main flip event handler - no need for setTimeout here
+        } else {
+            console.log('Flipbook: Already on first page, ignoring prev');
+        }
     }
 };
 
@@ -1205,11 +1547,12 @@ function createPageHTML(page, pageNumber = null, isContinuation = false) {
                 
                 return `
                     <div class="photo-frame photo-frame-${layout.type.toLowerCase()}" 
-                         style="${frameStyle}"
+                         style="${frameStyle}; pointer-events: none;"
                          data-frame-id="${layout.id}"
                          data-frame-index="${index}"
                          data-has-photo="${hasPhoto ? 'true' : 'false'}"
-                         onclick="handlePhotoFrameClick('${layout.id}', ${index})">
+                         data-original-x="${layout.frame[0][0]}"
+                         data-original-y="${layout.frame[0][1]}">
                         ${imageHtml}
                     </div>
                 `;
@@ -1263,25 +1606,89 @@ function createImageElement(imageBase64, imageName) {
     }
 }
 
+// Track if we're currently flipping to prevent unwanted zoom triggers
+let isFlipping = false;
+let flipTimeout = null;
+
 // Set up click handlers for page zoom
 function setupPageClickHandlers() {
     console.log('Flipbook: Setting up page click handlers for native zoom...');
     
-    // Add click handler to book container
-    const bookContainer = document.getElementById('book-container');
-    if (bookContainer) {
-        bookContainer.addEventListener('click', function(e) {
-            // Check if clicked on a page (not navigation or other UI)
-            const pageElement = e.target.closest('.flipbook-page');
-            if (pageElement && !e.target.closest('.nav-arrow')) {
-                console.log('Flipbook: Page clicked for native zoom');
-                
-                // Get current page index
-                const currentIndex = pageFlip ? pageFlip.getCurrentPageIndex() : 0;
-                handlePageTap(currentIndex);
+    // Track flipping state to prevent zoom during page transitions
+    if (pageFlip) {
+        pageFlip.on('changeState', function(e) {
+            if (e.data === 'flipping' || e.data === 'user_fold') {
+                isFlipping = true;
+                // Clear any existing timeout
+                if (flipTimeout) clearTimeout(flipTimeout);
+                // Set a timeout to reset flipping state
+                flipTimeout = setTimeout(() => {
+                    isFlipping = false;
+                }, 500);
+            } else if (e.data === 'read') {
+                isFlipping = false;
+                if (flipTimeout) clearTimeout(flipTimeout);
             }
         });
     }
+    
+    // Add handlers to book container for better coverage
+    const bookContainer = document.getElementById('book-container');
+    const bookElement = document.getElementById('book');
+    
+    if (!bookContainer) {
+        console.error('Flipbook: book-container not found!');
+        return;
+    }
+    
+    console.log('Flipbook: Adding click handler to book-container');
+    
+    // Use both click and touchend for better mobile support
+    const handleTap = function(e) {
+        console.log('Flipbook: Tap detected on:', e.target.tagName, e.target.className);
+        
+        // Don't zoom if we're currently flipping pages
+        if (isFlipping) {
+            console.log('Flipbook: Tap ignored - page flip in progress');
+            return;
+        }
+        
+        // Check if this is a navigation arrow
+        if (e.target.closest('.nav-arrow') || e.target.closest('#prev-button') || e.target.closest('#next-button')) {
+            console.log('Flipbook: Tap on navigation button, ignoring');
+            return;
+        }
+        
+            // Check if clicked on a page
+            const pageElement = e.target.closest('.flipbook-page');
+            console.log('Flipbook: Page element found:', !!pageElement);
+            
+            if (pageElement) {
+                console.log('Flipbook: Page clicked, triggering zoom');
+                
+                // Prevent default and stop propagation
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                
+                // CRITICAL: Get the page index from the data attribute of the CLICKED page
+                const htmlPageIndex = parseInt(pageElement.getAttribute('data-page-index') || '0', 10);
+                
+                console.log('📖 JavaScript: Clicked page element has data-page-index:', htmlPageIndex);
+                console.log('📖 JavaScript: Page element classes:', pageElement.className);
+                
+                // Send the HTML page index directly - Swift will use this for its expanded pages
+                handlePageTap(htmlPageIndex);
+                
+                return false;
+            } else {
+                console.log('Flipbook: No page element found in click path');
+            }
+    };
+    
+    // Add handlers for both mouse and touch events
+    bookContainer.addEventListener('click', handleTap, true);
+    bookContainer.addEventListener('touchend', handleTap, true);
     
     console.log('Flipbook: Page click handlers setup complete');
 }

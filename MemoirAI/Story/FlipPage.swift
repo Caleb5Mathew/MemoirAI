@@ -10,6 +10,7 @@ struct FlipPage: Codable, Identifiable {
     var imageBase64: String?
     var imageName: String?
     var photoLayouts: [PhotoLayout]? // Photo layouts on this page
+    var memoryID: String? // UUID string for QR code generation
     
     enum PageType: String, Codable, CaseIterable {
         case cover = "cover"
@@ -21,7 +22,7 @@ struct FlipPage: Codable, Identifiable {
         case photoLayout = "photoLayout" // New type for custom photo layouts
     }
     
-    init(type: PageType, title: String? = nil, caption: String? = nil, text: String? = nil, imageBase64: String? = nil, imageName: String? = nil, photoLayouts: [PhotoLayout]? = nil) {
+    init(type: PageType, title: String? = nil, caption: String? = nil, text: String? = nil, imageBase64: String? = nil, imageName: String? = nil, photoLayouts: [PhotoLayout]? = nil, memoryID: String? = nil) {
         self.type = type
         self.title = title
         self.caption = caption
@@ -29,6 +30,7 @@ struct FlipPage: Codable, Identifiable {
         self.imageBase64 = imageBase64
         self.imageName = imageName
         self.photoLayouts = photoLayouts
+        self.memoryID = memoryID
     }
 }
 
@@ -49,11 +51,18 @@ extension FlipPage {
         It was 1923 when my great-grandmother arrived at Ellis Island with three children, a worn suitcase, and this recipe—one of the few pieces of home she could carry. The ingredients were simple: apples, sugar, cinnamon, and butter. But the secret, Grandma insisted, was in the love.
         
         During the Depression, when apples were sometimes all they had, this pie became a symbol of abundance even in scarcity. "We may not have much," Great-grandma would say, "but we can always make something beautiful from what we have."
+        """),
         
+        FlipPage(type: .text, title: "Grandma's Secret Recipe", text: """
         I remember standing on a wooden stool in Grandma's kitchen, barely tall enough to see over the counter. She'd guide my small hands, teaching me to feel when the dough was just right. "Too much flour and it's tough, too little and it falls apart. Like life, finding balance is everything."
+        """),
         
+        // Grandma's Kitchen illustration - embedded with text about the kitchen gathering
+        FlipPage(type: .mixed, title: "Grandma's Secret Recipe", text: """
         The kitchen would fill with the scent of cinnamon and baking apples, drawing family members like a lighthouse draws ships. Uncle Tony would appear first, always claiming he was "just passing by." Then Aunt Maria, then the cousins, until the small kitchen overflowed with laughter and stories.
+        """, imageName: "preview1"),
         
+        FlipPage(type: .text, title: "Grandma's Secret Recipe", text: """
         Grandma would tell us about the first time she made the pie for Grandpa. "I was so nervous, I forgot the sugar! But he ate every bite, smiled, and said it was perfect. That's when I knew he was the one."
         
         When Grandma's hands began to tremble with age, she called me to her kitchen one last time. "It's your turn now," she said simply. We made the pie together, her guiding voice replacing her steadying hands. She shared the final secret: a pinch of cardamom, "for the old country," and a tablespoon of cream, "for the new."
@@ -65,8 +74,10 @@ extension FlipPage {
         Some inheritances come in the form of money or property. Mine came as flour-dusted hands, patient teaching, and a recipe that means home, no matter where in the world I am.
         """),
         
-        // Family kitchen photo for Story 1
-        FlipPage(type: .rightPhoto, title: "Kitchen Memories", caption: "Where recipes became rituals and kitchens became classrooms.", imageName: "family_kitchen"),
+        // Family kitchen gathering photo - embedded at end with closing text
+        FlipPage(type: .mixed, title: "Grandma's Secret Recipe", text: """
+        Where recipes became rituals and kitchens became classrooms.
+        """, imageName: "preview2"),
         
         // Story 2: Dad's Workshop Wisdom - Life lessons through craftsmanship
         // IMAGE PROMPT 1: "Vintage woodworking workshop, tools hanging on pegboard, sawdust in afternoon light, worn workbench with current project, warm browns and ambers, documentary style"
@@ -79,13 +90,25 @@ extension FlipPage {
         We started with something simple—a birdhouse. "Measure twice, cut once," he'd say, watching as I carefully marked the wood. The first cut was crooked. I wanted to start over, but Dad stopped me. "Nothing in life is perfect. We learn to work with what we have, make it beautiful anyway."
         
         The sawdust had a sweet smell that I can still conjure today. It covered everything in a fine layer, like snow, marking us as makers, creators. Dad would blow it off his workbench at the end of each day, revealing the scratches and stains below. "Every mark tells a story," he'd say. "This burn here? That's from the summer we built your mother's garden bench. This gouge? Your brother's first attempt at carving."
+        """),
         
+        // Vintage Workshop Interior illustration - embedded with text about the workshop
+        FlipPage(type: .mixed, title: "Dad's Workshop Wisdom", text: """
         Over months, my hands learned the language of wood—how pine was forgiving, oak stubborn, cherry beautiful but demanding. Dad taught through metaphors I wouldn't understand until years later. "See how the grain runs? Always work with it, never against it. Same with people."
+        """, imageName: "preview3"),
         
+        FlipPage(type: .text, title: "Dad's Workshop Wisdom", text: """
         The treehouse project came the summer I turned twelve. It wasn't just about building; it was about dreaming, planning, problem-solving. We spent weeks drawing designs, calculating loads, selecting the perfect tree. "Foundation matters most," Dad emphasized, spending days on the platform that everything else would rest upon. "Get that wrong, and nothing else matters."
         
         We worked every evening after Dad got home from his job at the factory. His tired eyes would light up as we entered the workshop, as if this was what recharged him. Some days we worked in comfortable silence, the only sounds our breathing and the whisper of sandpaper. Other days, he'd share stories of his father, his childhood, his dreams that became our family's reality.
+        """),
         
+        // Father Teaching Child photo - embedded with text about teaching moments
+        FlipPage(type: .mixed, title: "Dad's Workshop Wisdom", text: """
+        Where patience was taught through sawdust and love through craftsmanship.
+        """, imageName: "preview4"),
+        
+        FlipPage(type: .text, title: "Dad's Workshop Wisdom", text: """
         The day we raised the walls was magical. What had been pieces became structure. "This is the moment," Dad said, stepping back to admire our work, "when a project becomes real. Remember this feeling—it's what keeps you going through the hard parts."
         
         I remember the afternoon we hung the rope ladder. I was frustrated; it kept twisting, refusing to hang straight. Dad watched me struggle, then quietly said, "Sometimes the harder you try to control something, the more it resists. Let it find its own balance." The ladder straightened as soon as I stopped fighting it.
@@ -96,9 +119,6 @@ extension FlipPage {
         
         The workshop remains, a cathedral of sawdust and memory. Every project I complete there adds another layer to our family's story, another ring in the tree of our legacy. Dad was right—we were building more than furniture. We were building character, patience, and love, one careful cut at a time.
         """),
-        
-        // Workshop photo for Story 2
-        FlipPage(type: .rightPhoto, title: "Workshop Legacy", caption: "Where patience was taught through sawdust and love through craftsmanship.", imageName: "workshop"),
         
         // Story 3: The Immigration Story - Courage and new beginnings
         // IMAGE PROMPT 1: "Vintage sepia photograph style, immigrant family at ship's rail seeing Statue of Liberty, period clothing, hopeful expressions, historical documentary style"
@@ -111,9 +131,14 @@ extension FlipPage {
         The crossing took sixteen days. Sixteen days in steerage, where the air was thick with the smell of unwashed bodies, sickness, and dreams. Great-grandma would sing the old lullabies to keep the children calm, her voice competing with the groaning of the ship and the crying of a hundred other children. "Every song," she'd later say, "was a bridge between the world we left and the world we were sailing toward."
         
         They glimpsed the Statue of Liberty through morning fog on April 7, 1923. Papa lifted each child to see her, tears streaming down his weathered face. "Look," he said in Italian, "she welcomes us. We are home." But home was still a stranger, speaking in tongues they didn't understand.
+        """),
         
+        // Ellis Island Arrival illustration - embedded with text about seeing the Statue of Liberty
+        FlipPage(type: .mixed, title: "The Courage to Begin Again", text: """
         Ellis Island was chaos—a babel of languages, medical inspections, chalk marks on coats that could mean acceptance or rejection. The family waited for six hours, the children restless, parents rigid with tension. When finally approved, when that stamp hit their papers, Great-grandma collapsed into Papa's arms. They had crossed more than an ocean; they had crossed into possibility.
+        """, imageName: "preview5"),
         
+        FlipPage(type: .text, title: "The Courage to Begin Again", text: """
         New York City swallowed them whole. They found a tenement on Mulberry Street—two rooms for five people, windows that faced a brick wall, stairs that groaned with the weight of dreams deferred. But that first night, as they sat on wooden crates eating bread and cheese bought with their precious dollars, Papa said, "This is not where we end. This is where we begin."
         
         Work came hard and harsh. Papa found a job in construction, leaving before dawn, returning after dark, his hands increasingly gnarled, his back increasingly bent. Great-grandma took in sewing, her fingers flying over fabric by lamplight while the children slept. Every penny saved was a brick in the foundation of their American dream.
@@ -121,7 +146,14 @@ extension FlipPage {
         The children learned English with stunning speed, becoming translators for their parents, bridges between old and new. "We spoke Italian at home," Grandma remembered, "English at school, and dreams in both languages."
         
         Within five years, they had saved enough to leave Mulberry Street. The house in Queens was tiny—but it had a yard. Papa planted tomatoes and basil alongside roses and petunias. "Both countries," he'd say, "growing together in American soil."
+        """),
         
+        // Family Home in Queens photo - embedded with text about the American Dream
+        FlipPage(type: .mixed, title: "The Courage to Begin Again", text: """
+        From twenty dollars to twenty grandchildren—the true American story.
+        """, imageName: "preview6"),
+        
+        FlipPage(type: .text, title: "The Courage to Begin Again", text: """
         The Depression tested them, as it tested everyone. But they had survived with less, and they knew how to make something from nothing. Great-grandma's garden fed not just their family but neighbors too. Papa's construction skills, learned in the old country, kept their home standing when others were losing theirs. "In the old country," he'd say, "we learned that family and community are the only real wealth."
         
         When World War II came, their eldest son enlisted immediately. "This country gave us everything," he said. "Now I give back." The blue star in their window was a badge of honor, their son's service the ultimate declaration of belonging.
@@ -134,9 +166,6 @@ extension FlipPage {
         
         "You see her?" he whispered, his English still accented but proud. "She says welcome. She says you belong. She says you are home." The baby gurgled, reaching toward the statue, toward the future, toward all the possibilities that one act of courage had made possible.
         """),
-        
-        // Immigration photo for Story 3
-        FlipPage(type: .mixed, title: "American Dream", caption: "From twenty dollars to twenty grandchildren—the true American story.", imageName: "ellis_island"),
         
         // Story 4: Mom's Garden of Memories - Growth, nurturing, and seasons of life
         // IMAGE PROMPT 1: "Elderly woman in sun hat tending heirloom tomatoes, morning dew, golden sunrise light, gardening tools, peaceful documentary style"
@@ -167,12 +196,14 @@ extension FlipPage {
         The day she came home from her final treatment, cancer-free but exhausted, we wheeled her to the garden. It was July, everything in full bloom, heavy with produce. She cried seeing it—not sad tears, but the kind that water hope back to life. "You kept it going," she whispered. "All of you."
         
         Now I have my own garden, and my daughter has her small plot within it. I find myself saying Mom's words: "Be patient. Water deeply but not too often. Sometimes the best thing you can do is nothing. Trust the process." I talk to my plants in the morning, save seeds in carefully labeled envelopes, and always plant more than I need because someone, somewhere, needs fresh tomatoes and hope.
-        
-        The heirloom seeds Mom gave me are more valuable than any jewelry. Each packet is labeled in her careful handwriting: "Cherokee Purple tomato - 1987 - from Grandma Rose" or "Kentucky Wonder beans - saved every year since 1962." When I plant them, I'm planting history, love, and the promise that some things, tended carefully, last forever.
         """),
         
-        // Garden photo for Story 4
-        FlipPage(type: .rightPhoto, title: "Seeds of Legacy", caption: "In gardens, as in life, what we plant with love grows forever.", imageName: "garden_generations")
+        // Garden photo for Story 4 - Three Generations Gardening - embedded with closing text
+        FlipPage(type: .mixed, title: "Mom's Garden of Life", text: """
+        The heirloom seeds Mom gave me are more valuable than any jewelry. Each packet is labeled in her careful handwriting: "Cherokee Purple tomato - 1987 - from Grandma Rose" or "Kentucky Wonder beans - saved every year since 1962." When I plant them, I'm planting history, love, and the promise that some things, tended carefully, last forever.
+        
+        In gardens, as in life, what we plant with love grows forever.
+        """, imageName: "preview7")
     ]
     
     // Convert MockBookPage to FlipPage

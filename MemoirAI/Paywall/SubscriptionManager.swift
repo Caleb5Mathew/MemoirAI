@@ -8,8 +8,8 @@ enum Tier: String, CaseIterable {
     case yearly = "$rc_annual"    // Matches RevenueCat dashboard package ID
 
     var allowance: Int {
-        // All subscription tiers get 50 images
-        return 50
+        // All subscription tiers get 100 images
+        return 100
     }
 
     var displayName: String {
@@ -41,34 +41,69 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     private let lastPurchaseDateKey = "memoirai_last_purchase_date_"
     
     // Maximum images per subscription period
-    private let maxImagesPerPeriod: Int = 50
-    // Developer back-door flag
-    private let devUnlockedKey = "memoirai_devUnlocked"
+    private let maxImagesPerPeriod: Int = 100
+    /// When true, developer unlock survives cold launch until toggled off in Profile Edit or Settings.
+    private let persistentDevModeKey = "memoirai_persistentDevMode"
+    /// Session developer unlock (also true when persistent dev mode is on).
+    @Published private(set) var isDeveloperUnlockedSession: Bool = false
+    /// Mirrors UserDefaults for SwiftUI; use for gates like headshot bypass.
+    @Published private(set) var isPersistentDevMode: Bool = false
 
     private override init() {
         super.init()
-        
+
+        isPersistentDevMode = UserDefaults.standard.bool(forKey: persistentDevModeKey)
+        if isPersistentDevMode {
+            unlockDeveloperMode()
+            print("RCManager: Restored persistent developer mode from storage.")
+        }
+
         // Add a small delay to ensure RevenueCat is fully configured
         Task {
             // Wait a brief moment for RevenueCat to be ready
             try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-        
-        if Purchases.isConfigured {
+
+            if Purchases.isConfigured {
                 await MainActor.run {
-            Purchases.shared.delegate = self
+                    Purchases.shared.delegate = self
                 }
                 await loadOfferings()
                 await refreshCustomerInfo()
-        } else {
+            } else {
                 await MainActor.run {
-            print("⚠️ RevenueCat not configured - using development mode")
-            // In development, simulate no subscription
-            activeTier = nil
-            remainingAllowance = 0
-            nextRenewalDate = nil
+                    print("RCManager: RevenueCat not configured - using development mode")
+                    // In development, simulate no subscription
+                    activeTier = nil
+                    remainingAllowance = 0
+                    nextRenewalDate = nil
+                }
+            }
+
+            await MainActor.run {
+                if UserDefaults.standard.bool(forKey: persistentDevModeKey) {
+                    unlockDeveloperMode()
                 }
             }
         }
+    }
+
+    /// Enables developer unlock and persists it across app restarts until `disablePersistentDevMode()`.
+    func enablePersistentDevMode() {
+        UserDefaults.standard.set(true, forKey: persistentDevModeKey)
+        UserDefaults.standard.synchronize()
+        isPersistentDevMode = true
+        unlockDeveloperMode()
+        print("RCManager: Persistent developer mode enabled – survives app restart until disabled.")
+    }
+
+    /// Turns off persisted dev unlock and re-evaluates real subscription state.
+    func disablePersistentDevMode() {
+        UserDefaults.standard.set(false, forKey: persistentDevModeKey)
+        UserDefaults.standard.synchronize()
+        isPersistentDevMode = false
+        isDeveloperUnlockedSession = false
+        Task { await refreshCustomerInfo() }
+        print("RCManager: Persistent developer mode disabled.")
     }
 
     func loadOfferings() async {
@@ -125,10 +160,15 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             evaluateEntitlements(from: info)
         } catch {
             print("❌ RCManager: CustomerInfo error: \(error). Setting as non-subscriber.")
-            // No subscription = no generation allowed
-            activeTier = nil
-            remainingAllowance = 0
-            nextRenewalDate = nil
+            if isDeveloperUnlockedSession {
+                // Keep dev access active for this app session.
+                unlockDeveloperMode()
+            } else {
+                // No subscription = no generation allowed
+                activeTier = nil
+                remainingAllowance = 0
+                nextRenewalDate = nil
+            }
         }
     }
 
@@ -165,10 +205,15 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             print("RCManager: Active subscription found for tier: \(newTier.displayName)")
             setActiveTier(newTier, renewalDate: renewalDate, latestPurchaseDate: purchaseDate)
         } else {
-            print("RCManager: No active subscription found. User cannot generate images.")
-            activeTier = nil
-            remainingAllowance = 0
-            nextRenewalDate = nil
+            if isDeveloperUnlockedSession {
+                print("RCManager: No active subscription found, but developer mode is active for this session.")
+                unlockDeveloperMode()
+            } else {
+                print("RCManager: No active subscription found. User cannot generate images.")
+                activeTier = nil
+                remainingAllowance = 0
+                nextRenewalDate = nil
+            }
         }
     }
 
@@ -265,8 +310,8 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         // Force save
         UserDefaults.standard.synchronize()
 
-        // Apply developer override if previously unlocked
-        if UserDefaults.standard.bool(forKey: devUnlockedKey) {
+        // Apply developer override for current app session only.
+        if isDeveloperUnlockedSession {
             self.unlockDeveloperMode()
         }
     }
@@ -372,7 +417,15 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     
     // Check if user has any active subscription
     var hasActiveSubscription: Bool {
+        // Check for developer unlock first
+        if isDeveloperUnlockedSession {
+            return true
+        }
         return activeTier != nil
+    }
+
+    var isDeveloperUnlocked: Bool {
+        isDeveloperUnlockedSession
     }
     
     // Check if user has reached image limit
@@ -390,8 +443,8 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             return "You're requesting \(requestedPages) images but only have \(remaining) left in your monthly allowance. Consider generating fewer pages."
         }
         
-        if requestedPages > 25 && remaining > 25 {
-            return "This will use \(requestedPages) of your 50 monthly allowance. You'll have \(remaining - requestedPages) images remaining this month."
+        if requestedPages > 50 && remaining > 50 {
+            return "This will use \(requestedPages) of your 100 monthly allowance. You'll have \(remaining - requestedPages) images remaining this month."
         }
         
         if remaining <= 10 {
@@ -403,21 +456,20 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     
     var monthlyAllowanceStatus: String {
         guard hasActiveSubscription else { return "No active subscription" }
-        return "\(remainingAllowance)/50 monthly allowance remaining"
+        return "\(remainingAllowance)/100 monthly allowance remaining"
     }
     
     // ✨ Check if generation would use a large portion of allowance
     func isLargeGeneration(pages: Int) -> Bool {
-        return pages > 10 // More than 20% of monthly allowance
+        return pages > 20 // More than 20% of monthly allowance
     }
 
     // MARK: – Developer mode unlock
     func unlockDeveloperMode() {
-        UserDefaults.standard.set(true, forKey: devUnlockedKey)
-        UserDefaults.standard.synchronize()
+        isDeveloperUnlockedSession = true
         activeTier = .monthly
-        remainingAllowance = 9_999
-        print("🚀 Developer mode unlocked – unlimited images")
+        remainingAllowance = 2000
+        print("🚀 Developer mode unlocked for this session – 2000 images")
     }
 }
 

@@ -7,6 +7,32 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		248D87F12F3052400031846B /* FirebaseAI in Frameworks */ = {isa = PBXBuildFile; productRef = 248D87F02F3052400031846B /* FirebaseAI */; };
+		248D87F32F3052400031846B /* FirebaseAILogic in Frameworks */ = {isa = PBXBuildFile; productRef = 248D87F22F3052400031846B /* FirebaseAILogic */; };
+		248D87F52F3052400031846B /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 248D87F42F3052400031846B /* FirebaseAnalytics */; };
+		248D87F72F3052400031846B /* FirebaseAnalyticsCore in Frameworks */ = {isa = PBXBuildFile; productRef = 248D87F62F3052400031846B /* FirebaseAnalyticsCore */; };
+		248D87F92F3052400031846B /* FirebaseAnalyticsIdentitySupport in Frameworks */ = {isa = PBXBuildFile; productRef = 248D87F82F3052400031846B /* FirebaseAnalyticsIdentitySupport */; };
+		248D87FB2F3052400031846B /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = 248D87FA2F3052400031846B /* FirebaseAppCheck */; };
+		248D87FD2F3052400031846B /* FirebaseAppDistribution-Beta in Frameworks */ = {isa = PBXBuildFile; productRef = 248D87FC2F3052400031846B /* FirebaseAppDistribution-Beta */; };
+		248D87FF2F3052400031846B /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 248D87FE2F3052400031846B /* FirebaseAuth */; };
+		248D88012F3052400031846B /* FirebaseAuthCombine-Community in Frameworks */ = {isa = PBXBuildFile; productRef = 248D88002F3052400031846B /* FirebaseAuthCombine-Community */; };
+		248D88032F3052400031846B /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 248D88022F3052400031846B /* FirebaseCore */; };
+		248D88052F3052400031846B /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 248D88042F3052400031846B /* FirebaseCrashlytics */; };
+		248D88072F3052400031846B /* FirebaseDatabase in Frameworks */ = {isa = PBXBuildFile; productRef = 248D88062F3052400031846B /* FirebaseDatabase */; };
+		248D88092F3052400031846B /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 248D88082F3052400031846B /* FirebaseFirestore */; };
+		248D880B2F3052400031846B /* FirebaseFirestoreCombine-Community in Frameworks */ = {isa = PBXBuildFile; productRef = 248D880A2F3052400031846B /* FirebaseFirestoreCombine-Community */; };
+		248D880D2F3052400031846B /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 248D880C2F3052400031846B /* FirebaseFunctions */; };
+		248D880F2F3052400031846B /* FirebaseFunctionsCombine-Community in Frameworks */ = {isa = PBXBuildFile; productRef = 248D880E2F3052400031846B /* FirebaseFunctionsCombine-Community */; };
+		248D88112F3052400031846B /* FirebaseInAppMessaging-Beta in Frameworks */ = {isa = PBXBuildFile; productRef = 248D88102F3052400031846B /* FirebaseInAppMessaging-Beta */; };
+		248D88132F3052400031846B /* FirebaseInstallations in Frameworks */ = {isa = PBXBuildFile; productRef = 248D88122F3052400031846B /* FirebaseInstallations */; };
+		248D88152F3052400031846B /* FirebaseMLModelDownloader in Frameworks */ = {isa = PBXBuildFile; productRef = 248D88142F3052400031846B /* FirebaseMLModelDownloader */; };
+		248D88172F3052400031846B /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 248D88162F3052400031846B /* FirebaseMessaging */; };
+		248D881B2F3052400031846B /* FirebaseRemoteConfig in Frameworks */ = {isa = PBXBuildFile; productRef = 248D881A2F3052400031846B /* FirebaseRemoteConfig */; };
+		248D881D2F3052400031846B /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 248D881C2F3052400031846B /* FirebaseStorage */; };
+		248D881F2F3052400031846B /* FirebaseStorageCombine-Community in Frameworks */ = {isa = PBXBuildFile; productRef = 248D881E2F3052400031846B /* FirebaseStorageCombine-Community */; };
+		248D88222F30531D0031846B /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 248D88212F30531D0031846B /* GoogleSignIn */; };
+		248D88242F30531D0031846B /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 248D88232F30531D0031846B /* GoogleSignInSwift */; };
+		7A1B2C342E9F000000000003 /* Vortex in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1B2C342E9F000000000002 /* Vortex */; };
 		84063F072E00E29200218E1F /* FacebookAEM in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F062E00E29200218E1F /* FacebookAEM */; };
 		84063F092E00E29200218E1F /* FacebookBasics in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F082E00E29200218E1F /* FacebookBasics */; };
 		84063F0B2E00E29200218E1F /* FacebookCore in Frameworks */ = {isa = PBXBuildFile; productRef = 84063F0A2E00E29200218E1F /* FacebookCore */; };
@@ -36,6 +62,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		2497942A2F96891000D01413 /* MemoirAI.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = MemoirAI.xcodeproj; sourceTree = "<group>"; };
 		844EFABD2DA3416E00620E37 /* MemoirAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MemoirAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		844EFACE2DA3416F00620E37 /* MemoirAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MemoirAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		844EFAD82DA3416F00620E37 /* MemoirAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MemoirAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -53,23 +80,11 @@
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
-/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
-		845471B32DE9F36F00435321 /* Exceptions for "MemoirAI" folder in "Copy Bundle Resources" phase from "MemoirAI" target */ = {
-			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
-			buildPhase = 844EFABB2DA3416E00620E37 /* Resources */;
-			membershipExceptions = (
-				"Memory/MemoryEntry+Playback.swift",
-				"Story/String+Pagnation.swift",
-			);
-		};
-/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		844EFABF2DA3416E00620E37 /* MemoirAI */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				84A6BBD82DC7F227002E7430 /* Exceptions for "MemoirAI" folder in "MemoirAI" target */,
-				845471B32DE9F36F00435321 /* Exceptions for "MemoirAI" folder in "Copy Bundle Resources" phase from "MemoirAI" target */,
 			);
 			path = MemoirAI;
 			sourceTree = "<group>";
@@ -92,14 +107,40 @@
 			buildActionMask = 2147483647;
 			files = (
 				84063F072E00E29200218E1F /* FacebookAEM in Frameworks */,
+				248D88012F3052400031846B /* FirebaseAuthCombine-Community in Frameworks */,
 				84063F0B2E00E29200218E1F /* FacebookCore in Frameworks */,
+				248D88132F3052400031846B /* FirebaseInstallations in Frameworks */,
+				248D881D2F3052400031846B /* FirebaseStorage in Frameworks */,
+				248D880D2F3052400031846B /* FirebaseFunctions in Frameworks */,
+				248D87FF2F3052400031846B /* FirebaseAuth in Frameworks */,
+				248D87F52F3052400031846B /* FirebaseAnalytics in Frameworks */,
+				248D88222F30531D0031846B /* GoogleSignIn in Frameworks */,
 				84063F092E00E29200218E1F /* FacebookBasics in Frameworks */,
+				248D87F32F3052400031846B /* FirebaseAILogic in Frameworks */,
+				248D88032F3052400031846B /* FirebaseCore in Frameworks */,
 				84063F0F2E00E29200218E1F /* FacebookLogin in Frameworks */,
+				248D881B2F3052400031846B /* FirebaseRemoteConfig in Frameworks */,
+				248D88092F3052400031846B /* FirebaseFirestore in Frameworks */,
+				248D87F72F3052400031846B /* FirebaseAnalyticsCore in Frameworks */,
+				248D87FD2F3052400031846B /* FirebaseAppDistribution-Beta in Frameworks */,
+				248D88112F3052400031846B /* FirebaseInAppMessaging-Beta in Frameworks */,
+				248D880F2F3052400031846B /* FirebaseFunctionsCombine-Community in Frameworks */,
 				8458DF492E158DB7001688EA /* RevenueCat in Frameworks */,
+				248D88072F3052400031846B /* FirebaseDatabase in Frameworks */,
+				248D880B2F3052400031846B /* FirebaseFirestoreCombine-Community in Frameworks */,
+				248D881F2F3052400031846B /* FirebaseStorageCombine-Community in Frameworks */,
+				248D87F12F3052400031846B /* FirebaseAI in Frameworks */,
 				8458DF4B2E158DB7001688EA /* RevenueCatUI in Frameworks */,
+				248D87F92F3052400031846B /* FirebaseAnalyticsIdentitySupport in Frameworks */,
 				845BE2C12DED4D1800ECD629 /* Mixpanel in Frameworks */,
+				7A1B2C342E9F000000000003 /* Vortex in Frameworks */,
 				84063F112E00E29200218E1F /* FacebookShare in Frameworks */,
+				248D88052F3052400031846B /* FirebaseCrashlytics in Frameworks */,
+				248D88242F30531D0031846B /* GoogleSignInSwift in Frameworks */,
+				248D87FB2F3052400031846B /* FirebaseAppCheck in Frameworks */,
+				248D88172F3052400031846B /* FirebaseMessaging in Frameworks */,
 				84063F0D2E00E29200218E1F /* FacebookGamingServices in Frameworks */,
+				248D88152F3052400031846B /* FirebaseMLModelDownloader in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -120,6 +161,13 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		249794EB2F96891000D01413 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
 		844EFAB42DA3416E00620E37 = {
 			isa = PBXGroup;
 			children = (
@@ -169,6 +217,32 @@
 				84063F102E00E29200218E1F /* FacebookShare */,
 				8458DF482E158DB7001688EA /* RevenueCat */,
 				8458DF4A2E158DB7001688EA /* RevenueCatUI */,
+				248D87F02F3052400031846B /* FirebaseAI */,
+				248D87F22F3052400031846B /* FirebaseAILogic */,
+				248D87F42F3052400031846B /* FirebaseAnalytics */,
+				248D87F62F3052400031846B /* FirebaseAnalyticsCore */,
+				248D87F82F3052400031846B /* FirebaseAnalyticsIdentitySupport */,
+				248D87FA2F3052400031846B /* FirebaseAppCheck */,
+				248D87FC2F3052400031846B /* FirebaseAppDistribution-Beta */,
+				248D87FE2F3052400031846B /* FirebaseAuth */,
+				248D88002F3052400031846B /* FirebaseAuthCombine-Community */,
+				248D88022F3052400031846B /* FirebaseCore */,
+				248D88042F3052400031846B /* FirebaseCrashlytics */,
+				248D88062F3052400031846B /* FirebaseDatabase */,
+				248D88082F3052400031846B /* FirebaseFirestore */,
+				248D880A2F3052400031846B /* FirebaseFirestoreCombine-Community */,
+				248D880C2F3052400031846B /* FirebaseFunctions */,
+				248D880E2F3052400031846B /* FirebaseFunctionsCombine-Community */,
+				248D88102F3052400031846B /* FirebaseInAppMessaging-Beta */,
+				248D88122F3052400031846B /* FirebaseInstallations */,
+				248D88142F3052400031846B /* FirebaseMLModelDownloader */,
+				248D88162F3052400031846B /* FirebaseMessaging */,
+				248D881A2F3052400031846B /* FirebaseRemoteConfig */,
+				248D881C2F3052400031846B /* FirebaseStorage */,
+				248D881E2F3052400031846B /* FirebaseStorageCombine-Community */,
+				248D88212F30531D0031846B /* GoogleSignIn */,
+				248D88232F30531D0031846B /* GoogleSignInSwift */,
+				7A1B2C342E9F000000000002 /* Vortex */,
 			);
 			productName = MemoirAI;
 			productReference = 844EFABD2DA3416E00620E37 /* MemoirAI.app */;
@@ -256,10 +330,19 @@
 				845BE2BF2DED4D1800ECD629 /* XCRemoteSwiftPackageReference "mixpanel-swift" */,
 				84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */,
 				8458DF472E158DB7001688EA /* XCRemoteSwiftPackageReference "purchases-ios" */,
+				248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				248D88202F30531D0031846B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				7A1B2C342E9F000000000001 /* XCRemoteSwiftPackageReference "Vortex" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 844EFABE2DA3416E00620E37 /* Products */;
 			projectDirPath = "";
+			projectReferences = (
+				{
+					ProductGroup = 249794EB2F96891000D01413 /* Products */;
+					ProjectRef = 2497942A2F96891000D01413 /* MemoirAI.xcodeproj */;
+				},
+			);
 			projectRoot = "";
 			targets = (
 				844EFABC2DA3416E00620E37 /* MemoirAI */,
@@ -457,6 +540,17 @@
 				DEVELOPMENT_TEAM = SNG8SZK5TY;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				EXCLUDED_RESOURCE_FILE_NAMES = ".claude/* .claude/**/* .claude/worktrees/* .claude/worktrees/**/* */.claude/* */.claude/**/* */.claude/worktrees/* */.claude/worktrees/**/*";
+				EXCLUDED_SOURCE_FILE_NAMES = (
+					".claude/*",
+					".claude/**/*",
+					".claude/worktrees/*",
+					".claude/worktrees/**/*",
+					"*/.claude/*",
+					"*/.claude/**/*",
+					"*/.claude/worktrees/*",
+					"*/.claude/worktrees/**/*",
+				);
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MemoirAI/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -469,19 +563,17 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.7;
 				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Buildr.MemoirAI;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
-				XROS_DEPLOYMENT_TARGET = 2.2;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -497,6 +589,17 @@
 				DEVELOPMENT_TEAM = SNG8SZK5TY;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				EXCLUDED_RESOURCE_FILE_NAMES = ".claude/* .claude/**/* .claude/worktrees/* .claude/worktrees/**/* */.claude/* */.claude/**/* */.claude/worktrees/* */.claude/worktrees/**/*";
+				EXCLUDED_SOURCE_FILE_NAMES = (
+					".claude/*",
+					".claude/**/*",
+					".claude/worktrees/*",
+					".claude/worktrees/**/*",
+					"*/.claude/*",
+					"*/.claude/**/*",
+					"*/.claude/worktrees/*",
+					"*/.claude/worktrees/**/*",
+				);
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MemoirAI/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -509,19 +612,17 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.7;
 				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Buildr.MemoirAI;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
-				XROS_DEPLOYMENT_TARGET = 2.2;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -534,17 +635,15 @@
 				DEVELOPMENT_TEAM = SNG8SZK5TY;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
-				MACOSX_DEPLOYMENT_TARGET = 14.7;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Buildr.MemoirAITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MemoirAI.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MemoirAI";
-				XROS_DEPLOYMENT_TARGET = 2.2;
 			};
 			name = Debug;
 		};
@@ -557,17 +656,15 @@
 				DEVELOPMENT_TEAM = SNG8SZK5TY;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
-				MACOSX_DEPLOYMENT_TARGET = 14.7;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Buildr.MemoirAITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MemoirAI.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MemoirAI";
-				XROS_DEPLOYMENT_TARGET = 2.2;
 			};
 			name = Release;
 		};
@@ -579,17 +676,15 @@
 				DEVELOPMENT_TEAM = SNG8SZK5TY;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
-				MACOSX_DEPLOYMENT_TARGET = 14.7;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Buildr.MemoirAIUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = MemoirAI;
-				XROS_DEPLOYMENT_TARGET = 2.2;
 			};
 			name = Debug;
 		};
@@ -601,17 +696,15 @@
 				DEVELOPMENT_TEAM = SNG8SZK5TY;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
-				MACOSX_DEPLOYMENT_TARGET = 14.7;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.Buildr.MemoirAIUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = MemoirAI;
-				XROS_DEPLOYMENT_TARGET = 2.2;
 			};
 			name = Release;
 		};
@@ -657,6 +750,30 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.8.0;
+			};
+		};
+		248D88202F30531D0031846B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.1.0;
+			};
+		};
+		7A1B2C342E9F000000000001 /* XCRemoteSwiftPackageReference "Vortex" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/twostraws/Vortex";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
 		84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/facebook/facebook-ios-sdk.git";
@@ -684,6 +801,136 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		248D87F02F3052400031846B /* FirebaseAI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAI;
+		};
+		248D87F22F3052400031846B /* FirebaseAILogic */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAILogic;
+		};
+		248D87F42F3052400031846B /* FirebaseAnalytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalytics;
+		};
+		248D87F62F3052400031846B /* FirebaseAnalyticsCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalyticsCore;
+		};
+		248D87F82F3052400031846B /* FirebaseAnalyticsIdentitySupport */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalyticsIdentitySupport;
+		};
+		248D87FA2F3052400031846B /* FirebaseAppCheck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAppCheck;
+		};
+		248D87FC2F3052400031846B /* FirebaseAppDistribution-Beta */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = "FirebaseAppDistribution-Beta";
+		};
+		248D87FE2F3052400031846B /* FirebaseAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAuth;
+		};
+		248D88002F3052400031846B /* FirebaseAuthCombine-Community */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = "FirebaseAuthCombine-Community";
+		};
+		248D88022F3052400031846B /* FirebaseCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseCore;
+		};
+		248D88042F3052400031846B /* FirebaseCrashlytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseCrashlytics;
+		};
+		248D88062F3052400031846B /* FirebaseDatabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseDatabase;
+		};
+		248D88082F3052400031846B /* FirebaseFirestore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFirestore;
+		};
+		248D880A2F3052400031846B /* FirebaseFirestoreCombine-Community */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = "FirebaseFirestoreCombine-Community";
+		};
+		248D880C2F3052400031846B /* FirebaseFunctions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFunctions;
+		};
+		248D880E2F3052400031846B /* FirebaseFunctionsCombine-Community */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = "FirebaseFunctionsCombine-Community";
+		};
+		248D88102F3052400031846B /* FirebaseInAppMessaging-Beta */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = "FirebaseInAppMessaging-Beta";
+		};
+		248D88122F3052400031846B /* FirebaseInstallations */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseInstallations;
+		};
+		248D88142F3052400031846B /* FirebaseMLModelDownloader */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMLModelDownloader;
+		};
+		248D88162F3052400031846B /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
+		};
+		248D881A2F3052400031846B /* FirebaseRemoteConfig */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseRemoteConfig;
+		};
+		248D881C2F3052400031846B /* FirebaseStorage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseStorage;
+		};
+		248D881E2F3052400031846B /* FirebaseStorageCombine-Community */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D87EF2F3052400031846B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = "FirebaseStorageCombine-Community";
+		};
+		248D88212F30531D0031846B /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D88202F30531D0031846B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
+		};
+		248D88232F30531D0031846B /* GoogleSignInSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 248D88202F30531D0031846B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignInSwift;
+		};
+		7A1B2C342E9F000000000002 /* Vortex */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7A1B2C342E9F000000000001 /* XCRemoteSwiftPackageReference "Vortex" */;
+			productName = Vortex;
+		};
 		84063F062E00E29200218E1F /* FacebookAEM */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 84063F052E00E29200218E1F /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */;

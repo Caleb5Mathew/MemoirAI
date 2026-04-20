@@ -57,21 +57,24 @@ struct PersistenceController {
                 print("❌ Core Data store loading error: \(error)")
                 print("❌ Error details: \(error.userInfo)")
                 
-                // Don't fatal error for CloudKit sync issues - let the app continue
-                if error.domain == "NSCocoaErrorDomain" && error.code == 134060 {
-                    print("⚠️ CloudKit sync error - app will continue with local data")
+                // Don't fatal error for CloudKit sync issues - let the app continue with local data
+                // 134060: mirroring / push setup issues; 134400: no iCloud account (simulator or signed out)
+                let nonFatalCloudCodes: Set<Int> = [134060, 134400]
+                if error.domain == NSCocoaErrorDomain && nonFatalCloudCodes.contains(error.code) {
+                    print("⚠️ Core Data loaded with CloudKit sync unavailable (\(error.code)) — continuing local-only")
                 } else {
                     fatalError("Unresolved error \(error), \(error.userInfo)")
                 }
-            } else {
-                print("✅ Core Data store loaded successfully")
-                print("✅ CloudKit container: \(storeDescription.cloudKitContainerOptions?.containerIdentifier ?? "None")")
             }
+            print("✅ Core Data store loaded successfully")
+            print("✅ CloudKit container: \(storeDescription.cloudKitContainerOptions?.containerIdentifier ?? "None")")
         })
 
         container.viewContext.automaticallyMergesChangesFromParent = true
-        container.viewContext.mergePolicy =
-            NSMergeByPropertyObjectTrumpMergePolicy
+        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        
+        // Ensure fresh data on every fetch (no staleness)
+        container.viewContext.stalenessInterval = 0
     }
     
 }
@@ -83,7 +86,17 @@ extension PersistenceController {
     func entry(id: UUID) -> MemoryEntry? {
         let ctx = container.viewContext
         let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
-        request.predicate   = NSPredicate(format: "id == %@", id as CVarArg)
+        if let uid = MemoryUserScope.currentFirebaseUserId {
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(format: "id == %@", id as CVarArg),
+                NSCompoundPredicate(orPredicateWithSubpredicates: [
+                    NSPredicate(format: "firebaseUserId == %@", uid),
+                    NSPredicate(format: "firebaseUserId == nil")
+                ])
+            ])
+        } else {
+            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+        }
         request.fetchLimit  = 1
         request.includesPendingChanges = true
         return (try? ctx.fetch(request))?.first

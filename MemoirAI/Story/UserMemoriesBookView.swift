@@ -13,8 +13,7 @@ struct UserMemoriesBookView: View {
     @State private var useFallback = false
     @State private var flipbookError = false
     @State private var webView: WKWebView?
-    @State private var showZoomedPage = false
-    @State private var zoomedPageIndex: Int = 0
+    @State private var zoomPageIdentifier: ZoomPageIdentifier? = nil
     @State private var flipbookPages: [FlipPage] = []
     @State private var showDownloadOptions = false
     @State private var showPhotoLayoutSheet = false
@@ -23,12 +22,21 @@ struct UserMemoriesBookView: View {
     @State private var selectedPhotoFramePageIndex: Int?
     @State private var showPhotoPickerForFrame = false
     @State private var flipbookInitialized = false
+    @State private var showDebugConsole = false
     
     // Read art style from AppStorage to determine book orientation
-    @AppStorage("memoirArtStyle") private var artStyleRaw = ArtStyle.realistic.rawValue
+    @AppStorage("memoirArtStyle") private var artStyleRaw = ArtStyle.kidsBook.rawValue
     
     private var isKidsBook: Bool {
         return ArtStyle(rawValue: artStyleRaw) == .kidsBook
+    }
+
+    private var flipbookBasePageWidth: CGFloat {
+        isKidsBook ? 428.8 : 321.6
+    }
+
+    private var flipbookBasePageHeight: CGFloat {
+        isKidsBook ? 321.6 : 428.8
     }
     
     @StateObject private var memoryViewModel = MemoryEntryViewModel()
@@ -43,7 +51,8 @@ struct UserMemoriesBookView: View {
         
         // Use more conservative sizing to prevent cut-off
         let maxW = size.width * 0.80  // Reduced from 0.85
-        let targetAspect: CGFloat = 3.0 / 2.0
+        // Kids Book = landscape (wider than tall), Others = portrait (taller than wide)
+        let targetAspect: CGFloat = isKidsBook ? (11.0 / 8.5) : (8.5 / 11.0)
         let maxH = availableHeight * 0.85  // Reduced from 0.75
         
         var bookW = maxW
@@ -53,9 +62,9 @@ struct UserMemoriesBookView: View {
             bookW = bookH * targetAspect
         }
         
-        // Ensure minimum size
-        let minWidth: CGFloat = 280
-        let minHeight: CGFloat = 374
+        // Ensure minimum size - conditional based on orientation
+        let minWidth: CGFloat = isKidsBook ? 374 : 280
+        let minHeight: CGFloat = isKidsBook ? 280 : 374
         bookW = max(bookW, minWidth)
         bookH = max(bookH, minHeight)
         
@@ -79,6 +88,12 @@ struct UserMemoriesBookView: View {
                         let bookSize = calculateBookSize(for: geo.size)
                         
                         VStack(spacing: 0) {
+                            // Add "Click Page to Zoom" hint text
+                            Text("Click Page to Zoom")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(Tokens.ink.opacity(0.6))
+                                .padding(.bottom, 12)
+                            
                             // Flipbook preview with user's memories
                             if useFallback {
                                 // Fallback to native implementation
@@ -93,6 +108,7 @@ struct UserMemoriesBookView: View {
                             } else {
                                 // Flipbook implementation with external chevrons
                                 ZStack {
+                                    // WebView for page flip animation (background, non-interactive for photos)
                                     FlipbookViewWithWebView(
                                         pages: flipbookPages,
                                         currentPage: $currentPage,
@@ -110,18 +126,45 @@ struct UserMemoriesBookView: View {
                                                 flipbookError = true
                                                 useFallback = true
                                             } else {
-                                                currentPage = pageIndex
+                                                // Only update if different to prevent infinite loops
+                                                if currentPage != pageIndex {
+                                                    currentPage = pageIndex
+                                                }
                                             }
                                         },
                                         onPageTap: { index in
-                                            zoomedPageIndex = index
-                                            showZoomedPage = true
+                                            zoomPageIdentifier = ZoomPageIdentifier(pageIndex: index)
                                         },
-                                        onPhotoFrameTap: { pageIndex, frameId, frameIndex in
-                                            handlePhotoFrameTap(pageIndex: pageIndex, frameId: frameId, frameIndex: frameIndex)
-                                        }
+                                        onPhotoFrameTap: nil, // Disabled - handled by overlay
+                                        onPhotoFrameMoved: nil // Disabled - handled by overlay
                                     )
                                     .frame(width: bookSize.width, height: bookSize.height)
+                                    
+                                    // Native overlay for photo layouts (interactive)
+                                    // Positioned to match WebView page rendering exactly
+                                    if currentPage >= 0 && currentPage < flipbookPages.count {
+                                        PhotoLayoutOverlayView(
+                                            page: flipbookPages[currentPage],
+                                            pageIndex: currentPage,
+                                            bookSize: bookSize,
+                                            isKidsBook: isKidsBook,
+                                            onLayoutTap: { layoutId in
+                                                handlePhotoFrameTap(
+                                                    pageIndex: currentPage,
+                                                    frameId: layoutId.uuidString,
+                                                    frameIndex: 0
+                                                )
+                                            },
+                                            onLayoutMoved: { layoutId, newPosition in
+                                                handlePhotoFrameMoved(
+                                                    pageIndex: currentPage,
+                                                    frameId: layoutId.uuidString,
+                                                    newX: newPosition.x,
+                                                    newY: newPosition.y
+                                                )
+                                            }
+                                        )
+                                    }
                                 }
                                 .onAppear {
                                     if !flipbookInitialized {
@@ -160,25 +203,40 @@ struct UserMemoriesBookView: View {
             // Don't reset currentPage here to preserve page position when sheets are dismissed
             loadUserMemories()
         }
-        .fullScreenCover(isPresented: $showZoomedPage) {
-            PageZoomView(pageIndex: zoomedPageIndex, pages: $flipbookPages)
+        .fullScreenCover(item: $zoomPageIdentifier) { identifier in
+            PageZoomView(
+                pageIndex: identifier.pageIndex,
+                pages: $flipbookPages,
+                flipbookPageWidth: flipbookBasePageWidth,
+                flipbookPageHeight: flipbookBasePageHeight,
+                onDismiss: { finalPageIndex in
+                    // Don't update anything - let the flipbook maintain its own state
+                    // The flipbook already knows what page it's on (the one that was clicked)
+                    // Updating currentPage here causes state confusion and double-flips
+                    print("✅ UserMemoriesBookView: Zoom dismissed from page \(finalPageIndex), flipbook state unchanged (no Swift state update)")
+                }
+            )
+        }
+        .sheet(isPresented: $showDebugConsole) {
+            NavigationView {
+                DownloadDebugView(webView: webView)
+                    .navigationTitle("Download Debug")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Done") {
+                                showDebugConsole = false
+                            }
+                        }
+                    }
+            }
         }
         .sheet(isPresented: $showPhotoPickerForFrame) {
-            if let pageIndex = selectedPhotoFramePageIndex,
-               let frameId = selectedPhotoFrameId,
-               pageIndex >= 0 && pageIndex < flipbookPages.count {
-                // Find the specific layout being edited
-                let layout = flipbookPages[pageIndex].photoLayouts?.first(where: { $0.id.uuidString == frameId })
-                
-                PhotoFrameEditorView(
-                    isPresented: $showPhotoPickerForFrame,
-                    frameLayout: layout,
-                    pageIndex: pageIndex,
-                    onPhotoSelected: { photo in
-                        handlePhotoSelectedForFrame(photo)
-                    }
-                )
+            PhotoSourcePicker(isPresented: $showPhotoPickerForFrame) { image in
+                handlePhotoSelectedForFrame(image)
             }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .overlay(
             Group {
@@ -343,12 +401,27 @@ struct UserMemoriesBookView: View {
                     content: page.text ?? page.caption ?? "",
                     imageName: page.imageName
                 )
-            case .html, .photoLayout:
-                // Convert HTML and photo layout pages to mixed type
+            case .html:
+                // Convert HTML pages to text type
+                return MockBookPage(
+                    type: .text,
+                    content: page.text ?? "",
+                    imageName: nil
+                )
+            case .photoLayout:
+                // For photo layout pages, show text if present, otherwise show placeholder
+                let content: String
+                if let text = page.text, !text.isEmpty {
+                    content = text
+                } else if let layouts = page.photoLayouts, !layouts.isEmpty {
+                    content = "\(layouts.count) photo layout\(layouts.count == 1 ? "" : "s")"
+                } else {
+                    content = "Photo Layout Page"
+                }
                 return MockBookPage(
                     type: .mixed,
-                    content: page.text ?? "Photo Collection",
-                    imageName: page.imageName
+                    content: content,
+                    imageName: nil
                 )
             default:
                 return MockBookPage(
@@ -401,6 +474,10 @@ struct UserMemoriesBookView: View {
                                 .stroke(Tokens.ink.opacity(0.1), lineWidth: 1)
                         )
                 }
+                .onLongPressGesture(minimumDuration: 2.0) {
+                    // Long press to open debug console
+                    showDebugConsole = true
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, geo.safeAreaInsets.top > 0 ? geo.size.height * 0.06 : geo.size.height * 0.08)
@@ -413,7 +490,9 @@ struct UserMemoriesBookView: View {
     private var actionButtonsView: some View {
         VStack(spacing: Tokens.buttonSpacing) {
             // Primary: Record more memories
-            NavigationLink(destination: RecordMemoryView().environmentObject(profileVM)) {
+            NavigationLink(destination: RecordMemoryView()
+                .environmentObject(profileVM)
+                .environmentObject(TutorialCoordinator.shared)) {
                 Text("Record a memory")
                     .font(Tokens.Typography.button)
                     .foregroundColor(Tokens.ink)
@@ -491,13 +570,19 @@ struct UserMemoriesBookView: View {
         guard currentPage >= 0 && currentPage < flipbookPages.count else { return }
         
         // Calculate default position for the new layout (center of page)
-        let pageWidth: CGFloat = 300 // Approximate page width
-        let pageHeight: CGFloat = 400 // Approximate page height
+        // Use standard flipbook page dimensions (matches flipbook.js)
+        let pageWidth = flipbookBasePageWidth
+        let pageHeight = flipbookBasePageHeight
+        let margin: CGFloat = 20  // Page margin
         let layoutSize = template.defaultSize
         
+        // Center the layout on the page, accounting for margins
+        let availableWidth = pageWidth - (margin * 2)
+        let availableHeight = pageHeight - (margin * 2)
+        
         let frame = CGRect(
-            x: (pageWidth - layoutSize.width) / 2,
-            y: (pageHeight - layoutSize.height) / 2,
+            x: margin + (availableWidth - layoutSize.width) / 2,
+            y: margin + (availableHeight - layoutSize.height) / 2,
             width: layoutSize.width,
             height: layoutSize.height
         )
@@ -513,8 +598,12 @@ struct UserMemoriesBookView: View {
         }
         updatedPages[currentPage].photoLayouts?.append(newLayout)
         
-        // Update the page type if needed
-        if updatedPages[currentPage].type != .photoLayout {
+        // Update the page type if needed - allow text pages to have photo layouts
+        // If page has text, convert to mixed type; otherwise use photoLayout type
+        if updatedPages[currentPage].type == .text && updatedPages[currentPage].text != nil {
+            // Keep text, but allow photo layouts - use mixed type
+            updatedPages[currentPage].type = .mixed
+        } else if updatedPages[currentPage].type != .photoLayout && updatedPages[currentPage].type != .mixed {
             updatedPages[currentPage].type = .photoLayout
         }
         
@@ -525,8 +614,38 @@ struct UserMemoriesBookView: View {
         let impact = UIImpactFeedbackGenerator(style: .medium)
         impact.impactOccurred()
         
+        // Trigger flipbook re-render
+        if let webView = webView {
+            renderPagesToWebView(webView)
+        }
+        
         print("Added \(template.rawValue) layout to page \(currentPage)")
         print("Page \(currentPage) now has \(flipbookPages[currentPage].photoLayouts?.count ?? 0) photo layouts")
+    }
+    
+    // Helper to re-render pages in WebView
+    private func renderPagesToWebView(_ webView: WKWebView) {
+        // Re-render pages when photo layouts change
+        do {
+            let jsonData = try JSONEncoder().encode(flipbookPages)
+            let jsonString = String(data: jsonData, encoding: .utf8) ?? "[]"
+            let escapedJSON = jsonString.replacingOccurrences(of: "\\", with: "\\\\")
+                                        .replacingOccurrences(of: "'", with: "\\'")
+                                        .replacingOccurrences(of: "\"", with: "\\\"")
+                                        .replacingOccurrences(of: "\n", with: "\\n")
+                                        .replacingOccurrences(of: "\r", with: "\\r")
+            
+            let jsCode = "window.renderPages('\(escapedJSON)')"
+            webView.evaluateJavaScript(jsCode) { result, error in
+                if let error = error {
+                    print("Error re-rendering pages: \(error)")
+                } else {
+                    print("UserMemoriesBookView: Pages re-rendered successfully")
+                }
+            }
+        } catch {
+            print("Error encoding pages for re-render: \(error)")
+        }
     }
     
     private var geometry: CGSize {
@@ -546,19 +665,26 @@ struct UserMemoriesBookView: View {
               let pageIndex = selectedPhotoFramePageIndex,
               pageIndex >= 0 && pageIndex < flipbookPages.count else { return }
         
-        // Convert UIImage to base64
-        if let imageData = photo.jpegData(compressionQuality: 0.6) {
+        // Convert UIImage to base64 with better compression
+        if let imageData = photo.jpegData(compressionQuality: 0.7) {
             let base64String = "data:image/jpeg;base64," + imageData.base64EncodedString()
             
             // Update the specific photo layout
-            if var layouts = flipbookPages[pageIndex].photoLayouts {
+            var updatedPages = flipbookPages
+            if var layouts = updatedPages[pageIndex].photoLayouts {
                 if let layoutIndex = layouts.firstIndex(where: { $0.id.uuidString == frameId }) {
                     layouts[layoutIndex].imageData = base64String
-                    
-                    // Create a copy of pages to trigger update
-                    var updatedPages = flipbookPages
                     updatedPages[pageIndex].photoLayouts = layouts
                     flipbookPages = updatedPages
+                    
+                    // Haptic feedback
+                    let impact = UIImpactFeedbackGenerator(style: .light)
+                    impact.impactOccurred()
+                    
+                    // Trigger flipbook re-render to show the new photo
+                    if let webView = webView {
+                        renderPagesToWebView(webView)
+                    }
                     
                     print("UserMemoriesBookView: Added photo to frame \(frameId) on page \(pageIndex)")
                 }
@@ -568,6 +694,28 @@ struct UserMemoriesBookView: View {
         // Reset selection
         selectedPhotoFrameId = nil
         selectedPhotoFramePageIndex = nil
+    }
+    
+    // MARK: - Photo Frame Position Update Handler
+    private func handlePhotoFrameMoved(pageIndex: Int, frameId: String, newX: CGFloat, newY: CGFloat) {
+        guard pageIndex >= 0 && pageIndex < flipbookPages.count else { return }
+        
+        var updatedPages = flipbookPages
+        if var layouts = updatedPages[pageIndex].photoLayouts,
+           let layoutIndex = layouts.firstIndex(where: { $0.id.uuidString == frameId }) {
+            // Update frame position (newX and newY are already in page coordinates)
+            var newFrame = layouts[layoutIndex].frame
+            newFrame.origin.x = max(0, min(newX, flipbookBasePageWidth - newFrame.width)) // Constrain to page
+            newFrame.origin.y = max(0, min(newY, flipbookBasePageHeight - newFrame.height)) // Constrain to page
+            layouts[layoutIndex].frame = newFrame
+            updatedPages[pageIndex].photoLayouts = layouts
+            flipbookPages = updatedPages
+            
+            // Trigger re-render of overlay
+            // (SwiftUI will automatically update when flipbookPages changes)
+            
+            print("UserMemoriesBookView: Moved photo frame \(frameId) on page \(pageIndex) to (\(newX), \(newY))")
+        }
     }
 }
 

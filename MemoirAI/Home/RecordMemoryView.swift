@@ -1,11 +1,13 @@
 import SwiftUI
 import AVFoundation
 import Speech
+import CoreData
 
 struct RecordMemoryView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var context
     @EnvironmentObject var profileVM: ProfileViewModel
+    @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
     @StateObject private var viewModel = MemoryEntryViewModel()
     @StateObject private var usageTracker = UsageTracker.shared
     @StateObject private var audioMonitor = AudioLevelMonitor()
@@ -22,11 +24,26 @@ struct RecordMemoryView: View {
     @State private var showExitConfirm = false
     @FocusState private var isTextFocused: Bool
     @State private var answeredPrompts: [String] = []
+    @State private var suggestionPool: [String] = []
     @State private var recordingTime: TimeInterval = 0
     @State private var recordingTimer: Timer?
+    @State private var checkpointTimer: Timer?
+    @State private var checkpointFiles: [URL] = []
+    @State private var lastCheckpointTime: TimeInterval = 0
+    @State private var isKeyboardSavePressed = false
+    
+    // Timeout warning states
+    @State private var showTimeoutWarning = false
+    @State private var finalCountdown: Int? = nil
     
     // Store picked/cropped images as raw JPEG/PNG data for Core-Data persistence
     @State private var selectedImagesData: [Data] = []
+    
+    // Constants
+    private let maxRecordingDuration: TimeInterval = 3600 // 60 minutes in seconds
+    private let checkpointInterval: TimeInterval = 600 // 10 minutes in seconds
+    private let warningThreshold: TimeInterval = 3570 // 59:30 (30 seconds before limit)
+    private let countdownStart: TimeInterval = 3597 // 59:57 (3 seconds before limit)
     
     private let passedPrompt: String?
     private let promptKey = "PromptOfTheDayCompleted"
@@ -40,19 +57,98 @@ struct RecordMemoryView: View {
     }
     
     let allPrompts: [String] = [
+        // Family & traditions
         "What are your favorite family traditions?",
-        "Describe your childhood home.",
         "Tell me about when you first met Grandma.",
+        "What is your favorite story about your parents?",
+        "Describe a typical Sunday in your family growing up.",
+        "What did family dinners look like when you were young?",
+        "Tell me about a relative who made a big impression on you.",
+        "What traditions did your family have around the holidays?",
+        "Share a story about your grandparents.",
+        "What's a family recipe you still remember?",
+        "Tell me about a family vacation you'll never forget.",
+
+        // Childhood
+        "Describe your childhood home.",
+        "What did you love to do as a kid?",
+        "What was your favorite toy or game growing up?",
+        "Tell me about your best childhood friend.",
+        "What was school like for you?",
+        "Describe your childhood bedroom.",
+        "What's a mischievous thing you did as a kid?",
+        "What did you want to be when you grew up?",
+        "Tell me about a teacher who shaped you.",
+        "What was your neighborhood like growing up?",
+
+        // Love & relationships
+        "Tell me about your wedding day.",
+        "How did you meet your spouse?",
+        "What was your first date like?",
+        "Describe the moment you knew you were in love.",
+        "Tell me about a love letter you wrote or received.",
+        "What's the best advice you've received about love?",
+        "Describe a friendship that has meant the most to you.",
+        "Tell me about someone who believed in you.",
+
+        // Career & work
         "What was your first job like?",
+        "Tell me about a job you loved.",
+        "What's the hardest thing you've ever worked on?",
+        "Describe a proud moment in your career.",
+        "Who was your best boss or mentor, and why?",
+        "Tell me about a risk you took professionally.",
+
+        // Memories & moments
         "What are your happiest holiday memories?",
         "Describe a funny moment from your youth.",
-        "What did you love to do as a kid?",
+        "Tell me about a time you laughed until you cried.",
+        "What's the best birthday you ever had?",
+        "Tell me about a trip that changed you.",
+        "Share a moment you felt truly proud.",
+        "Describe a time you were scared but went through with it anyway.",
+        "What's something you did that surprised even you?",
+
+        // People
         "Who had the biggest influence on your life?",
-        "Tell me about your wedding day."
+        "Tell me about a stranger who made a difference.",
+        "Describe someone who always made you feel safe.",
+        "Who taught you the most about kindness?",
+        "Tell me about a hero of yours.",
+
+        // Lessons & reflection
+        "What's the best advice you ever got?",
+        "What's a mistake that taught you the most?",
+        "What would you tell your younger self?",
+        "What's a belief that has changed as you've gotten older?",
+        "What are you most grateful for today?",
+        "What do you hope people remember about you?",
+        "What's a tradition you hope continues in your family?",
+        "What's something you wish more people knew about you?",
+
+        // Places & time
+        "Describe a place that feels like home.",
+        "Tell me about the house you raised your children in.",
+        "What did your town look like when you were young?",
+        "Share a memory from a place you'll never forget.",
+
+        // Fun prompts
+        "What songs take you right back in time?",
+        "What was the best meal you ever ate?",
+        "Tell me about a pet you loved.",
+        "What's a skill you're proud of learning?"
     ]
     
     var micColor: Color {
         Color(red: 0.88, green: 0.52, blue: 0.28)
+    }
+    
+    private var liveAudioLevel: Double {
+        audioMonitor.getSmoothedLevel()
+    }
+    
+    private var shouldShowVoiceRings: Bool {
+        isRecording && !isPaused && (audioMonitor.isVoiceActive || liveAudioLevel > 0.08)
     }
     
     var body: some View {
@@ -96,8 +192,8 @@ struct RecordMemoryView: View {
                     
                     // Mic Button with enhanced visual feedback
                     ZStack {
-                        // Animated rings for recording state
-                        if isRecording || isPaused {
+                        // Rings only appear when actively recording and speech is detected.
+                        if shouldShowVoiceRings {
                             ForEach(0..<3, id: \.self) { i in
                                 Circle()
                                     .stroke(
@@ -108,12 +204,11 @@ struct RecordMemoryView: View {
                                     )
                                     .frame(width: CGFloat(140 + i * 20),
                                            height: CGFloat(140 + i * 20))
-                                    .scaleEffect(audioMonitor.isVoiceActive ? 1.3 : 1.2)
+                                    .scaleEffect(1.0 + liveAudioLevel * (0.10 + Double(i) * 0.04))
+                                    .opacity(0.25 + liveAudioLevel * 0.45)
                                     .animation(
-                                        Animation.easeOut(duration: audioMonitor.isVoiceActive ? 1.0 : 1.5)
-                                            .repeatForever()
-                                            .delay(Double(i) * 0.3),
-                                        value: isRecording || isPaused
+                                        .easeOut(duration: 0.12),
+                                        value: liveAudioLevel
                                     )
                             }
                         }
@@ -127,11 +222,11 @@ struct RecordMemoryView: View {
                             .frame(width: 120, height: 120)
                             .scaleEffect(
                                 isRecording && !isPaused ?
-                                    (1.0 + audioMonitor.getSmoothedLevel() * 0.1) : 1.0
+                                    (1.0 + liveAudioLevel * 0.1) : 1.0
                             )
                             .shadow(color: Color.orange.opacity(0.25),
                                     radius: 10, x: 0, y: 4)
-                            .animation(.easeOut(duration: 0.1), value: audioMonitor.getSmoothedLevel())
+                            .animation(.easeOut(duration: 0.1), value: liveAudioLevel)
                             .animation(.easeInOut(duration: 0.3), value: audioMonitor.isVoiceActive)
                         
                         // Mic icon
@@ -255,22 +350,44 @@ struct RecordMemoryView: View {
                             ZStack(alignment: .topLeading) {
                                 if typedText.isEmpty {
                                     Text("Type your memory here...")
-                                        .foregroundColor(accent.opacity(0.6))
-                                        .padding(.top, 10)
-                                        .padding(.leading, 12)
+                                        .font(.system(size: 16))
+                                        .foregroundColor(accent.opacity(0.5))
+                                        .padding(.top, 14)
+                                        .padding(.leading, 16)
                                 }
                                 
                                 TextEditor(text: $typedText)
-                                    .padding(8)
+                                    .font(.system(size: 16))
+                                    .scrollContentBackground(.hidden)
+                                    .background(Color.clear)
+                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 12)
                                     .focused($isTextFocused)
                             }
-                            .frame(height: 140)
-                            .background(Color(red: 0.98, green: 0.94, blue: 0.86))
-                            .cornerRadius(18)
-                            .shadow(color: Color.black.opacity(0.04),
-                                    radius: 4, x: 0, y: 2)
+                            .frame(minHeight: 160, maxHeight: 200)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(red: 1.0, green: 0.97, blue: 0.91))
+                            .cornerRadius(16)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .stroke(accent.opacity(0.2), lineWidth: 1.5)
+                            )
+                            .shadow(color: Color.black.opacity(0.03),
+                                    radius: 3, x: 0, y: 2)
+                            
+                            // Word count indicator
+                            if !typedText.isEmpty {
+                                HStack {
+                                    Spacer()
+                                    Text("\(typedText.split(separator: " ").count) words")
+                                        .font(.caption)
+                                        .foregroundColor(accent.opacity(0.5))
+                                }
+                                .padding(.horizontal, 4)
+                            }
                         }
                         .padding(.horizontal)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
                     
                     // Suggestions (max 3)
@@ -281,7 +398,7 @@ struct RecordMemoryView: View {
                                 .foregroundColor(accent)
                                 .padding(.horizontal)
                             
-                            ForEach(unansweredPrompts().prefix(3), id: \.self) { suggestion in
+                            ForEach(suggestionPool.prefix(3), id: \.self) { suggestion in
                                 Text(suggestion)
                                     .foregroundColor(.black)
                                     .padding()
@@ -309,9 +426,36 @@ struct RecordMemoryView: View {
                                     }
                                     .padding(.horizontal)
                             }
+
+                            HStack {
+                                Spacer()
+                                Button(action: regenerateSuggestions) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "arrow.triangle.2.circlepath")
+                                            .font(.system(size: 12, weight: .medium))
+                                        Text("Show different questions")
+                                            .font(.system(size: 13, weight: .medium))
+                                    }
+                                    .foregroundColor(accent.opacity(0.7))
+                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, 14)
+                                    .background(Color.black.opacity(0.04))
+                                    .clipShape(Capsule())
+                                }
+                                Spacer()
+                            }
+                            .padding(.top, 4)
                         }
                     }
                 }
+                .tutorialAnchor(.recordingSaveMemory)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { tutorialCoordinator.reportAnchor(.recordingSaveMemory, rect: geo.frame(in: .global)) }
+                            .onChange(of: geo.frame(in: .global)) { _, f in tutorialCoordinator.reportAnchor(.recordingSaveMemory, rect: f) }
+                    }
+                )
                 .padding(.bottom, 48)
             }
             .onTapGesture {
@@ -321,34 +465,73 @@ struct RecordMemoryView: View {
                 isTextFocused = false
             }
             
-            // Floating Save Button
-            if hasUnsavedData() {
-                Button(action: saveMemory) {
-                    Text("Save Memory")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                        .background(micColor)
-                        .cornerRadius(18)
-                        .shadow(color: Color.black.opacity(0.1),
-                                radius: 4, x: 0, y: 2)
-                }
-                .padding()
-                .transition(.scale)
+            // Timeout Warning Overlay
+            if showTimeoutWarning {
+                TimeoutWarningOverlay(
+                    countdown: finalCountdown,
+                    message: "Recording will save soon to protect your memory"
+                )
             }
         }
         .background(Color(red: 1.0, green: 0.96, blue: 0.89)
             .ignoresSafeArea())
         .tint(accent)
-        .confirmationDialog("Exit without saving?", isPresented: $showExitConfirm) {
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button {
+                    guard hasUnsavedData() else { return }
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    saveMemory()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.and.arrow.down.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Save Memory")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(hasUnsavedData() ? micColor : Color.gray.opacity(0.5))
+                    .clipShape(Capsule())
+                    .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 2)
+                    .scaleEffect(isKeyboardSavePressed ? 0.95 : 1.0)
+                    .animation(.spring(response: 0.22, dampingFraction: 0.72), value: isKeyboardSavePressed)
+                    .animation(.easeInOut(duration: 0.15), value: hasUnsavedData())
+                }
+                .disabled(!hasUnsavedData())
+                .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity, pressing: { pressing in
+                    isKeyboardSavePressed = pressing
+                }, perform: {})
+                .accessibilityLabel("Save Memory")
+                .accessibilityHint("Saves your current written or recorded memory")
+
+                Button {
+                    isTextFocused = false
+                } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                        .font(.system(size: 18, weight: .medium))
+                }
+                .foregroundColor(accent)
+            }
+        }
+        .alert("Exit without saving?", isPresented: $showExitConfirm) {
             Button("Discard and Exit", role: .destructive) {
                 dismiss()
             }
-            Button("Cancel", role: .cancel) { }
+            Button("Keep Editing", role: .cancel) { }
+        } message: {
+            Text("You have an unsaved memory in progress. If you exit now, your current recording and text will be lost.")
         }
         .onAppear {
+            tutorialCoordinator.setVisibleScreen(.recordMemory)
             answeredPrompts = viewModel.entries.compactMap { $0.prompt }
+            if suggestionPool.isEmpty {
+                suggestionPool = unansweredPrompts().shuffled()
+            }
+            showExitConfirm = false
+            tutorialCoordinator.onRecordMemoryViewAppeared(profileID: profileVM.selectedProfile.id)
             
             // Request microphone permission if not already granted
             if !permissionManager.isMicrophoneAuthorized {
@@ -358,6 +541,12 @@ struct RecordMemoryView: View {
             // Ensure speech recognition permission is requested up-front
             SFSpeechRecognizer.requestAuthorization { status in
                 print("🔑 Speech auth status (RecordMemoryView):", status.rawValue)
+            }
+        }
+        .onDisappear {
+            tutorialCoordinator.clearAnchor(.recordingSaveMemory)
+            if tutorialCoordinator.visibleScreen == .recordMemory {
+                tutorialCoordinator.setVisibleScreen(.unknown)
             }
         }
         .navigationBarHidden(true)
@@ -394,6 +583,20 @@ struct RecordMemoryView: View {
     func unansweredPrompts() -> [String] {
         allPrompts.filter { !answeredPrompts.contains($0) }
     }
+
+    func regenerateSuggestions() {
+        let unanswered = unansweredPrompts()
+        guard !unanswered.isEmpty else {
+            suggestionPool = []
+            return
+        }
+        let currentlyShown = Set(suggestionPool.prefix(3))
+        let remaining = unanswered.filter { !currentlyShown.contains($0) }
+        let nextPool = remaining.count >= 3 ? remaining.shuffled() : unanswered.shuffled()
+        withAnimation(.easeInOut(duration: 0.25)) {
+            suggestionPool = nextPool
+        }
+    }
     
     func hasUnsavedData() -> Bool {
         selectedPrompt != nil || !typedText.isEmpty || audioURL != nil || !selectedImagesData.isEmpty
@@ -413,8 +616,48 @@ struct RecordMemoryView: View {
     // Start recording timer
     func startRecordingTimer() {
         recordingTime = 0
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+        checkpointFiles.removeAll()
+        lastCheckpointTime = 0
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [self] _ in
             recordingTime += 1
+            
+            // Check for timeout warnings
+            if recordingTime >= countdownStart && recordingTime < maxRecordingDuration {
+                // Start 3-second countdown
+                let remaining = Int(maxRecordingDuration - recordingTime)
+                finalCountdown = remaining
+            } else if recordingTime >= warningThreshold && recordingTime < countdownStart {
+                // Show warning overlay (30 seconds before limit)
+                showTimeoutWarning = true
+            } else if recordingTime >= maxRecordingDuration {
+                // Auto-stop and save
+                stopRecording()
+                saveMemory()
+            }
+            
+            // Checkpoint every 10 minutes (only trigger once per interval)
+            if recordingTime - lastCheckpointTime >= checkpointInterval && recordingTime > 0 {
+                saveCheckpoint()
+                lastCheckpointTime = recordingTime
+            }
+        }
+    }
+    
+    // Save checkpoint (every 10 minutes)
+    func saveCheckpoint() {
+        guard let currentURL = audioURL else { return }
+        
+        // Copy current file as checkpoint
+        let checkpointURL = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("checkpoint_\(UUID().uuidString).caf")
+        
+        do {
+            try FileManager.default.copyItem(at: currentURL, to: checkpointURL)
+            checkpointFiles.append(checkpointURL)
+            print("✅ Checkpoint saved at \(formatTime(recordingTime))")
+        } catch {
+            print("❌ Failed to save checkpoint: \(error)")
         }
     }
     
@@ -487,12 +730,12 @@ struct RecordMemoryView: View {
         audioRecorder?.pause()
         isPaused = true
         recordingTimer?.invalidate() // Pause the timer
+        audioMonitor.setIdleState()
         
         // Pause real-time transcription
         realTimeTranscription.pauseTranscription()
         
-        // Note: We keep audio monitoring active during pause so user can see
-        // that audio input is still being detected, just not recorded
+        // Clear live meter visuals immediately while paused.
     }
     
     func resumeRecording() {
@@ -514,6 +757,14 @@ struct RecordMemoryView: View {
         isPaused = false
         stopRecordingTimer() // Stop the timer
         
+        // Stop checkpoint timer
+        checkpointTimer?.invalidate()
+        checkpointTimer = nil
+        
+        // Hide timeout warning
+        showTimeoutWarning = false
+        finalCountdown = nil
+        
         // Stop audio level monitoring
         audioMonitor.stopMonitoring()
         
@@ -529,6 +780,12 @@ struct RecordMemoryView: View {
         stopRecording()
         audioURL = nil
         recordingTime = 0 // Reset timer
+        
+        // Clean up checkpoint files
+        for checkpointURL in checkpointFiles {
+            try? FileManager.default.removeItem(at: checkpointURL)
+        }
+        checkpointFiles.removeAll()
         
         // Audio monitor is already stopped in stopRecording()
     }
@@ -553,13 +810,20 @@ struct RecordMemoryView: View {
             newEntry.audioData    = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
             newEntry.createdAt    = Date()
             newEntry.profileID    = profileVM.selectedProfile.id
+            newEntry.firebaseUserId = MemoryUserScope.currentFirebaseUserId
+            if newEntry.firebaseUserId == nil {
+                print("⚠️ Saving memory without firebaseUserId in RecordMemoryView")
+            }
             
+            // Photo saving disabled - uncomment below to re-enable
+            /*
             for data in imagesToSave {
                 let photo = Photo(context: bgContext)
                 photo.id = UUID()
                 photo.data = data
                 photo.memoryEntry = newEntry
             }
+            */
             
             do {
                 try bgContext.save()
@@ -575,7 +839,21 @@ struct RecordMemoryView: View {
                 print("❌ Error saving MemoryEntry:", error)
             }
             
-            // 3️⃣ Start transcription using same background context
+            // 3️⃣ Generate title if needed (if prompt is "Untitled Prompt" and we have text)
+            if promptToSave == "Untitled Prompt" || promptToSave == "Untitled" {
+                let textForTitle = textToSave.isEmpty ? nil : textToSave
+                
+                // If we have text now, generate title immediately
+                if let text = textForTitle, !text.isEmpty {
+                    Task {
+                        await generateAndUpdateTitle(for: newEntry, text: text, context: bgContext)
+                    }
+                } else {
+                    // If we're waiting for transcription, title will be generated after transcription completes
+                }
+            }
+            
+            // 4️⃣ Start transcription using same background context
             if let urlString = newEntry.audioFileURL,
                let fileURL = URL(string: urlString) {
                 // Use enhanced transcription with better accuracy
@@ -584,6 +862,14 @@ struct RecordMemoryView: View {
                     case .success(let transcript):
                         bgContext.perform {
                             newEntry.text = transcript
+                            
+                            // Generate title if prompt is still "Untitled Prompt"
+                            if newEntry.prompt == "Untitled Prompt" || newEntry.prompt == "Untitled" {
+                                Task {
+                                    await generateAndUpdateTitle(for: newEntry, text: transcript, context: bgContext)
+                                }
+                            }
+                            
                             try? bgContext.save()
                             
                             DispatchQueue.main.async {
@@ -604,6 +890,7 @@ struct RecordMemoryView: View {
         audioURL        = nil
         isRecording     = false
         isPaused        = false
+        showExitConfirm = false
         showTextEntry   = false
         
         // Persist prompt‐of‐the‐day if needed
@@ -614,6 +901,81 @@ struct RecordMemoryView: View {
         // 🔥 ENHANCED: Brief delay to allow transcription to start, then dismiss
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             dismiss()
+        }
+    }
+    
+    // MARK: - Title Generation Helper
+    private func generateAndUpdateTitle(for entry: MemoryEntry, text: String, context: NSManagedObjectContext) async {
+        guard let apiKey = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String else {
+            print("⚠️ Cannot generate title: API key not found")
+            return
+        }
+        
+        let titleService = MemoryTitleService(apiKey: apiKey)
+        if let generatedTitle = await titleService.generateTitle(from: text) {
+            // Use performAndWait since we're already in an async context and want to wait for the save
+            context.performAndWait {
+                entry.prompt = generatedTitle
+                try? context.save()
+            }
+            
+            // Post notification on main thread after save completes
+            await MainActor.run {
+                NotificationCenter.default.post(name: .memorySaved, object: nil)
+                print("✅ Title generated and updated: '\(generatedTitle)'")
+            }
+        }
+    }
+}
+
+// MARK: - Timeout Warning Overlay
+struct TimeoutWarningOverlay: View {
+    let countdown: Int?
+    let message: String
+    
+    @State private var pulseScale: CGFloat = 1.0
+    
+    var body: some View {
+        ZStack {
+            // Pulsing background flash
+            Color.red.opacity(0.2)
+                .ignoresSafeArea()
+                .scaleEffect(pulseScale)
+                .animation(
+                    Animation.easeInOut(duration: 0.5)
+                        .repeatForever(autoreverses: true),
+                    value: pulseScale
+                )
+                .onAppear {
+                    pulseScale = 1.1
+                }
+            
+            // Warning card
+            VStack(spacing: 20) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 50))
+                    .foregroundColor(.red)
+                
+                Text(message)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.black)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                
+                if let countdown = countdown {
+                    Text("\(countdown)")
+                        .font(.system(size: 60, weight: .bold, design: .rounded))
+                        .foregroundColor(.red)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .padding(30)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
+            )
+            .padding(.horizontal, 40)
         }
     }
 }

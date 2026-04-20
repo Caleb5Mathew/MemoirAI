@@ -1,0 +1,22 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "bookVersions",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {"fieldPath": "profileId", "order": "ASCENDING"},
+        {"fieldPath": "createdAt", "order": "DESCENDING"},
+        {"fieldPath": "__name__", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "pendingCartCheckouts",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "createdAt", "order": "ASCENDING"}
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

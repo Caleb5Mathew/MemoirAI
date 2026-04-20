@@ -1,0 +1,23 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    // Canonical hybrid artifacts: PNG pages + packaged PDF per book version.
+    match /users/{userId}/bookVersions/{bookVersionId}/pages/{pageFile} {
+      allow read, write, delete: if isOwner(userId)
+        && pageFile.matches('page_[0-9]{3}\\.png');
+    }
+
+    match /users/{userId}/bookVersions/{bookVersionId}/book.pdf {
+      allow read, write, delete: if isOwner(userId);
+    }
+
+    // Backward-compatibility paths for older uploads.
+    match /users/{userId}/{allPaths=**} {
+      allow read, write, delete: if isOwner(userId);
+    }
+  }
+}

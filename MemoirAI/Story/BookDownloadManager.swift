@@ -29,6 +29,52 @@ class BookDownloadManager: NSObject, ObservableObject {
     }
     
     // MARK: - Public Methods
+    func saveRenderedPagesToPhotos(_ pageImages: [UIImage], from viewController: UIViewController?) {
+        guard !pageImages.isEmpty else {
+            showErrorAlert("No rendered pages available to save")
+            return
+        }
+        
+        self.presentingViewController = viewController
+        
+        PHPhotoLibrary.requestAuthorization { [weak self] status in
+            DispatchQueue.main.async {
+                switch status {
+                case .authorized, .limited:
+                    self?.saveUIImagePagesToPhotoLibrary(pageImages)
+                case .denied, .restricted:
+                    self?.showErrorAlert("Photo library access is required to save images. Please enable it in Settings.")
+                default:
+                    self?.showErrorAlert("Photo library permission not granted")
+                }
+            }
+        }
+    }
+    
+    func saveRenderedPagesAsPDF(
+        _ pageImages: [UIImage],
+        printSpec: BookPrintSpec,
+        filename: String = "MemoirAI_Storybook.pdf",
+        from viewController: UIViewController?
+    ) {
+        guard !pageImages.isEmpty else {
+            showErrorAlert("No rendered pages available for PDF export")
+            return
+        }
+        
+        guard let pdfData = BookDownloadHandler.makePDFFromRenderedPages(pageImages, printSpec: printSpec) else {
+            showErrorAlert("Failed to generate PDF from rendered pages")
+            return
+        }
+        
+        guard let viewController else {
+            showErrorAlert("No presenting view controller for PDF export")
+            return
+        }
+        
+        presentPDFSaveDialog(with: pdfData, filename: filename, from: viewController)
+    }
+
     func saveToPhotos(webView: WKWebView?, from viewController: UIViewController?) {
         guard let webView = webView else {
             showErrorAlert("Unable to access book content")
@@ -172,6 +218,22 @@ class BookDownloadManager: NSObject, ObservableObject {
         }
     }
     
+    private func saveUIImagePagesToPhotoLibrary(_ images: [UIImage]) {
+        PHPhotoLibrary.shared().performChanges({
+            for image in images {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }
+        }) { [weak self] success, error in
+            DispatchQueue.main.async {
+                if success {
+                    self?.showSuccessAlert("Saved \(images.count) pages to Photos")
+                } else {
+                    self?.showErrorAlert("Failed to save images: \(error?.localizedDescription ?? "Unknown error")")
+                }
+            }
+        }
+    }
+    
     // MARK: - Alert Helpers
     private func showErrorAlert(_ message: String) {
         errorMessage = message
@@ -233,44 +295,81 @@ extension BookDownloadManager: UIDocumentPickerDelegate {
 
 // MARK: - SwiftUI Integration
 struct BookDownloadHandler {
-    static func handlePDFDownload(pages: [String], filename: String, presentingView: UIViewController?, isKidsBook: Bool = false) {
-        // Create PDF document
-        let pdfDocument = PDFDocument()
+    static func makePDFFromRenderedPages(_ pageImages: [UIImage], printSpec: BookPrintSpec) -> Data? {
+        guard !pageImages.isEmpty else { return nil }
         
-        // Process each page image
-        for (index, pageDataString) in pages.enumerated() {
-            // Remove data URL prefix if present
-            let base64String: String
-            if pageDataString.hasPrefix("data:image/jpeg;base64,") {
-                base64String = String(pageDataString.dropFirst("data:image/jpeg;base64,".count))
-            } else if pageDataString.hasPrefix("data:image/png;base64,") {
-                base64String = String(pageDataString.dropFirst("data:image/png;base64,".count))
-            } else {
-                base64String = pageDataString
+        let bounds = CGRect(x: 0, y: 0, width: printSpec.widthPt, height: printSpec.heightPt)
+        let renderer = UIGraphicsPDFRenderer(bounds: bounds)
+        
+        return renderer.pdfData { context in
+            for image in pageImages {
+                context.beginPage()
+                image.draw(in: bounds)
             }
-            
-            // Decode base64 to image data
-            guard let imageData = Data(base64Encoded: base64String),
-                  let image = UIImage(data: imageData) else {
-                print("BookDownloadHandler: Failed to decode page \(index + 1)")
-                continue
-            }
-            
-            // Create PDF page from image (already in correct orientation from JS capture)
-            if let pdfPage = PDFPage(image: image) {
-                pdfDocument.insert(pdfPage, at: index)
+        }
+    }
+
+    static func handlePDFDownload(pages: [String], filename: String, presentingView: UIViewController?, isKidsBook: Bool = false) {
+        // Standard US Letter dimensions in points (1 inch = 72 points)
+        // Comic, Realistic, Custom: 8.5 x 11 inches = 612 x 792 points (portrait)
+        // Kids Book: 11 x 8.5 inches = 792 x 612 points (landscape)
+        let pdfWidth: CGFloat = isKidsBook ? (11.0 * 72) : (8.5 * 72)  // 792 or 612 points
+        let pdfHeight: CGFloat = isKidsBook ? (8.5 * 72) : (11.0 * 72)  // 612 or 792 points
+        let pdfBounds = CGRect(x: 0, y: 0, width: pdfWidth, height: pdfHeight)
+        
+        // Use UIGraphicsPDFRenderer to create PDF with correct page dimensions
+        let renderer = UIGraphicsPDFRenderer(bounds: pdfBounds)
+        
+        let pdfData = renderer.pdfData { ctx in
+            // Process each page image
+            for (index, pageDataString) in pages.enumerated() {
+                // Remove data URL prefix if present
+                let base64String: String
+                if pageDataString.hasPrefix("data:image/jpeg;base64,") {
+                    base64String = String(pageDataString.dropFirst("data:image/jpeg;base64,".count))
+                } else if pageDataString.hasPrefix("data:image/png;base64,") {
+                    base64String = String(pageDataString.dropFirst("data:image/png;base64,".count))
+                } else {
+                    base64String = pageDataString
+                }
+                
+                // Decode base64 to image data
+                guard let imageData = Data(base64Encoded: base64String),
+                      let image = UIImage(data: imageData) else {
+                    print("BookDownloadHandler: Failed to decode page \(index + 1)")
+                    continue
+                }
+                
+                // Begin new PDF page with correct bounds
+                ctx.beginPage(withBounds: pdfBounds, pageInfo: [:])
+                
+                // Fill background with paper color
+                let context = ctx.cgContext
+                context.setFillColor(UIColor(red: 0.98, green: 0.96, blue: 0.89, alpha: 1.0).cgColor)
+                context.fill(pdfBounds)
+                
+                // Draw image scaled to fit page bounds while maintaining aspect ratio
+                let imageAspect = image.size.width / image.size.height
+                let pageAspect = pdfWidth / pdfHeight
+                
+                var drawRect = pdfBounds
+                if imageAspect > pageAspect {
+                    // Image is wider - fit to width
+                    let scaledHeight = pdfWidth / imageAspect
+                    drawRect = CGRect(x: 0, y: (pdfHeight - scaledHeight) / 2, width: pdfWidth, height: scaledHeight)
+                } else {
+                    // Image is taller - fit to height
+                    let scaledWidth = pdfHeight * imageAspect
+                    drawRect = CGRect(x: (pdfWidth - scaledWidth) / 2, y: 0, width: scaledWidth, height: pdfHeight)
+                }
+                
+                image.draw(in: drawRect)
             }
         }
         
         // Check if we have pages
-        guard pdfDocument.pageCount > 0 else {
+        guard !pages.isEmpty else {
             print("BookDownloadHandler: No pages were added to PDF")
-            return
-        }
-        
-        // Get PDF data
-        guard let pdfData = pdfDocument.dataRepresentation() else {
-            print("BookDownloadHandler: Failed to generate PDF data")
             return
         }
         

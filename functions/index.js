@@ -1,5 +1,7 @@
 const admin = require("firebase-admin");
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const { PDFDocument } = require("pdf-lib");
 const crypto = require("crypto");
@@ -17,17 +19,543 @@ const stripeWebhookSecret = defineSecret("STRIPE_WEBHOOK_SECRET");
 const luluClientKey = defineSecret("LULU_CLIENT_KEY");
 const luluClientSecret = defineSecret("LULU_CLIENT_SECRET");
 const luluWebhookSecretParam = defineSecret("LULU_WEBHOOK_SECRET");
+/** Server-side only; enable Places Autocomplete + Geocoding for checkout address typeahead */
+const googlePlacesApiKey = defineSecret("GOOGLE_PLACES_API_KEY");
 
 const LULU_SANDBOX = process.env.LULU_USE_SANDBOX === "true";
-const LULU_BASE = LULU_SANDBOX
-  ? "https://api.sandbox.lulu.com"
-  : "https://api.lulu.com";
-const LULU_AUTH_URL = LULU_SANDBOX
-  ? "https://api.sandbox.lulu.com/auth/realms/glasstree/protocol/openid-connect/token"
-  : "https://api.lulu.com/auth/realms/glasstree/protocol/openid-connect/token";
+const LULU_ENDPOINTS = {
+  production: {
+    baseUrl: "https://api.lulu.com",
+    authUrl: "https://api.lulu.com/auth/realms/glasstree/protocol/openid-connect/token"
+  },
+  sandbox: {
+    baseUrl: "https://api.sandbox.lulu.com",
+    authUrl: "https://api.sandbox.lulu.com/auth/realms/glasstree/protocol/openid-connect/token"
+  }
+};
+
+const LULU_SHIPPING_LEVELS = [
+  { level: "MAIL", label: "Standard Mail" },
+  { level: "PRIORITY_MAIL", label: "Priority Mail" },
+  { level: "GROUND_HD", label: "Ground (Home)" },
+  { level: "GROUND_BUS", label: "Ground (Business)" },
+  { level: "GROUND", label: "Ground" },
+  { level: "EXPEDITED", label: "Expedited" },
+  { level: "EXPRESS", label: "Express" }
+];
 
 function jsonError(res, code, message) {
   res.status(code).json({ status: "failed", message });
+}
+
+function getStripeApiKey() {
+  const raw = String(stripeSecretKey.value() || "");
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error("Stripe secret key is empty");
+  }
+  if (raw !== trimmed) {
+    console.warn("STRIPE_SECRET_KEY had surrounding whitespace; trimmed before Stripe client init.");
+  }
+  if (/[\r\n]/.test(trimmed)) {
+    throw new Error("Stripe secret key contains newline characters");
+  }
+  return trimmed;
+}
+
+function createStripeClient({ maxNetworkRetries = 1, timeoutMs = 20 * 1000 } = {}) {
+  return new Stripe(getStripeApiKey(), {
+    maxNetworkRetries,
+    timeout: timeoutMs
+  });
+}
+
+function isLikelyTransientStripeError(error) {
+  const type = String(error?.type || "");
+  const code = String(error?.code || "");
+  const msg = String(error?.message || error || "").toLowerCase();
+  return type === "StripeConnectionError"
+    || code === "ECONNRESET"
+    || code === "ECONNREFUSED"
+    || code === "EHOSTUNREACH"
+    || code === "ENETUNREACH"
+    || code === "EAI_AGAIN"
+    || code === "ETIMEDOUT"
+    || msg.includes("connection to stripe")
+    || msg.includes("connection error")
+    || msg.includes("socket hang up")
+    || msg.includes("network")
+    || msg.includes("timed out")
+    || msg.includes("econnreset");
+}
+
+async function createStripeCheckoutSessionWithRetry(stripe, payload, logLabel, idempotencyKey) {
+  const maxAttempts = 3;
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      if (attempt > 1) {
+        console.warn(`${logLabel} stripe checkout retry attempt=${attempt}/${maxAttempts}`);
+      }
+      return await stripe.checkout.sessions.create(payload, idempotencyKey ? { idempotencyKey } : undefined);
+    } catch (error) {
+      lastError = error;
+      const transient = isLikelyTransientStripeError(error);
+      const canRetry = transient && attempt < maxAttempts;
+      console.warn(
+        `${logLabel} stripe checkout create failed attempt=${attempt} transient=${transient} ` +
+        `type=${String(error?.type || "")} code=${String(error?.code || "")} message=${String(error?.message || error)}`
+      );
+      if (!canRetry) {
+        throw error;
+      }
+      const baseBackoff = Math.min(1500, 250 * Math.pow(2, attempt - 1));
+      const jitter = Math.floor(Math.random() * 250);
+      const backoffMs = baseBackoff + jitter;
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+  throw lastError || new Error("Stripe session create failed");
+}
+
+async function withTimeout(promise, timeoutMs, label) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** Fast checkout (quote + session split). Default on; set FAST_CHECKOUT_ENABLED=false to disable server-side. */
+function isFastCartCheckoutEnabled() {
+  return process.env.FAST_CHECKOUT_ENABLED !== "false";
+}
+
+const CART_CHECKOUT_QUOTE_TTL_MS = 30 * 60 * 1000;
+
+function normalizeCartItemsForHash(items) {
+  const rows = (items || []).map((row) => ({
+    bookVersionId: String(row.bookVersionId || ""),
+    productOptionId: row.productOptionId ? String(row.productOptionId) : "",
+    quantity: Math.min(99, Math.max(1, parseInt(row.quantity, 10) || 1))
+  }));
+  rows.sort((a, b) => {
+    const c = a.bookVersionId.localeCompare(b.bookVersionId);
+    if (c !== 0) return c;
+    const d = a.productOptionId.localeCompare(b.productOptionId);
+    if (d !== 0) return d;
+    return a.quantity - b.quantity;
+  });
+  return rows;
+}
+
+function normalizeShippingForHash(addr) {
+  if (!addr || typeof addr !== "object") return {};
+  return {
+    name: String(addr.name || "").trim(),
+    street1: String(addr.street1 || "").trim(),
+    city: String(addr.city || "").trim(),
+    stateCode: String(addr.stateCode || "").trim().toUpperCase(),
+    countryCode: String(addr.countryCode || "").trim().toUpperCase(),
+    postcode: String(addr.postcode || "").trim().toUpperCase(),
+    phone: String(addr.phone || "").trim()
+  };
+}
+
+function computeCartCheckoutPayloadHash(items, shippingAddress, shippingLevel) {
+  const payload = {
+    items: normalizeCartItemsForHash(items),
+    shippingAddress: normalizeShippingForHash(shippingAddress),
+    shippingLevel: String(shippingLevel || "MAIL").toUpperCase()
+  };
+  const json = JSON.stringify(payload);
+  return crypto.createHash("sha256").update(json).digest("hex");
+}
+
+function sanitizeIdempotencyKey(raw) {
+  const s = String(raw || "").trim().slice(0, 256);
+  if (!s || s.length < 8) {
+    return null;
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(s)) {
+    return null;
+  }
+  return s;
+}
+
+/**
+ * Shared Lulu pricing + Stripe line items for cart checkout (used by legacy create + quote + fast session).
+ */
+async function buildCartCheckoutResolved(userId, items, shippingAddress, shippingLevel, logPrefix) {
+  const stripeLineItems = [];
+  const resolvedItems = [];
+  const cartLineItemsForWholeOrderShip = [];
+  const allWarnings = [];
+  let suggestedAddress = null;
+  let booksSubtotalCents = 0;
+  let summedLineShippingFallbackCents = 0;
+  let firstResolvedLine = null;
+  let firstLineQuantity = 1;
+
+  for (let i = 0; i < items.length; i += 1) {
+    const row = items[i] || {};
+    const bookVersionId = row.bookVersionId;
+    const productOptionId = row.productOptionId || null;
+    const quantity = Math.min(99, Math.max(1, parseInt(row.quantity, 10) || 1));
+    if (!bookVersionId) {
+      throw new HttpsError("invalid-argument", `items[${i}].bookVersionId is required`);
+    }
+
+    let resolved;
+    try {
+      resolved = await pricingForCartLine(
+        userId,
+        bookVersionId,
+        productOptionId,
+        shippingAddress,
+        shippingLevel,
+        `${logPrefix}:${i}:${bookVersionId}`,
+        quantity
+      );
+    } catch (err) {
+      if (err instanceof HttpsError) {
+        const prev = err.details && typeof err.details === "object" ? err.details : {};
+        throw new HttpsError(err.code, err.message, {
+          ...prev,
+          stage: "line_pricing",
+          lineIndex: i,
+          bookVersionId
+        });
+      }
+      throw new HttpsError("failed-precondition", String(err?.message || err || "Line pricing failed"), {
+        stage: "line_pricing",
+        lineIndex: i,
+        bookVersionId
+      });
+    }
+    for (const w of resolved.warnings) {
+      allWarnings.push(w);
+    }
+    if (!suggestedAddress && resolved.suggestedAddress) {
+      suggestedAddress = resolved.suggestedAddress;
+    }
+    if (!firstResolvedLine) {
+      firstResolvedLine = resolved;
+      firstLineQuantity = quantity;
+    }
+
+    const lineBook = resolved.pricing.bookBaseCents;
+    const lineShip = resolved.pricing.shippingCents;
+    summedLineShippingFallbackCents += lineShip;
+    booksSubtotalCents += lineBook;
+    const unitBook = quantity > 0 ? Math.round(lineBook / quantity) : lineBook;
+    const unitCents = quantity > 0 ? Math.round(lineBook / quantity) : lineBook;
+
+    cartLineItemsForWholeOrderShip.push({
+      podPackageId: resolved.inputs.podPackageId,
+      pageCount: resolved.inputs.pageCount,
+      quantity
+    });
+
+    resolvedItems.push({
+      bookVersionId,
+      productOptionId: resolved.inputs.selectedOption.optionId,
+      selectedPodPackageId: resolved.inputs.selectedOption.podPackageId,
+      quantity,
+      unitCents,
+      lineTotalCents: lineBook,
+      lineBookBaseCents: lineBook,
+      lineShippingCents: 0,
+      unitBookBaseCents: unitBook,
+      unitShippingCents: 0,
+      coverStoragePath: resolved.coverStoragePath,
+      pdfStoragePath: resolved.pdfStoragePath,
+      pageCount: resolved.inputs.pageCount,
+      productTitle: resolved.inputs.selectedOption.title,
+      dimensionsLabel: resolved.dimensionsLabel
+    });
+
+    stripeLineItems.push({
+      price_data: {
+        currency: "usd",
+        product_data: {
+          name: `MemoirAI — ${resolved.inputs.selectedOption.title}`,
+          description: `${resolved.dimensionsLabel} · ${resolved.inputs.pageCount} pages · qty ${quantity}`
+        },
+        unit_amount: lineBook
+      },
+      quantity: 1
+    });
+  }
+
+  let orderShippingCents = 0;
+  if (cartLineItemsForWholeOrderShip.length > 0) {
+    try {
+      const normAddr = normalizeShippingForLuluCalc(shippingAddress);
+      const { costResult: wholeOrderCost } = await withTimeout(
+        calculateLuluMultiLineCostWithRetry({
+          lineItems: cartLineItemsForWholeOrderShip,
+          shippingAddress: normAddr,
+          shippingLevel,
+          logLabel: `${logPrefix}:wholeOrderShip`
+        }),
+        15000,
+        "wholeOrderShip"
+      );
+      orderShippingCents = extractLuluShippingCents(wholeOrderCost);
+    } catch (err) {
+      console.warn(
+        `${logPrefix} wholeOrder ship failed; fallback to summed per-line shipping:`,
+        String(err.message || err)
+      );
+      orderShippingCents = summedLineShippingFallbackCents;
+    }
+  }
+
+  if (orderShippingCents > 0) {
+    stripeLineItems.push({
+      price_data: {
+        currency: "usd",
+        product_data: {
+          name: "Shipping (Lulu estimate)",
+          description: `Combined shipment · ${shippingLevel || "MAIL"}`
+        },
+        unit_amount: orderShippingCents
+      },
+      quantity: 1
+    });
+  }
+
+  const totalCents = booksSubtotalCents + orderShippingCents;
+
+  return {
+    stripeLineItems,
+    resolvedItems,
+    cartLineItemsForShippingOptions: cartLineItemsForWholeOrderShip,
+    booksSubtotalCents,
+    orderShippingCents,
+    summedLineShippingFallbackCents,
+    totalCents,
+    allWarnings,
+    suggestedAddress,
+    firstResolvedLine,
+    firstLineQuantity
+  };
+}
+
+async function estimateShippingMethodsForCartSnapshot({
+  cartLineItemsForShippingOptions,
+  shippingAddress,
+  shippingLevel,
+  firstResolvedLine,
+  firstLineQuantity,
+  logLabel
+}) {
+  let shippingMethods = [];
+  if (cartLineItemsForShippingOptions.length > 0) {
+    try {
+      shippingMethods = await estimateLuluShippingMethodsForCart({
+        lineItems: cartLineItemsForShippingOptions,
+        shippingAddress,
+        logLabel: `${logLabel}:shipOpts`
+      });
+    } catch (err) {
+      console.warn(`${logLabel} shipping-options failed:`, String(err.message || err));
+    }
+  }
+  if (shippingMethods.length === 0 && firstResolvedLine) {
+    try {
+      shippingMethods = await estimateLuluShippingMethodsForLine({
+        selectedCost: firstResolvedLine.pricing.selectedCost,
+        selectedShippingLevel: shippingLevel,
+        podPackageId: firstResolvedLine.inputs.podPackageId,
+        pageCount: firstResolvedLine.inputs.pageCount,
+        shippingAddress,
+        logLabel: `${logLabel}:fallbackFirstLine`,
+        quantity: firstLineQuantity
+      });
+    } catch (err) {
+      console.warn(`${logLabel} shippingMethods fallback failed:`, String(err.message || err));
+    }
+  }
+  return shippingMethods;
+}
+
+/** Max 36 chars, URL-safe-ish (strip UUID hyphens). Used by Places API (New) session billing. */
+function normalizePlacesSessionToken(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return undefined;
+  }
+  const s = String(raw).replace(/-/g, "").slice(0, 36);
+  return s.length ? s : undefined;
+}
+
+function throwFromGooglePlacesHttp(res, data) {
+  const status = data && data.error && data.error.status;
+  const message =
+    (data && data.error && data.error.message) ||
+    data?.message ||
+    res.statusText ||
+    `HTTP ${res.status}`;
+  const code = String(status || "");
+  if (code === "PERMISSION_DENIED" || res.status === 403) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Google Places is blocked for this project or key. Enable Places API (New) and allow this key to use it."
+    );
+  }
+  if (code === "INVALID_ARGUMENT") {
+    throw new HttpsError("invalid-argument", String(message));
+  }
+  if (res.status === 429 || code === "RESOURCE_EXHAUSTED") {
+    throw new HttpsError("resource-exhausted", "Places quota exceeded; try again shortly.");
+  }
+  throw new HttpsError("failed-precondition", String(message));
+}
+
+/**
+ * Places API (New) — POST places:autocomplete
+ * https://places.googleapis.com/v1/places:autocomplete
+ */
+async function googlePlacesAutocompleteNew({ query, countryCode, sessionToken, apiKey }) {
+  const body = { input: query, languageCode: "en" };
+  const cc = String(countryCode || "").trim().toUpperCase();
+  if (cc.length === 2) {
+    body.includedRegionCodes = [cc];
+  }
+  const tok = normalizePlacesSessionToken(sessionToken);
+  if (tok) {
+    body.sessionToken = tok;
+  }
+
+  const res = await fetch("https://places.googleapis.com/v1/places:autocomplete", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": apiKey,
+      "X-Goog-FieldMask": "suggestions.placePrediction.placeId,suggestions.placePrediction.text"
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throwFromGooglePlacesHttp(res, data);
+  }
+
+  const suggestions = data.suggestions || [];
+  const predictions = [];
+  for (const sgg of suggestions) {
+    const pp = sgg.placePrediction;
+    if (!pp) {
+      continue;
+    }
+    const placeId = pp.placeId || "";
+    const description = (pp.text && pp.text.text) || "";
+    if (!placeId) {
+      continue;
+    }
+    predictions.push({ placeId, description });
+  }
+  return { predictions, status: predictions.length ? "OK" : "ZERO_RESULTS" };
+}
+
+function parsePlaceAddressComponentsNew(components) {
+  let streetNumber = "";
+  let route = "";
+  let city = "";
+  let stateCode = "";
+  let postcode = "";
+  let countryCode = "";
+  for (const c of components) {
+    const types = c.types || [];
+    const longName = c.longText != null ? c.longText : c.long_name;
+    const longText = longName != null ? String(longName) : "";
+    const shortName = c.shortText != null ? c.shortText : c.short_name;
+    const shortText = shortName != null ? String(shortName) : "";
+    if (types.includes("street_number")) {
+      streetNumber = longText;
+    }
+    if (types.includes("route")) {
+      route = longText;
+    }
+    if (types.includes("locality")) {
+      city = longText;
+    }
+    if (!city && types.includes("postal_town")) {
+      city = longText;
+    }
+    if (!city && types.includes("sublocality")) {
+      city = longText;
+    }
+    if (!city && types.includes("neighborhood")) {
+      city = longText;
+    }
+    if (types.includes("administrative_area_level_1")) {
+      stateCode = shortText;
+    }
+    if (types.includes("postal_code")) {
+      postcode = longText;
+    }
+    if (types.includes("country")) {
+      countryCode = shortText;
+    }
+  }
+  const street1 = [streetNumber, route].filter(Boolean).join(" ").trim();
+  return { street1, city, stateCode, postcode, countryCode };
+}
+
+/**
+ * Places API (New) — GET places/{place_id}
+ * https://places.googleapis.com/v1/places/{placeId}
+ */
+async function googlePlacesGetPlaceNew({ placeId, sessionToken, apiKey }) {
+  let pid = String(placeId || "").trim();
+  if (!pid) {
+    throw new HttpsError("invalid-argument", "placeId is required");
+  }
+  if (pid.startsWith("places/")) {
+    pid = pid.slice("places/".length);
+  }
+
+  const qs = new URLSearchParams({ languageCode: "en" });
+  const tok = normalizePlacesSessionToken(sessionToken);
+  if (tok) {
+    qs.set("sessionToken", tok);
+  }
+  const url = `https://places.googleapis.com/v1/places/${encodeURIComponent(pid)}?${qs.toString()}`;
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "X-Goog-Api-Key": apiKey,
+      "X-Goog-FieldMask": "formattedAddress,addressComponents"
+    }
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throwFromGooglePlacesHttp(res, data);
+  }
+
+  const components = data.addressComponents || [];
+  const parsed = parsePlaceAddressComponentsNew(components);
+  return {
+    formattedAddress: data.formattedAddress || data.formatted_address || "",
+    shippingAddress: {
+      street1: parsed.street1,
+      city: parsed.city,
+      stateCode: parsed.stateCode,
+      postcode: parsed.postcode,
+      countryCode: parsed.countryCode || "US"
+    }
+  };
 }
 
 async function verifyUser(req) {
@@ -39,18 +567,12 @@ async function verifyUser(req) {
   return admin.auth().verifyIdToken(token);
 }
 
-async function getLuluAccessToken() {
-  const clientKey = luluClientKey.value();
-  const clientSecret = luluClientSecret.value();
-  if (!clientKey || !clientSecret) {
-    throw new Error("LULU_CLIENT_KEY and LULU_CLIENT_SECRET must be set");
-  }
-  const encoded = Buffer.from(`${clientKey}:${clientSecret}`).toString("base64");
-  const res = await fetch(LULU_AUTH_URL, {
+async function requestLuluAccessToken(authUrl, encodedBasicAuth) {
+  const res = await fetch(authUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      "Authorization": `Basic ${encoded}`
+      "Authorization": `Basic ${encodedBasicAuth}`
     },
     body: "grant_type=client_credentials"
   });
@@ -59,11 +581,237 @@ async function getLuluAccessToken() {
     throw new Error(`Lulu auth failed: ${res.status} ${text}`);
   }
   const data = await res.json();
+  if (!data?.access_token) {
+    throw new Error("Lulu auth failed: missing access token");
+  }
   return data.access_token;
 }
 
-async function luluCalculateCost(accessToken, podPackageId, pageCount, shippingAddress, shippingLevel) {
-  const res = await fetch(`${LULU_BASE}/print-job-cost-calculations/`, {
+function isLikelyLuluInvalidClientError(error) {
+  const msg = String(error?.message || "").toLowerCase();
+  return msg.includes("lulu auth failed: 401") || msg.includes("invalid_client") || msg.includes("invalid client credentials");
+}
+
+function extractHttpStatusFromErrorMessage(message) {
+  const m = String(message || "").match(/failed:\s*(\d{3})/i);
+  return m ? Number(m[1]) : null;
+}
+
+function oppositeLuluEnvironment(environment) {
+  return environment === "sandbox" ? "production" : "sandbox";
+}
+
+function isLuluCostAuthLikeError(error) {
+  const msg = String(error?.message || "");
+  const status = extractHttpStatusFromErrorMessage(msg);
+  if (!msg.toLowerCase().includes("lulu cost calculation failed")) {
+    return false;
+  }
+  return status === 401 || status === 403;
+}
+
+function luluFallbackDiagnostics(error) {
+  const message = String(error?.message || error || "Unknown Lulu error");
+  const statusCode = extractHttpStatusFromErrorMessage(message);
+  let reason = "lulu_unknown_error";
+  let phase = "unknown";
+  if (message.toLowerCase().includes("lulu auth failed")) {
+    reason = "lulu_auth_failed";
+    phase = "auth";
+  } else if (message.toLowerCase().includes("lulu cost calculation failed")) {
+    reason = "lulu_cost_failed";
+    phase = "cost_calc";
+  }
+  return {
+    fallbackReason: reason,
+    fallbackPhase: phase,
+    fallbackStatusCode: statusCode,
+    fallbackDetail: message.slice(0, 500)
+  };
+}
+
+async function getLuluAccessToken(forcePreferredEnvironment = null) {
+  const clientKey = luluClientKey.value();
+  const clientSecret = luluClientSecret.value();
+  if (!clientKey || !clientSecret) {
+    throw new Error("LULU_CLIENT_KEY and LULU_CLIENT_SECRET must be set");
+  }
+  const encoded = Buffer.from(`${clientKey}:${clientSecret}`).toString("base64");
+
+  const defaultPreferred = LULU_SANDBOX ? "sandbox" : "production";
+  const preferred = LULU_ENDPOINTS[forcePreferredEnvironment] ? forcePreferredEnvironment : defaultPreferred;
+  const alternate = oppositeLuluEnvironment(preferred);
+
+  try {
+    const token = await requestLuluAccessToken(LULU_ENDPOINTS[preferred].authUrl, encoded);
+    return { accessToken: token, luluBaseUrl: LULU_ENDPOINTS[preferred].baseUrl, environment: preferred };
+  } catch (firstErr) {
+    if (!isLikelyLuluInvalidClientError(firstErr)) {
+      throw firstErr;
+    }
+    console.warn(`Lulu auth invalid_client on ${preferred}; retrying ${alternate}.`);
+    const token = await requestLuluAccessToken(LULU_ENDPOINTS[alternate].authUrl, encoded);
+    return { accessToken: token, luluBaseUrl: LULU_ENDPOINTS[alternate].baseUrl, environment: alternate };
+  }
+}
+
+function clampPrintQuantity(q) {
+  const n = parseInt(q, 10);
+  if (!Number.isFinite(n)) {
+    return 1;
+  }
+  return Math.min(99, Math.max(1, n));
+}
+
+/**
+ * Full-cart shipping methods + delivery windows (Lulu POST /shipping-options/).
+ * Accepts the same line_items shape as cost calculation (multiple pod packages / quantities).
+ */
+async function luluFetchShippingOptions(accessToken, luluBaseUrl, payload) {
+  const res = await fetch(`${luluBaseUrl}/shipping-options/`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let snippet = text;
+    try {
+      const parsed = JSON.parse(text);
+      snippet = JSON.stringify(parsed).slice(0, 400);
+    } catch (_) {
+      snippet = String(text).slice(0, 400);
+    }
+    console.warn(`luluFetchShippingOptions failed status=${res.status} snippet=${snippet}`);
+    throw new Error(`Lulu shipping-options failed: ${res.status} ${snippet}`);
+  }
+  return res.json();
+}
+
+function isLuluShippingOptionsAuthLikeError(error) {
+  const msg = String(error?.message || "");
+  if (!msg.toLowerCase().includes("lulu shipping-options failed")) {
+    return false;
+  }
+  const status = extractHttpStatusFromErrorMessage(msg);
+  return status === 401 || status === 403;
+}
+
+function buildLuluShippingOptionsPayload(lineItems, shippingAddress) {
+  const addr = normalizeShippingForLuluCalc(shippingAddress || {});
+  return {
+    currency: "USD",
+    line_items: (lineItems || []).map((li) => ({
+      page_count: Math.max(1, parseInt(li.pageCount, 10) || 1),
+      pod_package_id: String(li.podPackageId || "").trim(),
+      quantity: clampPrintQuantity(li.quantity)
+    })).filter((li) => li.pod_package_id.length > 0),
+    shipping_address: {
+      street1: addr.street1 || "",
+      city: addr.city || "",
+      state_code: addr.stateCode || "",
+      country: String(addr.countryCode || "US").toUpperCase().slice(0, 2),
+      postcode: addr.postcode || "",
+      phone_number: addr.phone || "0000000000"
+    }
+  };
+}
+
+function mapLuluShippingOptionsRowToMethod(row) {
+  if (!row || typeof row !== "object") {
+    return null;
+  }
+  const level = String(row.level || "").trim();
+  if (!level) {
+    return null;
+  }
+  const known = new Set(LULU_SHIPPING_LEVELS.map((it) => it.level));
+  if (!known.has(level)) {
+    return null;
+  }
+  const label = LULU_SHIPPING_LEVELS.find((it) => it.level === level)?.label || level;
+  let shippingCents = 0;
+  if (row.cost_excl_tax != null && row.cost_excl_tax !== "") {
+    const d = parseFloat(String(row.cost_excl_tax));
+    if (Number.isFinite(d)) {
+      shippingCents = Math.max(0, Math.round(d * 100));
+    }
+  }
+  let minDays = coerceIntOrNull(row.total_days_min);
+  let maxDays = coerceIntOrNull(row.total_days_max);
+  if (minDays == null && maxDays == null) {
+    const transit = coerceIntOrNull(row.transit_time);
+    if (transit != null && transit > 0) {
+      minDays = transit;
+      maxDays = transit;
+    }
+  }
+  const minDate = isoDateOnly(
+    row.min_delivery_date ??
+    row.min_delivery ??
+    row.estimated_delivery_date_min ??
+    row.arrival_min
+  );
+  const maxDate = isoDateOnly(
+    row.max_delivery_date ??
+    row.max_delivery ??
+    row.estimated_delivery_date_max ??
+    row.arrival_max
+  );
+  return {
+    level,
+    label,
+    shippingCents,
+    estimatedArrivalMinDays: minDays,
+    estimatedArrivalMaxDays: maxDays,
+    estimatedArrivalMinDate: minDate,
+    estimatedArrivalMaxDate: maxDate
+  };
+}
+
+function orderShippingMethodsByKnownLevels(methods) {
+  const byLevel = new Map(methods.map((m) => [m.level, m]));
+  return LULU_SHIPPING_LEVELS.map((it) => byLevel.get(it.level)).filter(Boolean);
+}
+
+/**
+ * Shipping speed + ETA for entire cart (all line_items in one Lulu request).
+ */
+async function estimateLuluShippingMethodsForCart({ lineItems, shippingAddress, logLabel }) {
+  const payload = buildLuluShippingOptionsPayload(lineItems, shippingAddress);
+  if (!payload.line_items.length) {
+    return [];
+  }
+  let auth = await getLuluAccessToken();
+  console.log(`${logLabel} Lulu shipping-options env=${auth.environment} lineItems=${payload.line_items.length}`);
+  let raw;
+  try {
+    raw = await luluFetchShippingOptions(auth.accessToken, auth.luluBaseUrl, payload);
+  } catch (firstErr) {
+    if (!isLuluShippingOptionsAuthLikeError(firstErr)) {
+      throw firstErr;
+    }
+    const retryEnv = oppositeLuluEnvironment(auth.environment);
+    console.warn(`${logLabel} shipping-options auth-like failure; retry env=${retryEnv}`);
+    auth = await getLuluAccessToken(retryEnv);
+    raw = await luluFetchShippingOptions(auth.accessToken, auth.luluBaseUrl, payload);
+  }
+  const rows = Array.isArray(raw) ? raw : [];
+  if (rows.length > 0) {
+    console.log(`${logLabel} shipping-options sample=${JSON.stringify(rows[0]).slice(0, 520)}`);
+  }
+  const mapped = rows.map(mapLuluShippingOptionsRowToMethod).filter(Boolean);
+  const ordered = orderShippingMethodsByKnownLevels(mapped);
+  console.log(`${logLabel} shipping-options returned ${rows.length} rows, mapped ${ordered.length} methods`);
+  return ordered;
+}
+
+async function luluCalculateCost(accessToken, luluBaseUrl, podPackageId, pageCount, shippingAddress, shippingLevel, quantity = 1) {
+  const qty = clampPrintQuantity(quantity);
+  const res = await fetch(`${luluBaseUrl}/print-job-cost-calculations/`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${accessToken}`,
@@ -74,7 +822,7 @@ async function luluCalculateCost(accessToken, podPackageId, pageCount, shippingA
         {
           pod_package_id: podPackageId,
           page_count: pageCount,
-          quantity: 1
+          quantity: qty
         }
       ],
       shipping_address: {
@@ -90,13 +838,609 @@ async function luluCalculateCost(accessToken, podPackageId, pageCount, shippingA
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Lulu cost calculation failed: ${res.status} ${text}`);
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch (_) {
+      parsed = null;
+    }
+    let compact = text;
+    if (parsed && typeof parsed === "object") {
+      const firstIssue = Array.isArray(parsed?.line_item_errors) ? parsed.line_item_errors[0] : null;
+      compact = JSON.stringify({
+        message: parsed.message || parsed.detail || null,
+        code: parsed.code || parsed.error || null,
+        firstIssue: firstIssue || null
+      });
+    }
+    console.warn(
+      `luluCalculateCost failed status=${res.status} base=${luluBaseUrl} ` +
+      `snippet=${String(compact).slice(0, 300)}`
+    );
+    throw new Error(`Lulu cost calculation failed: ${res.status} ${compact}`);
   }
   return res.json();
 }
 
-async function luluCreatePrintJob(accessToken, payload) {
-  const res = await fetch(`${LULU_BASE}/print-jobs/`, {
+/**
+ * One Lulu cost calculation for the entire cart (all line_items). Shipping matches a single combined shipment.
+ */
+async function luluCalculateMultiLineCost(accessToken, luluBaseUrl, lineItems, shippingAddress, shippingLevel) {
+  const items = (lineItems || [])
+    .map((li) => ({
+      pod_package_id: String(li.podPackageId || "").trim(),
+      page_count: Math.max(1, parseInt(li.pageCount, 10) || 1),
+      quantity: clampPrintQuantity(li.quantity)
+    }))
+    .filter((li) => li.pod_package_id.length > 0);
+  if (items.length === 0) {
+    throw new Error("Lulu multi-line cost: no line items");
+  }
+  const res = await fetch(`${luluBaseUrl}/print-job-cost-calculations/`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      line_items: items,
+      shipping_address: {
+        street1: shippingAddress.street1 || "",
+        city: shippingAddress.city || "",
+        state_code: shippingAddress.stateCode || "",
+        country_code: shippingAddress.countryCode || "US",
+        postcode: shippingAddress.postcode || "",
+        phone_number: shippingAddress.phone || "0000000000"
+      },
+      shipping_level: shippingLevel || "MAIL"
+    })
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let compact = text;
+    try {
+      const parsed = JSON.parse(text);
+      const firstIssue = Array.isArray(parsed?.line_item_errors) ? parsed.line_item_errors[0] : null;
+      compact = JSON.stringify({
+        message: parsed.message || parsed.detail || null,
+        code: parsed.code || parsed.error || null,
+        firstIssue: firstIssue || null
+      });
+    } catch (_) {
+      compact = String(text).slice(0, 400);
+    }
+    console.warn(`luluCalculateMultiLineCost failed status=${res.status} snippet=${compact}`);
+    throw new Error(`Lulu cost calculation failed: ${res.status} ${compact}`);
+  }
+  return res.json();
+}
+
+async function calculateLuluMultiLineCostWithRetry({ lineItems, shippingAddress, shippingLevel, logLabel }) {
+  let auth = await getLuluAccessToken();
+  console.log(`${logLabel} Lulu multi-line auth env=${auth.environment} items=${(lineItems || []).length}`);
+  try {
+    const costResult = await luluCalculateMultiLineCost(
+      auth.accessToken,
+      auth.luluBaseUrl,
+      lineItems,
+      shippingAddress,
+      shippingLevel
+    );
+    return { costResult, environment: auth.environment };
+  } catch (costErr) {
+    if (!isLuluCostAuthLikeError(costErr)) {
+      throw costErr;
+    }
+    const retryEnv = oppositeLuluEnvironment(auth.environment);
+    console.warn(`${logLabel} Lulu multi-line auth-like failure; retry env=${retryEnv}`);
+    auth = await getLuluAccessToken(retryEnv);
+    const costResult = await luluCalculateMultiLineCost(
+      auth.accessToken,
+      auth.luluBaseUrl,
+      lineItems,
+      shippingAddress,
+      shippingLevel
+    );
+    return { costResult, environment: auth.environment };
+  }
+}
+
+async function calculateLuluCostWithRetry({ podPackageId, pageCount, shippingAddress, shippingLevel, logLabel, quantity = 1 }) {
+  let auth = await getLuluAccessToken();
+  console.log(`${logLabel} Lulu auth environment=${auth.environment}`);
+  try {
+    const costResult = await luluCalculateCost(
+      auth.accessToken,
+      auth.luluBaseUrl,
+      podPackageId,
+      pageCount,
+      shippingAddress,
+      shippingLevel,
+      quantity
+    );
+    return { costResult, environment: auth.environment };
+  } catch (costErr) {
+    if (!isLuluCostAuthLikeError(costErr)) {
+      throw costErr;
+    }
+    const retryEnv = oppositeLuluEnvironment(auth.environment);
+    console.warn(`${logLabel} Lulu cost auth-like failure; retrying cost with env=${retryEnv}`);
+    auth = await getLuluAccessToken(retryEnv);
+    console.log(`${logLabel} Lulu retry auth environment=${auth.environment}`);
+    const costResult = await luluCalculateCost(
+      auth.accessToken,
+      auth.luluBaseUrl,
+      podPackageId,
+      pageCount,
+      shippingAddress,
+      shippingLevel,
+      quantity
+    );
+    return { costResult, environment: auth.environment };
+  }
+}
+
+function buildLandscapeProductOptions(pricing) {
+  const hardcoverPkg = pricing?.luluPodPackageId || "1100X0850FCSTDCW080CW444MXX";
+  return [
+    {
+      optionId: "kids_hardcover_casewrap",
+      title: "Hardcover (Casewrap)",
+      subtitle: "Premium keepsake with matte hard cover",
+      podPackageId: hardcoverPkg,
+      minPages: 24,
+      maxPages: 800
+    },
+    {
+      optionId: "kids_coil_bound",
+      title: "Coil Bound",
+      subtitle: "Best for short books and activity-style flipping",
+      podPackageId: "1100X0850FCSTDCO080CW444MXX",
+      minPages: 2,
+      maxPages: 470
+    },
+    {
+      optionId: "kids_paperback_perfect",
+      title: "Paperback",
+      subtitle: "Softcover perfect bound",
+      podPackageId: "1100X0850FCSTDPB080CW444MXX",
+      minPages: 32,
+      maxPages: 250
+    }
+  ];
+}
+
+function buildPortraitProductOptions(pricing) {
+  const hardcoverPkg = pricing?.luluPodPackageId || "0850X1100FCSTDCW080CW444MXX";
+  return [
+    {
+      optionId: "portrait_hardcover_casewrap",
+      title: "Hardcover (Casewrap)",
+      subtitle: "Premium keepsake with matte hard cover",
+      podPackageId: hardcoverPkg,
+      minPages: 24,
+      maxPages: 800
+    }
+  ];
+}
+
+function optionsForBook(isLandscape, pricing) {
+  return isLandscape ? buildLandscapeProductOptions(pricing) : buildPortraitProductOptions(pricing);
+}
+
+function optionAvailability(option, pageCount) {
+  if (pageCount < option.minPages) {
+    return {
+      available: false,
+      reason: `Requires at least ${option.minPages} pages (you have ${pageCount}).`
+    };
+  }
+  if (pageCount > option.maxPages) {
+    return {
+      available: false,
+      reason: `Supports up to ${option.maxPages} pages (you have ${pageCount}).`
+    };
+  }
+  return { available: true, reason: null };
+}
+
+/**
+ * Load book version + Firestore pricing config for ordering (shared by checkout + estimate).
+ * @returns {Promise<{record: object, pageCount: number, podPackageId: string, baseCents: number, marginPercent: number, isLandscape: boolean, selectedOption: object, productOptions: object[]}>}
+ */
+async function getBookVersionOrderInputs(userId, bookVersionId, requestedOptionId = null) {
+  const docRef = db.collection("users").doc(userId).collection("bookVersions").doc(bookVersionId);
+  const snapshot = await docRef.get();
+  if (!snapshot.exists) {
+    throw new HttpsError("not-found", "Book not found");
+  }
+  const record = snapshot.data() || {};
+  if (record.renderStatus !== "rendered" || !record.pdfURL || !record.coverURL) {
+    throw new HttpsError("failed-precondition", "Book PDF is not ready for printing yet");
+  }
+  const pageCount = record.pageCount || record.pages?.length || 0;
+  const pdfStoragePath = record.pdfStoragePath;
+  const coverStoragePath = record.coverStoragePath;
+  if (!pdfStoragePath || !coverStoragePath) {
+    throw new HttpsError("failed-precondition", "Book artifacts missing");
+  }
+  const isLandscape = (record.pageWidth || 612) > (record.pageHeight || 792);
+  const pricingSnap = await db.collection("config").doc("pricing").get();
+  const pricingData = pricingSnap.exists ? pricingSnap.data() : {};
+  const pricing = isLandscape ? pricingData?.kidsBook : pricingData?.standardBook;
+  const baseCents = pricing?.basePriceCents ?? 2999;
+  const marginPercent = pricing?.marginPercent ?? 30;
+
+  const catalog = optionsForBook(isLandscape, pricing).map((opt) => {
+    const availability = optionAvailability(opt, pageCount);
+    return {
+      ...opt,
+      available: availability.available,
+      unavailableReason: availability.reason
+    };
+  });
+  const preferred = requestedOptionId
+    ? catalog.find((o) => o.optionId === requestedOptionId)
+    : null;
+  const selected = preferred
+    || catalog.find((o) => o.available && o.optionId.includes("hardcover"))
+    || catalog.find((o) => o.available)
+    || null;
+
+  if (!selected) {
+    throw new HttpsError(
+      "failed-precondition",
+      `No print products support ${pageCount} pages for this format.`
+    );
+  }
+  if (!selected.available) {
+    throw new HttpsError(
+      "failed-precondition",
+      selected.unavailableReason || "Selected print product is not available for this page count."
+    );
+  }
+
+  return {
+    record,
+    pageCount,
+    podPackageId: selected.podPackageId,
+    baseCents,
+    marginPercent,
+    isLandscape,
+    selectedOption: selected,
+    productOptions: catalog
+  };
+}
+
+function extractLuluShippingCents(costResult) {
+  const shippingInclTaxRaw = (
+    (costResult?.shipping_cost && typeof costResult.shipping_cost === "object"
+      ? costResult.shipping_cost.total_cost_incl_tax
+      : null)
+    || costResult?.shipping_cost_incl_tax
+    || null
+  );
+  const shippingDollars = parseFloat(shippingInclTaxRaw || "0");
+  return Number.isFinite(shippingDollars) ? Math.max(0, Math.round(shippingDollars * 100)) : 0;
+}
+
+function extractLuluLineItemMakeCents(costResult) {
+  const firstLineItem = Array.isArray(costResult?.line_item_costs) ? costResult.line_item_costs[0] : null;
+  const makeRaw = firstLineItem?.total_cost_incl_tax ?? firstLineItem?.total_cost_excl_tax ?? "0";
+  const makeDollars = parseFloat(makeRaw);
+  return Number.isFinite(makeDollars) ? Math.max(0, Math.round(makeDollars * 100)) : 0;
+}
+
+function clampPageCountForOption(pageCount, option) {
+  if (!option) return pageCount;
+  const minPages = Number(option.minPages || 1);
+  const maxPages = Number(option.maxPages || 800);
+  return Math.min(maxPages, Math.max(minPages, pageCount));
+}
+
+function normalizeShippingForLuluCalc(shippingAddress) {
+  return {
+    street1: shippingAddress.street1 || "",
+    city: shippingAddress.city || "",
+    stateCode: shippingAddress.stateCode || "",
+    countryCode: shippingAddress.countryCode || "US",
+    postcode: shippingAddress.postcode || "",
+    phone: shippingAddress.phone || "0000000000"
+  };
+}
+
+function coerceIntOrNull(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const n = parseInt(String(value), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isoDateOnly(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
+}
+
+function extractLuluArrivalEstimate(costResult) {
+  const shippingCost = costResult?.shipping_cost && typeof costResult.shipping_cost === "object"
+    ? costResult.shipping_cost
+    : {};
+  const shippingDetails = costResult?.shipping_details && typeof costResult.shipping_details === "object"
+    ? costResult.shipping_details
+    : {};
+  const shipmentDates = costResult?.shipment_dates && typeof costResult.shipment_dates === "object"
+    ? costResult.shipment_dates
+    : {};
+
+  const minDays = coerceIntOrNull(
+    shippingCost.min_delivery_days ??
+    shippingCost.estimated_min_days ??
+    shippingCost.transit_min_days ??
+    shippingCost.min_business_days ??
+    shippingCost.estimated_business_days_min ??
+    shippingCost.total_days_min ??
+    shippingDetails.min_delivery_days ??
+    shippingDetails.estimated_min_days ??
+    shippingDetails.transit_min_days ??
+    shippingDetails.min_business_days ??
+    shippingDetails.estimated_business_days_min ??
+    shippingDetails.total_days_min
+  );
+  const maxDays = coerceIntOrNull(
+    shippingCost.max_delivery_days ??
+    shippingCost.estimated_max_days ??
+    shippingCost.transit_max_days ??
+    shippingCost.max_business_days ??
+    shippingCost.estimated_business_days_max ??
+    shippingCost.total_days_max ??
+    shippingDetails.max_delivery_days ??
+    shippingDetails.estimated_max_days ??
+    shippingDetails.transit_max_days ??
+    shippingDetails.max_business_days ??
+    shippingDetails.estimated_business_days_max ??
+    shippingDetails.total_days_max
+  );
+
+  const minDate = isoDateOnly(
+    shippingCost.arrival_min ??
+    shippingCost.min_delivery_date ??
+    shippingCost.estimated_delivery_date_min ??
+    shippingCost.estimated_arrival_date_min ??
+    shippingDetails.arrival_min ??
+    shippingDetails.min_delivery_date ??
+    shippingDetails.estimated_delivery_date_min ??
+    shippingDetails.estimated_arrival_date_min ??
+    shipmentDates.arrival_min ??
+    shipmentDates.min_delivery_date ??
+    shipmentDates.estimated_arrival_date_min
+  );
+  const maxDate = isoDateOnly(
+    shippingCost.arrival_max ??
+    shippingCost.max_delivery_date ??
+    shippingCost.estimated_delivery_date_max ??
+    shippingCost.estimated_arrival_date_max ??
+    shippingDetails.arrival_max ??
+    shippingDetails.max_delivery_date ??
+    shippingDetails.estimated_delivery_date_max ??
+    shippingDetails.estimated_arrival_date_max ??
+    shipmentDates.arrival_max ??
+    shipmentDates.max_delivery_date ??
+    shipmentDates.estimated_arrival_date_max
+  );
+
+  return {
+    estimatedArrivalMinDays: minDays,
+    estimatedArrivalMaxDays: maxDays,
+    estimatedArrivalMinDate: minDate,
+    estimatedArrivalMaxDate: maxDate
+  };
+}
+
+async function estimateLuluShippingMethodsForLine({
+  selectedCost,
+  selectedShippingLevel,
+  podPackageId,
+  pageCount,
+  shippingAddress,
+  logLabel,
+  quantity = 1
+}) {
+  const qty = clampPrintQuantity(quantity);
+  const methodsByLevel = new Map();
+  const normalizedAddress = normalizeShippingForLuluCalc(shippingAddress || {});
+  const knownLevels = new Set(LULU_SHIPPING_LEVELS.map((it) => it.level));
+  const initialLevel = String(selectedShippingLevel || "MAIL");
+
+  const registerMethod = (level, costResult) => {
+    if (!knownLevels.has(level) || !costResult) {
+      return;
+    }
+    const shippingCents = extractLuluShippingCents(costResult);
+    const arrival = extractLuluArrivalEstimate(costResult);
+    const label = LULU_SHIPPING_LEVELS.find((it) => it.level === level)?.label || level;
+    methodsByLevel.set(level, {
+      level,
+      label,
+      shippingCents,
+      ...arrival
+    });
+  };
+
+  registerMethod(initialLevel, selectedCost);
+
+  await Promise.all(
+    LULU_SHIPPING_LEVELS
+      .map((it) => it.level)
+      .filter((level) => level !== initialLevel)
+      .map(async (level) => {
+        try {
+          const quote = await calculateLuluCostWithRetry({
+            podPackageId,
+            pageCount,
+            shippingAddress: normalizedAddress,
+            shippingLevel: level,
+            logLabel: `${logLabel}:shippingMethod:${level}`,
+            quantity: qty
+          });
+          registerMethod(level, quote.costResult);
+        } catch (err) {
+          console.warn(`${logLabel} shipping method estimate skipped level=${level}:`, String(err.message || err));
+        }
+      })
+  );
+
+  return LULU_SHIPPING_LEVELS
+    .map((it) => methodsByLevel.get(it.level))
+    .filter(Boolean);
+}
+
+async function calculateMerchantPricingBreakdown({
+  inputs,
+  shippingAddress,
+  shippingLevel,
+  logLabel,
+  quantity = 1
+}) {
+  const qty = clampPrintQuantity(quantity);
+  const selectedQuote = await calculateLuluCostWithRetry({
+    podPackageId: inputs.podPackageId,
+    pageCount: inputs.pageCount,
+    shippingAddress,
+    shippingLevel,
+    logLabel,
+    quantity: qty
+  });
+  const selectedCost = selectedQuote.costResult;
+  const selectedShippingCents = extractLuluShippingCents(selectedCost);
+  const selectedMakeCents = extractLuluLineItemMakeCents(selectedCost);
+
+  let referenceHardcoverMakeCents = selectedMakeCents;
+  let hardcoverReferencePageCount = inputs.pageCount;
+  const hardcoverOption = inputs.productOptions.find((o) => String(o.optionId || "").includes("hardcover")) || null;
+  const selectedIsHardcover = String(inputs.selectedOption?.optionId || "").includes("hardcover");
+
+  if (!selectedIsHardcover && hardcoverOption) {
+    hardcoverReferencePageCount = clampPageCountForOption(inputs.pageCount, hardcoverOption);
+    const hardcoverQuote = await calculateLuluCostWithRetry({
+      podPackageId: hardcoverOption.podPackageId,
+      pageCount: hardcoverReferencePageCount,
+      shippingAddress,
+      shippingLevel,
+      logLabel: `${logLabel}:hardcoverReference`,
+      quantity: qty
+    });
+    referenceHardcoverMakeCents = extractLuluLineItemMakeCents(hardcoverQuote.costResult);
+  }
+
+  const retailLineCents = inputs.baseCents * qty;
+  const bookBaseCents = selectedIsHardcover
+    ? retailLineCents
+    : Math.max(0, retailLineCents - referenceHardcoverMakeCents + selectedMakeCents);
+  const shippingCents = selectedShippingCents;
+  const estimatedTotalCents = bookBaseCents + shippingCents;
+
+  return {
+    selectedCost,
+    bookBaseCents,
+    shippingCents,
+    estimatedTotalCents,
+    luluShippingCostInclTax: (
+      (selectedCost?.shipping_cost && typeof selectedCost.shipping_cost === "object"
+        ? selectedCost.shipping_cost.total_cost_incl_tax
+        : null)
+      || selectedCost?.shipping_cost_incl_tax
+      || null
+    ),
+    selectedLineItemCostInclTax: (
+      Array.isArray(selectedCost?.line_item_costs) && selectedCost.line_item_costs[0]
+        ? selectedCost.line_item_costs[0].total_cost_incl_tax || null
+        : null
+    ),
+    hardcoverReferenceLineItemCostInclTax: referenceHardcoverMakeCents > 0
+      ? (referenceHardcoverMakeCents / 100).toFixed(2)
+      : null,
+    hardcoverReferencePageCount
+  };
+}
+
+/**
+ * Per-cart-line pricing: live Lulu + merchant formula (same as single-book checkout).
+ */
+async function pricingForCartLine(userId, bookVersionId, productOptionId, shippingAddress, shippingLevel, logLabel, quantity = 1) {
+  const inputs = await getBookVersionOrderInputs(userId, bookVersionId, productOptionId);
+  const addr = normalizeShippingForLuluCalc(shippingAddress);
+  const pricing = await calculateMerchantPricingBreakdown({
+    inputs,
+    shippingAddress: addr,
+    shippingLevel,
+    logLabel,
+    quantity
+  });
+  const { warnings, suggestedAddress } = extractLuluAddressFeedback(pricing.selectedCost);
+  const record = inputs.record;
+  return {
+    inputs,
+    pricing,
+    warnings,
+    suggestedAddress,
+    pdfStoragePath: record.pdfStoragePath,
+    coverStoragePath: record.coverStoragePath,
+    dimensionsLabel: inputs.isLandscape ? "11x8.5\"" : "8.5x11\""
+  };
+}
+
+/**
+ * Lulu returns warnings on the cost-calculation response (address validation).
+ */
+function extractLuluAddressFeedback(costResult) {
+  const raw = costResult.warnings;
+  const warnings = [];
+  let suggestedAddress = null;
+  if (Array.isArray(raw)) {
+    for (const w of raw) {
+      if (w && typeof w === "object") {
+        warnings.push({
+          type: w.type || "",
+          code: w.code || "",
+          path: w.path || "",
+          message: w.message || ""
+        });
+        const sug = w.suggested_address;
+        if (!suggestedAddress && sug && typeof sug === "object") {
+          suggestedAddress = {
+            street1: sug.street1 || "",
+            street2: sug.street2 || "",
+            city: sug.city || "",
+            stateCode: sug.state_code || "",
+            postcode: sug.postcode || "",
+            countryCode: sug.country_code || ""
+          };
+        }
+      }
+    }
+  }
+  /** Top-level suggested_address on some payloads */
+  if (!suggestedAddress && costResult.suggested_address && typeof costResult.suggested_address === "object") {
+    const sug = costResult.suggested_address;
+    suggestedAddress = {
+      street1: sug.street1 || "",
+      street2: sug.street2 || "",
+      city: sug.city || "",
+      stateCode: sug.state_code || "",
+      postcode: sug.postcode || "",
+      countryCode: sug.country_code || ""
+    };
+  }
+  return { warnings, suggestedAddress };
+}
+
+async function luluCreatePrintJob(accessToken, luluBaseUrl, payload) {
+  const res = await fetch(`${luluBaseUrl}/print-jobs/`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${accessToken}`,
@@ -109,6 +1453,224 @@ async function luluCreatePrintJob(accessToken, payload) {
     throw new Error(`Lulu create print job failed: ${res.status} ${text}`);
   }
   return res.json();
+}
+
+async function luluGetPrintJob(accessToken, luluBaseUrl, printJobId) {
+  const id = String(printJobId || "").trim();
+  if (!id) {
+    throw new Error("Missing Lulu print job id");
+  }
+  const res = await fetch(`${luluBaseUrl}/print-jobs/${encodeURIComponent(id)}/`, {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    }
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Lulu get print job failed: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
+function mapLuluStatusToOrderStatus(status) {
+  const statusMap = {
+    CREATED: "submitted_to_printer",
+    UNPAID: "submitted_to_printer",
+    PAYMENT_IN_PROGRESS: "printing",
+    PRODUCTION_READY: "printing",
+    IN_PRODUCTION: "printing",
+    SHIPPED: "shipped",
+    DELIVERED: "delivered",
+    CANCELLED: "failed",
+    ERROR: "failed"
+  };
+  return statusMap[status] || status;
+}
+
+function resolveTrackingUrlFromLuluJob(job) {
+  if (!job || typeof job !== "object") {
+    return null;
+  }
+  if (job.tracking_url) return String(job.tracking_url);
+  if (job.trackingUrl) return String(job.trackingUrl);
+  if (Array.isArray(job.tracking_urls) && job.tracking_urls.length > 0) {
+    return String(job.tracking_urls[0]);
+  }
+  if (Array.isArray(job.trackingUrls) && job.trackingUrls.length > 0) {
+    return String(job.trackingUrls[0]);
+  }
+  return null;
+}
+
+function pushStatusHistory(existingHistory, { status, trackingUrl = null, source = "lulu_sync" }) {
+  const history = Array.isArray(existingHistory) ? [...existingHistory] : [];
+  history.push({
+    status: status || "UNKNOWN",
+    timestamp: new Date().toISOString(),
+    trackingUrl: trackingUrl || null,
+    source
+  });
+  return history;
+}
+
+async function syncOrderStatusFromLulu({ orderRef, orderData }) {
+  const luluPrintJobId = orderData.luluPrintJobId;
+  if (!luluPrintJobId) {
+    return { synced: false, reason: "missing_lulu_print_job_id" };
+  }
+  const { accessToken, luluBaseUrl, environment } = await getLuluAccessToken();
+  const job = await luluGetPrintJob(accessToken, luluBaseUrl, luluPrintJobId);
+  const luluRawStatus = String(job.status || job.state || "UNKNOWN");
+  const mapped = mapLuluStatusToOrderStatus(luluRawStatus);
+  const trackingUrl = resolveTrackingUrlFromLuluJob(job);
+  const statusChanged = orderData.status !== mapped;
+  const trackingChanged = Boolean(trackingUrl) && trackingUrl !== orderData.luluTrackingUrl;
+  const shouldAppendHistory = statusChanged || trackingChanged;
+
+  const updates = {
+    luluRawStatus,
+    luluLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+  if (statusChanged) {
+    updates.status = mapped;
+  }
+  if (trackingUrl) {
+    updates.luluTrackingUrl = trackingUrl;
+  }
+  if (shouldAppendHistory) {
+    updates.luluStatusHistory = pushStatusHistory(orderData.luluStatusHistory, {
+      status: luluRawStatus,
+      trackingUrl,
+      source: "lulu_sync"
+    });
+  }
+
+  await orderRef.update(updates);
+  return {
+    synced: true,
+    environment,
+    luluRawStatus,
+    mappedStatus: mapped,
+    statusChanged,
+    trackingChanged
+  };
+}
+
+async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, source }) {
+  if (orderData.isTestOrder) {
+    return { submitted: false, skipped: true, reason: "test_order" };
+  }
+  if (orderData.status !== "paid") {
+    return { submitted: false, skipped: true, reason: `status_${orderData.status}` };
+  }
+  if (orderData.luluPrintJobId) {
+    return { submitted: false, skipped: true, reason: "already_submitted", luluPrintJobId: orderData.luluPrintJobId };
+  }
+
+  const coverStoragePath = orderData.coverPdfStoragePath;
+  const interiorStoragePath = orderData.interiorPdfStoragePath;
+  if (!coverStoragePath || !interiorStoragePath) {
+    throw new Error("Order missing PDF storage paths");
+  }
+
+  await orderRef.update({
+    status: "pending_fulfillment",
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  try {
+    const [coverSignedUrl, interiorSignedUrl] = await Promise.all([
+      getSignedUrl(coverStoragePath),
+      getSignedUrl(interiorStoragePath)
+    ]);
+
+    const bookSnap = await db.collection("users").doc(userId)
+      .collection("bookVersions").doc(orderData.bookVersionId).get();
+    const bookRecord = bookSnap.exists ? bookSnap.data() : {};
+    const firstPageTitle = bookRecord.pages?.[0]?.title || "Story";
+    const printTitleRaw = bookRecord.printTitle != null ? String(bookRecord.printTitle).trim() : "";
+    const chosenTitle = printTitleRaw || firstPageTitle;
+    const bookTitle = chosenTitle ? `${chosenTitle} (Story)` : "MemoirAI Story";
+
+    let podPackageId = orderData.selectedPodPackageId || null;
+    if (!podPackageId) {
+      const inputs = await getBookVersionOrderInputs(
+        userId,
+        orderData.bookVersionId,
+        orderData.selectedProductOptionId || null
+      );
+      podPackageId = inputs.podPackageId;
+    }
+
+    const shippingAddress = orderData.shippingAddress || {};
+    const printQty = Math.min(99, Math.max(1, parseInt(orderData.quantity, 10) || 1));
+    const payload = {
+      line_items: [
+        {
+          title: bookTitle,
+          cover_url: coverSignedUrl,
+          interior_url: interiorSignedUrl,
+          pod_package_id: podPackageId,
+          page_count: bookRecord.pageCount || bookRecord.pages?.length || 0,
+          quantity: printQty
+        }
+      ],
+      shipping_address: {
+        name: shippingAddress.name || "Customer",
+        street1: shippingAddress.street1 || "",
+        city: shippingAddress.city || "",
+        state_code: shippingAddress.stateCode || "",
+        country_code: shippingAddress.countryCode || "US",
+        postcode: shippingAddress.postcode || "",
+        phone_number: shippingAddress.phone || "0000000000"
+      },
+      contact_email: orderData.customerEmail || "",
+      shipping_level: orderData.shippingLevel || "MAIL",
+      external_id: orderId
+    };
+
+    const { accessToken, luluBaseUrl, environment } = await getLuluAccessToken();
+    console.log(`submitPaidOrderToLulu source=${source} order=${orderId} env=${environment}`);
+    const luluJob = await luluCreatePrintJob(accessToken, luluBaseUrl, payload);
+    const luluJobId = luluJob.id || luluJob.external_id;
+    const luluRawStatus = String(luluJob.status || luluJob.state || "CREATED");
+    const mappedStatus = mapLuluStatusToOrderStatus(luluRawStatus);
+    const trackingUrl = resolveTrackingUrlFromLuluJob(luluJob);
+
+    const updates = {
+      luluPrintJobId: luluJobId,
+      luluRawStatus,
+      status: mappedStatus,
+      luluLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      luluStatusHistory: pushStatusHistory(orderData.luluStatusHistory, {
+        status: luluRawStatus,
+        trackingUrl,
+        source
+      })
+    };
+    if (trackingUrl) {
+      updates.luluTrackingUrl = trackingUrl;
+    }
+    await orderRef.update(updates);
+
+    return {
+      submitted: true,
+      luluJobId,
+      mappedStatus,
+      luluRawStatus
+    };
+  } catch (err) {
+    await orderRef.update({
+      status: "lulu_failed",
+      luluError: String(err?.message || err || "Unknown Lulu submit error"),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    throw err;
+  }
 }
 
 async function getSignedUrl(storagePath, expiresInSeconds = 604800) {
@@ -267,6 +1829,878 @@ exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB"
 
 // --- Book Ordering (Stripe + Lulu) ---
 
+/** Callable: Lulu-backed estimate for in-app checkout UI (book base + remainder as shipping & fees). */
+exports.estimateCheckoutPricing = onCall(
+  {
+    timeoutSeconds: 60,
+    secrets: [luluClientKey, luluClientSecret]
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in");
+    }
+    const userId = request.auth.uid;
+    const { bookVersionId, shippingAddress, shippingLevel = "MAIL", productOptionId = null } = request.data || {};
+    if (!bookVersionId || !shippingAddress) {
+      throw new HttpsError("invalid-argument", "bookVersionId and shippingAddress are required");
+    }
+
+    let inputs;
+    try {
+      inputs = await getBookVersionOrderInputs(userId, bookVersionId, productOptionId);
+    } catch (e) {
+      if (e instanceof HttpsError) {
+        throw e;
+      }
+      throw new HttpsError("internal", String(e.message || e));
+    }
+
+    const addr = {
+      street1: shippingAddress.street1,
+      city: shippingAddress.city,
+      stateCode: shippingAddress.stateCode || "",
+      countryCode: shippingAddress.countryCode || "US",
+      postcode: shippingAddress.postcode,
+      phone: shippingAddress.phone
+    };
+
+    try {
+      const pricing = await calculateMerchantPricingBreakdown({
+        inputs,
+        shippingAddress: addr,
+        shippingLevel,
+        logLabel: "estimateCheckoutPricing"
+      });
+      const { warnings, suggestedAddress } = extractLuluAddressFeedback(pricing.selectedCost);
+
+      console.log(
+        `estimateCheckoutPricing user=${userId} book=${bookVersionId} level=${shippingLevel} ` +
+        `luluTotal=${pricing.selectedCost.total_cost_incl_tax} ` +
+        `bookBaseCents=${pricing.bookBaseCents} shippingCents=${pricing.shippingCents} ` +
+        `merchantTotalCents=${pricing.estimatedTotalCents}`
+      );
+
+      return {
+        bookBaseCents: pricing.bookBaseCents,
+        shippingCents: pricing.shippingCents,
+        estimatedTotalCents: pricing.estimatedTotalCents,
+        currency: "usd",
+        pageCount: inputs.pageCount,
+        selectedProductOptionId: inputs.selectedOption.optionId,
+        selectedPodPackageId: inputs.selectedOption.podPackageId,
+        selectedProductTitle: inputs.selectedOption.title,
+        productOptions: inputs.productOptions.map((o) => ({
+          optionId: o.optionId,
+          title: o.title,
+          subtitle: o.subtitle,
+          minPages: o.minPages,
+          maxPages: o.maxPages,
+          available: o.available,
+          unavailableReason: o.unavailableReason
+        })),
+        marginPercent: inputs.marginPercent,
+        luluTotalCostInclTax: pricing.selectedCost.total_cost_incl_tax || null,
+        luluShippingCostInclTax: pricing.luluShippingCostInclTax,
+        selectedLineItemCostInclTax: pricing.selectedLineItemCostInclTax,
+        hardcoverReferenceLineItemCostInclTax: pricing.hardcoverReferenceLineItemCostInclTax,
+        hardcoverReferencePageCount: pricing.hardcoverReferencePageCount,
+        pricingFloorApplied: false,
+        luluCurrency: pricing.selectedCost.currency || null,
+        warnings,
+        suggestedAddress,
+        fallback: false
+      };
+    } catch (err) {
+      console.warn("estimateCheckoutPricing Lulu error:", err.message);
+      return {
+        bookBaseCents: inputs.baseCents,
+        shippingCents: 0,
+        estimatedTotalCents: inputs.baseCents,
+        currency: "usd",
+        pageCount: inputs.pageCount,
+        selectedProductOptionId: inputs.selectedOption.optionId,
+        selectedPodPackageId: inputs.selectedOption.podPackageId,
+        selectedProductTitle: inputs.selectedOption.title,
+        productOptions: inputs.productOptions.map((o) => ({
+          optionId: o.optionId,
+          title: o.title,
+          subtitle: o.subtitle,
+          minPages: o.minPages,
+          maxPages: o.maxPages,
+          available: o.available,
+          unavailableReason: o.unavailableReason
+        })),
+        marginPercent: inputs.marginPercent,
+        luluTotalCostInclTax: null,
+        luluShippingCostInclTax: null,
+        pricingFloorApplied: false,
+        luluCurrency: null,
+        warnings: [{ type: "lulu_error", code: "", path: "", message: String(err.message || err) }],
+        ...luluFallbackDiagnostics(err),
+        suggestedAddress: null,
+        fallback: true
+      };
+    }
+  }
+);
+
+/** Callable: multi-item cart estimate (per-line live Lulu + merchant formula). */
+exports.estimateCartCheckoutPricing = onCall(
+  {
+    timeoutSeconds: 120,
+    secrets: [luluClientKey, luluClientSecret]
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in");
+    }
+    const userId = request.auth.uid;
+    const { items, shippingAddress, shippingLevel = "MAIL" } = request.data || {};
+    if (!Array.isArray(items) || items.length === 0 || !shippingAddress) {
+      throw new HttpsError("invalid-argument", "items[] and shippingAddress are required");
+    }
+    if (items.length > 25) {
+      throw new HttpsError("invalid-argument", "Cart cannot exceed 25 lines");
+    }
+
+    const allWarnings = [];
+    let suggestedAddress = null;
+    const lines = [];
+    let subtotalCents = 0;
+    /** For fallback shipping-method estimates if /shipping-options/ fails */
+    let firstLineForShippingMethods = null;
+    let firstLineQuantity = 1;
+    /** Full cart: every resolved line’s pod package, pages, qty for aggregate shipping-options */
+    const cartLineItemsForShippingOptions = [];
+
+    for (let i = 0; i < items.length; i += 1) {
+      const row = items[i] || {};
+      const bookVersionId = row.bookVersionId;
+      const productOptionId = row.productOptionId || null;
+      const quantity = Math.min(99, Math.max(1, parseInt(row.quantity, 10) || 1));
+      if (!bookVersionId) {
+        throw new HttpsError("invalid-argument", `items[${i}].bookVersionId is required`);
+      }
+
+      try {
+        const rowLabel = `estimateCartCheckoutPricing:${i}:${bookVersionId}`;
+        const resolved = await pricingForCartLine(
+          userId,
+          bookVersionId,
+          productOptionId,
+          shippingAddress,
+          shippingLevel,
+          rowLabel,
+          quantity
+        );
+        for (const w of resolved.warnings) {
+          allWarnings.push(w);
+        }
+        if (!suggestedAddress && resolved.suggestedAddress) {
+          suggestedAddress = resolved.suggestedAddress;
+        }
+        if (!firstLineForShippingMethods) {
+          firstLineForShippingMethods = resolved;
+          firstLineQuantity = quantity;
+        }
+        cartLineItemsForShippingOptions.push({
+          podPackageId: resolved.inputs.podPackageId,
+          pageCount: resolved.inputs.pageCount,
+          quantity
+        });
+        const lineBook = resolved.pricing.bookBaseCents;
+        const lineShip = resolved.pricing.shippingCents;
+        const lineTotal = resolved.pricing.estimatedTotalCents;
+        subtotalCents += lineTotal;
+        const unitBook = quantity > 0 ? Math.round(lineBook / quantity) : lineBook;
+        const unitShip = quantity > 0 ? Math.round(lineShip / quantity) : lineShip;
+        const unitTot = quantity > 0 ? Math.round(lineTotal / quantity) : lineTotal;
+        lines.push({
+          bookVersionId,
+          productOptionId: resolved.inputs.selectedOption.optionId,
+          productTitle: resolved.inputs.selectedOption.title,
+          quantity,
+          lineBookBaseCents: lineBook,
+          lineShippingCents: lineShip,
+          unitBookBaseCents: unitBook,
+          unitShippingCents: unitShip,
+          unitTotalCents: unitTot,
+          lineTotalCents: lineTotal,
+          pageCount: resolved.inputs.pageCount
+        });
+      } catch (err) {
+        console.warn("estimateCartCheckoutPricing line error:", err.message);
+        if (err instanceof HttpsError) {
+          throw err;
+        }
+        throw new HttpsError("failed-precondition", String(err.message || err));
+      }
+    }
+
+    console.log(
+      `estimateCartCheckoutPricing user=${userId} lines=${lines.length} total=${subtotalCents}`
+    );
+
+    let shippingMethods = [];
+    if (cartLineItemsForShippingOptions.length > 0) {
+      try {
+        shippingMethods = await estimateLuluShippingMethodsForCart({
+          lineItems: cartLineItemsForShippingOptions,
+          shippingAddress,
+          logLabel: "estimateCartCheckoutPricing"
+        });
+      } catch (err) {
+        console.warn("estimateCartCheckoutPricing shipping-options failed:", String(err.message || err));
+      }
+    }
+    if (shippingMethods.length === 0 && firstLineForShippingMethods) {
+      try {
+        shippingMethods = await estimateLuluShippingMethodsForLine({
+          selectedCost: firstLineForShippingMethods.pricing.selectedCost,
+          selectedShippingLevel: shippingLevel,
+          podPackageId: firstLineForShippingMethods.inputs.podPackageId,
+          pageCount: firstLineForShippingMethods.inputs.pageCount,
+          shippingAddress,
+          logLabel: "estimateCartCheckoutPricing:fallbackFirstLine",
+          quantity: firstLineQuantity
+        });
+      } catch (err) {
+        console.warn("estimateCartCheckoutPricing shippingMethods fallback failed:", String(err.message || err));
+      }
+    }
+
+    const booksSubtotalCents = lines.reduce((s, l) => s + l.lineBookBaseCents, 0);
+    const summedLineShippingCents = lines.reduce((s, l) => s + l.lineShippingCents, 0);
+    let orderShippingCents = 0;
+    if (cartLineItemsForShippingOptions.length > 0) {
+      try {
+        const normAddr = normalizeShippingForLuluCalc(shippingAddress);
+        const { costResult: wholeOrderCost } = await calculateLuluMultiLineCostWithRetry({
+          lineItems: cartLineItemsForShippingOptions,
+          shippingAddress: normAddr,
+          shippingLevel,
+          logLabel: "estimateCartCheckoutPricing:wholeOrderShip"
+        });
+        orderShippingCents = extractLuluShippingCents(wholeOrderCost);
+        const shipSnip =
+          wholeOrderCost?.shipping_cost && typeof wholeOrderCost.shipping_cost === "object"
+            ? JSON.stringify(wholeOrderCost.shipping_cost).slice(0, 280)
+            : String(wholeOrderCost?.shipping_cost_incl_tax ?? "");
+        console.log(
+          `estimateCartCheckoutPricing wholeOrder orderShippingCents=${orderShippingCents} ` +
+          `summedLineShip=${summedLineShippingCents} shipping_snip=${shipSnip}`
+        );
+      } catch (err) {
+        console.warn("estimateCartCheckoutPricing wholeOrder ship failed; using summed line shipping:", String(err.message || err));
+        orderShippingCents = summedLineShippingCents;
+      }
+    } else {
+      orderShippingCents = summedLineShippingCents;
+    }
+
+    const adjustedLines = lines.map((l) => {
+      const unitTot = l.quantity > 0 ? Math.round(l.lineBookBaseCents / l.quantity) : l.lineBookBaseCents;
+      return {
+        ...l,
+        lineShippingCents: 0,
+        unitShippingCents: 0,
+        lineTotalCents: l.lineBookBaseCents,
+        unitTotalCents: unitTot
+      };
+    });
+    const estimatedTotalCents = booksSubtotalCents + orderShippingCents;
+
+    console.log(
+      `estimateCartCheckoutPricing user=${userId} books=${booksSubtotalCents} ` +
+      `orderShip=${orderShippingCents} total=${estimatedTotalCents} (was subtotal ${subtotalCents})`
+    );
+
+    return {
+      lines: adjustedLines,
+      booksSubtotalCents,
+      orderShippingCents,
+      subtotalCents: estimatedTotalCents,
+      estimatedTotalCents,
+      currency: "usd",
+      shippingLevel,
+      shippingMethods,
+      warnings: allWarnings,
+      suggestedAddress,
+      fallback: false
+    };
+  }
+);
+
+/** Callable: precompute cart quote for fast checkout (Lulu once; Stripe later). */
+exports.prepareCartCheckoutQuote = onCall(
+  {
+    timeoutSeconds: 120,
+    secrets: [luluClientKey, luluClientSecret]
+  },
+  async (request) => {
+    const startMs = Date.now();
+    const elapsedMs = () => Date.now() - startMs;
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in");
+    }
+    const userId = request.auth.uid;
+    const debugId = `qprep_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+    const { items, shippingAddress, shippingLevel = "MAIL", clientPayloadHash } = request.data || {};
+    if (!Array.isArray(items) || items.length === 0 || !shippingAddress) {
+      throw new HttpsError("invalid-argument", "items[] and shippingAddress are required");
+    }
+    if (items.length > 25) {
+      throw new HttpsError("invalid-argument", "Cart cannot exceed 25 lines");
+    }
+
+    console.log(
+      JSON.stringify({
+        msg: "prepareCartCheckoutQuote:start",
+        userId,
+        debugId,
+        stage: "start",
+        itemCount: items.length,
+        shippingLevel: shippingLevel || "MAIL",
+        elapsedMs: elapsedMs()
+      })
+    );
+
+    const cartHash = computeCartCheckoutPayloadHash(items, shippingAddress, shippingLevel);
+    if (clientPayloadHash && String(clientPayloadHash) !== cartHash) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Cart or address changed since quote was requested. Refresh pricing and try again.",
+        { debugId, stage: "hash_mismatch", cartHash }
+      );
+    }
+
+    const built = await buildCartCheckoutResolved(
+      userId,
+      items,
+      shippingAddress,
+      shippingLevel,
+      "prepareCartCheckoutQuote"
+    );
+
+    console.log(
+      JSON.stringify({
+        msg: "prepareCartCheckoutQuote:resolved",
+        userId,
+        debugId,
+        stage: "line_pricing_done",
+        booksSubtotalCents: built.booksSubtotalCents,
+        orderShippingCents: built.orderShippingCents,
+        totalCents: built.totalCents,
+        elapsedMs: elapsedMs()
+      })
+    );
+
+    const shippingMethods = await estimateShippingMethodsForCartSnapshot({
+      cartLineItemsForShippingOptions: built.cartLineItemsForShippingOptions,
+      shippingAddress,
+      shippingLevel,
+      firstResolvedLine: built.firstResolvedLine,
+      firstLineQuantity: built.firstLineQuantity,
+      logLabel: "prepareCartCheckoutQuote"
+    });
+
+    const adjustedLines = built.resolvedItems.map((item) => {
+      const qty = item.quantity || 1;
+      const lineBook = item.lineBookBaseCents;
+      const unitTot = qty > 0 ? Math.round(lineBook / qty) : lineBook;
+      return {
+        bookVersionId: item.bookVersionId,
+        productOptionId: item.productOptionId,
+        productTitle: item.productTitle,
+        quantity: qty,
+        lineBookBaseCents: lineBook,
+        lineShippingCents: 0,
+        unitBookBaseCents: unitTot,
+        unitShippingCents: 0,
+        unitTotalCents: unitTot,
+        lineTotalCents: lineBook,
+        pageCount: item.pageCount
+      };
+    });
+
+    const quoteId = `q_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+    const expiresAt = admin.firestore.Timestamp.fromMillis(Date.now() + CART_CHECKOUT_QUOTE_TTL_MS);
+
+    const quoteRef = db.collection("users").doc(userId).collection("checkoutQuotes").doc(quoteId);
+    await quoteRef.set({
+      quoteId,
+      userId,
+      cartHash,
+      items: normalizeCartItemsForHash(items).map((row) => ({
+        bookVersionId: row.bookVersionId,
+        productOptionId: row.productOptionId || null,
+        quantity: row.quantity
+      })),
+      shippingAddress,
+      shippingLevel: shippingLevel || "MAIL",
+      stripeLineItems: built.stripeLineItems,
+      resolvedItems: built.resolvedItems,
+      booksSubtotalCents: built.booksSubtotalCents,
+      orderShippingCents: built.orderShippingCents,
+      totalCents: built.totalCents,
+      shippingMethods,
+      warnings: built.allWarnings,
+      suggestedAddress: built.suggestedAddress || null,
+      status: "ready",
+      debugId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      expiresAt
+    });
+
+    console.log(
+      JSON.stringify({
+        msg: "prepareCartCheckoutQuote:written",
+        userId,
+        debugId,
+        quoteId,
+        cartHash,
+        totalCents: built.totalCents,
+        elapsedMs: elapsedMs()
+      })
+    );
+
+    return {
+      quoteId,
+      cartHash,
+      expiresAt: { _seconds: Math.floor(expiresAt.toMillis() / 1000), _nanoseconds: 0 },
+      expiresAtMillis: expiresAt.toMillis(),
+      lines: adjustedLines,
+      booksSubtotalCents: built.booksSubtotalCents,
+      orderShippingCents: built.orderShippingCents,
+      subtotalCents: built.totalCents,
+      estimatedTotalCents: built.totalCents,
+      currency: "usd",
+      shippingLevel: shippingLevel || "MAIL",
+      shippingMethods,
+      warnings: built.allWarnings,
+      suggestedAddress: built.suggestedAddress,
+      fallback: false,
+      fastCheckoutEnabled: isFastCartCheckoutEnabled()
+    };
+  }
+);
+
+/** Callable: create Stripe session from a prepared quote (no Lulu pricing work). */
+exports.createCartCheckoutSessionFast = onCall(
+  {
+    timeoutSeconds: 60,
+    secrets: [stripeSecretKey, luluClientKey, luluClientSecret]
+  },
+  async (request) => {
+    const startMs = Date.now();
+    const elapsedMs = () => Date.now() - startMs;
+    if (!isFastCartCheckoutEnabled()) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Fast checkout is disabled. Use the standard checkout action.",
+        { code: "fast_checkout_disabled" }
+      );
+    }
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in to order books");
+    }
+    const userId = request.auth.uid;
+    const debugId = `ccf_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+    let stage = "input_validation";
+    const {
+      quoteId,
+      idempotencyKey: rawKey,
+      clientEstimatedTotalCents,
+      cartHash: clientCartHash
+    } = request.data || {};
+    if (!quoteId || typeof quoteId !== "string") {
+      throw new HttpsError("invalid-argument", "quoteId is required");
+    }
+    const idempotencyKey = sanitizeIdempotencyKey(rawKey);
+    if (!idempotencyKey) {
+      throw new HttpsError("invalid-argument", "idempotencyKey is required (8-256 URL-safe chars)");
+    }
+
+    const attemptRef = db.collection("users").doc(userId).collection("checkoutAttempts").doc(idempotencyKey);
+
+    const replay = await db.runTransaction(async (transaction) => {
+      const attemptSnap = await transaction.get(attemptRef);
+      if (attemptSnap.exists) {
+        const d = attemptSnap.data() || {};
+        if (d.stripeSessionId && d.checkoutUrl && d.cartOrderGroupId) {
+          return {
+            replay: true,
+            checkoutUrl: d.checkoutUrl,
+            sessionId: d.stripeSessionId,
+            cartOrderGroupId: d.cartOrderGroupId,
+            totalCents: d.totalCents || 0
+          };
+        }
+        const startedMs = d.startedAt && d.startedAt.toMillis ? d.startedAt.toMillis() : 0;
+        if (d.status === "processing" && startedMs && Date.now() - startedMs < 120000) {
+          throw new HttpsError(
+            "resource-exhausted",
+            "Checkout is already in progress. Wait a moment and try again.",
+            { debugId, stage: "idempotency_in_flight" }
+          );
+        }
+      }
+      transaction.set(
+        attemptRef,
+        {
+          status: "processing",
+          quoteId,
+          userId,
+          debugId,
+          startedAt: admin.firestore.FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+      return { replay: false };
+    });
+
+    if (replay.replay) {
+      console.log(
+        JSON.stringify({
+          msg: "createCartCheckoutSessionFast:idempotent_replay",
+          userId,
+          debugId,
+          idempotencyKey,
+          stage: "idempotent_replay",
+          fallback: false,
+          elapsedMs: elapsedMs()
+        })
+      );
+      return {
+        checkoutUrl: replay.checkoutUrl,
+        sessionId: replay.sessionId,
+        cartOrderGroupId: replay.cartOrderGroupId,
+        totalCents: replay.totalCents,
+        idempotentReplay: true
+      };
+    }
+
+    const quoteRef = db.collection("users").doc(userId).collection("checkoutQuotes").doc(quoteId);
+    const quoteSnap = await quoteRef.get();
+    if (!quoteSnap.exists) {
+      await attemptRef.set(
+        { status: "failed", failedStage: "quote_load", error: "quote_not_found", updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+      throw new HttpsError("not-found", "Checkout quote expired or invalid. Refresh pricing and try again.", {
+        debugId,
+        stage: "quote_load"
+      });
+    }
+
+    const quote = quoteSnap.data() || {};
+    if (quote.userId && quote.userId !== userId) {
+      throw new HttpsError("permission-denied", "Quote does not belong to this user");
+    }
+    if (quote.status && quote.status !== "ready") {
+      throw new HttpsError("failed-precondition", "Quote is no longer valid.", { debugId, stage: "quote_status" });
+    }
+    const exp = quote.expiresAt;
+    const expMs = exp && exp.toMillis ? exp.toMillis() : 0;
+    if (expMs && Date.now() > expMs) {
+      await quoteRef.set({ status: "expired", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await attemptRef.set(
+        { status: "failed", failedStage: "quote_expired", updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+      throw new HttpsError(
+        "failed-precondition",
+        "Checkout quote expired. Refresh pricing and try again.",
+        { debugId, stage: "quote_expired" }
+      );
+    }
+
+    if (clientCartHash && quote.cartHash && String(clientCartHash) !== quote.cartHash) {
+      await attemptRef.set(
+        { status: "failed", failedStage: "hash_mismatch", updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+      throw new HttpsError(
+        "failed-precondition",
+        "Cart changed since quote. Refresh pricing and try again.",
+        { debugId, stage: "hash_mismatch" }
+      );
+    }
+
+    const stripeLineItems = quote.stripeLineItems;
+    const resolvedItems = quote.resolvedItems;
+    const shippingAddress = quote.shippingAddress;
+    const shippingLevel = quote.shippingLevel || "MAIL";
+    const booksSubtotalCents = quote.booksSubtotalCents || 0;
+    const orderShippingCents = quote.orderShippingCents || 0;
+    const totalCents = quote.totalCents || 0;
+
+    if (!Array.isArray(stripeLineItems) || stripeLineItems.length === 0 || !Array.isArray(resolvedItems)) {
+      throw new HttpsError("internal", "Quote data is incomplete. Prepare a new quote.");
+    }
+
+    if (clientEstimatedTotalCents != null && Number.isFinite(Number(clientEstimatedTotalCents))) {
+      const cli = Math.round(Number(clientEstimatedTotalCents));
+      if (cli !== totalCents) {
+        console.warn(`createCartCheckoutSessionFast pricing drift user=${userId} client=${cli} server=${totalCents}`);
+      }
+    }
+
+    stage = "pending_checkout_write";
+    const cartOrderGroupId = `cg_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+    const pendingRef = db.collection("users").doc(userId).collection("pendingCartCheckouts").doc(cartOrderGroupId);
+
+    await pendingRef.set({
+      cartOrderGroupId,
+      userId,
+      items: resolvedItems,
+      shippingAddress,
+      shippingLevel,
+      totalCents,
+      booksSubtotalCents,
+      orderShippingCents,
+      status: "pending_stripe",
+      quoteId,
+      idempotencyKey,
+      checkoutPath: "fast",
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    console.log(
+      JSON.stringify({
+        msg: "createCartCheckoutSessionFast:pending_written",
+        userId,
+        debugId,
+        quoteId,
+        cartOrderGroupId,
+        totalCents,
+        lineItemsForStripe: stripeLineItems.length,
+        elapsedMs: elapsedMs()
+      })
+    );
+
+    const stripe = createStripeClient({ maxNetworkRetries: 1, timeoutMs: 20 * 1000 });
+    let session;
+    try {
+      stage = "stripe_session_create";
+      console.log(
+        JSON.stringify({
+          msg: "createCartCheckoutSessionFast:stripe_session_create",
+          userId,
+          debugId,
+          cartOrderGroupId,
+          totalCents,
+          elapsedMs: elapsedMs()
+        })
+      );
+      session = await createStripeCheckoutSessionWithRetry(
+        stripe,
+        {
+          mode: "payment",
+          payment_method_types: ["card"],
+          line_items: stripeLineItems,
+          success_url: `memoirai://order-complete?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: "memoirai://order-cancelled",
+          metadata: {
+            cartOrderGroupId,
+            userId,
+            shippingLevel: shippingLevel || "MAIL",
+            totalCents: String(totalCents),
+            quoteId: quoteId || ""
+          },
+          customer_email: request.auth.token?.email || undefined,
+          payment_intent_data: {
+            receipt_email: request.auth.token?.email || undefined
+          }
+        },
+        "createCartCheckoutSessionFast",
+        `fast_${idempotencyKey}`
+      );
+    } catch (err) {
+      const stripeMessage = String(err?.message || err || "unknown");
+      const transient = isLikelyTransientStripeError(err);
+      console.error(
+        "createCartCheckoutSessionFast stripe session create failed:",
+        {
+          userId,
+          debugId,
+          cartOrderGroupId,
+          elapsedMs: elapsedMs(),
+          totalCents,
+          transient,
+          message: stripeMessage
+        }
+      );
+      await pendingRef.set(
+        {
+          status: "stripe_create_failed",
+          debugId,
+          failedStage: stage,
+          elapsedMs: elapsedMs(),
+          stripeError: stripeMessage,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+      await attemptRef.set(
+        {
+          status: "failed",
+          failedStage: stage,
+          stripeError: stripeMessage,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+      if (transient) {
+        throw new HttpsError(
+          "unavailable",
+          "Stripe is temporarily unreachable. Please try again in a moment.",
+          {
+            debugId,
+            cartOrderGroupId,
+            stage,
+            transient,
+            stripeType: err?.type || null,
+            stripeCode: err?.code || null,
+            stripeMessage
+          }
+        );
+      }
+      throw new HttpsError(
+        "internal",
+        "Unable to start secure checkout. Please try again.",
+        {
+          debugId,
+          cartOrderGroupId,
+          stage,
+          transient,
+          stripeType: err?.type || null,
+          stripeCode: err?.code || null,
+          stripeMessage
+        }
+      );
+    }
+
+    await pendingRef.update({
+      stripeSessionId: session.id,
+      elapsedMs: elapsedMs(),
+      finalStage: "stripe_session_created"
+    });
+
+    await quoteRef.set(
+      {
+        status: "consumed",
+        consumedAt: admin.firestore.FieldValue.serverTimestamp(),
+        cartOrderGroupId,
+        stripeSessionId: session.id
+      },
+      { merge: true }
+    );
+
+    await attemptRef.set(
+      {
+        status: "completed",
+        cartOrderGroupId,
+        stripeSessionId: session.id,
+        checkoutUrl: session.url,
+        totalCents,
+        completedAt: admin.firestore.FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+
+    console.log(
+      JSON.stringify({
+        msg: "createCartCheckoutSessionFast:success",
+        userId,
+        debugId,
+        quoteId,
+        cartOrderGroupId,
+        stage: "complete",
+        totalCents,
+        elapsedMs: elapsedMs()
+      })
+    );
+
+    return {
+      checkoutUrl: session.url,
+      sessionId: session.id,
+      cartOrderGroupId,
+      totalCents,
+      idempotentReplay: false
+    };
+  }
+);
+
+/** Proxy Google Places Autocomplete (Places API New — server-side key). */
+exports.autocompleteAddress = onCall(
+  {
+    timeoutSeconds: 30,
+    secrets: [googlePlacesApiKey]
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in");
+    }
+    const { query, sessionToken, countryCode } = request.data || {};
+    const q = String(query || "").trim();
+    if (q.length < 3) {
+      return { predictions: [], status: "ZERO_RESULTS" };
+    }
+    const key = googlePlacesApiKey.value();
+    if (!key) {
+      throw new HttpsError("failed-precondition", "Address search is not configured");
+    }
+
+    try {
+      const { predictions, status } = await googlePlacesAutocompleteNew({
+        query: q,
+        countryCode,
+        sessionToken,
+        apiKey: key
+      });
+      return { predictions, status };
+    } catch (e) {
+      if (e instanceof HttpsError) {
+        throw e;
+      }
+      console.error("Places autocomplete (new):", e.message || e);
+      throw new HttpsError("failed-precondition", String(e.message || e));
+    }
+  }
+);
+
+/** Place Details (Places API New) -> fields for ShippingAddress. */
+exports.resolveAddressPlace = onCall(
+  {
+    timeoutSeconds: 30,
+    secrets: [googlePlacesApiKey]
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in");
+    }
+    const { placeId, sessionToken } = request.data || {};
+    if (!placeId) {
+      throw new HttpsError("invalid-argument", "placeId is required");
+    }
+    const key = googlePlacesApiKey.value();
+    if (!key) {
+      throw new HttpsError("failed-precondition", "Address search is not configured");
+    }
+
+    try {
+      return await googlePlacesGetPlaceNew({ placeId, sessionToken, apiKey: key });
+    } catch (e) {
+      if (e instanceof HttpsError) {
+        throw e;
+      }
+      console.error("Places details (new):", e.message || e);
+      throw new HttpsError("failed-precondition", String(e.message || e));
+    }
+  }
+);
+
 exports.createCheckoutSession = onCall(
   {
     timeoutSeconds: 60,
@@ -277,46 +2711,36 @@ exports.createCheckoutSession = onCall(
       throw new HttpsError("unauthenticated", "Must be signed in to order a book");
     }
     const userId = request.auth.uid;
-    const { bookVersionId, shippingAddress, shippingLevel = "MAIL" } = request.data || {};
+    const debugId = `cs_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+    const { bookVersionId, shippingAddress, shippingLevel = "MAIL", clientEstimatedTotalCents, productOptionId = null } = request.data || {};
     if (!bookVersionId || !shippingAddress) {
       throw new HttpsError("invalid-argument", "bookVersionId and shippingAddress are required");
     }
 
-    const docRef = db.collection("users").doc(userId).collection("bookVersions").doc(bookVersionId);
-    const snapshot = await docRef.get();
-    if (!snapshot.exists) {
-      throw new HttpsError("not-found", "Book not found");
-    }
-    const record = snapshot.data() || {};
-    if (record.renderStatus !== "rendered" || !record.pdfURL || !record.coverURL) {
-      throw new HttpsError("failed-precondition", "Book PDF is not ready for printing yet");
+    let inputs;
+    try {
+      inputs = await getBookVersionOrderInputs(userId, bookVersionId, productOptionId);
+    } catch (e) {
+      if (e instanceof HttpsError) {
+        throw e;
+      }
+      throw new HttpsError("internal", String(e.message || e));
     }
 
-    const pageCount = record.pageCount || record.pages?.length || 0;
+    const { record, pageCount, baseCents, marginPercent, isLandscape, selectedOption } = inputs;
     const pdfStoragePath = record.pdfStoragePath;
     const coverStoragePath = record.coverStoragePath;
-    if (!pdfStoragePath || !coverStoragePath) {
-      throw new HttpsError("failed-precondition", "Book artifacts missing");
-    }
-
-    const isLandscape = (record.pageWidth || 612) > (record.pageHeight || 792);
-    const pricingSnap = await db.collection("config").doc("pricing").get();
-    const pricingData = pricingSnap.exists ? pricingSnap.data() : {};
-    const pricing = isLandscape ? pricingData?.kidsBook : pricingData?.standardBook;
-    const podPackageId = pricing?.luluPodPackageId
-      ?? (isLandscape ? "1100X0850FCSTDCW080CW444MXX" : "0850X1100FCSTDCW080CW444MXX");
-    const baseCents = pricing?.basePriceCents ?? 2999;
-    const marginPercent = pricing?.marginPercent ?? 30;
     const dimensions = isLandscape ? "11x8.5\"" : "8.5x11\"";
 
     let totalCents = baseCents;
+    let pricingFallbackReason = null;
+    let pricingFallbackPhase = null;
+    let pricingFallbackStatusCode = null;
+    let pricingFallbackDetail = null;
     try {
-      const accessToken = await getLuluAccessToken();
-      const costResult = await luluCalculateCost(
-        accessToken,
-        podPackageId,
-        pageCount,
-        {
+      const pricing = await calculateMerchantPricingBreakdown({
+        inputs,
+        shippingAddress: {
           street1: shippingAddress.street1,
           city: shippingAddress.city,
           stateCode: shippingAddress.stateCode || "",
@@ -324,56 +2748,333 @@ exports.createCheckoutSession = onCall(
           postcode: shippingAddress.postcode,
           phone: shippingAddress.phone
         },
-        shippingLevel
-      );
-      const luluTotalDollars = parseFloat(costResult.total_cost_incl_tax || "0");
-      const luluTotalCents = Math.round(luluTotalDollars * 100);
-      if (luluTotalCents > 0) {
-        totalCents = Math.max(baseCents, Math.round(luluTotalCents * (1 + (marginPercent / 100))));
-      } else {
-        totalCents = baseCents;
+        shippingLevel,
+        logLabel: "createCheckoutSession"
+      });
+      totalCents = pricing.estimatedTotalCents;
+      if (clientEstimatedTotalCents != null && Number.isFinite(Number(clientEstimatedTotalCents))) {
+        const cli = Math.round(Number(clientEstimatedTotalCents));
+        if (cli !== totalCents) {
+          console.warn(
+            `createCheckoutSession pricing drift user=${userId} book=${bookVersionId} ` +
+            `clientEstimate=${cli} serverTotal=${totalCents} lulu=${pricing.selectedCost.total_cost_incl_tax}`
+          );
+        }
       }
     } catch (err) {
       console.warn("Lulu cost calculation failed, using base price:", err.message);
+      const diag = luluFallbackDiagnostics(err);
+      pricingFallbackReason = diag.fallbackReason;
+      pricingFallbackPhase = diag.fallbackPhase;
+      pricingFallbackStatusCode = diag.fallbackStatusCode;
+      pricingFallbackDetail = diag.fallbackDetail;
       totalCents = baseCents;
     }
 
-    const stripe = new Stripe(stripeSecretKey.value());
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: "usd",
-            product_data: {
-              name: "MemoirAI Printed Book",
-              description: `${dimensions} Hardcover, Full Color, Matte. ${pageCount} pages.`,
-              images: []
+    const stripe = createStripeClient({ maxNetworkRetries: 1, timeoutMs: 20 * 1000 });
+    let session;
+    try {
+      console.log(JSON.stringify({ msg: "createCheckoutSession:stripe_session_create", userId, debugId, totalCents }));
+      session = await createStripeCheckoutSessionWithRetry(stripe, {
+        mode: "payment",
+        payment_method_types: ["card"],
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: {
+                name: "MemoirAI Printed Book",
+                description: `${dimensions} ${selectedOption.title}, Full Color, Matte. ${pageCount} pages.`
+              },
+              unit_amount: totalCents
             },
-            unit_amount: totalCents
-          },
-          quantity: 1
+            quantity: 1
+          }
+        ],
+        success_url: `memoirai://order-complete?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: "memoirai://order-cancelled",
+        metadata: {
+          bookVersionId,
+          userId,
+          shippingAddress: JSON.stringify(shippingAddress),
+          shippingLevel,
+          totalCents: String(totalCents),
+          coverStoragePath,
+          pdfStoragePath,
+          pricingFallbackReason: pricingFallbackReason || "",
+          pricingFallbackPhase: pricingFallbackPhase || "",
+          pricingFallbackStatusCode: pricingFallbackStatusCode != null ? String(pricingFallbackStatusCode) : "",
+          pricingFallbackDetail: pricingFallbackDetail || "",
+          selectedProductOptionId: selectedOption.optionId,
+          selectedPodPackageId: selectedOption.podPackageId
+        },
+        customer_email: request.auth.token?.email || undefined,
+        payment_intent_data: {
+          receipt_email: request.auth.token?.email || undefined
         }
-      ],
-      success_url: `memoirai://order-complete?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: "memoirai://order-cancelled",
-      metadata: {
-        bookVersionId,
+      }, "createCheckoutSession");
+    } catch (err) {
+      const stripeMessage = String(err?.message || err || "unknown");
+      const transient = isLikelyTransientStripeError(err);
+      console.error("createCheckoutSession stripe session create failed:", {
         userId,
-        shippingAddress: JSON.stringify(shippingAddress),
+        debugId,
+        bookVersionId,
+        totalCents,
         shippingLevel,
-        totalCents: String(totalCents),
-        coverStoragePath,
-        pdfStoragePath
-      },
-      customer_email: request.auth.token?.email || undefined,
-      payment_intent_data: {
-        receipt_email: request.auth.token?.email || undefined
+        code: err?.code || null,
+        type: err?.type || null,
+        transient,
+        message: stripeMessage
+      }, "createCheckoutSession", `single_${debugId}`);
+      if (transient) {
+        throw new HttpsError(
+          "unavailable",
+          "Stripe is temporarily unreachable. Please try again in a moment.",
+          {
+            debugId,
+            stage: "stripe_session_create",
+            transient,
+            stripeType: err?.type || null,
+            stripeCode: err?.code || null,
+            stripeMessage
+          }
+        );
       }
-    });
+      throw new HttpsError(
+        "internal",
+        "Unable to start secure checkout. Please try again.",
+        {
+          debugId,
+          stage: "stripe_session_create",
+          transient,
+          stripeType: err?.type || null,
+          stripeCode: err?.code || null,
+          stripeMessage
+        }
+      );
+    }
 
     return { checkoutUrl: session.url, sessionId: session.id };
+  }
+);
+
+/** Callable: Stripe checkout for multiple books (one session, multiple line items). */
+exports.createCartCheckoutSession = onCall(
+  {
+    timeoutSeconds: 120,
+    secrets: [stripeSecretKey, luluClientKey, luluClientSecret]
+  },
+  async (request) => {
+    const startMs = Date.now();
+    const elapsedMs = () => Date.now() - startMs;
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in to order books");
+    }
+    const userId = request.auth.uid;
+    const debugId = `ccs_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+    let stage = "input_validation";
+    const { items, shippingAddress, shippingLevel = "MAIL", clientEstimatedTotalCents } = request.data || {};
+    if (!Array.isArray(items) || items.length === 0 || !shippingAddress) {
+      throw new HttpsError("invalid-argument", "items[] and shippingAddress are required");
+    }
+    if (items.length > 25) {
+      throw new HttpsError("invalid-argument", "Cart cannot exceed 25 lines");
+    }
+
+    const cartOrderGroupId = `cg_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+    stage = "start";
+    console.log(
+      JSON.stringify({
+        msg: "createCartCheckoutSession:start",
+        userId,
+        debugId,
+        cartOrderGroupId,
+        itemCount: items.length,
+        shippingLevel: shippingLevel || "MAIL",
+        elapsedMs: elapsedMs()
+      })
+    );
+    stage = "line_pricing";
+    let built;
+    try {
+      built = await buildCartCheckoutResolved(
+        userId,
+        items,
+        shippingAddress,
+        shippingLevel,
+        "createCartCheckoutSession"
+      );
+    } catch (err) {
+      const d = err instanceof HttpsError && err.details && typeof err.details === "object" ? err.details : {};
+      console.error("createCartCheckoutSession line_pricing failed:", {
+        userId,
+        debugId,
+        cartOrderGroupId,
+        elapsedMs: elapsedMs(),
+        lineIndex: d.lineIndex ?? null,
+        bookVersionId: d.bookVersionId ?? null,
+        code: err?.code || null,
+        type: err?.type || null,
+        message: String(err?.message || err || "unknown")
+      });
+      if (err instanceof HttpsError) {
+        throw new HttpsError(err.code, err.message, {
+          ...d,
+          debugId,
+          cartOrderGroupId,
+          stage: "line_pricing"
+        });
+      }
+      throw new HttpsError("failed-precondition", String(err?.message || err || "Line pricing failed"), {
+        debugId,
+        cartOrderGroupId,
+        stage: "line_pricing"
+      });
+    }
+
+    const { stripeLineItems, resolvedItems, booksSubtotalCents, orderShippingCents, totalCents } = built;
+
+    if (clientEstimatedTotalCents != null && Number.isFinite(Number(clientEstimatedTotalCents))) {
+      const cli = Math.round(Number(clientEstimatedTotalCents));
+      if (cli !== totalCents) {
+        console.warn(`createCartCheckoutSession pricing drift user=${userId} client=${cli} server=${totalCents}`);
+      }
+    }
+
+    stage = "pending_checkout_write";
+    const pendingRef = db.collection("users").doc(userId).collection("pendingCartCheckouts").doc(cartOrderGroupId);
+    await pendingRef.set({
+      cartOrderGroupId,
+      userId,
+      items: resolvedItems,
+      shippingAddress,
+      shippingLevel,
+      totalCents,
+      booksSubtotalCents,
+      orderShippingCents,
+      status: "pending_stripe",
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    console.log(
+      JSON.stringify({
+        msg: "createCartCheckoutSession:pending_written",
+        userId,
+        debugId,
+        cartOrderGroupId,
+        totalCents,
+        lineItemsForStripe: stripeLineItems.length,
+        elapsedMs: elapsedMs()
+      })
+    );
+
+    const stripe = createStripeClient({ maxNetworkRetries: 1, timeoutMs: 20 * 1000 });
+    let session;
+    try {
+      stage = "stripe_session_create";
+      console.log(
+        JSON.stringify({
+          msg: "createCartCheckoutSession:stripe_session_create",
+          userId,
+          debugId,
+          cartOrderGroupId,
+          totalCents,
+          elapsedMs: elapsedMs()
+        })
+      );
+      session = await createStripeCheckoutSessionWithRetry(stripe, {
+        mode: "payment",
+        payment_method_types: ["card"],
+        line_items: stripeLineItems,
+        success_url: `memoirai://order-complete?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: "memoirai://order-cancelled",
+        metadata: {
+          cartOrderGroupId,
+          userId,
+          shippingLevel: shippingLevel || "MAIL",
+          totalCents: String(totalCents)
+        },
+        customer_email: request.auth.token?.email || undefined,
+        payment_intent_data: {
+          receipt_email: request.auth.token?.email || undefined
+        }
+      }, "createCartCheckoutSession", `cart_${cartOrderGroupId}`);
+    } catch (err) {
+      const stripeMessage = String(err?.message || err || "unknown");
+      const transient = isLikelyTransientStripeError(err);
+      console.error(
+        "createCartCheckoutSession stripe session create failed:",
+        {
+          userId,
+          debugId,
+          cartOrderGroupId,
+          elapsedMs: elapsedMs(),
+          totalCents,
+          shippingLevel,
+          lineCount: stripeLineItems.length,
+          code: err?.code || null,
+          type: err?.type || null,
+          transient,
+          message: stripeMessage
+        }
+      );
+      console.error(
+        `createCartCheckoutSession CORRELATION lookup Firestore: users/${userId}/pendingCartCheckouts/${cartOrderGroupId} status may be stripe_create_failed`
+      );
+      await pendingRef.set({
+        status: "stripe_create_failed",
+        debugId,
+        failedStage: stage,
+        elapsedMs: elapsedMs(),
+        stripeError: stripeMessage,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+      if (transient) {
+        throw new HttpsError(
+          "unavailable",
+          "Stripe is temporarily unreachable. Please try again in a moment.",
+          {
+            debugId,
+            cartOrderGroupId,
+            stage,
+            transient,
+            stripeType: err?.type || null,
+            stripeCode: err?.code || null,
+            stripeMessage
+          }
+        );
+      }
+      throw new HttpsError(
+        "internal",
+        "Unable to start secure checkout. Please try again.",
+        {
+          debugId,
+          cartOrderGroupId,
+          stage,
+          transient,
+          stripeType: err?.type || null,
+          stripeCode: err?.code || null,
+          stripeMessage
+        }
+      );
+    }
+
+    await pendingRef.update({ stripeSessionId: session.id, elapsedMs: elapsedMs(), finalStage: "stripe_session_created" });
+
+    console.log(
+      JSON.stringify({
+        msg: "createCartCheckoutSession:success",
+        userId,
+        debugId,
+        cartOrderGroupId,
+        stage: "complete",
+        path: "legacy",
+        totalCents,
+        elapsedMs: elapsedMs()
+      })
+    );
+
+    return { checkoutUrl: session.url, sessionId: session.id, cartOrderGroupId, totalCents };
   }
 );
 
@@ -411,7 +3112,95 @@ exports.stripeWebhook = onRequest(
     }
 
     const session = event.data.object;
-    const { bookVersionId, userId, shippingAddress: addrJson, shippingLevel, coverStoragePath, pdfStoragePath } = session.metadata || {};
+    const meta = session.metadata || {};
+    const cartOrderGroupId = meta.cartOrderGroupId;
+    const userIdFromMeta = meta.userId;
+
+    if (cartOrderGroupId && userIdFromMeta) {
+      const pendRef = db.collection("users").doc(userIdFromMeta).collection("pendingCartCheckouts").doc(cartOrderGroupId);
+      const pendSnap = await pendRef.get();
+      if (!pendSnap.exists) {
+        console.error("Stripe webhook: pending cart missing", cartOrderGroupId);
+        return jsonError(res, 400, "Missing pending checkout");
+      }
+      const pend = pendSnap.data();
+      if (pend.status === "paid") {
+        console.log(`Duplicate cart webhook for ${cartOrderGroupId}, skipping`);
+        return res.status(200).json({ received: true, duplicate: true, cart: true });
+      }
+
+      const paidTotal = session.amount_total;
+      const expectedTotal = pend.totalCents || 0;
+      if (paidTotal !== expectedTotal) {
+        console.warn(`Cart amount mismatch session=${paidTotal} expected=${expectedTotal} group=${cartOrderGroupId}`);
+      }
+
+      const shippingAddress = pend.shippingAddress || {};
+      const shippingLevel = pend.shippingLevel || "MAIL";
+      const isStripeTestMode = event.livemode === false;
+
+      const batch = db.batch();
+      const createdOrderIds = [];
+      for (let lineIdx = 0; lineIdx < (pend.items || []).length; lineIdx += 1) {
+        const item = pend.items[lineIdx];
+        const orderId = `ord_${Date.now()}_${lineIdx}_${crypto.randomBytes(4).toString("hex")}`;
+        createdOrderIds.push(orderId);
+        const qty = item.quantity || 1;
+        const lineTotal = Number.isFinite(Number(item.lineTotalCents))
+          ? Math.round(Number(item.lineTotalCents))
+          : (item.unitCents || 0) * qty;
+        const unit = qty > 0 ? Math.round(lineTotal / qty) : (item.unitCents || 0);
+        batch.set(db.collection("users").doc(userIdFromMeta).collection("orders").doc(orderId), {
+          orderId,
+          cartOrderGroupId,
+          bookVersionId: item.bookVersionId,
+          userId: userIdFromMeta,
+          stripeSessionId: session.id,
+          stripePaymentIntentId: session.payment_intent || null,
+          luluPrintJobId: null,
+          status: "paid",
+          luluError: null,
+          isTestOrder: isStripeTestMode,
+          customerEmail: session.customer_details?.email || session.customer_email || null,
+          shippingAddress,
+          shippingLevel,
+          selectedProductOptionId: item.productOptionId || null,
+          selectedPodPackageId: item.selectedPodPackageId || null,
+          quantity: qty,
+          unitCents: unit,
+          lineTotalCents: lineTotal,
+          pricing: {
+            totalCents: lineTotal,
+            currency: "usd"
+          },
+          coverPdfStoragePath: item.coverStoragePath,
+          interiorPdfStoragePath: item.pdfStoragePath,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          luluTrackingUrl: null,
+          luluStatusHistory: []
+        });
+      }
+      batch.update(pendRef, {
+        status: "paid",
+        paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        stripeSessionId: session.id
+      });
+      await batch.commit();
+      console.log(`Cart paid: orders=${createdOrderIds.length} group=${cartOrderGroupId}`);
+      return res.status(200).json({ received: true, cart: true, orderIds: createdOrderIds });
+    }
+
+    const {
+      bookVersionId,
+      userId,
+      shippingAddress: addrJson,
+      shippingLevel,
+      coverStoragePath,
+      pdfStoragePath,
+      selectedProductOptionId,
+      selectedPodPackageId
+    } = meta;
     if (!bookVersionId || !userId || !addrJson || !coverStoragePath || !pdfStoragePath) {
       console.error("Stripe webhook: missing metadata", session.metadata);
       return jsonError(res, 400, "Missing metadata");
@@ -424,7 +3213,6 @@ exports.stripeWebhook = onRequest(
       return jsonError(res, 400, "Invalid shipping address");
     }
 
-    // Idempotency: check for existing order with same Stripe session
     const existingSnap = await db.collectionGroup("orders")
       .where("stripeSessionId", "==", session.id)
       .limit(1)
@@ -451,6 +3239,11 @@ exports.stripeWebhook = onRequest(
       customerEmail: session.customer_details?.email || session.customer_email || null,
       shippingAddress,
       shippingLevel: shippingLevel || "MAIL",
+      selectedProductOptionId: selectedProductOptionId || null,
+      selectedPodPackageId: selectedPodPackageId || null,
+      quantity: 1,
+      unitCents: parseInt(session.metadata?.totalCents || "2999", 10),
+      lineTotalCents: parseInt(session.metadata?.totalCents || "2999", 10),
       pricing: {
         totalCents: parseInt(session.metadata?.totalCents || "2999", 10),
         currency: "usd"
@@ -491,7 +3284,6 @@ exports.fulfillOrder = onCall(
       throw new HttpsError("not-found", "Order not found");
     }
     const order = orderSnap.data();
-
     if (order.status !== "paid") {
       throw new HttpsError("failed-precondition", `Order status is '${order.status}', expected 'paid'`);
     }
@@ -499,67 +3291,83 @@ exports.fulfillOrder = onCall(
       throw new HttpsError("failed-precondition", "Cannot fulfill a test order");
     }
 
-    const coverStoragePath = order.coverPdfStoragePath;
-    const interiorStoragePath = order.interiorPdfStoragePath;
-    if (!coverStoragePath || !interiorStoragePath) {
-      throw new HttpsError("failed-precondition", "Order missing PDF storage paths");
+    let result;
+    try {
+      result = await submitPaidOrderToLulu({
+        orderRef,
+        orderData: order,
+        orderId,
+        userId: targetUserId,
+        source: "manual_fulfill"
+      });
+    } catch (err) {
+      throw new HttpsError("internal", String(err?.message || err || "Failed to submit to Lulu"));
     }
 
-    const [coverSignedUrl, interiorSignedUrl] = await Promise.all([
-      getSignedUrl(coverStoragePath),
-      getSignedUrl(interiorStoragePath)
-    ]);
+    return { success: true, orderId, luluJobId: result.luluJobId || null, status: result.mappedStatus || "submitted_to_printer" };
+  }
+);
 
-    const bookSnap = await db.collection("users").doc(targetUserId)
-      .collection("bookVersions").doc(order.bookVersionId).get();
-    const bookRecord = bookSnap.exists ? bookSnap.data() : {};
-    const firstPageTitle = bookRecord.pages?.[0]?.title || "Story";
-    const bookTitle = firstPageTitle ? `${firstPageTitle} (Story)` : "MemoirAI Story";
+// Auto-submit newly paid orders to Lulu so Lulu dashboard and Firestore stay aligned.
+exports.autoFulfillPaidOrder = onDocumentCreated(
+  {
+    document: "users/{userId}/orders/{orderId}",
+    timeoutSeconds: 120,
+    secrets: [luluClientKey, luluClientSecret]
+  },
+  async (event) => {
+    const data = event.data?.data();
+    const orderRef = event.data?.ref;
+    const userId = event.params?.userId;
+    const orderId = event.params?.orderId;
+    if (!data || !orderRef || !userId || !orderId) {
+      return;
+    }
+    if (data.status !== "paid" || data.isTestOrder || data.luluPrintJobId) {
+      return;
+    }
+    try {
+      await submitPaidOrderToLulu({
+        orderRef,
+        orderData: data,
+        orderId,
+        userId,
+        source: "auto_fulfill_trigger"
+      });
+    } catch (err) {
+      console.error(`autoFulfillPaidOrder failed order=${orderId} user=${userId}:`, err?.message || err);
+    }
+  }
+);
 
-    const isLandscape = (bookRecord.pageWidth || 612) > (bookRecord.pageHeight || 792);
-    const pricingSnap = await db.collection("config").doc("pricing").get();
-    const pricingData = pricingSnap.exists ? pricingSnap.data() : {};
-    const pricing = isLandscape ? pricingData?.kidsBook : pricingData?.standardBook;
-    const podPackageId = pricing?.luluPodPackageId
-      ?? (isLandscape ? "1100X0850FCSTDCW080CW444MXX" : "0850X1100FCSTDCW080CW444MXX");
-
-    const shippingAddress = order.shippingAddress || {};
-    const payload = {
-      line_items: [
-        {
-          title: bookTitle,
-          cover_url: coverSignedUrl,
-          interior_url: interiorSignedUrl,
-          pod_package_id: podPackageId,
-          page_count: bookRecord.pageCount || bookRecord.pages?.length || 0,
-          quantity: 1
-        }
-      ],
-      shipping_address: {
-        name: shippingAddress.name || "Customer",
-        street1: shippingAddress.street1 || "",
-        city: shippingAddress.city || "",
-        state_code: shippingAddress.stateCode || "",
-        country_code: shippingAddress.countryCode || "US",
-        postcode: shippingAddress.postcode || "",
-        phone_number: shippingAddress.phone || "0000000000"
-      },
-      contact_email: order.customerEmail || "",
-      shipping_level: order.shippingLevel || "MAIL",
-      external_id: orderId
-    };
-
-    const accessToken = await getLuluAccessToken();
-    const luluJob = await luluCreatePrintJob(accessToken, payload);
-    const luluJobId = luluJob.id || luluJob.external_id;
-
-    await orderRef.update({
-      luluPrintJobId: luluJobId,
-      status: "submitted_to_printer",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    return { success: true, orderId, luluJobId };
+exports.syncOrderFromLulu = onCall(
+  {
+    timeoutSeconds: 60,
+    secrets: [luluClientKey, luluClientSecret]
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in");
+    }
+    const { orderId, userId: targetUserId } = request.data || {};
+    if (!orderId || !targetUserId) {
+      throw new HttpsError("invalid-argument", "orderId and userId are required");
+    }
+    if (request.auth.uid !== targetUserId) {
+      throw new HttpsError("permission-denied", "Can only sync your own orders");
+    }
+    const orderRef = db.collection("users").doc(targetUserId).collection("orders").doc(orderId);
+    const snap = await orderRef.get();
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Order not found");
+    }
+    const orderData = snap.data() || {};
+    try {
+      const result = await syncOrderStatusFromLulu({ orderRef, orderData });
+      return { ok: true, ...result };
+    } catch (err) {
+      throw new HttpsError("internal", String(err?.message || err || "Lulu sync failed"));
+    }
   }
 );
 
@@ -625,24 +3433,17 @@ exports.luluWebhook = onRequest(
     const orderDoc = snap.docs[0];
     const orderRef = orderDoc.ref;
     const orderData = orderDoc.data() || {};
-    const hist = orderData.luluStatusHistory || [];
-    hist.push({ status, timestamp: new Date().toISOString(), trackingUrl: trackingUrl || null });
-
-    const statusMap = {
-      CREATED: "submitted_to_printer",
-      UNPAID: "submitted_to_printer",
-      PAYMENT_IN_PROGRESS: "printing",
-      PRODUCTION_READY: "printing",
-      IN_PRODUCTION: "printing",
-      SHIPPED: "shipped",
-      DELIVERED: "delivered",
-      CANCELLED: "failed",
-      ERROR: "failed"
-    };
-    const ourStatus = statusMap[status] || status;
+    const hist = pushStatusHistory(orderData.luluStatusHistory, {
+      status,
+      trackingUrl: trackingUrl || null,
+      source: "lulu_webhook"
+    });
+    const ourStatus = mapLuluStatusToOrderStatus(status);
 
     const updates = {
       status: ourStatus,
+      luluRawStatus: status || null,
+      luluLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       luluStatusHistory: hist
     };
@@ -652,5 +3453,90 @@ exports.luluWebhook = onRequest(
 
     await orderRef.update(updates);
     return res.status(200).json({ received: true });
+  }
+);
+
+/** Scheduled: reconcile stale Stripe Checkout sessions on pending cart checkouts. */
+exports.reconcilePendingCartCheckouts = onSchedule(
+  {
+    schedule: "every 15 minutes",
+    timeZone: "Etc/UTC",
+    secrets: [stripeSecretKey],
+    timeoutSeconds: 300,
+    memory: "256MiB"
+  },
+  async () => {
+    const runStartMs = Date.now();
+    const debugId = `rcc_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+    const stripe = createStripeClient({ maxNetworkRetries: 3, timeoutMs: 25 * 1000 });
+    const threshold = admin.firestore.Timestamp.fromMillis(Date.now() - 45 * 60 * 1000);
+    let snap;
+    try {
+      snap = await db
+        .collectionGroup("pendingCartCheckouts")
+        .where("status", "==", "pending_stripe")
+        .where("createdAt", "<", threshold)
+        .limit(40)
+        .get();
+    } catch (err) {
+      console.error("reconcilePendingCartCheckouts query failed:", err.message || err);
+      return;
+    }
+    if (snap.empty) {
+      return;
+    }
+    let processed = 0;
+    for (const doc of snap.docs) {
+      const data = doc.data() || {};
+      if (data.status === "paid") {
+        continue;
+      }
+      const sid = data.stripeSessionId;
+      if (!sid) {
+        continue;
+      }
+      try {
+        const session = await stripe.checkout.sessions.retrieve(String(sid));
+        const updates = {
+          checkoutReconcileAt: admin.firestore.FieldValue.serverTimestamp(),
+          stripeSessionStatus: session.status || null,
+          stripePaymentStatus: session.payment_status || null
+        };
+        if (session.status === "expired") {
+          updates.status = "checkout_expired";
+          updates.reconcileNote = "stripe_session_expired";
+        } else if (session.status === "complete" && session.payment_status === "paid" && data.status !== "paid") {
+          console.warn(
+            JSON.stringify({
+              msg: "reconcilePendingCartCheckouts:paid_but_pending_doc",
+              path: doc.ref.path,
+              cartOrderGroupId: data.cartOrderGroupId || null,
+              stripeSessionId: sid
+            })
+          );
+          updates.reconcileNote = "stripe_paid_pending_firestore_mismatch";
+        }
+        await doc.ref.set(updates, { merge: true });
+        processed += 1;
+      } catch (e) {
+        console.warn(
+          "reconcilePendingCartCheckouts retrieve failed:",
+          doc.ref.path,
+          String(e?.message || e)
+        );
+      }
+    }
+    if (processed > 0 || !snap.empty) {
+      console.log(
+        JSON.stringify({
+          msg: "reconcilePendingCartCheckouts:run_complete",
+          debugId,
+          stage: "complete",
+          processed,
+          candidateDocs: snap.size,
+          elapsedMs: Date.now() - runStartMs
+        })
+      );
+    }
   }
 );

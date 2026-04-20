@@ -49,6 +49,9 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
                     print("[Order] Stripe return — session_id: \(sessionId)")
                     UserDefaults.standard.set(sessionId, forKey: "lastCompletedStripeSessionId")
                 }
+                Task { @MainActor in
+                    OrderCartStore.shared.clear()
+                }
                 NotificationCenter.default.post(name: .orderComplete, object: nil, userInfo: ["url": url, "sessionId": sessionId as Any])
             } else if url.host == "order-cancelled" {
                 NotificationCenter.default.post(name: .orderCancelled, object: nil)
@@ -63,6 +66,7 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
 extension Notification.Name {
     static let orderComplete = Notification.Name("orderComplete")
     static let orderCancelled = Notification.Name("orderCancelled")
+    static let bookCoverBackfillComplete = Notification.Name("bookCoverBackfillComplete")
 }
 
 @main
@@ -110,6 +114,7 @@ struct MemoirAIApp: App {
                 .environmentObject(profileVM)
                 .environmentObject(iCloudManager.shared)
                 .environmentObject(RCSubscriptionManager.shared)
+                .environmentObject(TutorialCoordinator.shared)
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 // Our custom UI uses light backgrounds; force a light appearance so dynamic text stays dark
                 .preferredColorScheme(.light)

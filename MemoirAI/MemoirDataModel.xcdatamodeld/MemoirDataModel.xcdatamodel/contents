@@ -6,6 +6,7 @@
         <attribute name="chapter" optional="YES" attributeType="String"/>
         <attribute name="characterDetails" optional="YES" attributeType="String"/>
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="firebaseUserId" optional="YES" attributeType="String"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="profileID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="prompt" optional="YES" attributeType="String"/>
@@ -16,5 +17,11 @@
         <attribute name="data" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <relationship name="memoryEntry" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="MemoryEntry" inverseName="photos" inverseEntity="MemoryEntry"/>
+    </entity>
+    <entity name="GlobalCharacter" representedClassName="GlobalCharacter" syncable="YES" codeGenerationType="class">
+        <attribute name="canonicalName" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="profileID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
     </entity>
 </model>

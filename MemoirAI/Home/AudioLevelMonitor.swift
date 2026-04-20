@@ -30,16 +30,19 @@ class AudioLevelMonitor: ObservableObject {
         audioRecorder = nil
         
         // Reset values
-        averagePower = -160.0
-        peakPower = -160.0
-        normalizedLevel = 0.0
-        isVoiceActive = false
-        waveformLevels = Array(repeating: 0.0, count: 50)
-        voiceActivityBuffer.removeAll()
+        setIdleState(resetWaveform: true)
     }
     
     private func updateAudioLevels() {
-        guard let recorder = audioRecorder, recorder.isRecording else { return }
+        guard let recorder = audioRecorder else {
+            setIdleState()
+            return
+        }
+        
+        guard recorder.isRecording else {
+            setIdleState()
+            return
+        }
         
         recorder.updateMeters()
         averagePower = recorder.averagePower(forChannel: 0)
@@ -77,6 +80,22 @@ class AudioLevelMonitor: ObservableObject {
         
         DispatchQueue.main.async {
             self.isVoiceActive = activeRatio > 0.6
+        }
+    }
+    
+    /// Immediately clears voice-activity state for paused/stopped UI.
+    func setIdleState(resetWaveform: Bool = false) {
+        averagePower = -160.0
+        peakPower = -160.0
+        normalizedLevel = 0.0
+        isVoiceActive = false
+        voiceActivityBuffer.removeAll()
+        
+        if resetWaveform {
+            waveformLevels = Array(repeating: 0.0, count: 50)
+        } else if !waveformLevels.isEmpty {
+            waveformLevels.removeFirst()
+            waveformLevels.append(0.0)
         }
     }
     

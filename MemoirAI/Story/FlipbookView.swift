@@ -11,9 +11,10 @@ struct FlipbookView: UIViewRepresentable {
     let onFlip: ((Int) -> Void)?
     let onPageTap: ((Int) -> Void)?
     let onPhotoFrameTap: ((Int, String, Int) -> Void)?
+    let onPhotoFrameMoved: ((Int, String, CGFloat, CGFloat) -> Void)?
     let isKidsBook: Bool
     
-    init(pages: [FlipPage], currentPage: Binding<Int>, webView: Binding<WKWebView?> = .constant(nil), isKidsBook: Bool = false, onReady: (() -> Void)? = nil, onFlip: ((Int) -> Void)? = nil, onPageTap: ((Int) -> Void)? = nil, onPhotoFrameTap: ((Int, String, Int) -> Void)? = nil) {
+    init(pages: [FlipPage], currentPage: Binding<Int>, webView: Binding<WKWebView?> = .constant(nil), isKidsBook: Bool = false, onReady: (() -> Void)? = nil, onFlip: ((Int) -> Void)? = nil, onPageTap: ((Int) -> Void)? = nil, onPhotoFrameTap: ((Int, String, Int) -> Void)? = nil, onPhotoFrameMoved: ((Int, String, CGFloat, CGFloat) -> Void)? = nil) {
         self.pages = pages
         self._currentPage = currentPage
         self._webView = webView
@@ -22,6 +23,7 @@ struct FlipbookView: UIViewRepresentable {
         self.onFlip = onFlip
         self.onPageTap = onPageTap
         self.onPhotoFrameTap = onPhotoFrameTap
+        self.onPhotoFrameMoved = onPhotoFrameMoved
     }
     
     func makeUIView(context: Context) -> WKWebView {
@@ -37,8 +39,10 @@ struct FlipbookView: UIViewRepresentable {
         // Add message handler for communication with JavaScript
         config.userContentController.add(context.coordinator, name: "native")
         
-        // Create WKWebView with a proper initial frame - use the expected book size
-        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 280, height: 374), configuration: config)
+        // Create WKWebView with a proper initial frame - conditional on orientation
+        let initialWidth: CGFloat = isKidsBook ? 374 : 280
+        let initialHeight: CGFloat = isKidsBook ? 280 : 374
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: initialWidth, height: initialHeight), configuration: config)
         webView.backgroundColor = .clear
         webView.isOpaque = false
         webView.scrollView.isScrollEnabled = false
@@ -156,9 +160,18 @@ struct FlipbookView: UIViewRepresentable {
         }
         
         // If the webview is ready and we have pages, render them
-        // Always re-render when ready to ensure updates are reflected
+        // CRITICAL: Only re-render if pages actually changed (not just currentPage)
+        // This prevents infinite loops when currentPage updates trigger renderPages
+        // which calls flip() to restore position, which triggers another flip event
         if context.coordinator.isReady && !pages.isEmpty {
-            renderPages(webView: webView)
+            let currentPagesHash = context.coordinator.pagesHash(pages)
+            if currentPagesHash != context.coordinator.lastRenderedPagesHash {
+                print("FlipbookView: Pages changed, re-rendering (hash: \(currentPagesHash))")
+                context.coordinator.lastRenderedPagesHash = currentPagesHash
+                renderPages(webView: webView)
+            } else {
+                print("FlipbookView: Pages unchanged, skipping re-render (only currentPage changed)")
+            }
         }
     }
     
@@ -365,9 +378,23 @@ struct FlipbookView: UIViewRepresentable {
         var parent: FlipbookView
         var isReady = false
         weak var webView: WKWebView?
+        var lastRenderedPagesHash: Int = 0 // Track if pages actually changed
         
         init(_ parent: FlipbookView) {
             self.parent = parent
+        }
+        
+        // Calculate a simple hash of pages to detect if they actually changed
+        func pagesHash(_ pages: [FlipPage]) -> Int {
+            var hasher = Hasher()
+            for page in pages {
+                hasher.combine(page.type)
+                hasher.combine(page.title)
+                hasher.combine(page.text)
+                hasher.combine(page.imageName)
+            }
+            hasher.combine(pages.count)
+            return hasher.finalize()
         }
         
         // MARK: - WKNavigationDelegate
@@ -446,8 +473,19 @@ struct FlipbookView: UIViewRepresentable {
                 
             case "flip":
                 if let index = body["index"] as? Int {
-                    parent.currentPage = index
-                    parent.onFlip?(index)
+                    // Only update if different to prevent feedback loops
+                    if parent.currentPage != index {
+                        print("FlipbookView: Updating currentPage from \(parent.currentPage) to \(index)")
+                        parent.currentPage = index
+                        parent.onFlip?(index)
+                    } else {
+                        print("FlipbookView: Ignoring duplicate flip notification for page \(index)")
+                    }
+                }
+                
+            case "debug":
+                if let message = body["message"] as? String {
+                    print("FlipbookView JS: \(message)")
                 }
                 
             case "pagesLoaded":
@@ -482,6 +520,7 @@ struct FlipbookView: UIViewRepresentable {
                 
             case "pageTapped":
                 if let index = body["pageIndex"] as? Int {
+                    print("📖 Swift FlipbookView: Received pageTapped with index \(index)")
                     parent.onPageTap?(index)
                 }
                 
@@ -491,6 +530,19 @@ struct FlipbookView: UIViewRepresentable {
                    let frameIndex = body["frameIndex"] as? Int {
                     print("FlipbookView: Photo frame tapped - page: \(pageIndex), frame: \(frameId), index: \(frameIndex)")
                     parent.onPhotoFrameTap?(pageIndex, frameId, frameIndex)
+                }
+                
+            case "photoFrameMoved":
+                if let pageIndex = body["pageIndex"] as? Int,
+                   let frameId = body["frameId"] as? String,
+                   let positionDict = body["newPosition"] as? [String: CGFloat] {
+                    let newX = positionDict["x"] ?? 0
+                    let newY = positionDict["y"] ?? 0
+                    
+                    print("FlipbookView: Photo frame moved - page: \(pageIndex), frame: \(frameId), new position: (\(newX), \(newY))")
+                    
+                    // Notify parent to update the position
+                    parent.onPhotoFrameMoved?(pageIndex, frameId, newX, newY)
                 }
                 
             case "zoomOpened":

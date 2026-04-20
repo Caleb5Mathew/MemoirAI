@@ -275,7 +275,7 @@ struct FamilyView: View {
     
     private func fetchMemoryEntries() {
         let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
-        request.predicate = NSPredicate(format: "profileID == %@", profileVM.selectedProfile.id as CVarArg)
+        request.predicate = MemoryUserScope.profilePredicate(profileID: profileVM.selectedProfile.id)
         request.sortDescriptors = [NSSortDescriptor(keyPath: \MemoryEntry.createdAt, ascending: false)]
         
         do {

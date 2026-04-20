@@ -689,16 +689,36 @@ html, body {
     position: absolute;
     border: 2px solid #e0e0e0;
     background: white;
-    cursor: pointer;
+    cursor: move;
     overflow: hidden;
     transition: all 0.3s ease;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    touch-action: none; /* Prevent default touch behaviors */
+    user-select: none; /* Prevent text selection during drag */
+    -webkit-user-select: none;
 }
 
 .photo-frame:hover {
     border-color: #4a90e2;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
-    transform: scale(1.02);
+}
+
+.photo-frame-dragging {
+    border-color: #4a90e2;
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.25);
+    z-index: 1000;
+    opacity: 0.9;
+    transition: none; /* Disable transition during drag */
+}
+
+/* Prevent page flip when dragging photo frames */
+body.dragging-photo-frame .stf__item,
+body.dragging-photo-frame .stf__item * {
+    pointer-events: none !important;
+}
+
+body.dragging-photo-frame .photo-frame-dragging {
+    pointer-events: auto !important;
 }
 
 .photo-frame-portrait {

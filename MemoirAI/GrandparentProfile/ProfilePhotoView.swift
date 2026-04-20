@@ -1,1 +1,290 @@
-// ProfilePhotoView.swift// MemoirAIimport SwiftUIstruct ProfilePhotoView: View {    @ObservedObject var viewModel: ProfileViewModel    @Binding var disableWiggle: Bool    var onAddPhotoTapped: () -> Void    @State private var isShowingRenameAlert = false    @State private var newName: String = ""    @State private var animateOffset = false    @State private var wiggleTimer = Timer.publish(every: 0.6, on: .main, in: .common).autoconnect()    @StateObject private var subscriptionManager = RCSubscriptionManager.shared    // Baseline shift and wiggle amplitude    private let fullAmplitude: CGFloat = 40    private var amplitude: CGFloat { fullAmplitude / 3 }    // ✨ NEW: Show different UI based on subscription and profile count    private var shouldShowAddButton: Bool {        // Always show for existing profiles (for photo updates)        if !viewModel.profiles.isEmpty {            return true        }                // For new profiles, check subscription limits        return viewModel.canCreateNewProfile    }        private var buttonColor: Color {        if viewModel.canCreateNewProfile {            return .orange  // Normal state        } else {            return .gray    // Restricted state        }    }    var body: some View {        ZStack(alignment: .bottomTrailing) {            if viewModel.profiles.isEmpty {                dashedAddProfileBox            } else {                profileImageBox            }            // ✨ ENHANCED: Smart camera button with subscription awareness            if shouldShowAddButton {                Button(action: onAddPhotoTapped) {                    Image(systemName: viewModel.canCreateNewProfile ? "camera.circle.fill" : "lock.circle.fill")                        .resizable()                        .frame(width: 42, height: 42)                        .foregroundColor(buttonColor)                        .shadow(radius: 4)                        .overlay(Circle().stroke(Color.white, lineWidth: 2))                }                .offset(                    x: disableWiggle                        ? -fullAmplitude                        : (-fullAmplitude + (animateOffset ? amplitude : -amplitude)),                    y: 0                )                .onReceive(wiggleTimer) { _ in                    guard !disableWiggle && viewModel.canCreateNewProfile else { return }                    animateOffset.toggle()                }                .animation(.easeInOut(duration: 0.3), value: animateOffset)            }                        // ✨ NEW: Subscription status indicator for multiple profiles            if viewModel.profiles.count > 1 && subscriptionManager.hasActiveSubscription {                VStack {                    Text("👑")                        .font(.caption)                    Text("\(viewModel.profiles.count) profiles")                        .font(.system(size: 10, weight: .medium))                        .foregroundColor(.gray)                }                .offset(x: 60, y: -60)            }        }        .padding(12)        .frame(height: 180)        .alert("Rename Profile", isPresented: $isShowingRenameAlert) {            TextField("New name", text: $newName)            Button("Save") {                viewModel.updateName(for: viewModel.selectedProfile, to: newName)            }            Button("Cancel", role: .cancel) {}        } message: {            Text("Enter a new name for this profile.")        }    }    private var profileImageBox: some View {        HStack {            // ✨ ENHANCED: Show previous button only if multiple profiles            if viewModel.profiles.count > 1 {                Button {                    viewModel.selectPreviousProfile()                } label: {                    Image(systemName: "chevron.left")                        .foregroundColor(.gray)                        .padding()                }            } else {                Spacer().frame(width: 44) // Maintain spacing            }            Spacer()            ZStack(alignment: .topTrailing) {                viewModel.selectedProfile.image                    .resizable()                    .scaledToFill()                    .frame(width: 180, height: 180)                    .clipShape(RoundedRectangle(cornerRadius: 24))                    .overlay(                        RoundedRectangle(cornerRadius: 24)                            .stroke(Color.black.opacity(0.05), lineWidth: 1)                    )                    .clipped()                Menu {                    Button("Rename") {                        newName = viewModel.selectedProfile.name                        isShowingRenameAlert = true                    }                    Button("Remove Photo", role: .destructive) {                        viewModel.removePhotoFromSelectedProfile()                    }                                        // ✨ NEW: Only show delete if multiple profiles exist                    if viewModel.profiles.count > 1 {                        Button("Delete Profile", role: .destructive) {                            viewModel.deleteSelectedProfile()                        }                    }                } label: {                    Image(systemName: "ellipsis.circle.fill")                        .font(.title2)                        .foregroundColor(.gray)                        .padding(6)                }            }            .frame(width: 180, height: 180)            .shadow(color: Color.black.opacity(0.03), radius: 4, x: 0, y: 2)            Spacer()            // ✨ ENHANCED: Show next button only if multiple profiles            if viewModel.profiles.count > 1 {                Button {                    viewModel.selectNextProfile()                } label: {                    Image(systemName: "chevron.right")                        .foregroundColor(.gray)                        .padding()                }            } else {                Spacer().frame(width: 44) // Maintain spacing            }        }    }    private var dashedAddProfileBox: some View {        Button {            onAddPhotoTapped()        } label: {            VStack {                Image(systemName: viewModel.canCreateNewProfile ? "photo.fill.on.rectangle.fill" : "lock.fill")                    .font(.system(size: 32))                    .foregroundColor(viewModel.canCreateNewProfile ? .gray : .orange)                                Text(viewModel.canCreateNewProfile ? "Add your first profile!" : "Subscribe for multiple profiles")                    .font(.footnote)                    .foregroundColor(viewModel.canCreateNewProfile ? .gray : .orange)                    .multilineTextAlignment(.center)            }            .frame(maxWidth: .infinity, minHeight: 180)            .overlay(                RoundedRectangle(cornerRadius: 24)                    .stroke(style: StrokeStyle(lineWidth: 2, dash: [8]))                    .foregroundColor(viewModel.canCreateNewProfile ? .gray.opacity(0.5) : .orange.opacity(0.7))            )        }    }}struct ProfilePhotoView_Previews: PreviewProvider {    static var previews: some View {        ProfilePhotoView(            viewModel: ProfileViewModel(),            disableWiggle: .constant(false)        ) {            // tapped        }        .padding()        .previewLayout(.sizeThatFits)    }}
+// ProfilePhotoView.swift
+// MemoirAI
+
+import SwiftUI
+import PhotosUI
+
+struct ProfilePhotoView: View {
+    @ObservedObject var viewModel: ProfileViewModel
+    @Binding var disableWiggle: Bool
+    var onSwitchProfileTapped: () -> Void
+
+    @State private var isShowingRenameAlert = false
+    @State private var newName: String = ""
+    @State private var animateOffset = false
+    @State private var wiggleTimer = Timer.publish(every: 0.6, on: .main, in: .common).autoconnect()
+    @StateObject private var subscriptionManager = RCSubscriptionManager.shared
+
+    @State private var showingLibraryPicker = false
+    @State private var showingCamera = false
+
+    private let fullAmplitude: CGFloat = 40
+    private var amplitude: CGFloat { fullAmplitude / 3 }
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            if viewModel.profiles.isEmpty {
+                dashedAddProfileBox
+            } else {
+                profileImageBox
+            }
+
+            Button(action: onSwitchProfileTapped) {
+                Image(systemName: "arrow.2.circlepath.circle.fill")
+                    .resizable()
+                    .frame(width: 42, height: 42)
+                    .foregroundColor(.orange)
+                    .shadow(radius: 4)
+                    .overlay(Circle().stroke(Color.white, lineWidth: 2))
+            }
+            .offset(
+                x: disableWiggle
+                    ? -fullAmplitude
+                    : (-fullAmplitude + (animateOffset ? amplitude : -amplitude)),
+                y: 0
+            )
+            .onReceive(wiggleTimer) { _ in
+                guard !disableWiggle else { return }
+                animateOffset.toggle()
+            }
+            .animation(.easeInOut(duration: 0.3), value: animateOffset)
+
+            if viewModel.profiles.count > 1 && subscriptionManager.hasActiveSubscription {
+                VStack {
+                    Text("👑")
+                        .font(.caption)
+                    Text("\(viewModel.profiles.count) profiles")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.gray)
+                }
+                .offset(x: 60, y: -60)
+            }
+        }
+        .padding(12)
+        .frame(height: 180)
+        .sheet(isPresented: $showingLibraryPicker) {
+            LibraryPickerView { image in
+                if let data = image.jpegData(compressionQuality: 0.8) {
+                    var updated = viewModel.selectedProfile
+                    updated.photoData = data
+                    viewModel.updateProfile(updated)
+                }
+            }
+        }
+        .sheet(isPresented: $showingCamera) {
+            CameraPickerView { image in
+                if let data = image.jpegData(compressionQuality: 0.8) {
+                    var updated = viewModel.selectedProfile
+                    updated.photoData = data
+                    viewModel.updateProfile(updated)
+                }
+            }
+        }
+        .alert("Rename Profile", isPresented: $isShowingRenameAlert) {
+            TextField("New name", text: $newName)
+            Button("Save") {
+                viewModel.updateName(for: viewModel.selectedProfile, to: newName)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Enter a new name for this profile.")
+        }
+    }
+
+    private var profileImageBox: some View {
+        HStack {
+            if viewModel.profiles.count > 1 {
+                Button {
+                    viewModel.selectPreviousProfile()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .foregroundColor(.gray)
+                        .padding()
+                }
+            } else {
+                Spacer().frame(width: 44)
+            }
+
+            Spacer()
+
+            ZStack(alignment: .topTrailing) {
+                viewModel.selectedProfile.image
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 180, height: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: 24))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24)
+                            .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                    )
+                    .clipped()
+                    .transaction { $0.animation = nil }
+
+                Menu {
+                    Button("Rename") {
+                        newName = viewModel.selectedProfile.name
+                        isShowingRenameAlert = true
+                    }
+                    Button {
+                        showingLibraryPicker = true
+                    } label: {
+                        Label("Choose from Library", systemImage: "photo.on.rectangle")
+                    }
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                        Button {
+                            showingCamera = true
+                        } label: {
+                            Label("Take Photo", systemImage: "camera")
+                        }
+                    }
+                    Button("Remove Photo", role: .destructive) {
+                        viewModel.removePhotoFromSelectedProfile()
+                    }
+                    if viewModel.profiles.count > 1 {
+                        Button("Delete Profile", role: .destructive) {
+                            viewModel.deleteSelectedProfile()
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle.fill")
+                        .font(.title2)
+                        .foregroundColor(.gray)
+                        .padding(6)
+                }
+            }
+            .frame(width: 180, height: 180)
+            .shadow(color: Color.black.opacity(0.03), radius: 4, x: 0, y: 2)
+
+            Spacer()
+
+            if viewModel.profiles.count > 1 {
+                Button {
+                    viewModel.selectNextProfile()
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.gray)
+                        .padding()
+                }
+            } else {
+                Spacer().frame(width: 44)
+            }
+        }
+    }
+
+    private var dashedAddProfileBox: some View {
+        Button {
+            onSwitchProfileTapped()
+        } label: {
+            VStack {
+                Image(systemName: "person.badge.plus")
+                    .font(.system(size: 32))
+                    .foregroundColor(.gray)
+
+                Text("Add your first profile!")
+                    .font(.footnote)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity, minHeight: 180)
+            .overlay(
+                RoundedRectangle(cornerRadius: 24)
+                    .stroke(style: StrokeStyle(lineWidth: 2, dash: [8]))
+                    .foregroundColor(.gray.opacity(0.5))
+            )
+        }
+    }
+}
+
+// MARK: - Library Picker (PHPickerViewController, iOS 14+)
+
+struct LibraryPickerView: UIViewControllerRepresentable {
+    var onPhotoPicked: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.selectionLimit = 1
+        config.filter = .images
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+
+    class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let parent: LibraryPickerView
+
+        init(_ parent: LibraryPickerView) {
+            self.parent = parent
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            parent.dismiss()
+            guard let result = results.first else { return }
+            result.itemProvider.loadObject(ofClass: UIImage.self) { object, _ in
+                if let image = object as? UIImage {
+                    DispatchQueue.main.async {
+                        self.parent.onPhotoPicked(image)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Camera Picker (UIImagePickerController)
+
+struct CameraPickerView: UIViewControllerRepresentable {
+    var onPhotoPicked: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.allowsEditing = true
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: CameraPickerView
+
+        init(_ parent: CameraPickerView) {
+            self.parent = parent
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            let image = (info[.editedImage] ?? info[.originalImage]) as? UIImage
+            if let image {
+                parent.onPhotoPicked(image)
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+    }
+}
+
+struct ProfilePhotoView_Previews: PreviewProvider {
+    static var previews: some View {
+        ProfilePhotoView(
+            viewModel: ProfileViewModel(),
+            disableWiggle: .constant(false)
+        ) {}
+        .padding()
+        .previewLayout(.sizeThatFits)
+    }
+}

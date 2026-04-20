@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Childhood path — bubble alignment check</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; background: #222; color: #eee; }
+    h1 { font-size: 1.1rem; }
+    .wrap { max-width: 420px; }
+    .frame {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 393 / 759;
+      border: 2px solid #555;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #111;
+    }
+    .frame img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center;
+      display: block;
+    }
+    .dot {
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      margin-left: -9px;
+      margin-top: -9px;
+      border-radius: 50%;
+      border: 3px solid #fff;
+      box-shadow: 0 0 0 2px #000, 0 2px 8px rgba(0,0,0,.5);
+      pointer-events: none;
+    }
+    .dot:nth-child(2) { background: #e07a3a; }
+    .dot:nth-child(3) { background: #c94a9e; }
+    .dot:nth-child(4) { background: #3a9ee0; }
+    .dot:nth-child(5) { background: #5cb85c; }
+    ul { font-size: 0.85rem; opacity: 0.9; padding-left: 1.2rem; }
+    code { background: #333; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Childhood — computed path centers (safe area 393×759)</h1>
+    <p style="font-size:0.85rem">Image uses <code>object-fit: cover</code> + center crop, matching SwiftUI <code>scaledToFill</code> in a fixed safe-area aspect box.</p>
+    <div class="frame" id="frame">
+      <!-- Dots use same norm_x / norm_y as PromptData.swift (from childhood_path_positions.py) -->
+      <img src="../MemoirAI/Assets.xcassets/childhood.imageset/ChatGPT%20Image%20Apr%2014%2C%202025%2C%2002_42_33%20PM.png" alt="Childhood" />
+      <span class="dot" style="left: 54.52%; top: 80%;"></span>
+      <span class="dot" style="left: 55.22%; top: 62.97%;"></span>
+      <span class="dot" style="left: 55.93%; top: 43.02%;"></span>
+      <span class="dot" style="left: 48.87%; top: 28.04%;"></span>
+    </div>
+    <ul>
+      <li>Orange — bottom prompt (y≈0.80)</li>
+      <li>Magenta — second (y≈0.63)</li>
+      <li>Blue — third (y≈0.43)</li>
+      <li>Green — top (y≈0.28)</li>
+    </ul>
+    <p style="font-size:0.8rem; opacity:0.75">Open this file from disk; if the image does not load, URL-encode spaces in the filename or open via a local server.</p>
+  </div>
+</body>
+</html>

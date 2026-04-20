@@ -41,6 +41,7 @@ actor OpenAIImageService {
         retryCount: Int,
         maxRetries: Int
     ) async throws -> [UIImage] {
+        let startedAt = Date()
         // 1) build JSON payload - DALL-E 3 specific constraints
         print("[OpenAIImageService DEBUG] === DALL-E 3 REQUEST DETAILS ===")
         print("[OpenAIImageService DEBUG] Prompt length: \(prompt.count) characters")
@@ -54,7 +55,7 @@ actor OpenAIImageService {
             "n"               : 1, // DALL-E 3 only supports n=1
             "size"            : size,
             "response_format" : "url",
-            "quality"         : "standard" // Add required quality parameter
+            "quality"         : "hd" // Use HD quality like ChatGPT web for better results
         ]
         
         // Note: reference_image_ids is not supported by DALL-E 3 API
@@ -116,6 +117,23 @@ actor OpenAIImageService {
                     print("[OpenAIImageService ERROR] === FINAL FAILURE AFTER ALL RETRIES ===")
                     print("[OpenAIImageService ERROR] This error suggests the prompt content may be triggering OpenAI's content filters")
                     print("[OpenAIImageService ERROR] Consider simplifying the prompt or removing specific details")
+                    await DevCostTelemetryService.shared.logEvent(
+                        DevCostEvent(
+                            timestamp: Date(),
+                            provider: .openAI,
+                            operation: .openAIImage,
+                            model: "dall-e-3",
+                            statusCode: http.statusCode,
+                            success: false,
+                            durationMs: Date().timeIntervalSince(startedAt) * 1000,
+                            promptCharacters: prompt.count,
+                            inputTokens: 0,
+                            outputTokens: 0,
+                            inputImageCount: referencedImageIDs.count,
+                            outputImageCount: 0,
+                            uploadedBytes: 0
+                        )
+                    )
                     
                     throw NSError(domain: "OpenAI",
                                   code: http.statusCode,
@@ -141,6 +159,23 @@ actor OpenAIImageService {
                         maxRetries: maxRetries
                     )
                 } else {
+                    await DevCostTelemetryService.shared.logEvent(
+                        DevCostEvent(
+                            timestamp: Date(),
+                            provider: .openAI,
+                            operation: .openAIImage,
+                            model: "dall-e-3",
+                            statusCode: http.statusCode,
+                            success: false,
+                            durationMs: Date().timeIntervalSince(startedAt) * 1000,
+                            promptCharacters: prompt.count,
+                            inputTokens: 0,
+                            outputTokens: 0,
+                            inputImageCount: referencedImageIDs.count,
+                            outputImageCount: 0,
+                            uploadedBytes: 0
+                        )
+                    )
                     throw NSError(domain: "OpenAI",
                                   code: http.statusCode,
                                   userInfo: [NSLocalizedDescriptionKey: "Rate limit exceeded. Please try again in a few minutes.", "body": raw])
@@ -151,6 +186,23 @@ actor OpenAIImageService {
         guard (200...299).contains(http.statusCode) else {
             let raw = String(data: data, encoding: .utf8) ?? "(binary)"
             print("[OpenAIImageService ERROR] API \(http.statusCode):\n\(raw)")
+            await DevCostTelemetryService.shared.logEvent(
+                DevCostEvent(
+                    timestamp: Date(),
+                    provider: .openAI,
+                    operation: .openAIImage,
+                    model: "dall-e-3",
+                    statusCode: http.statusCode,
+                    success: false,
+                    durationMs: Date().timeIntervalSince(startedAt) * 1000,
+                    promptCharacters: prompt.count,
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    inputImageCount: referencedImageIDs.count,
+                    outputImageCount: 0,
+                    uploadedBytes: 0
+                )
+            )
             throw NSError(domain: "OpenAI",
                           code: http.statusCode,
                           userInfo: [NSLocalizedDescriptionKey: "Image API failed", "body": raw])
@@ -174,6 +226,23 @@ actor OpenAIImageService {
             }
         }
         print("[OpenAIImageService DEBUG] downloaded \(images.count) images")
+        await DevCostTelemetryService.shared.logEvent(
+            DevCostEvent(
+                timestamp: Date(),
+                provider: .openAI,
+                operation: .openAIImage,
+                model: "dall-e-3",
+                statusCode: http.statusCode,
+                success: !images.isEmpty,
+                durationMs: Date().timeIntervalSince(startedAt) * 1000,
+                promptCharacters: prompt.count,
+                inputTokens: 0,
+                outputTokens: 0,
+                inputImageCount: referencedImageIDs.count,
+                outputImageCount: images.count,
+                uploadedBytes: 0
+            )
+        )
         return images
     }
 

@@ -71,6 +71,67 @@ struct PhotoLayout: Codable, Identifiable {
     var hasPhoto: Bool {
         imageData != nil
     }
+    
+    // Custom Codable implementation to match JavaScript format
+    enum CodingKeys: String, CodingKey {
+        case id, type, frame, imageData, imageName, rotation, borderStyle, isLocked
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        type = try container.decode(PhotoLayoutType.self, forKey: .type)
+        imageData = try container.decodeIfPresent(String.self, forKey: .imageData)
+        imageName = try container.decodeIfPresent(String.self, forKey: .imageName)
+        rotation = try container.decodeIfPresent(Double.self, forKey: .rotation) ?? 0
+        borderStyle = try container.decodeIfPresent(BorderStyle.self, forKey: .borderStyle) ?? .none
+        isLocked = try container.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
+        
+        // Handle frame decoding - support both JavaScript format [[x,y],[w,h]] and CGRect format
+        if let frameArray = try? container.decode([[CGFloat]].self, forKey: .frame) {
+            // JavaScript format: [[x, y], [width, height]]
+            if frameArray.count == 2 && frameArray[0].count == 2 && frameArray[1].count == 2 {
+                let origin = CGPoint(x: frameArray[0][0], y: frameArray[0][1])
+                let size = CGSize(width: frameArray[1][0], height: frameArray[1][1])
+                frame = CGRect(origin: origin, size: size)
+            } else {
+                frame = CGRect.zero
+            }
+        } else if let frameDict = try? container.decode([String: [String: CGFloat]].self, forKey: .frame) {
+            // CGRect format: {"origin": {"x": ..., "y": ...}, "size": {"width": ..., "height": ...}}
+            if let originDict = frameDict["origin"],
+               let sizeDict = frameDict["size"],
+               let x = originDict["x"],
+               let y = originDict["y"],
+               let width = sizeDict["width"],
+               let height = sizeDict["height"] {
+                frame = CGRect(x: x, y: y, width: width, height: height)
+            } else {
+                frame = CGRect.zero
+            }
+        } else {
+            // Fallback to zero frame
+            frame = CGRect.zero
+        }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(type, forKey: .type)
+        try container.encodeIfPresent(imageData, forKey: .imageData)
+        try container.encodeIfPresent(imageName, forKey: .imageName)
+        try container.encode(rotation, forKey: .rotation)
+        try container.encode(borderStyle, forKey: .borderStyle)
+        try container.encode(isLocked, forKey: .isLocked)
+        
+        // Encode frame in JavaScript format: [[x, y], [width, height]]
+        let frameArray: [[CGFloat]] = [
+            [frame.origin.x, frame.origin.y],
+            [frame.size.width, frame.size.height]
+        ]
+        try container.encode(frameArray, forKey: .frame)
+    }
 }
 
 // MARK: - Border Styles

@@ -19,16 +19,21 @@ struct Profile: Identifiable, Codable, Equatable {
     var gender: String?
     var createdAt: Date
     var updatedAt: Date
-    
+
+    /// Names of children this parent is creating the Parenthood memoir for.
+    /// Empty for non-parent modes or parents who haven't entered names yet.
+    var childNames: [String]
+
     // Maintain backward compatibility with existing profiles
-    init(id: UUID = UUID(), 
-         name: String, 
+    init(id: UUID = UUID(),
+         name: String,
          photoData: Data? = nil,
          birthdate: Date? = nil,
          ethnicity: String? = nil,
          gender: String? = nil,
          createdAt: Date? = nil,
-         updatedAt: Date? = nil) {
+         updatedAt: Date? = nil,
+         childNames: [String] = []) {
         self.id = id
         self.name = name
         self.photoData = photoData
@@ -37,21 +42,23 @@ struct Profile: Identifiable, Codable, Equatable {
         self.gender = gender
         self.createdAt = createdAt ?? Date()
         self.updatedAt = updatedAt ?? Date()
+        self.childNames = childNames
     }
-    
+
     // Custom decoding for backward compatibility
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         photoData = try container.decodeIfPresent(Data.self, forKey: .photoData)
-        
+
         // New fields with defaults for backward compatibility
         birthdate = try container.decodeIfPresent(Date.self, forKey: .birthdate)
         ethnicity = try container.decodeIfPresent(String.self, forKey: .ethnicity)
         gender = try container.decodeIfPresent(String.self, forKey: .gender)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        childNames = try container.decodeIfPresent([String].self, forKey: .childNames) ?? []
     }
 
     var image: Image {

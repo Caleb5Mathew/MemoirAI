@@ -10,22 +10,24 @@ import SwiftUI
 import UIKit
 
 extension View {
-  /// Renders this SwiftUI view into a UIImage.
+  /// Renders this SwiftUI view into a UIImage at print resolution (points).
+  /// Used for book page snapshots (text + illustration) before Firebase upload.
   func snapshot(width: CGFloat, height: CGFloat) -> UIImage {
     // 1. Host the view
     let controller = UIHostingController(rootView: self)
     guard let view = controller.view else {
-        // Return a blank image if view creation fails
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: width, height: height))
         return renderer.image { _ in }
     }
 
-    // 2. Set size
-    view.bounds = CGRect(x: 0, y: 0, width: width, height: height)
+    // 2. Set size and force layout
+    let size = CGSize(width: max(width, 1), height: max(height, 1))
+    view.bounds = CGRect(origin: .zero, size: size)
     view.backgroundColor = .clear
+    view.layoutIfNeeded()
 
-    // 3. Draw into a graphics context
-    let renderer = UIGraphicsImageRenderer(size: view.bounds.size)
+    // 3. Draw into graphics context (afterScreenUpdates ensures layout is applied)
+    let renderer = UIGraphicsImageRenderer(size: size)
     return renderer.image { _ in
       view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
     }

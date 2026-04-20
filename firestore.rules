@@ -1,0 +1,71 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function renderedBookFieldsUnchanged() {
+      return request.resource.data.pageWidth == resource.data.pageWidth
+        && request.resource.data.pageHeight == resource.data.pageHeight
+        && request.resource.data.orientation == resource.data.orientation
+        && request.resource.data.layoutVersion == resource.data.layoutVersion
+        && request.resource.data.trimSizeInches == resource.data.trimSizeInches
+        && request.resource.data.totalPngBytes == resource.data.totalPngBytes
+        && request.resource.data.pdfBytes == resource.data.pdfBytes
+        && request.resource.data.pdfStoragePath == resource.data.pdfStoragePath
+        && request.resource.data.pdfURL == resource.data.pdfURL
+        && request.resource.data.pdfPageCount == resource.data.pdfPageCount
+        && request.resource.data.renderStatus == resource.data.renderStatus
+        && request.resource.data.renderedAt == resource.data.renderedAt;
+    }
+
+    function canUpdateBookVersion() {
+      return !(resource.data.renderStatus == "rendered") || renderedBookFieldsUnchanged();
+    }
+
+    // All user content remains namespaced under users/{uid}/...
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      match /memories/{memoryId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /books/{bookId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /profiles/{profileId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /bookVersions/{bookVersionId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId);
+        allow delete: if isOwner(userId);
+        allow update: if isOwner(userId) && canUpdateBookVersion();
+      }
+
+      match /orders/{orderId} {
+        allow read: if isOwner(userId);
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /config/pricing {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Global developer telemetry aggregates across all users.
+    // Dashboard reads from these docs; image/chat/upload operations increment them.
+    match /globalApiTelemetry/{dayKey} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /globalApiTelemetryTotals/{docId} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

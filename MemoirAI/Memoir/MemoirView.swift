@@ -30,36 +30,97 @@ struct ColorTheme {
 struct MemoirView: View {
     let colors = ColorTheme()
     @EnvironmentObject var profileVM: ProfileViewModel
+    @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
     @StateObject private var subscriptionManager = RCSubscriptionManager.shared
     @State private var showPaywall = false
     @State private var entries: [MemoryEntry] = []
     @State private var navigateToChapter: Int? = nil
-    private let totalChapters = allChapters.count
+    @State private var showModePicker = false
+    @State private var showChildNamesSheet = false
+    @AppStorage(memoirModeKey) private var memoirModeRaw: String = MemoirMode.normal.rawValue
+    private var chapters: [Chapter] { activeChapters }
+    private var totalChapters: Int { chapters.count }
+    private var memoirMode: MemoirMode { MemoirMode(rawValue: memoirModeRaw) ?? .normal }
+
+    /// Shown at the top of the memoir hub; updates when the mode toggle changes.
+    private var memoirPageTitle: String {
+        switch memoirMode {
+        case .normal: return "My Life Story"
+        case .parent: return "Parenthood Memoir"
+        case .relationships: return "Relationship Memoir"
+        }
+    }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    header
-                    if let ch = firstIncompleteChapter { currentChapterCard(for: ch) }
-                    allChaptersTitle
-                    chaptersGrid
-                }
-                .padding(.bottom, 100)
+        ScrollView {
+            VStack(spacing: 24) {
+                Text(memoirPageTitle)
+                    .font(.customSerifFallback(size: 22))
+                    .foregroundColor(colors.deepGreen)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal)
+                    .padding(.top, 12)
+
+                header
+                modeToggle
+                if let ch = firstIncompleteChapter { currentChapterCard(for: ch) }
+                allChaptersTitle
+                chaptersGrid
             }
-            .background(colors.softCream.ignoresSafeArea())
-            .onAppear {
-                fetchEntries()
-            }
-            .toolbarBackground(colors.softCream, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .navigationDestination(item: $navigateToChapter) { chapterNumber in
-                ChapterJourneyView(chapter: getMockChapter(chapterNumber))
-                    .environmentObject(profileVM)
-                    .navigationBarHidden(true)
+            .padding(.bottom, 100)
+        }
+        .background(colors.softCream.ignoresSafeArea())
+        .onAppear {
+            migrateLegacyMemoirModeIfNeeded()
+            fetchEntries()
+            tutorialCoordinator.setVisibleScreen(.memoir)
+            tutorialCoordinator.onMemoirViewAppeared(profileID: profileVM.selectedProfile.id)
+            promptForChildNamesIfNeeded()
+        }
+        .onChange(of: memoirModeRaw) { _, _ in
+            promptForChildNamesIfNeeded()
+        }
+        .sheet(isPresented: $showChildNamesSheet) {
+            EditChildrenSheet()
+                .environmentObject(profileVM)
+        }
+        .onDisappear {
+            tutorialCoordinator.clearAnchor(.memoirPickChapter)
+            if tutorialCoordinator.visibleScreen == .memoir {
+                tutorialCoordinator.setVisibleScreen(.unknown)
             }
         }
+        .toolbarBackground(colors.softCream, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .navigationDestination(item: $navigateToChapter) { chapterNumber in
+            Group {
+                if memoirMode == .relationships {
+                    RelationshipJourneyView(chapter: preparedChapter(for: chapterNumber))
+                } else {
+                    ChapterJourneyView(chapter: preparedChapter(for: chapterNumber))
+                }
+            }
+            .environmentObject(profileVM)
+            .environmentObject(tutorialCoordinator)
+            .navigationBarHidden(true)
+        }
         .tint(.black)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        showModePicker.toggle()
+                    }
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(colors.deepGreen)
+                        .frame(width: 34, height: 34)
+                        .background(colors.tileBackground)
+                        .clipShape(Circle())
+                }
+            }
+        }
         .fullScreenCover(isPresented: $showPaywall) {
             // Add error handling around PaywallView
             Group {
@@ -125,22 +186,18 @@ struct MemoirView: View {
                     .foregroundColor(colors.terracotta)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Chapter \(chapter.number) – \(chapter.title)")
+                    Text("Chapter \(chapter.number): \(chapter.title)")
                         .font(.headline)
                         .foregroundColor(colors.deepGreen)
 
-                    Text("\(entriesForChapter(chapter).count) of \(chapter.prompts.count) memories recorded")
+                    Text("\(filledPromptSlotsForChapter(entries: entries, chapter: chapter)) of \(chapter.prompts.count) memories recorded")
                         .font(.subheadline)
                         .foregroundColor(colors.deepGreen)
                 }
             }
 
             Button(action: {
-                if chapter.number == 1 || isSubscribed {
-                    navigateToChapter = chapter.number
-                } else {
-                    showPaywall = true
-                }
+                navigateToChapter = chapter.number
             }) {
                 Text("Continue Chapter")
                     .foregroundColor(.white)
@@ -158,6 +215,128 @@ struct MemoirView: View {
         .padding(.horizontal)
     }
 
+    @ViewBuilder
+    private var modeToggle: some View {
+        if showModePicker {
+            VStack(spacing: 10) {
+                ForEach(MemoirMode.allCases, id: \.rawValue) { mode in
+                    let isSelected = memoirMode == mode
+                    Button {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            memoirModeRaw = mode.rawValue
+                            showModePicker = false
+                        }
+                        fetchEntries()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: memoirModeIcon(mode))
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(isSelected ? .white : colors.terracotta)
+                                .frame(width: 32, height: 32)
+                                .background(isSelected ? colors.terracotta : colors.terracotta.opacity(0.12))
+                                .clipShape(Circle())
+
+                            Text(mode.memoirKindTitle)
+                                .font(.system(size: 16, weight: isSelected ? .semibold : .medium))
+                                .foregroundColor(isSelected ? colors.deepGreen : colors.deepGreen.opacity(0.7))
+
+                            Spacer()
+
+                            if isSelected {
+                                Circle()
+                                    .fill(colors.terracotta)
+                                    .frame(width: 8, height: 8)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .background(isSelected ? colors.tileBackground : Color.clear)
+                        .cornerRadius(16)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(isSelected ? colors.terracotta.opacity(0.3) : Color.clear, lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+
+                if memoirMode == .parent {
+                    Button {
+                        showChildNamesSheet = true
+                        showModePicker = false
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "person.2.fill")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(colors.terracotta)
+                                .frame(width: 32, height: 32)
+                                .background(colors.terracotta.opacity(0.12))
+                                .clipShape(Circle())
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(editChildrenLabelTitle)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundColor(colors.deepGreen)
+                                Text(editChildrenLabelDetail)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(colors.deepGreen.opacity(0.65))
+                                    .lineLimit(1)
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(colors.deepGreen.opacity(0.5))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(colors.tileBackground.opacity(0.6))
+                        .cornerRadius(16)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(colors.softCream)
+                    .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(colors.terracotta.opacity(0.15), lineWidth: 1)
+            )
+            .padding(.horizontal, 16)
+            .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .top)))
+            .accessibilityIdentifier("memoirSwitchModeMenu")
+        }
+    }
+
+    private var editChildrenLabelTitle: String {
+        profileVM.selectedProfile.childNames.isEmpty ? "Add children" : "Edit children"
+    }
+
+    private var editChildrenLabelDetail: String {
+        let names = profileVM.selectedProfile.childNames
+        if names.isEmpty { return "Tap to add the kids this book is for" }
+        return names.joined(separator: ", ")
+    }
+
+    private func promptForChildNamesIfNeeded() {
+        if memoirMode == .parent && profileVM.selectedProfile.childNames.isEmpty {
+            showChildNamesSheet = true
+        }
+    }
+
+    private func memoirModeIcon(_ mode: MemoirMode) -> String {
+        switch mode {
+        case .normal: return "book.fill"
+        case .parent: return "figure.and.child.holdinghands"
+        case .relationships: return "heart.fill"
+        }
+    }
+
     private var allChaptersTitle: some View {
         Text("All Chapters")
             .font(.headline)
@@ -168,17 +347,13 @@ struct MemoirView: View {
 
     private var chaptersGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-            ForEach(1...10, id: \.self) { chapterNumber in
-                if let chapter = allChapters.first(where: { $0.number == chapterNumber }) {
-                    let isDone = entriesForChapter(chapter).count >= chapter.prompts.count
-                    let isLocked = chapterNumber > 1 && !isSubscribed
+            ForEach(1...chapters.count, id: \.self) { chapterNumber in
+                if let chapter = chapters.first(where: { $0.number == chapterNumber }) {
+                    let isDone = filledPromptSlotsForChapter(entries: entries, chapter: chapter) >= chapter.prompts.count
+                    let isLocked = false
 
                     Button(action: {
-                        if chapterNumber == 1 || isSubscribed {
-                            navigateToChapter = chapterNumber
-                        } else {
-                            showPaywall = true
-                        }
+                        navigateToChapter = chapterNumber
                     }) {
                         ChapterTileView(
                             chapterNumber: chapterNumber,
@@ -190,6 +365,23 @@ struct MemoirView: View {
                         )
                     }
                     .buttonStyle(PlainButtonStyle())
+                    .overlay(
+                        Group {
+                            if chapterNumber == 1 {
+                                GeometryReader { geo in
+                                    Color.clear
+                                        .onAppear {
+                                            tutorialCoordinator.reportAnchor(.memoirPickChapter, rect: geo.frame(in: .global))
+                                        }
+                                        .onChange(of: geo.frame(in: .global)) { _, newFrame in
+                                            tutorialCoordinator.reportAnchor(.memoirPickChapter, rect: newFrame)
+                                        }
+                                }
+                                .allowsHitTesting(false)
+                            }
+                        }
+                    )
+                    .tutorialAnchor(.memoirPickChapter, when: chapterNumber == 1)
                 }
             }
         }
@@ -197,35 +389,32 @@ struct MemoirView: View {
     }
 
     // MARK: — Data helpers
-    private var firstIncompleteChapter: Chapter? {
-        allChapters.first { entriesForChapter($0).count < $0.prompts.count }
+       private var firstIncompleteChapter: Chapter? {
+        chapters.first { filledPromptSlotsForChapter(entries: entries, chapter: $0) < $0.prompts.count }
     }
 
     private func completedChaptersCount() -> Int {
-        allChapters.filter { entriesForChapter($0).count >= $0.prompts.count }.count
-    }
-
-    private func entriesForChapter(_ c: Chapter) -> [MemoryEntry] {
-        entries.filter {
-            ($0.chapter ?? "") == c.title &&
-            c.prompts.map(\.text).contains($0.prompt ?? "")
-        }
+        chapters.filter { filledPromptSlotsForChapter(entries: entries, chapter: $0) >= $0.prompts.count }.count
     }
 
     private func fetchEntries() {
         let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
-        request.predicate = NSPredicate(format: "profileID == %@", profileVM.selectedProfile.id as CVarArg)
+        request.predicate = MemoryUserScope.profilePredicate(profileID: profileVM.selectedProfile.id)
         do { entries = try PersistenceController.shared.container.viewContext.fetch(request) }
         catch { print("Fetch error:", error) }
     }
 
-    private func getMockChapter(_ idx: Int) -> Chapter {
-        guard let base = allChapters.first(where: { $0.number == idx }) else {
+    /// Chapter data for journey: image-based layout uses fixed 4 coordinates; Relationships uses raw prompts (layout in `RelationshipJourneyView`).
+    private func preparedChapter(for idx: Int) -> Chapter {
+        guard let base = chapters.first(where: { $0.number == idx }) else {
             return .init(number: idx, title: "Unknown", prompts: [])
+        }
+        if memoirMode == .relationships {
+            return base
         }
         let coords: [(CGFloat, CGFloat)] = [(0.88,0.80),(0.55,0.63),(0.85,0.43),(0.68,0.28)]
         let prompts = zip(base.prompts, coords).map { (p,c) in
-            MemoryPrompt(text: p.text, x: c.0, y: c.1)
+            MemoryPrompt(text: p.text, x: c.0, y: c.1, isPerChild: p.isPerChild)
         }
         return .init(number: base.number, title: base.title, prompts: prompts)
     }
@@ -246,23 +435,25 @@ struct ChapterTileView: View {
     let colors: ColorTheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: isCompleted ? "checkmark" : "book")
-                    .foregroundColor(colors.deepGreen)
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: isCompleted ? "checkmark" : "book")
+                .foregroundColor(colors.deepGreen)
+                .padding(.top, 2)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Chapter \(chapterNumber)")
-                        .font(.subheadline).fontWeight(.semibold)
-                        .foregroundColor(colors.deepGreen)
-                    Text(title)
-                        .font(.caption)
-                        .foregroundColor(colors.deepGreen)
-                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Chapter \(chapterNumber)")
+                    .font(.subheadline).fontWeight(.semibold)
+                    .foregroundColor(colors.deepGreen)
+                Text(title)
+                    .font(.caption)
+                    .foregroundColor(colors.deepGreen)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            Spacer(minLength: 0)
         }
         .padding()
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
         .background(colors.tileBackground)
         .cornerRadius(20)
         .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 2)

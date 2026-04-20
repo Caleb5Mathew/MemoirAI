@@ -8,9 +8,20 @@
 import SwiftUI
 
 struct BirthdayOnboardingFlow: View {
-    @AppStorage("userBirthday") private var savedBirthday: Date?
+    // Store as TimeInterval (Double) for iOS 17 compatibility
+    // @AppStorage with optional Date? requires iOS 18+
+    @AppStorage("userBirthdayTimestamp") private var savedBirthdayTimestamp: Double = 0
     @Environment(\.dismiss) private var dismiss
     @StateObject private var notificationManager = NotificationManager.shared
+    
+    // Computed property to work with Date
+    private var savedBirthday: Date? {
+        get { savedBirthdayTimestamp > 0 ? Date(timeIntervalSince1970: savedBirthdayTimestamp) : nil }
+    }
+    
+    private func saveBirthday(_ date: Date) {
+        savedBirthdayTimestamp = date.timeIntervalSince1970
+    }
 
     @State private var currentStep: Int = 1
     @State private var selectedYear: Int = Calendar.current.component(.year, from: Date()) - 30
@@ -177,7 +188,7 @@ struct BirthdayOnboardingFlow: View {
                                     generator.impactOccurred()
 
                                     withAnimation {
-                                        savedBirthday = date
+                                        saveBirthday(date)
                                         // Schedule notifications
                                         notificationManager.scheduleDailyPrompt()
                                         notificationManager.scheduleWeeklyReminder()

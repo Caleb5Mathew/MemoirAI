@@ -4,16 +4,24 @@ import CoreData
 import PhotosUI
 import Speech
 import Mixpanel
+import UIKit
 
 struct RecordingView: View {
     @State private var debugBanner: String?
     let prompt: MemoryPrompt
     let chapterTitle: String
     var namespace: Namespace.ID
+    /// Called first on `onDisappear` so the chapter map can clear selection before the full-screen dismiss animation ends (avoids hidden prompt node / stale border).
+    var onRecordingDismiss: (() -> Void)? = nil
+    /// When set, runs after a successful save instead of the default `dismiss()`. Used by the per-child queue wrapper to advance between child variants without tearing the cover down.
+    var onSaveComplete: (() -> Void)? = nil
+    /// Optional header label for sub-prompt flows, e.g., "1 of 3".
+    var progressLabel: String? = nil
     @State private var isSaving = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var context
     @EnvironmentObject var profileVM: ProfileViewModel
+    @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
     @StateObject private var audioMonitor = AudioLevelMonitor()
     @StateObject private var permissionManager = PermissionManager.shared
     @StateObject private var realTimeTranscription = RealTimeTranscriptionManager.shared
@@ -25,6 +33,9 @@ struct RecordingView: View {
     @State private var isPaused = false
     @State private var showExitConfirm = false
     @State private var showSaveToast = false
+    @State private var activePromptText: String = ""
+    @State private var showCustomQuestionSheet = false
+    @State private var isUsingCustomQuestion = false
     @State private var powerLevel: Float = 0.0
     @State private var timer: Timer?
     @State private var recordingTime: TimeInterval = 0
@@ -51,31 +62,75 @@ struct RecordingView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                // Background image + overlay
-                Image(chapterTitle.lowercased())
-                    .resizable()
-                    .scaledToFill()
-                    .ignoresSafeArea()
+                // Background: chapter art when available; Relationships chapters use same gradient as journey map
+                Group {
+                    let chapterAsset = chapterImageAssetName(for: chapterTitle)
+                    if UIImage(named: chapterAsset) != nil {
+                        Image(chapterAsset)
+                            .resizable()
+                            .scaledToFill()
+                    } else if let relationshipGradient = relationshipChapterGradient(forChapterTitle: chapterTitle) {
+                        relationshipGradient
+                    } else {
+                        Color(red: 0.22, green: 0.22, blue: 0.24)
+                    }
+                }
+                .ignoresSafeArea()
                 overlayBlack.ignoresSafeArea()
 
                 VStack(spacing: 24) {
                     Spacer(minLength: geo.size.height * 0.08)
 
                     // Prompt & audio controls
-                    VStack(spacing: 20) {
-                        Text(prompt.text)
-                            .matchedGeometryEffect(id: prompt.id, in: namespace)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.white)
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .lineLimit(nil)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 12)
-                            .background(terracotta)
-                            .cornerRadius(16)
+                    VStack(spacing: 12) {
+                        VStack(spacing: 6) {
+                            if let progressLabel = progressLabel {
+                                Text(progressLabel)
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .foregroundColor(.white.opacity(0.9))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(Color.black.opacity(0.35))
+                                    .clipShape(Capsule())
+                            }
+                            Text(activePromptText.isEmpty ? prompt.text : activePromptText)
+                                .matchedGeometryEffect(id: prompt.id, in: namespace)
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .lineLimit(nil)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 12)
+                                .background(terracotta)
+                                .cornerRadius(16)
 
-                        // Main Recording Button (replaces auto-start)
+                            if isUsingCustomQuestion {
+                                Text("You're answering your own question")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+                        }
+
+                        Button {
+                            triggerHaptic(.selection)
+                            showCustomQuestionSheet = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 12, weight: .medium))
+                                Text("Try a different question")
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                            .foregroundColor(.white.opacity(0.85))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Color.white.opacity(0.15))
+                            .cornerRadius(20)
+                        }
+
+                        // Main Recording Button
                         if !isRecording && !isPaused && audioURL == nil {
                             Button(action: startRecording) {
                                 VStack(spacing: 8) {
@@ -137,13 +192,13 @@ struct RecordingView: View {
                                     .font(.system(size: 20, weight: .medium, design: .monospaced))
                                     .foregroundColor(.white)
                                 
-                                Text(isPaused ? "Recording Paused" : "Recording...")
+                                Text(isPaused ? "Recording paused" : "Recording in progress")
                                     .font(.caption)
                                     .foregroundColor(isPaused ? .white.opacity(0.7) : terracotta)
                             }
                         }
 
-                        // Recording Controls (only show when recording or paused)
+                        // Recording Controls (only show when recording or paused or has audio)
                         if isRecording || isPaused || audioURL != nil {
                             HStack(spacing: 40) {
                                 controlButton(icon: "arrow.counterclockwise", label: "Clear") {
@@ -169,34 +224,6 @@ struct RecordingView: View {
                     }
                     .frame(maxWidth: geo.size.width * 0.9)
                     .multilineTextAlignment(.center)
-
-                    // — replace your existing "Or" + button HStack with this —
-                    ZStack {
-                        // centered "Or"
-                        Text("Or")
-                            .font(.caption)
-                            .foregroundColor(.white)
-
-                        // trailing "Save Memory"
-                        HStack {
-                            Spacer()
-                            Button(action: {
-                                triggerHaptic(.impact(.heavy))
-                                if isRecording { stopRecording() }
-                                saveMemory()
-                            }) {
-                                Text("Save Memory")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(.white)
-                                    .padding(.vertical, 8)
-                                    .padding(.horizontal, 16)
-                                    .background(terracotta)
-                                    .cornerRadius(12)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, geo.size.width * 0.05)
-                    .offset(y: -12)   // tweak this value to move it up/down
 
                     // Text entry
                     ZStack(alignment: .topLeading) {
@@ -226,79 +253,40 @@ struct RecordingView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 16))
                     .shadow(color: .black.opacity(0.03), radius: 2, x: 0, y: 1)
                     .padding(.horizontal, geo.size.width * 0.05)
-
-                    Text("Add Memory Pictures Here!")
-                        .font(.subheadline)
-                        .foregroundColor(.white)
+                    
+                    // Save Memory button - right-aligned, only shows when recording controls are NOT visible
+                    if !isRecording && !isPaused && audioURL == nil {
+                        HStack {
+                            Spacer()
+                            Button(action: {
+                                triggerHaptic(.impact(.heavy))
+                                saveMemory()
+                            }) {
+                                Text("Save Memory")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 20)
+                                    .background(terracotta)
+                                    .cornerRadius(12)
+                                    .shadow(color: terracotta.opacity(0.3), radius: 4, x: 0, y: 2)
+                            }
+                        }
+                        .padding(.horizontal, geo.size.width * 0.05)
                         .padding(.top, 8)
-
-                    let gridWidth = geo.size.width * 0.9
-                    let thumbSize = (gridWidth - 3 * 8) / 4
-
-                    // Photo picker / grid preview
-                    PhotosPicker(
-                        selection: $photoItems,
-                        maxSelectionCount: 8,
-                        matching: .images,
-                        photoLibrary: .shared()
-                    ) {
-                        if selectedImagesData.isEmpty {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(softCream)
-                                    .frame(height: 120)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 16)
-                                            .stroke(Color.black, style: StrokeStyle(lineWidth: 2, dash: [5]))
-                                    )
-                                VStack {
-                                    Image(systemName: "photo.on.rectangle.angled")
-                                    Text("Tap to upload")
-                                }
-                                .foregroundColor(.gray)
-                            }
-                        } else {
-                            LazyVGrid(columns: columns, spacing: 8) {
-                                ForEach(0..<8, id: \.self) { idx in
-                                    ZStack {
-                                        if idx < selectedImagesData.count,
-                                           let ui = UIImage(data: selectedImagesData[idx]) {
-                                            Image(uiImage: ui)
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fill)
-                                                .frame(width: thumbSize, height: thumbSize)
-                                                .clipped()
-                                                .cornerRadius(8)
-                                        } else {
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .fill(softCream)
-                                                .frame(width: thumbSize, height: thumbSize)
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .stroke(Color.black, style: StrokeStyle(lineWidth: 2, dash: [5]))
-                                                .frame(width: thumbSize, height: thumbSize)
-                                        }
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, geo.size.width * 0.05)
-                            .frame(height: thumbSize * 2 + 8)
-                        }
-                    }
-                    .padding(.horizontal, geo.size.width * 0.05)
-                    .onChange(of: photoItems) { newItems in
-                        triggerHaptic(.selection)
-                        selectedImagesData.removeAll()
-                        for item in newItems {
-                            Task {
-                                if let data = try? await item.loadTransferable(type: Data.self) {
-                                    selectedImagesData.append(data)
-                                }
-                            }
-                        }
+                        .transition(.opacity)
                     }
 
                     Spacer()
                 }
+                .tutorialAnchor(.recordingSaveMemory)
+                .background(
+                    GeometryReader { inner in
+                        Color.clear
+                            .onAppear { tutorialCoordinator.reportAnchor(.recordingSaveMemory, rect: inner.frame(in: .global)) }
+                            .onChange(of: inner.frame(in: .global)) { _, f in tutorialCoordinator.reportAnchor(.recordingSaveMemory, rect: f) }
+                    }
+                )
                 .frame(maxWidth: geo.size.width)
                 .position(x: geo.size.width / 2, y: geo.size.height / 2)
 
@@ -347,8 +335,29 @@ struct RecordingView: View {
                 Button("Discard and Exit", role: .destructive) { dismiss() }
                 Button("Cancel", role: .cancel) {}
             }
-            .onAppear(perform: setupAudioSession)
-            .onDisappear(perform: cleanup)
+            .sheet(isPresented: $showCustomQuestionSheet) {
+                QuestionGeneratorSheet(chapterTitle: chapterTitle) { newQuestion in
+                    activePromptText = newQuestion
+                    isUsingCustomQuestion = newQuestion.caseInsensitiveCompare(prompt.text.trimmingCharacters(in: .whitespacesAndNewlines)) != .orderedSame
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.hidden)
+            }
+            .onAppear {
+                activePromptText = prompt.text
+                isUsingCustomQuestion = false
+                setupAudioSession()
+                tutorialCoordinator.setVisibleScreen(.recording)
+                tutorialCoordinator.onRecordingViewAppeared(profileID: profileVM.selectedProfile.id)
+            }
+            .onDisappear {
+                tutorialCoordinator.clearAnchor(.recordingSaveMemory)
+                if tutorialCoordinator.visibleScreen == .recording {
+                    tutorialCoordinator.setVisibleScreen(.unknown)
+                }
+                onRecordingDismiss?()
+                cleanup()
+            }
             // Permission alerts
             .fullScreenCover(isPresented: $permissionManager.showMicrophonePermissionAlert) {
                 MicrophonePermissionAlert(
@@ -468,7 +477,7 @@ struct RecordingView: View {
             // Track recording started
             Mixpanel.mainInstance().track(event: "Started Recording", properties: [
                 "chapter_title": chapterTitle,
-                "prompt_text": prompt.text
+                "prompt_text": activePromptText.isEmpty ? prompt.text : activePromptText
             ])
             
             // Start audio level monitoring
@@ -539,9 +548,10 @@ struct RecordingView: View {
         isSaving = true       // you can overlay a ProgressView if desired
 
         // Track memory saved
+        let savedPrompt = activePromptText.isEmpty ? prompt.text : activePromptText
         Mixpanel.mainInstance().track(event: "Saved Memory", properties: [
             "chapter_title": chapterTitle,
-            "prompt_text": prompt.text,
+            "prompt_text": savedPrompt,
             "has_audio": audioURL != nil,
             "has_text": !typedText.isEmpty,
             "has_photos": !selectedImagesData.isEmpty,
@@ -549,6 +559,7 @@ struct RecordingView: View {
         ])
 
         // Capture current values before we mutate UI state
+        let promptToSave      = activePromptText.isEmpty ? prompt.text : activePromptText
         let textToSave        = typedText
         let audioURLToSave    = audioURL
         let imagesToSave      = selectedImagesData
@@ -559,35 +570,40 @@ struct RecordingView: View {
             // 2️⃣ Create the MemoryEntry in the background
             let entry = MemoryEntry(context: bgContext)
             entry.id           = UUID()
-            entry.prompt       = prompt.text
+            entry.prompt       = promptToSave
             entry.text         = textToSave.isEmpty ? nil : textToSave
             entry.audioData    = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
             entry.audioFileURL = audioURLToSave?.absoluteString
             entry.createdAt    = Date()
             entry.chapter      = chapterTitle
             entry.profileID    = profileVM.selectedProfile.id
+            entry.firebaseUserId = MemoryUserScope.currentFirebaseUserId
+            if entry.firebaseUserId == nil {
+                print("⚠️ Saving memory without firebaseUserId in RecordingView")
+            }
 
-            // 3️⃣ Persist each selected image—Core Data will externalize large blobs
+            // 3️⃣ Photo saving disabled - uncomment below to re-enable
+            /*
+            // Persist each selected image—Core Data will externalize large blobs
             for data in imagesToSave {
                 let photo = Photo(context: bgContext)
                 photo.id           = UUID()
                 photo.data         = data
                 photo.memoryEntry  = entry
             }
+            */
 
             // 4️⃣ Save the background context
             do {
                 try bgContext.save()
+                
+                // 4.5️⃣ Sync to Firebase with profile info (fire and forget)
+                FirestoreSyncService.shared.queueMemorySyncWithProfile(entry, profile: profileVM.selectedProfile)
             } catch {
                 print("❌ BG save failed:", error)
             }
 
-            // 5️⃣ Immediately notify that a new memory was saved (even if no audio)
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .memorySaved, object: nil)
-            }
-
-            // 6️⃣ Kick off speech-to-text if we have an audio URL
+            // 5️⃣ Kick off speech-to-text if we have an audio URL
             if let urlString = entry.audioFileURL,
                let fileURL = URL(string: urlString) {
                 // Use enhanced transcription with better accuracy
@@ -597,6 +613,16 @@ struct RecordingView: View {
                         bgContext.perform {
                             entry.text = transcript
                             try? bgContext.save()
+                            
+                            // Update transcription in Firebase
+                            if let memoryId = entry.id {
+                                Task {
+                                    await FirestoreSyncService.shared.updateMemoryTranscription(
+                                        memoryId: memoryId,
+                                        transcription: transcript
+                                    )
+                                }
+                            }
                             
                             DispatchQueue.main.async {
                                 NotificationCenter.default.post(name: .memorySaved, object: nil)
@@ -609,13 +635,22 @@ struct RecordingView: View {
                 }
             }
 
-            // 8️⃣ Back on the main thread: show toast, then dismiss
+            // 6️⃣ Back on the main thread: show toast, then dismiss (or advance the per-child queue)
             DispatchQueue.main.async {
                 isSaving = false
                 showSaveToast = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     showSaveToast = false
-                    dismiss()
+                    if let onSaveComplete = onSaveComplete {
+                        onSaveComplete()
+                    } else {
+                        dismiss()
+                    }
+                    // Notify after dismiss so listeners don't trigger view rebuilds
+                    // while the fullScreenCover is still animating out
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        NotificationCenter.default.post(name: .memorySaved, object: nil)
+                    }
                 }
             }
         }

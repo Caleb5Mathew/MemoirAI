@@ -164,6 +164,7 @@ struct StoryPage: View {
     @State private var headshotPickerItem: PhotosPickerItem?
     @State private var gender: String = ""
     @EnvironmentObject var profileVM: ProfileViewModel
+    @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
     @State private var userRace: String = ""
     @StateObject private var subscriptionManager = RCSubscriptionManager.shared
     
@@ -176,6 +177,7 @@ struct StoryPage: View {
     @State private var hasRequestedGeneration = false
     @State private var showPageDetail = false
     @State private var detailPageIndex = 0
+    @State private var detailStartsInEditMode = false
     
     // Progress simulation
     @State private var fakeProgress: Double = 0
@@ -186,6 +188,7 @@ struct StoryPage: View {
     @State private var showDownloadSuccess = false
     @State private var showRegenerateConfirmation = false
     @State private var isDownloading = false
+    @State private var isRegenerationFlow = false
     
     // Track actual preview dimensions for accurate PDF generation
     @State private var actualPreviewWidth: CGFloat = 0
@@ -199,6 +202,7 @@ struct StoryPage: View {
     
     // Incomplete memories banner
     @State private var incompleteCount: Int = 0
+    @State private var animateIncompleteMemoriesGlow = false
     @State private var navigateToRecent: Bool = false
     @State private var showIncompleteMemoriesAlert: Bool = false
     
@@ -211,6 +215,11 @@ struct StoryPage: View {
     @State private var orderBookRecordForSheet: BookVersionRecord?
     @State private var isOrderPreparing = false
     @State private var orderNotReadyAlert = false
+    @State private var showSkippedMemoriesExplanation = false
+    @ObservedObject private var printOrderCart = OrderCartStore.shared
+    @State private var debugSessionID: String = String(UUID().uuidString.prefix(8))
+    /// When free preview is exhausted, tutorial may allow one bonus image (tracked separately from `FreePreviewConfig`).
+    @State private var pendingTutorialBonusGeneration: Bool = false
     
     @Environment(\.managedObjectContext) private var context
     
@@ -306,9 +315,27 @@ struct StoryPage: View {
                     .fill(Color.white.opacity(0.5))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(localColors.terracotta.opacity(0.15), lineWidth: 1)
+                            .stroke(
+                                AngularGradient(
+                                    gradient: Gradient(colors: [
+                                        Color.orange,
+                                        Color.yellow,
+                                        Color.red.opacity(0.8),
+                                        Color.orange
+                                    ]),
+                                    center: .center,
+                                    angle: .degrees(animateIncompleteMemoriesGlow ? 360 : 0)
+                                ),
+                                lineWidth: 3
+                            )
                     )
             )
+            .shadow(color: Color.orange.opacity(0.3), radius: 8, x: 0, y: 4)
+            .onAppear {
+                withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) {
+                    animateIncompleteMemoriesGlow = true
+                }
+            }
         }
     }
     
@@ -319,6 +346,8 @@ struct StoryPage: View {
     ) -> some View {
         if vm.isLoading {
             makeLoadingView()
+        } else if hasRequestedGeneration && !vm.pageItems.isEmpty && vm.requiresVisualReadyGate && !vm.isVisualBookReady {
+            makeFinalizingAssetsView()
         } else if let error = vm.errorMessage {
             makeErrorView(error: error)
         } else if hasRequestedGeneration && !vm.pageItems.isEmpty {
@@ -331,17 +360,25 @@ struct StoryPage: View {
     @ViewBuilder
     private func makeLoadingView() -> some View {
         VStack(spacing: 12) {
-            ProgressView(value: displayProgress)
-                .progressViewStyle(
-                    LinearProgressViewStyle(tint: localColors.terracotta)
-                )
-                .frame(height: 6)
-                .padding(.horizontal, 40)
-                .animation(.linear(duration: 0.1), value: displayProgress)
+            if displayProgress >= 1.0 || vm.isFinalizingAssets {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: localColors.terracotta))
+                Text("Finalizing…")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundColor(localColors.terracotta)
+            } else {
+                ProgressView(value: displayProgress)
+                    .progressViewStyle(
+                        LinearProgressViewStyle(tint: localColors.terracotta)
+                    )
+                    .frame(height: 6)
+                    .padding(.horizontal, 40)
+                    .animation(.linear(duration: 0.1), value: displayProgress)
 
-            Text("\(Int(displayProgress * 100))%")
-                .font(.system(size: 14, weight: .medium, design: .rounded))
-                .foregroundColor(localColors.defaultGray)
+                Text("\(Int(displayProgress * 100))%")
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundColor(localColors.defaultGray)
+            }
             
             // Show current status and memory being processed
             if !vm.currentStatus.isEmpty {
@@ -352,7 +389,7 @@ struct StoryPage: View {
                     .padding(.horizontal, 20)
             }
 
-            if !etaString.isEmpty {
+            if !etaString.isEmpty, displayProgress < 1.0, !vm.isFinalizingAssets {
                 Text(etaString)
                     .font(.caption)
                     .foregroundColor(.gray)
@@ -361,6 +398,22 @@ struct StoryPage: View {
             Text("Please keep the app open while we generate your storybook.")
                 .font(.caption2)
                 .foregroundColor(.gray.opacity(0.8))
+        }
+    }
+
+    @ViewBuilder
+    private func makeFinalizingAssetsView() -> some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: localColors.terracotta))
+            Text("Finalizing cover and print assets...")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(localColors.terracotta)
+            Text("Your book will appear once the final AI cover is fully ready.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
         }
     }
     
@@ -394,7 +447,7 @@ struct StoryPage: View {
                 .padding(.top, 8)
             } else {
                 Button("Try Creating Again") {
-                    generateStorybookWithPaywallCheck()
+                    regenerateStorybook()
                 }
                 .font(.headline)
                 .foregroundColor(localColors.terracotta)
@@ -463,6 +516,7 @@ struct StoryPage: View {
                 .tag(idx)
                 .onTapGesture {
                     detailPageIndex = idx
+                    detailStartsInEditMode = false
                     showPageDetail = true
                 }
             }
@@ -517,6 +571,7 @@ struct StoryPage: View {
                     .shadow(color: localColors.shadowColor, radius: 8, x: 0, y: 4)
             )
         }
+        .allowsHitTesting(false)
     }
     
     @ViewBuilder
@@ -565,27 +620,24 @@ struct StoryPage: View {
     @ViewBuilder
     private func makeEmptyStateView() -> some View {
         VStack(spacing: 0) {
-            // Flexible space to center the content
             Spacer()
-            
-            // Main centered content
+
             VStack(spacing: 16) {
-                // Banner sits directly above the text
                 if incompleteCount > 0 {
                     incompleteMemoriesBanner()
-                        .padding(.bottom, 4) // Slight spacing between banner and title
+                        .padding(.bottom, 4)
                 }
-                
+
                 Text("Your storybook awaits!")
                     .font(.storyPageSerifFont(size: 18))
                     .foregroundColor(localColors.defaultBlack.opacity(0.9))
-                
+
                 Text("Tap below to bring this profile's memories to life.")
                     .font(.system(size: 14))
                     .foregroundColor(localColors.defaultGray)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 30)
-                
+
                 Button(action: {
                     showProfileSetup = true
                 }) {
@@ -601,11 +653,18 @@ struct StoryPage: View {
                             radius: 5, y: 3
                         )
                 }
+                .tutorialAnchor(.storybookCreate)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { tutorialCoordinator.reportAnchor(.storybookCreate, rect: geo.frame(in: .global)) }
+                            .onChange(of: geo.frame(in: .global)) { _, f in tutorialCoordinator.reportAnchor(.storybookCreate, rect: f) }
+                    }
+                )
                 .accessibilityIdentifier("createStorybookButton")
                 .disabled(vm.isLoading)
             }
-            
-            // Flexible space to center the content
+
             Spacer()
         }
         .padding()
@@ -632,21 +691,25 @@ struct StoryPage: View {
 
         // ─────────────────────────────────────────────────────────────
         // FREE PREVIEW LOGIC – non-subscribers get limited free images (tracked via iCloud KV store)
+        pendingTutorialBonusGeneration = false
         if !isSubscribed {
             let remaining = FreePreviewConfig.freeImagesRemaining
-            
-            // 1️⃣ No free images left → block generation entirely
-            if !FreePreviewConfig.canGenerateFreePreview {
+            let profileID = profileVM.selectedProfile.id
+
+            if FreePreviewConfig.canGenerateFreePreview {
+                // Always generate just 1 at a time for free users to track accurately
+                pagesToAttempt = 1
+                print("StoryPage: Free user - using 1 image (remaining: \(remaining)/\(FreePreviewConfig.maxPagesWithoutSubscription))")
+            } else if tutorialCoordinator.canUseTutorialBonusGeneration(isSubscribed: false, profileID: profileID) {
+                pagesToAttempt = 1
+                pendingTutorialBonusGeneration = true
+                print("StoryPage: Tutorial bonus — 1 image while free preview exhausted")
+            } else {
                 vm.errorMessage = "You have already used your free preview. Subscribe to unlock unlimited storybooks."
                 vm.isLoading = false
                 hasRequestedGeneration = false
                 return
             }
-            
-            // 2️⃣ Limit to remaining free images (e.g., if they have 2 left, only allow 2)
-            // Always generate just 1 at a time for free users to track accurately
-            pagesToAttempt = 1
-            print("StoryPage: Free user - using 1 image (remaining: \(remaining)/\(FreePreviewConfig.maxPagesWithoutSubscription))")
         }
 
         guard pagesToAttempt > 0 else {
@@ -707,12 +770,14 @@ struct StoryPage: View {
         let currentProfileID = profileVM.selectedProfile.id
         let finalPageCount = pagesExpected // Pass the adjusted page count
         let wasSubscribed = isSubscribed // Capture subscription state before async
+        let useTutorialBonus = pendingTutorialBonusGeneration
         
         Task {
             await vm.generateStorybook(
                 forProfileID: currentProfileID,
                 profileName: profileVM.selectedProfile.name,
-                overridePageCount: finalPageCount
+                overridePageCount: finalPageCount,
+                profileEthnicity: profileVM.selectedProfile.ethnicity
             )
             
             await MainActor.run {
@@ -725,10 +790,16 @@ struct StoryPage: View {
                             // Subscribed users: deduct from monthly allowance
                             subscriptionManager.consume(pages: actualImagesGenerated)
                             print("StoryPage: Consumed \(actualImagesGenerated) images from subscription.")
+                        } else if useTutorialBonus {
+                            tutorialCoordinator.consumeTutorialBonus(profileID: currentProfileID)
+                            print("StoryPage: Consumed tutorial bonus image (free preview was exhausted).")
                         } else {
                             // Free users: increment free preview counter (stored in iCloud + UserDefaults)
                             FreePreviewConfig.incrementFreeImagesUsed(by: actualImagesGenerated)
                             print("StoryPage: Consumed \(actualImagesGenerated) free preview image(s). Remaining: \(FreePreviewConfig.freeImagesRemaining)")
+                        }
+                        if tutorialCoordinator.isTutorialActive {
+                            tutorialCoordinator.completeTutorial(profileID: currentProfileID)
                         }
                     }
                     self.realProgress = 1.0
@@ -741,6 +812,7 @@ struct StoryPage: View {
                     etaTimer?.cancel()
                     // Note: We don't consume free preview images on failure
                 }
+                self.pendingTutorialBonusGeneration = false
                 if vm.isLoading { print("Warning: vm.isLoading is still true post-generation.")}
             }
         }
@@ -752,6 +824,17 @@ struct StoryPage: View {
         return NavigationStack {
             mainContent
                 .navigationBarHidden(true)
+                .onAppear {
+                    tutorialCoordinator.setVisibleScreen(.storyPage)
+                    tutorialCoordinator.onStoryPageAppeared(profileID: profileVM.selectedProfile.id)
+                    tutorialCoordinator.reloadBonusState(profileID: profileVM.selectedProfile.id)
+                }
+                .onDisappear {
+                    tutorialCoordinator.clearAnchor(.storybookCreate)
+                    if tutorialCoordinator.visibleScreen == .storyPage {
+                        tutorialCoordinator.setVisibleScreen(.unknown)
+                    }
+                }
         }
         .addAllSheetsAndModifiers(
             showSettings: $showSettings,
@@ -776,7 +859,7 @@ struct StoryPage: View {
             subscriptionManager: subscriptionManager,
             vm: vm,
             localColors: localColors,
-            generateStorybookWithPaywallCheck: generateStorybookWithPaywallCheck,
+            onProfileSetupDismissed: handleProfileSetupDismiss,
             regenerateStorybook: regenerateStorybook,
             updateIncompleteCount: updateIncompleteCount,
             hasRequestedGeneration: $hasRequestedGeneration,
@@ -785,9 +868,10 @@ struct StoryPage: View {
             actualPreviewHeight: $actualPreviewHeight,
             realProgress: $realProgress,
             showPageDetail: $showPageDetail,
-            detailPageIndex: $detailPageIndex
+            detailPageIndex: $detailPageIndex,
+            detailStartsInEditMode: $detailStartsInEditMode
         )
-        .sheet(item: $orderBookRecordForSheet) { record in
+        .fullScreenCover(item: $orderBookRecordForSheet) { record in
             OrderBookView(book: record)
         }
         .alert("Book PDF Still Preparing", isPresented: $orderNotReadyAlert) {
@@ -797,6 +881,46 @@ struct StoryPage: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text("Your book PDF is still being generated — this usually takes 1–2 minutes after your storybook is created. Tap Retry to check again.")
+        }
+        .sheet(isPresented: $showSkippedMemoriesExplanation) {
+            skippedMemoriesExplanationContent
+        }
+    }
+
+    private var skippedMemoriesExplanationContent: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(vm.skippedMemoriesNoticeSummary)
+                        .font(.body)
+                        .foregroundColor(.primary)
+
+                    ForEach(vm.skippedMemoriesDuringGeneration) { skipped in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(skipped.memoryLabel)
+                                .font(.headline)
+                            Text(skipped.detail)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(localColors.softCream.opacity(0.6))
+                        .cornerRadius(12)
+                    }
+                }
+                .padding()
+            }
+            .background(localColors.softCream.ignoresSafeArea())
+            .navigationTitle("Illustration notice")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        showSkippedMemoriesExplanation = false
+                    }
+                }
+            }
         }
     }
     
@@ -809,8 +933,7 @@ struct StoryPage: View {
             VStack(spacing: 0) {
                 makeHeader()
                 makeStorybookContentArea()
-                makeOrderBookButton()
-                makeRegenerateButton()
+                makeBottomActionArea()
             }
             .safeAreaInset(edge: .bottom) {
                 Color.clear.frame(height: 5)
@@ -820,12 +943,15 @@ struct StoryPage: View {
     
     @ViewBuilder
     private func makeHeader() -> some View {
-        HStack {
-            makeBackButton()
-            Spacer()
+        ZStack(alignment: .top) {
+            HStack(alignment: .top) {
+                makeBackButton()
+                Spacer()
+                makeHeaderButtons()
+            }
+
             makeTitleSection()
-            Spacer()
-            makeHeaderButtons()
+                .frame(maxWidth: 250, alignment: .top)
         }
         .padding(.horizontal)
         .padding(.top, 5)
@@ -848,9 +974,11 @@ struct StoryPage: View {
     private func makeTitleSection() -> some View {
         VStack(spacing: 2) {
             Text("Your Storybook")
-                .font(.storyPageSerifFont(size: 22))
-                .fontWeight(.medium)
+                .font(.system(size: 30, weight: .bold, design: .serif))
                 .foregroundColor(localColors.defaultBlack.opacity(0.8))
+                .tracking(-0.6)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             
             if subscriptionManager.hasActiveSubscription {
                 makeSubscriptionButton()
@@ -875,18 +1003,72 @@ struct StoryPage: View {
     
     @ViewBuilder
     private func makeHeaderButtons() -> some View {
-        HStack(spacing: 12) {
-            makeGalleryButton()
-            if hasRequestedGeneration && !vm.pageItems.isEmpty {
-                makeDownloadButton()
+        VStack(spacing: 8) {
+            if hasGeneratedStorybook, !vm.skippedMemoriesDuringGeneration.isEmpty {
+                Button {
+                    showSkippedMemoriesExplanation = true
+                } label: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.orange)
+                        .padding(10)
+                        .background(localColors.subtleControlBackground)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Some memories were not illustrated")
+                .accessibilityHint("Shows which memories were skipped when the storybook was created")
             }
-            makeSettingsButton()
+
+            if hasGeneratedStorybook {
+                makeDownloadButton()
+                makePrintCartButton()
+            } else {
+                makeSettingsButton()
+            }
+
+            makeGalleryButton()
         }
+        .frame(minWidth: 44)
+    }
+
+    /// Opens the same print-order sheet as **Print** (cart + checkout live here).
+    @ViewBuilder
+    private func makePrintCartButton() -> some View {
+        Button(action: orderBookTapped) {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "bag.fill")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundColor(localColors.defaultBlack.opacity(0.7))
+                    .padding(10)
+                    .background(localColors.subtleControlBackground)
+                    .clipShape(Circle())
+
+                if printOrderCart.totalLineCount > 0 {
+                    Text("\(printOrderCart.totalLineCount)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(localColors.terracotta))
+                        .offset(x: 10, y: -4)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Print order and cart")
+    }
+
+    private var hasGeneratedStorybook: Bool {
+        hasRequestedGeneration && !vm.pageItems.isEmpty
     }
     
     @ViewBuilder
     private func makeGalleryButton() -> some View {
-        Button { showGallery = true } label: {
+        Button {
+            print("🧭 StoryPage[\(debugSessionID)] gallery button tapped; opening library")
+            showGallery = true
+        } label: {
             Image(systemName: "books.vertical")
                 .font(.system(size: 18, weight: .medium))
                 .foregroundColor(localColors.defaultBlack.opacity(0.7))
@@ -944,6 +1126,7 @@ struct StoryPage: View {
     private func makeBookFrame(geo: GeometryProxy) -> some View {
         let printSpec = vm.currentPrintSpec
         let exportAspectRatio = printSpec.aspectRatio
+        let isEmptyState = !vm.isLoading && vm.errorMessage == nil && (!hasRequestedGeneration || vm.pageItems.isEmpty)
         
         // Scale to fit screen while maintaining exact export aspect ratio
         let maxWidth = geo.size.width * 0.92
@@ -958,7 +1141,9 @@ struct StoryPage: View {
         let verticalPad: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 30 : 20
         let bookFrameHeight = bookContentHeightInsideFrame + (verticalPad * 2)
         let bookFrameX = geo.size.width / 2
-        let bookFrameY = geo.size.height / 2
+        // Nudge empty-state card slightly upward so it visually centers with header controls.
+        let emptyStateVerticalOffset: CGFloat = isEmptyState ? -18 : 0
+        let bookFrameY = (geo.size.height / 2) + emptyStateVerticalOffset
         let bookFrameTop = bookFrameY - (bookFrameHeight / 2)
         
         ZStack {
@@ -1021,32 +1206,76 @@ struct StoryPage: View {
     }
     
     @ViewBuilder
-    private func makeOrderBookButton() -> some View {
-        if hasRequestedGeneration && !vm.pageItems.isEmpty {
-            VStack(spacing: 8) {
-                Button(action: orderBookTapped) {
-                    HStack(spacing: 10) {
-                        if isOrderPreparing {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        } else {
-                            Image(systemName: "book.closed.fill")
-                                .font(.system(size: 18, weight: .semibold))
-                            Text(vm.isBookOrderable ? "Order Printed Copy" : "Preparing for print...")
+    private func makeBottomActionArea() -> some View {
+        if hasRequestedGeneration && !vm.pageItems.isEmpty && !vm.isLoading && (!vm.requiresVisualReadyGate || vm.isVisualBookReady) {
+            VStack(spacing: 14) {
+                Button(action: handleCurrentPageEditTapped) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("Edit")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                    .foregroundColor(localColors.terracotta)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 11)
+                    .background(localColors.terracotta.opacity(0.14))
+                    .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(localColors.terracotta.opacity(0.25), lineWidth: 1)
+                    )
+                }
+
+                HStack(spacing: 10) {
+                    Button(action: { showRegenerateConfirmation = true }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 15, weight: .medium))
+                            Text("Regenerate")
                                 .font(.system(size: 16, weight: .semibold))
                         }
+                        .foregroundColor(localColors.terracotta)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(localColors.terracotta.opacity(0.15))
+                        .cornerRadius(12)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(localColors.terracotta.opacity(0.3), lineWidth: 1)
+                        )
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .foregroundColor(.white)
-                    .background(localColors.terracotta)
-                    .clipShape(Capsule())
+
+                    Button(action: orderBookTapped) {
+                        HStack(spacing: 8) {
+                            if isOrderPreparing {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.9)
+                            } else {
+                                Image(systemName: "printer")
+                                    .font(.system(size: 15, weight: .semibold))
+                            }
+                            Text("Order")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .frame(minWidth: 112)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 13)
+                        .background(localColors.terracotta)
+                        .cornerRadius(12)
+                    }
+                    .accessibilityLabel("Order")
+                    .disabled(isOrderPreparing)
+                    .opacity(isOrderPreparing ? 0.7 : 1.0)
                 }
-                .disabled(isOrderPreparing || !vm.isBookOrderable)
-                .padding(.horizontal, 24)
+                .frame(maxWidth: 360)
+                .frame(maxWidth: .infinity)
             }
+            .padding(.horizontal, 24)
             .padding(.top, 16)
-            .padding(.bottom, 8)
+            .padding(.bottom, 20)
         }
     }
 
@@ -1060,39 +1289,49 @@ struct StoryPage: View {
                 if vm.isBookOrderable, let record = vm.currentBookVersionRecord {
                     orderBookRecordForSheet = record
                 } else {
+                    if let record = vm.currentBookVersionRecord {
+                        print(
+                            "🧭 StoryPage print blocked: " +
+                            "renderStatus=\(record.renderStatus), " +
+                            "hasPDF=\(record.pdfURL != nil), " +
+                            "hasCover=\(record.coverURL != nil), " +
+                            "pageCount=\(record.pageCount)"
+                        )
+                    }
                     orderNotReadyAlert = true
                 }
             }
         }
     }
 
-    @ViewBuilder
-    private func makeRegenerateButton() -> some View {
-        if hasRequestedGeneration && !vm.pageItems.isEmpty && !vm.isLoading {
-            VStack(spacing: 12) {
-                Button(action: { showRegenerateConfirmation = true }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 16, weight: .medium))
-                        Text("Regenerate Storybook")
-                            .font(.system(size: 16, weight: .medium))
-                    }
-                    .foregroundColor(localColors.terracotta)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                    .background(localColors.terracotta.opacity(0.15))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(localColors.terracotta.opacity(0.3), lineWidth: 1)
-                    )
-                }
-            }
-            .padding(.horizontal)
-            .padding(.bottom, 20)
+    private func handleCurrentPageEditTapped() {
+        guard currentPageIndex >= 0, currentPageIndex < vm.pageItems.count else { return }
+
+        switch vm.pageItems[currentPageIndex] {
+        case .illustration:
+            detailPageIndex = currentPageIndex
+            detailStartsInEditMode = true
+            showPageDetail = true
+        case .textPage:
+            detailPageIndex = currentPageIndex
+            detailStartsInEditMode = true
+            showPageDetail = true
         }
     }
     
+    private func handleProfileSetupDismiss() {
+        if didCompleteProfileSetup {
+            // Only clear after the user completes the setup+settings flow for regeneration.
+            if isRegenerationFlow {
+                vm.clearCurrentStorybook()
+                hasRequestedGeneration = false
+            }
+            generateStorybookWithPaywallCheck()
+            didCompleteProfileSetup = false
+        }
+        isRegenerationFlow = false
+    }
+
     // NEW: Download functionality
     private func downloadStorybook() {
         isDownloading = true
@@ -1146,9 +1385,11 @@ struct StoryPage: View {
     
     // NEW: Regenerate functionality
     private func regenerateStorybook() {
-        vm.clearCurrentStorybook()
-        hasRequestedGeneration = false
-        showSettings = true // Open settings so user can adjust parameters
+        // Route through the same setup path as first-time creation:
+        // ProfileSetupView -> Review Settings -> Save & Generate.
+        isRegenerationFlow = true
+        didCompleteProfileSetup = false
+        showProfileSetup = true
     }
     
     // MARK: – Helper to count memories needing enhancement
@@ -1243,35 +1484,49 @@ extension StoryPage {
     @ViewBuilder
     private func makeIllustrationPage(image: UIImage, memoryID: UUID, title: String?, index: Int, frameWidth: CGFloat, frameHeight: CGFloat, isKidsBook: Bool) -> some View {
         let isEditing = vm.isEditingImage(at: index)
+        let isPrecomposed = vm.isPrecomposedIllustration(memoryID: memoryID)
         
         Group {
-            if isKidsBook {
-                KidsBookIllustrationPage(
-                    image: image,
-                    memoryID: memoryID,
-                    title: title,
-                    frameWidth: frameWidth,
-                    frameHeight: frameHeight,
-                    pageNumber: index + 1
-                )
+            if isPrecomposed {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: frameWidth, height: frameHeight)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
-                VerticalBookIllustrationPage(
-                    image: image,
+                if isKidsBook {
+                    KidsBookIllustrationPage(
+                        image: image,
+                        memoryID: memoryID,
+                        title: title,
+                        frameWidth: frameWidth,
+                        frameHeight: frameHeight,
+                        pageNumber: index + 1
+                    )
+                } else {
+                    VerticalBookIllustrationPage(
+                        image: image,
+                        memoryID: memoryID,
+                        title: title,
+                        fontStyle: BookFontStyle(artStyle: vm.currentArtStyle),
+                        frameWidth: frameWidth,
+                        frameHeight: frameHeight,
+                        pageNumber: index + 1,
+                        totalPages: vm.pageItems.count
+                    )
+                }
+            }
+        }
+        .overlay {
+            if !isPrecomposed {
+                // QR Watermark — below illustration title bar (kids + portrait both use barHeight 6.5%)
+                QRWatermark(
                     memoryID: memoryID,
-                    frameWidth: frameWidth,
-                    frameHeight: frameHeight,
-                    pageNumber: index + 1,
-                    totalPages: vm.pageItems.count
+                    topInset: frameHeight * 0.065 + 6
                 )
             }
         }
-        .overlay(
-            // QR Watermark — on Kids book, inset below title bar so it sits on the picture only
-            QRWatermark(
-                memoryID: memoryID,
-                topInset: isKidsBook ? frameHeight * 0.065 + 6 : 0
-            )
-        )
         .overlay(
             // Loading indicator overlay when editing
             Group {
@@ -1295,48 +1550,131 @@ extension StoryPage {
                                 .fill(Color.black.opacity(0.7))
                         )
                     }
+                    .allowsHitTesting(false)
                 }
             }
         )
+        .overlay {
+            if vm.needsCloudIllustrationReload(memoryID: memoryID) {
+                VStack {
+                    Spacer()
+                    if vm.isCloudIllustrationRetrying(memoryID: memoryID) {
+                        ProgressView("Loading…")
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 14)
+                            .background(.ultraThinMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    } else {
+                        Button {
+                            vm.retryCloudIllustrationLoad(memoryID: memoryID)
+                        } label: {
+                            Text("Retry")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 28)
+                                .padding(.vertical, 12)
+                                .background(localColors.terracotta)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Spacer()
+                        .frame(height: max(frameHeight * 0.06, 16))
+                }
+            }
+        }
     }
     
     @ViewBuilder
     private func makeTextPage(pageIndex: Int, total: Int, text: String, title: String?, subtitle: String?, memoryID: UUID, index: Int, frameWidth: CGFloat, frameHeight: CGFloat, isKidsBook: Bool) -> some View {
         let fontStyle = BookFontStyle(artStyle: vm.currentArtStyle)
-        
-        Group {
-            if isKidsBook {
-                KidsBookTextPage(
-                    index: pageIndex,
-                    total: total,
-                    text: text,
-                    title: title,
-                    subtitle: subtitle,
-                    memoryID: memoryID,
-                    fontStyle: fontStyle,
-                    frameWidth: frameWidth,
-                    frameHeight: frameHeight,
-                    pageNumber: index + 1
-                )
-            } else {
-                VerticalBookTextPage(
-                    index: pageIndex,
-                    total: total,
-                    text: text,
-                    title: title,
-                    subtitle: subtitle,
-                    memoryID: memoryID,
-                    fontStyle: fontStyle,
-                    frameWidth: frameWidth,
-                    frameHeight: frameHeight,
-                    pageNumber: index + 1
-                )
-            }
-        }
-        .overlay(
-            // QR Watermark
-            QRWatermark(memoryID: memoryID)
+        let fallbackFrontCover = MemoirCoverFrontPage(
+            title: (title ?? vm.bookDisplayTitle).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Memoir" : (title ?? vm.bookDisplayTitle),
+            subtitle: text,
+            frameWidth: frameWidth,
+            frameHeight: frameHeight,
+            isKidsBook: isKidsBook
         )
+
+        if memoryID == BookInteriorAnchor.titlePageMemoryId {
+            if let pdfURL = printCoverPDFURL() {
+                RemotePDFThumbnailView(
+                    url: pdfURL,
+                    targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
+                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook,
+                    panel: .front,
+                    cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? ""
+                ) {
+                    TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
+                }
+                .frame(width: frameWidth, height: frameHeight)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                fallbackFrontCover
+            }
+        } else if memoryID == BookInteriorAnchor.closingPageMemoryId {
+            MemoirCoverBackPage(
+                heading: title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? (title ?? "About this Memoir") : "About this Memoir",
+                bodyText: text,
+                frameWidth: frameWidth,
+                frameHeight: frameHeight
+            )
+        } else {
+            Group {
+                if isKidsBook {
+                    KidsBookTextPage(
+                        index: pageIndex,
+                        total: total,
+                        text: text,
+                        title: title,
+                        subtitle: subtitle,
+                        memoryID: memoryID,
+                        fontStyle: fontStyle,
+                        frameWidth: frameWidth,
+                        frameHeight: frameHeight,
+                        pageNumber: index + 1
+                    )
+                } else {
+                    VerticalBookTextPage(
+                        index: pageIndex,
+                        total: total,
+                        text: text,
+                        title: title,
+                        subtitle: subtitle,
+                        memoryID: memoryID,
+                        fontStyle: fontStyle,
+                        frameWidth: frameWidth,
+                        frameHeight: frameHeight,
+                        pageNumber: index + 1
+                    )
+                }
+            }
+            .overlay(
+                QRWatermark(memoryID: memoryID)
+            )
+        }
+    }
+
+    private func printCoverPDFURL() -> URL? {
+        vm.currentBookVersionRecord?.printCoverPDFURL
+    }
+}
+
+private struct TitleCoverLoadingPlaceholder: View {
+    let frameWidth: CGFloat
+    let frameHeight: CGFloat
+
+    private let paper = Color(red: 0.965, green: 0.94, blue: 0.89)
+
+    var body: some View {
+        ZStack {
+            paper
+            ProgressView()
+                .scaleEffect(1.05)
+        }
+        .frame(width: frameWidth, height: frameHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -1355,27 +1693,27 @@ struct KidsBookIllustrationPage: View {
     var body: some View {
         VStack(spacing: 0) {
             // Top bar: memory title left, page number right
-            HStack {
+            HStack(alignment: .top) {
                 Text(title ?? "Memory")
                     .font(.kidsBookTitleFont(for: frameHeight))
                     .foregroundColor(colors.chapterTitleColor)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Text("\(pageNumber)")
                     .font(.kidsBookPageNumberFont(for: frameHeight))
                     .foregroundColor(colors.pageNumberColor)
             }
             .padding(.horizontal, frameWidth * 0.08)
-            .frame(height: barHeight)
+            .padding(.vertical, barHeight * 0.2)
+            .frame(minHeight: barHeight)
             .frame(maxWidth: .infinity)
             .background(colors.bookPageBackground)
-            
-            // Full page illustration
+
+            // Full page illustration fills remaining space
             Image(uiImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(width: frameWidth, height: frameHeight - barHeight)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
         }
         .frame(width: frameWidth, height: frameHeight)
@@ -1408,19 +1746,19 @@ struct KidsBookTextPage: View {
             Spacer().frame(height: topMargin)
             
             // Header bar: title left, page number right
-            HStack {
+            HStack(alignment: .top) {
                 Text(title ?? "Memory")
                     .font(fontStyle.titleFont(for: frameHeight))
                     .foregroundColor(colors.chapterTitleColor)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Text("\(pageNumber)")
                     .font(fontStyle.pageNumberFont(for: frameHeight))
                     .foregroundColor(colors.pageNumberColor)
             }
             .padding(.horizontal, sideMargin)
-            .frame(height: barHeight)
+            .padding(.vertical, barHeight * 0.2)
+            .frame(minHeight: barHeight)
             .frame(maxWidth: .infinity)
             .background(colors.bookPageBackground)
             
@@ -1448,12 +1786,20 @@ struct KidsBookTextPage: View {
 struct VerticalBookIllustrationPage: View {
     let image: UIImage
     let memoryID: UUID
+    /// LLM / short memory title for the top bar (same role as kids book illustration header).
+    let title: String?
+    let fontStyle: BookFontStyle
     let frameWidth: CGFloat
     let frameHeight: CGFloat
     let pageNumber: Int
     let totalPages: Int
     
     private let colors = StoryPageLocalColors()
+    private var barHeight: CGFloat { frameHeight * 0.065 }
+    private var headerTitle: String {
+        let t = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return t.isEmpty ? "Memory" : t
+    }
     
     var body: some View {
         ZStack {
@@ -1461,13 +1807,29 @@ struct VerticalBookIllustrationPage: View {
             colors.bookPageBackground
             
             VStack(spacing: 0) {
+                HStack(alignment: .top) {
+                    Text(headerTitle)
+                        .font(fontStyle.titleFont(for: frameHeight))
+                        .foregroundColor(colors.chapterTitleColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Text("\(pageNumber)")
+                        .font(fontStyle.pageNumberFont(for: frameHeight))
+                        .foregroundColor(colors.pageNumberColor)
+                }
+                .padding(.horizontal, frameWidth * 0.06)
+                .padding(.vertical, barHeight * 0.2)
+                .frame(minHeight: barHeight)
+                .frame(maxWidth: .infinity)
+                .background(colors.bookPageBackground)
+
                 Spacer()
                 
                 // Main image - centered
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(maxHeight: frameHeight * 0.85)
+                    .frame(maxHeight: frameHeight * 0.78)
                     .padding(.horizontal, frameWidth * 0.06)
                 
                 Spacer()
@@ -1784,6 +2146,7 @@ struct EnhancedQRCodePage: View {
             let dummyProfileVM = ProfileViewModel()
             StoryPage()
                 .environmentObject(dummyProfileVM)
+                .environmentObject(TutorialCoordinator.shared)
         }
     }
 
@@ -1814,7 +2177,7 @@ extension View {
         subscriptionManager: RCSubscriptionManager,
         vm: StoryPageViewModel,
         localColors: StoryPageLocalColors,
-        generateStorybookWithPaywallCheck: @escaping () -> Void,
+        onProfileSetupDismissed: @escaping () -> Void,
         regenerateStorybook: @escaping () -> Void,
         updateIncompleteCount: @escaping () -> Void,
         hasRequestedGeneration: Binding<Bool>,
@@ -1823,7 +2186,8 @@ extension View {
         actualPreviewHeight: Binding<CGFloat>,
         realProgress: Binding<Double>,
         showPageDetail: Binding<Bool>,
-        detailPageIndex: Binding<Int>
+        detailPageIndex: Binding<Int>,
+        detailStartsInEditMode: Binding<Bool>
     ) -> some View {
         let withSheets = addSheets(
             showSettings: showSettings,
@@ -1844,10 +2208,11 @@ extension View {
             vm: vm,
             selectedImageForFullScreen: selectedImageForFullScreen,
             localColors: localColors,
-            generateStorybookWithPaywallCheck: generateStorybookWithPaywallCheck,
+            onProfileSetupDismissed: onProfileSetupDismissed,
             hasRequestedGeneration: hasRequestedGeneration,
             showPageDetail: showPageDetail,
-            detailPageIndex: detailPageIndex
+            detailPageIndex: detailPageIndex,
+            detailStartsInEditMode: detailStartsInEditMode
         )
         
         let withAlerts = withSheets.addAlerts(
@@ -1894,30 +2259,42 @@ extension View {
         vm: StoryPageViewModel,
         selectedImageForFullScreen: Binding<UIImage?>,
         localColors: StoryPageLocalColors,
-        generateStorybookWithPaywallCheck: @escaping () -> Void,
+        onProfileSetupDismissed: @escaping () -> Void,
         hasRequestedGeneration: Binding<Bool>,
         showPageDetail: Binding<Bool>,
-        detailPageIndex: Binding<Int>
+        detailPageIndex: Binding<Int>,
+        detailStartsInEditMode: Binding<Bool>
     ) -> some View {
         self
             .background(
                 NavigationLink(
-                    destination: RecentMemoriesView().environmentObject(profileVM),
+                    destination: RecentMemoriesView(prioritizeEnhanceCandidates: true).environmentObject(profileVM),
                     isActive: navigateToRecent
                 ) {
                     EmptyView()
                 }
             )
+            .fullScreenCover(isPresented: showGallery, onDismiss: {
+                print("🧭 StoryPage gallery cover dismissed")
+            }) {
+                StorybookGalleryView(onBookSelected: { record, legacyBook in
+                    print("🧭 StoryPage gallery selection received: id=\(record.bookVersionId), source=\(record.source), pages=\(record.pageCount)")
+                    hasRequestedGeneration.wrappedValue = true
+                    vm.loadGalleryBook(record: record, legacyBook: legacyBook)
+                    showGallery.wrappedValue = false
+                })
+                .environmentObject(profileVM)
+            }
+            .onChange(of: showGallery.wrappedValue) { oldValue, newValue in
+                print("🧭 StoryPage showGallery changed: \(oldValue) -> \(newValue)")
+            }
             .sheet(isPresented: showSettings) {
                 SettingsView()
                     .environmentObject(profileVM)
                     .environmentObject(subscriptionManager)
             }
             .sheet(isPresented: showProfileSetup, onDismiss: {
-                if didCompleteProfileSetup.wrappedValue {
-                    generateStorybookWithPaywallCheck()
-                    didCompleteProfileSetup.wrappedValue = false
-                }
+                onProfileSetupDismissed()
             }) {
                 ProfileSetupView(
                     headshotImage: headshotImage,
@@ -1930,18 +2307,6 @@ extension View {
                 )
                 .environmentObject(profileVM)
                 .environmentObject(subscriptionManager)
-            }
-            .sheet(isPresented: showGallery) {
-                StorybookGalleryView(onBookSelected: { record, legacyBook in
-                    showGallery.wrappedValue = false
-                    if let legacyBook {
-                        vm.loadHistoricBook(legacyBook)
-                    } else {
-                        vm.loadBookVersionRecord(record)
-                    }
-                    hasRequestedGeneration.wrappedValue = true
-                })
-                    .environmentObject(profileVM)
             }
             .overlay(
                 FullScreenImageView(
@@ -1964,7 +2329,6 @@ extension View {
                     )
                     .presentationDetents([.height(152)])
                     .presentationDragIndicator(.visible)
-                    .interactiveDismissDisabled(vm.isEditingImage(at: index))
                 }
             }
             .onChange(of: vm.imageEditingStates) { _, _ in
@@ -1985,6 +2349,7 @@ extension View {
                     vm: vm,
                     artStyle: vm.currentArtStyle,
                     printSpec: vm.currentPrintSpec,
+                    startEditingOnAppear: detailStartsInEditMode.wrappedValue,
                     onRequestImageEdit: {
                         showPageDetail.wrappedValue = false
                         editingImageIndex.wrappedValue = $0
@@ -2039,12 +2404,20 @@ extension View {
     ) -> some View {
         self
             .onAppear {
-                vm.loadStorybookForProfile(profileVM.selectedProfile.id, name: profileVM.selectedProfile.name)
+                print("🧭 StoryPage lifecycle onAppear; profile=\(profileVM.selectedProfile.id.uuidString), hasGenerated=\(vm.hasGeneratedStorybook), hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count)")
+                vm.loadStorybookForProfile(
+                    profileVM.selectedProfile.id,
+                    name: profileVM.selectedProfile.name,
+                    profileEthnicity: profileVM.selectedProfile.ethnicity
+                )
                 
-                if headshotImage.wrappedValue == nil,
-                   let test = UIImage(named: "old") {
-                    headshotImage.wrappedValue = test
-                    vm.subjectPhoto = test
+                if let data = profileVM.selectedProfile.photoData,
+                   let image = UIImage(data: data) {
+                    headshotImage.wrappedValue = image
+                    vm.subjectPhoto = image
+                } else {
+                    headshotImage.wrappedValue = nil
+                    vm.subjectPhoto = nil
                 }
 
                 Task { @MainActor in
@@ -2057,8 +2430,24 @@ extension View {
                 Task { await subscriptionManager.refreshCustomerInfo() }
                 updateIncompleteCount()
             }
+            .onDisappear {
+                print("🧭 StoryPage lifecycle onDisappear; hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count)")
+            }
             .onChange(of: profileVM.selectedProfile.id) { _, newProfileID in
-                vm.loadStorybookForProfile(newProfileID, name: profileVM.selectedProfile.name)
+                print("🧭 StoryPage profile changed to \(newProfileID.uuidString); reloading storybook")
+                vm.loadStorybookForProfile(
+                    newProfileID,
+                    name: profileVM.selectedProfile.name,
+                    profileEthnicity: profileVM.selectedProfile.ethnicity
+                )
+                if let data = profileVM.selectedProfile.photoData,
+                   let image = UIImage(data: data) {
+                    headshotImage.wrappedValue = image
+                    vm.subjectPhoto = image
+                } else {
+                    headshotImage.wrappedValue = nil
+                    vm.subjectPhoto = nil
+                }
                 hasRequestedGeneration.wrappedValue = vm.hasGeneratedStorybook
                 updateIncompleteCount()
             }
@@ -2068,9 +2457,7 @@ extension View {
             }
             .onChange(of: vm.isLoading) { _, _ in }
             .onChange(of: headshotImage.wrappedValue) { _, newShot in
-                if let shot = newShot {
-                    vm.subjectPhoto = shot
-                }
+                vm.subjectPhoto = newShot
             }
             .onReceive(NotificationCenter.default.publisher(for: .memorySaved)) { _ in
                 updateIncompleteCount()

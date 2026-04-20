@@ -60,9 +60,11 @@ struct RealTimeWaveformView: View {
                     CircularAudioLevelView(level: audioMonitor.getSmoothedLevel())
                         .frame(width: 60, height: 60)
                 }
+                .frame(maxWidth: .infinity)
                 .transition(.scale.combined(with: .opacity))
             }
         }
+        .frame(maxWidth: .infinity)
         .animation(.spring(response: 0.6, dampingFraction: 0.8), value: isRecording)
     }
 }

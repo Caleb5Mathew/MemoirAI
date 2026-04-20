@@ -71,6 +71,13 @@ final class SpeechTranscriber {
             return
         }
         
+        // Calculate audio duration to set dynamic timeout
+        let asset = AVURLAsset(url: url)
+        let duration = CMTimeGetSeconds(asset.duration)
+        
+        // Set timeout: duration * 1.5, minimum 60s, maximum 600s (10 min)
+        let timeout = min(max(duration * 1.5, 60), 600)
+        
         let request = SFSpeechURLRecognitionRequest(url: url)
         
         // Force server recognition (not on-device)
@@ -117,8 +124,8 @@ final class SpeechTranscriber {
             }
         }
         
-        // Set a timeout for the recognition task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30.0) {
+        // Set dynamic timeout based on audio duration
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
             if !isFinal {
                 task?.cancel()
                 completion(.failure(SpeechTranscriberError.timeout))

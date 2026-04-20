@@ -106,7 +106,7 @@ struct BookEditorPrototypeView: View {
         // Load photos from all memory entries
         let context = PersistenceController.shared.container.viewContext
         let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
-        request.predicate = NSPredicate(format: "profileID == %@", profileID as CVarArg)
+        request.predicate = MemoryUserScope.profilePredicate(profileID: profileID)
         
         do {
             let entries = try context.fetch(request)

@@ -1,1 +1,92 @@
-import Foundationimport SwiftUIimport UIKit@MainActorclass PromptReviewViewModel: ObservableObject {    @Published var storyContents:    [StoryPageContent] = []    @Published var prompts:          [ImagePrompt]      = []    @Published var enrichedPrompts:  [ImagePrompt]      = []    @Published var images:           [UIImage]          = []    @Published var isLoading:        Bool               = false    @Published var errorMessage:     String?    @AppStorage("memoirArtStyle")           private var artStyleRaw        = ArtStyle.realistic.rawValue    @AppStorage("memoirCustomArtStyleText") private var customArtStyleText = ""    private var currentArtStyle: ArtStyle {        ArtStyle(rawValue: artStyleRaw) ?? .realistic    }    private let promptGen: PromptGenerator    private let imageCtx : ImageContext    private let imageSvc : OpenAIImageService    init() {        guard            let key = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String,            !key.isEmpty,            !key.contains("YOUR_API")        else {            fatalError("🔑 OPENAI_API_KEY missing or invalid in Info.plist")        }        promptGen = PromptGenerator(apiKey: key)        imageCtx  = ImageContext(apiKey: key)        imageSvc  = OpenAIImageService(apiKey: key)        print("[PromptReviewViewModel] Ready. Art style = \(currentArtStyle.rawValue)")    }    /// Generates prompts, enriches them, then renders images.    func generateAndRender(        transcript:     String,        pageCount:      Int,        attachedPhotos: [UIImage]    ) async {        print("[PromptReviewViewModel] ▶︎ generateAndRender – pages: \(pageCount), photos: \(attachedPhotos.count)")        isLoading    = true        errorMessage = nil        defer { isLoading = false }        do {            // 1 ─ TEXT → PROMPTS (+ page verses)            let rawContent = try await promptGen.generatePrompts(                from:                  transcript,                pageCount:             pageCount,                chosenArtStyle:        currentArtStyle,                customArtStyleDetails: customArtStyleText            )            storyContents = rawContent            // Build ImagePrompts with our reference IDs:            // (pass in your actual head-shot & style-tile OpenAI IDs here)            let headshotID  = ""  // ← fill in            let styleTileID = ""  // ← fill in            prompts = rawContent.map {                ImagePrompt(                    text: $0.imagePromptText,                    referenceImageIDs: [headshotID, styleTileID].compactMap { $0.isEmpty ? nil : $0 }                )            }            // 2 ─ PROMPTS → ENRICHED (attach first photo if any)            enrichedPrompts = try await imageCtx.enrichPrompts(                prompts:    prompts,                withPhotos: attachedPhotos            )            // 3 ─ IMAGES ← enriched prompts            images = try await imageSvc.generateImages(                from: enrichedPrompts            )        } catch {            errorMessage = error.localizedDescription            print("[PromptReviewViewModel ERROR] \(error.localizedDescription)")        }    }}
+import Foundation
+import SwiftUI
+import UIKit
+
+@MainActor
+class PromptReviewViewModel: ObservableObject {
+
+    @Published var storyContents:    [StoryPageContent] = []
+    @Published var prompts:          [ImagePrompt]      = []
+    @Published var enrichedPrompts:  [ImagePrompt]      = []
+    @Published var images:           [UIImage]          = []
+    @Published var isLoading:        Bool               = false
+    @Published var errorMessage:     String?
+
+    @AppStorage("memoirArtStyle")           private var artStyleRaw        = ArtStyle.kidsBook.rawValue
+    @AppStorage("memoirCustomArtStyleText") private var customArtStyleText = ""
+
+    private var currentArtStyle: ArtStyle {
+        ArtStyle(rawValue: artStyleRaw) ?? .kidsBook
+    }
+
+    private let promptGen: PromptGenerator
+    private let imageCtx : ImageContext
+    private let imageSvc : OpenAIImageService
+
+    init() {
+        guard
+            let key = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String,
+            !key.isEmpty,
+            !key.contains("YOUR_API")
+        else {
+            fatalError("🔑 OPENAI_API_KEY missing or invalid in Info.plist")
+        }
+
+        promptGen = PromptGenerator(apiKey: key)
+        imageCtx  = ImageContext(apiKey: key)
+        imageSvc  = OpenAIImageService(apiKey: key)
+
+        print("[PromptReviewViewModel] Ready. Art style = \(currentArtStyle.rawValue)")
+    }
+
+    /// Generates prompts, enriches them, then renders images.
+    func generateAndRender(
+        transcript:     String,
+        pageCount:      Int,
+        attachedPhotos: [UIImage]
+    ) async {
+
+        print("[PromptReviewViewModel] ▶︎ generateAndRender – pages: \(pageCount), photos: \(attachedPhotos.count)")
+        isLoading    = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            // 1 ─ TEXT → PROMPTS (+ page verses)
+            let rawContent = try await promptGen.generatePrompts(
+                from:                  transcript,
+                pageCount:             pageCount,
+                chosenArtStyle:        currentArtStyle,
+                customArtStyleDetails: customArtStyleText
+            )
+            storyContents = rawContent
+
+            // Build ImagePrompts with our reference IDs:
+            // (pass in your actual head-shot & style-tile OpenAI IDs here)
+            let headshotID  = ""  // ← fill in
+            let styleTileID = ""  // ← fill in
+
+            prompts = rawContent.map {
+                ImagePrompt(
+                    text: $0.imagePromptText,
+                    referenceImageIDs: [headshotID, styleTileID].compactMap { $0.isEmpty ? nil : $0 }
+                )
+            }
+
+            // 2 ─ PROMPTS → ENRICHED (attach first photo if any)
+            enrichedPrompts = try await imageCtx.enrichPrompts(
+                prompts:    prompts,
+                withPhotos: attachedPhotos
+            )
+
+            // 3 ─ IMAGES ← enriched prompts
+            images = try await imageSvc.generateImages(
+                from: enrichedPrompts
+            )
+
+        } catch {
+            errorMessage = error.localizedDescription
+            print("[PromptReviewViewModel ERROR] \(error.localizedDescription)")
+        }
+    }
+}

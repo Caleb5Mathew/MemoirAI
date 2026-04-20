@@ -114,7 +114,7 @@ struct SettingsView: View {
     
     // Settings States
     @AppStorage("memoirPageCount") var pageCountSetting: Int = 2
-    @AppStorage("memoirArtStyle") private var selectedArtStyleRawValue: String = ArtStyle.realistic.rawValue
+    @AppStorage("memoirArtStyle") private var selectedArtStyleRawValue: String = ArtStyle.kidsBook.rawValue
     @AppStorage("memoirCustomArtStyleText") private var customArtStyleText: String = ""
     @AppStorage("memoirMemorySource") var memorySourceSetting: String = "all"
     @AppStorage("memoirGeminiModelOverride") private var geminiModelOverrideRawValue: String = GeminiImageModelOption.gemini3ProPreview.rawValue
@@ -136,6 +136,7 @@ struct SettingsView: View {
     @State private var showDevDashboard: Bool = false
     @State private var hasUnseenOrders = false
     @State private var orderBadgeListener: ListenerRegistration?
+    @State private var showLibrary = false
     
     private enum DevUnlockResult {
         case success
@@ -143,7 +144,7 @@ struct SettingsView: View {
     }
     
     private var currentSelectedArtStyle: ArtStyle {
-        ArtStyle(rawValue: selectedArtStyleRawValue) ?? .realistic
+        ArtStyle(rawValue: selectedArtStyleRawValue) ?? .kidsBook
     }
 
     private var isInternalDeveloperBuild: Bool {
@@ -225,9 +226,6 @@ struct SettingsView: View {
                         // Art Style Section
                         artStyleSection
 
-                        // Optional style reference image for Gemini
-                        styleReferenceSection
-
                         // Developer-only model override
                         if canAccessDeveloperGeminiToggle {
                             geminiModelSection
@@ -288,6 +286,10 @@ struct SettingsView: View {
                 DevDashboardView()
             }
         }
+        .fullScreenCover(isPresented: $showLibrary) {
+            StorybookGalleryView(onBookSelected: nil)
+                .environmentObject(profileVM)
+        }
     }
     
     // MARK: - Dev Unlock Sheet
@@ -324,7 +326,7 @@ struct SettingsView: View {
             
             Button(action: {
                 if devKey == "Apologist123!" {
-                    RCSubscriptionManager.shared.unlockDeveloperMode()
+                    RCSubscriptionManager.shared.enablePersistentDevMode()
                     withAnimation { devResult = .success }
                     devKey = ""
                     // Auto dismiss after success
@@ -381,23 +383,22 @@ struct SettingsView: View {
                 .font(.system(size: 20, weight: .semibold, design: .serif))
                 .foregroundColor(darkText)
                 .accessibilityIdentifier("settingsHeaderTitle")
+            
+            Spacer()
+            
+            Color.clear
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
                 .onTapGesture {
-#if DEBUG
                     devTapCount += 1
                     if devTapCount >= 5 {
                         showDevSheet = true
                         devTapCount = 0
                     }
-                    // Reset after 2 seconds if not completed
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         if devTapCount < 5 { devTapCount = 0 }
                     }
-#endif
                 }
-            
-            Spacer()
-            
-            Circle().fill(Color.clear).frame(width: 40, height: 40)
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -709,6 +710,29 @@ struct SettingsView: View {
         .buttonStyle(PlainButtonStyle())
     }
     
+    /// Opens My Library (`StorybookGalleryView`) for ordering prints from saved books. Uses full-screen cover so it works when Settings is a sheet (no `NavigationStack` in parent).
+    private var printOrdersLibraryRow: some View {
+        Button {
+            showLibrary = true
+        } label: {
+            HStack {
+                Image(systemName: "shippingbox")
+                    .font(.system(size: 14))
+                Text("Print Orders")
+                    .font(.system(size: 14, weight: .medium))
+                Spacer()
+                if hasUnseenOrders {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
+                }
+            }
+            .foregroundColor(terracotta)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+    
     // MARK: - Account Section
     private var accountSection: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -750,21 +774,7 @@ struct SettingsView: View {
                     Divider()
                         .padding(.vertical, 8)
                     
-                    NavigationLink(destination: OrderHistoryView()) {
-                        HStack {
-                            Image(systemName: "shippingbox")
-                                .font(.system(size: 14))
-                            Text("Print Orders")
-                                .font(.system(size: 14, weight: .medium))
-                            Spacer()
-                            if hasUnseenOrders {
-                                Circle()
-                                    .fill(Color.red)
-                                    .frame(width: 8, height: 8)
-                            }
-                        }
-                        .foregroundColor(terracotta)
-                    }
+                    printOrdersLibraryRow
                     
                     // Link Google account button
                     Button(action: linkGoogleAccount) {
@@ -782,6 +792,8 @@ struct SettingsView: View {
                         }
                         .foregroundColor(terracotta)
                     }
+                    
+                    developerModeRow
                 } else {
                     // Signed in with Google
                     HStack(spacing: 12) {
@@ -814,21 +826,7 @@ struct SettingsView: View {
                     Divider()
                         .padding(.vertical, 8)
                     
-                    NavigationLink(destination: OrderHistoryView()) {
-                        HStack {
-                            Image(systemName: "shippingbox")
-                                .font(.system(size: 14))
-                            Text("Print Orders")
-                                .font(.system(size: 14, weight: .medium))
-                            Spacer()
-                            if hasUnseenOrders {
-                                Circle()
-                                    .fill(Color.red)
-                                    .frame(width: 8, height: 8)
-                            }
-                        }
-                        .foregroundColor(terracotta)
-                    }
+                    printOrdersLibraryRow
                     
                     Button(action: signOut) {
                         HStack {
@@ -839,6 +837,8 @@ struct SettingsView: View {
                         }
                         .foregroundColor(.red.opacity(0.8))
                     }
+                    
+                    developerModeRow
                 }
             } else {
                 // Not signed in yet (loading)
@@ -860,6 +860,21 @@ struct SettingsView: View {
         .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
     }
 
+    private var developerModeRow: some View {
+        Button {
+            showDevSheet = true
+        } label: {
+            HStack {
+                Image(systemName: "hammer.fill")
+                    .font(.system(size: 14))
+                Text("Developer Mode")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            .foregroundColor(.gray.opacity(0.6))
+        }
+        .buttonStyle(.plain)
+    }
+    
     // MARK: - Dev Dashboard Section
     private var devDashboardSection: some View {
         Button(action: {

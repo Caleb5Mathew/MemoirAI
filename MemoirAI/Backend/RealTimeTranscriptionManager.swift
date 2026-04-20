@@ -120,41 +120,46 @@ final class RealTimeTranscriptionManager: ObservableObject {
         print("✅ Real-time transcription stopped")
     }
     
-    /// Pause transcription (keep audio tap but stop processing)
+    /// Pause transcription - saves current transcript and stops
     func pauseTranscription() {
+        // Save current transcript before stopping
+        let savedTranscript = currentTranscript
+        
+        // Fully stop transcription (SFSpeechAudioBufferRecognitionRequest cannot be reused)
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
         recognitionTask?.cancel()
+        
+        // Clean up
+        audioEngine = nil
+        recognitionRequest = nil
         recognitionTask = nil
-        print("⏸️ Transcription paused")
+        isTranscribing = false
+        
+        // Restore saved transcript
+        currentTranscript = savedTranscript
+        
+        // Deactivate audio session
+        try? AVAudioSession.sharedInstance().setActive(false)
+        
+        print("⏸️ Transcription paused (saved: \(savedTranscript.prefix(30))...)")
     }
     
-    /// Resume transcription
+    /// Resume transcription - restarts with saved transcript
     func resumeTranscription() {
-        guard isTranscribing, let recognitionRequest = recognitionRequest else { return }
+        // Save current transcript to append to
+        let savedTranscript = currentTranscript
         
-        // Recreate recognition task
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {
-            transcriptionError = "Speech recognizer not available"
-            return
+        // Restart transcription fresh
+        startTranscription()
+        
+        // Prepend saved transcript
+        if !savedTranscript.isEmpty {
+            currentTranscript = savedTranscript + " "
         }
         
-        recognitionTask = recognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    self?.transcriptionError = error.localizedDescription
-                    return
-                }
-                
-                guard let result = result else { return }
-                
-                if result.isFinal {
-                    self?.currentTranscript = result.bestTranscription.formattedString
-                } else {
-                    self?.currentTranscript = result.bestTranscription.formattedString
-                }
-            }
-        }
-        
-        print("▶️ Transcription resumed")
+        print("▶️ Transcription resumed (prepending: \(savedTranscript.prefix(30))...)")
     }
     
     /// Get final transcript and reset
