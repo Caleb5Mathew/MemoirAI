@@ -30,7 +30,7 @@ let testChapter = Chapter(
     title: "Beginnings",
     prompts: [
         MemoryPrompt(text: "What was one of your funniest childhood memories?", x: 0.25, y: 0.78),
-        MemoryPrompt(text: "Tell me about a moment from early childhood that captures what home felt like to you.", x: 0.40, y: 0.62),
+        MemoryPrompt(text: "Tell me a childhood story where you learned a lesson", x: 0.40, y: 0.62),
         MemoryPrompt(text: "Tell me about an early memory that reveals something about your personality.", x: 0.35, y: 0.44),
         MemoryPrompt(text: "What type of kid were you? Do you have any memories that best show who you were?", x: 0.50, y: 0.28)
     ]

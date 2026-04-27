@@ -19,8 +19,10 @@ const db = admin.firestore();
 const defaultPricing = {
   kidsBook: {
     luluPodPackageId: "1100X0850FCSTDCW080CW444MXX",
+    /** Minimum retail per copy (cents). Floors thin books vs Lulu+margin. */
     basePriceCents: 2999,
     currency: "usd",
+    /** Markup % on Lulu line make cost (page-count sensitive). E.g. 35 => ×1.35 on Lulu cost. */
     marginPercent: 30,
     description: "11x8.5 Hardcover Kids Book, Full Color, Matte"
   },

@@ -91,7 +91,8 @@ struct MemoirCoverBackPage: View {
                     .foregroundColor(bodyColor)
                     .lineSpacing(frameHeight * 0.01)
                     .multilineTextAlignment(.leading)
-                    .padding(.top, frameHeight * 0.05)
+                    // Slightly more air under the heading so the block reads balanced vs top inset.
+                    .padding(.top, frameHeight * 0.072)
                     .padding(.horizontal, frameWidth * 0.11)
 
                 Spacer()

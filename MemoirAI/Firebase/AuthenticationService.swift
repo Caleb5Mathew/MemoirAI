@@ -37,6 +37,9 @@ final class AuthenticationService: ObservableObject {
                 
                 if let user = user {
                     print("✅ Auth state changed: signed in as \(user.email ?? user.uid)")
+                    if !user.isAnonymous {
+                        UserDefaults.standard.removeObject(forKey: MemoirPersistenceUserDefaults.suggestAccountLinkAfterBook)
+                    }
                     // Ensure user document exists in Firestore
                     await self?.createOrUpdateUserDocument()
                 } else {
@@ -185,6 +188,44 @@ final class AuthenticationService: ObservableObject {
     
     // MARK: - Link Google Account (upgrade from anonymous)
     
+    /// Link Sign in with Apple to the current anonymous user (keeps `users/{uid}` data on reinstall when using the same Apple ID).
+    func linkAppleAccount(credential: ASAuthorizationAppleIDCredential) async throws {
+        guard let nonce = currentNonce else {
+            throw AuthError.missingNonce
+        }
+        guard let appleIDToken = credential.identityToken,
+              let idTokenString = String(data: appleIDToken, encoding: .utf8) else {
+            throw AuthError.invalidCredential
+        }
+
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        let firebaseCredential = OAuthProvider.appleCredential(
+            withIDToken: idTokenString,
+            rawNonce: nonce,
+            fullName: credential.fullName
+        )
+
+        if let currentUser = Auth.auth().currentUser, currentUser.isAnonymous {
+            try await currentUser.link(with: firebaseCredential)
+            print("✅ Linked Apple account to anonymous user")
+        } else {
+            _ = try await Auth.auth().signIn(with: firebaseCredential)
+            print("✅ Signed in with Apple")
+        }
+
+        if let fullName = credential.fullName,
+           let givenName = fullName.givenName,
+           let user = Auth.auth().currentUser {
+            let displayName = [givenName, fullName.familyName].compactMap { $0 }.joined(separator: " ")
+            let changeRequest = user.createProfileChangeRequest()
+            changeRequest.displayName = displayName
+            try await changeRequest.commitChanges()
+        }
+    }
+
     /// Link Google account to current anonymous user
     func linkGoogleAccount() async throws {
         guard let clientID = FirebaseApp.app()?.options.clientID else {
@@ -243,6 +284,9 @@ final class AuthenticationService: ObservableObject {
         do {
             try Auth.auth().signOut()
             GIDSignIn.sharedInstance.signOut()
+            PDFThumbnailCache.shared.removeAll()
+            PDFThumbnailDiskCache.shared.removeAll()
+            IllustrationImageDiskCache.shared.removeAll()
             print("✅ Signed out successfully")
             
             // Sign back in anonymously so data keeps syncing
@@ -257,30 +301,42 @@ final class AuthenticationService: ObservableObject {
     
     // MARK: - User Document Management
     
-    private func createOrUpdateUserDocument() async {
+    func createOrUpdateUserDocument(profileName: String? = nil) async {
         guard let user = Auth.auth().currentUser else { return }
-        
+
         let db = Firestore.firestore()
         let userRef = db.collection("users").document(user.uid)
-        
+
+        let deviceFields: [String: Any] = [
+            "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
+            "buildNumber": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "",
+            "deviceModel": UIDevice.current.model,
+            "osVersion": UIDevice.current.systemVersion,
+            "rcUserId": UserDefaults.standard.string(forKey: "memoirai_rc_user_id") ?? ""
+        ]
+
         do {
             let doc = try await userRef.getDocument()
-            
+
             if doc.exists {
-                // Update last active time
-                try await userRef.updateData([
-                    "lastActiveAt": FieldValue.serverTimestamp()
-                ])
+                var update = deviceFields
+                update["lastActiveAt"] = FieldValue.serverTimestamp()
+                if let name = profileName, !name.isEmpty {
+                    update["profileName"] = name
+                }
+                try await userRef.updateData(update)
             } else {
-                // Create new user document
-                let userData: [String: Any] = [
+                var userData: [String: Any] = [
                     "email": user.email ?? "",
                     "displayName": user.displayName ?? "",
                     "authProvider": getAuthProvider(user),
+                    "isAnonymous": user.isAnonymous,
+                    "profileName": profileName ?? "",
                     "createdAt": FieldValue.serverTimestamp(),
                     "lastActiveAt": FieldValue.serverTimestamp(),
                     "profilePhotoURL": user.photoURL?.absoluteString ?? ""
                 ]
+                deviceFields.forEach { userData[$0.key] = $0.value }
                 try await userRef.setData(userData)
                 print("✅ Created user document for \(user.uid)")
             }
@@ -288,8 +344,19 @@ final class AuthenticationService: ObservableObject {
             print("❌ Error managing user document: \(error)")
         }
     }
-    
+
+    func updateProfileNameInUserDoc(_ name: String) async {
+        guard let uid = Auth.auth().currentUser?.uid, !name.isEmpty else { return }
+        do {
+            try await Firestore.firestore().collection("users").document(uid)
+                .setData(["profileName": name], merge: true)
+        } catch {
+            print("❌ Failed to write profileName to user doc: \(error)")
+        }
+    }
+
     private func getAuthProvider(_ user: User) -> String {
+        if user.isAnonymous { return "anonymous" }
         for info in user.providerData {
             switch info.providerID {
             case "apple.com":

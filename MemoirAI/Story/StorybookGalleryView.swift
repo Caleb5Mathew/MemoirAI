@@ -60,6 +60,11 @@ struct StorybookGalleryView: View {
     @State private var styleFilter: BookStyleFilter = .all
     @State private var debugSessionID: String = String(UUID().uuidString.prefix(8))
     @State private var isLoadingBooks: Bool = true
+    /// True after tapping a book when `onBookSelected` is set — shows loading on top of the library until the parent dismisses the cover.
+    @State private var isOpeningSelection: Bool = false
+    @State private var bookPendingDelete: BookVersionRecord?
+    @State private var isDeletingBook: Bool = false
+    @State private var bookDeleteInfoMessage: String?
     
     // Optional callback for when a book is selected (for loading into editor).
     // Passes (record, optional legacy PersistableStorybook for local-migration books with embedded imageData).
@@ -133,17 +138,25 @@ struct StorybookGalleryView: View {
                                     cardColor: Palette.surface,
                                     cardCornerRadius: Metrics.cardCorner,
                                     coverCornerRadius: Metrics.coverCorner,
+                                    isDeleting: isDeletingBook,
                                     onTap: {
                                         print("🧭 Gallery[\(debugSessionID)] card tapped: id=\(book.bookVersionId), source=\(book.source), pages=\(book.pageCount), style=\(book.artStyle)")
                                         if let callback = onBookSelected {
                                             let legacy = legacyBooksById[book.bookVersionId]
                                             print("🧭 Gallery[\(debugSessionID)] forwarding selection to StoryPage callback; legacyMatched=\(legacy != nil)")
-                                            callback(book, legacy)
+                                            isOpeningSelection = true
+                                            Task { @MainActor in
+                                                await Task.yield()
+                                                callback(book, legacy)
+                                            }
                                         } else {
                                             // Otherwise, use the old behavior (open reader)
                                             print("🧭 Gallery[\(debugSessionID)] opening standalone reader sheet")
                                             selectedBook = book
                                         }
+                                    },
+                                    onRequestDelete: {
+                                        bookPendingDelete = book
                                     }
                                 )
                             }
@@ -154,7 +167,13 @@ struct StorybookGalleryView: View {
                     }
                 }
             }
+
+            if isOpeningSelection {
+                GalleryBookLoadingOverlay()
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: isOpeningSelection)
         .navigationBarHidden(true)
         .onAppear {
             print("🧭 Gallery[\(debugSessionID)] onAppear; profile=\(profileVM.selectedProfile.id.uuidString)")
@@ -164,6 +183,7 @@ struct StorybookGalleryView: View {
         }
         .onDisappear {
             print("🧭 Gallery[\(debugSessionID)] onDisappear")
+            isOpeningSelection = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .bookCoverBackfillComplete)) { note in
             guard let bookVersionId = note.userInfo?["bookVersionId"] as? String,
@@ -174,6 +194,50 @@ struct StorybookGalleryView: View {
         }
         .sheet(item: $selectedBook) { book in
             StorybookReaderView(book: book)
+        }
+        .alert("Delete this book?", isPresented: .init(
+            get: { bookPendingDelete != nil },
+            set: { if !$0 { bookPendingDelete = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { bookPendingDelete = nil }
+            Button("Delete", role: .destructive) {
+                guard let b = bookPendingDelete else { return }
+                let createdAt = b.createdAt
+                let profileID = profileVM.selectedProfile.id
+                bookPendingDelete = nil
+                isDeletingBook = true
+                Task { @MainActor in
+                    let r = await FirestoreSyncService.shared.deleteBookVersion(bookId: b.bookVersionId)
+                    isDeletingBook = false
+                    switch r {
+                    case .deleted:
+                        allBooks.removeAll { $0.bookVersionId == b.bookVersionId }
+                        legacyBooksById[b.bookVersionId] = nil
+                        legacyCoverByBookId[b.bookVersionId] = nil
+                        StorybookLocalStore.removeHistoryFiles(matchingBookCreatedAt: createdAt, profileID: profileID)
+                        if let data = StorybookLocalStore.readCurrentBookData(profileID: profileID),
+                           let p = try? JSONDecoder().decode(PersistableStorybook.self, from: data),
+                           p.profileID == profileID,
+                           Int(p.createdAt.timeIntervalSince1970) == Int(createdAt.timeIntervalSince1970) {
+                            StorybookLocalStore.removeCurrentBook(profileID: profileID)
+                        }
+                    case .blockedBecauseOrderExists:
+                        bookDeleteInfoMessage = "This book is linked to an order, so it can’t be deleted from the library. Contact support if you need it removed from your account."
+                    case .error(let msg):
+                        bookDeleteInfoMessage = msg
+                    }
+                }
+            }
+        } message: {
+            Text("This removes the book from this device, iCloud KVS, and your Firebase account. If you have a print order, keep your confirmation email. Books with an order are protected and won’t be deleted.")
+        }
+        .alert("Delete", isPresented: .init(
+            get: { bookDeleteInfoMessage != nil },
+            set: { if !$0 { bookDeleteInfoMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { bookDeleteInfoMessage = nil }
+        } message: {
+            Text(bookDeleteInfoMessage ?? "")
         }
     }
     
@@ -354,7 +418,18 @@ struct StorybookGalleryView: View {
     private func loadBooks() async {
         isLoadingBooks = true
         let profileID = profileVM.selectedProfile.id
-        let cloudBooks = await FirestoreSyncService.shared.fetchBookVersions(profileID: profileID)
+        var cloudBooks = await FirestoreSyncService.shared.fetchBookVersions(profileID: profileID)
+        if !cloudBooks.isEmpty, !FirestoreSyncService.shared.isDuplicateBookCleanupDone(profileID: profileID) {
+            let pruned = await FirestoreSyncService.shared.runOneTimeDuplicateBookVersionCleanup(
+                profileID: profileID,
+                initialBooks: cloudBooks
+            )
+            if pruned.count != cloudBooks.count {
+                print("🧹 Gallery: duplicate book cleanup pruned \(cloudBooks.count - pruned.count) doc(s) for profile=\(profileID.uuidString)")
+            }
+            cloudBooks = pruned
+            FirestoreSyncService.shared.markDuplicateBookCleanupDone(profileID: profileID)
+        }
         print("🧭 Gallery[\(debugSessionID)] loadBooks profile=\(profileID.uuidString), cloudCount=\(cloudBooks.count)")
         
         // Always load local PersistableStorybooks for imageData fallback (file-backed + legacy migration)
@@ -368,6 +443,11 @@ struct StorybookGalleryView: View {
         
         if !cloudBooks.isEmpty {
             allBooks = cloudBooks
+            for bid in StorybookCloudApplyPolicy.bookVersionIdsNeedingCoverBackfillHealing(cloudBooks) {
+                Task.detached(priority: .utility) {
+                    await FirestoreSyncService.shared.ensureCoverDesignExistsIfMissing(bookVersionId: bid)
+                }
+            }
             // Match cloud books to local PersistableStorybooks by timestamp
             var legacyMap: [String: PersistableStorybook] = [:]
             var coverMap: [String: UIImage] = [:]
@@ -489,7 +569,9 @@ private struct BookCardItem: View {
     let cardColor: Color
     let cardCornerRadius: CGFloat
     let coverCornerRadius: CGFloat
+    let isDeleting: Bool
     let onTap: () -> Void
+    let onRequestDelete: () -> Void
     
     @State private var isPressed = false
     
@@ -529,6 +611,10 @@ private struct BookCardItem: View {
         book.printCoverPDFURL
     }
 
+    private var isCoverPending: Bool {
+        book.renderStatus == "rendered" && (book.coverURL?.isEmpty ?? true)
+    }
+
     private func isLikelyPDF(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         if ext == "pdf" {
@@ -558,9 +644,29 @@ private struct BookCardItem: View {
     }
     
     var body: some View {
-        Button(action: onTap) {
+        Button(action: {
+            guard !isCoverPending, !isDeleting else { return }
+            onTap()
+        }) {
             VStack(alignment: .leading, spacing: 10) {
                 coverView
+                    .overlay(
+                        Group {
+                            if isCoverPending {
+                                ZStack {
+                                    Color.black.opacity(0.45)
+                                    VStack(spacing: 8) {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        Text("Finalizing cover…")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(.white)
+                                    }
+                                }
+                                .clipShape(RoundedRectangle(cornerRadius: coverCornerRadius, style: .continuous))
+                            }
+                        }
+                    )
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text(formattedDate)
@@ -613,6 +719,15 @@ private struct BookCardItem: View {
         .onLongPressGesture(minimumDuration: 0.01, maximumDistance: .infinity, pressing: { pressing in
             isPressed = pressing
         }, perform: {})
+        .contextMenu {
+            if !isDeleting, !book.bookVersionId.hasSuffix("_local") {
+                Button(role: .destructive) {
+                    onRequestDelete()
+                } label: {
+                    Label("Delete from library…", systemImage: "trash")
+                }
+            }
+        }
     }
 
     private var coverView: some View {
@@ -631,7 +746,8 @@ private struct BookCardItem: View {
                             targetSize: CGSize(width: max(geo.size.width * 2, 120), height: max(geo.size.height * 2, 120)),
                             layout: book.coverFlatLayoutKind,
                             panel: .front,
-                            cacheRevision: book.coverThumbnailCacheRevision
+                            cacheRevision: book.coverThumbnailCacheRevision,
+                            cacheIdentity: book.coverStoragePath ?? ""
                         ) {
                             placeholderCover
                         }
@@ -717,11 +833,70 @@ private struct StorybookReaderView: View, Identifiable {
     private let textSecondary = Color(red: 0.5, green: 0.5, blue: 0.5)
     private let backgroundColor = Color(red: 0.12, green: 0.12, blue: 0.14)
 
+    private enum ReaderSlot {
+        case standaloneCover
+        case record(BookVersionPageRecord)
+    }
+
+    private var orderedPages: [BookVersionPageRecord] {
+        book.pages.sorted { $0.pageIndex < $1.pageIndex }
+    }
+
+    /// Raster cover when `coverURL` is an image (PDF covers use `printCoverPDFURL` instead).
+    private var rasterCoverURL: URL? {
+        guard book.printCoverPDFURL == nil,
+              let raw = book.coverURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return nil
+        }
+        let lower = raw.lowercased()
+        guard lower.contains(".jpg") || lower.contains(".jpeg") || lower.contains(".png") || lower.contains(".webp") else {
+            return nil
+        }
+        return url
+    }
+
+    private var hasDisplayableAICover: Bool {
+        book.printCoverPDFURL != nil || rasterCoverURL != nil
+    }
+
+    private func isInteriorTitlePage(_ item: BookVersionPageRecord) -> Bool {
+        guard item.type == "textPage" else { return false }
+        guard let mid = item.memoryId?.trimmingCharacters(in: .whitespacesAndNewlines), !mid.isEmpty,
+              let uuid = UUID(uuidString: mid) else {
+            return false
+        }
+        return uuid == BookInteriorAnchor.titlePageMemoryId
+    }
+
+    /// Library reader used to start on the first *interior* page; prepend the print/AI cover when it is not already the opening `textPage` bookend.
+    private var shouldPrependStandaloneCover: Bool {
+        guard hasDisplayableAICover, let first = orderedPages.first else { return false }
+        if isInteriorTitlePage(first) { return false }
+        return true
+    }
+
+    private var readerSlots: [ReaderSlot] {
+        var slots: [ReaderSlot] = []
+        if shouldPrependStandaloneCover {
+            slots.append(.standaloneCover)
+        }
+        slots.append(contentsOf: orderedPages.map { .record($0) })
+        return slots
+    }
+
+    private var readerPageCount: Int {
+        readerSlots.count
+    }
+
     var body: some View {
         ZStack {
             backgroundColor.ignoresSafeArea()
             
-            if book.pages.isEmpty {
+            if orderedPages.isEmpty {
                 // Empty state
                 VStack(spacing: 16) {
                     Image(systemName: "book.closed")
@@ -745,7 +920,7 @@ private struct StorybookReaderView: View, Identifiable {
                         
                         Spacer()
                         
-                        Text("\(currentPage + 1) of \(book.pages.count)")
+                        Text("\(currentPage + 1) of \(readerPageCount)")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.white.opacity(0.7))
                         
@@ -771,23 +946,23 @@ private struct StorybookReaderView: View, Identifiable {
                     
                     // Page content
                     TabView(selection: $currentPage) {
-                        ForEach(book.pages.indices, id: \.self) { idx in
-                            pageView(for: book.pages[idx], index: idx)
+                        ForEach(0..<readerPageCount, id: \.self) { idx in
+                            slotView(readerSlots[idx])
                                 .tag(idx)
                         }
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     
                     // Custom page dots
-                    if book.pages.count > 1 {
+                    if readerPageCount > 1 {
                         HStack(spacing: 8) {
-                            ForEach(0..<min(book.pages.count, 10), id: \.self) { idx in
+                            ForEach(0..<min(readerPageCount, 10), id: \.self) { idx in
                                 Circle()
                                     .fill(currentPage == idx ? terracotta : Color.white.opacity(0.3))
                                     .frame(width: currentPage == idx ? 8 : 6, height: currentPage == idx ? 8 : 6)
                                     .animation(.spring(response: 0.3), value: currentPage)
                             }
-                            if book.pages.count > 10 {
+                            if readerPageCount > 10 {
                                 Text("...")
                                     .font(.system(size: 12))
                                     .foregroundColor(.white.opacity(0.5))
@@ -802,6 +977,69 @@ private struct StorybookReaderView: View, Identifiable {
             OrderBookView(book: book)
         }
     }
+
+    @ViewBuilder
+    private func slotView(_ slot: ReaderSlot) -> some View {
+        switch slot {
+        case .standaloneCover:
+            aiGeneratedCoverPanel()
+        case .record(let item):
+            pageView(for: item)
+        }
+    }
+
+    @ViewBuilder
+    private func aiGeneratedCoverPanel() -> some View {
+        GeometryReader { geo in
+            let horizontalPad: CGFloat = 24
+            let usableW = max(geo.size.width - horizontalPad * 2, 120)
+            let usableH = max(geo.size.height - 40, 120)
+            VStack {
+                Spacer(minLength: 0)
+                if let pdfURL = book.printCoverPDFURL {
+                    RemotePDFThumbnailView(
+                        url: pdfURL,
+                        targetSize: CGSize(width: max(usableW, 240), height: max(usableH, 240)),
+                        layout: book.coverFlatLayoutKind,
+                        panel: .front,
+                        cacheRevision: book.coverThumbnailCacheRevision,
+                        cacheIdentity: book.coverStoragePath ?? ""
+                    ) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(.white)
+                    }
+                    .frame(width: usableW, height: usableH * 0.92)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .shadow(color: Color.black.opacity(0.45), radius: 24, x: 0, y: 12)
+                } else if let url = rasterCoverURL {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        case .empty:
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                        default:
+                            Image(systemName: "photo")
+                                .font(.system(size: 48, weight: .thin))
+                                .foregroundColor(.white.opacity(0.35))
+                        }
+                    }
+                    .frame(maxWidth: usableW, maxHeight: usableH * 0.92)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .shadow(color: Color.black.opacity(0.45), radius: 24, x: 0, y: 12)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, horizontalPad)
+        }
+    }
     
     /// Prefer JPEG `imageURL`, then pre-rendered PNG `renderedPageURL` (matches main book loader).
     private func illustrationDisplayURL(for item: BookVersionPageRecord) -> URL? {
@@ -814,7 +1052,7 @@ private struct StorybookReaderView: View, Identifiable {
     }
 
     @ViewBuilder
-    private func pageView(for item: BookVersionPageRecord, index: Int) -> some View {
+    private func pageView(for item: BookVersionPageRecord) -> some View {
         switch item.type {
         case "illustration":
             // Image page with caption
@@ -861,11 +1099,14 @@ private struct StorybookReaderView: View, Identifiable {
             }
             
         case "textPage":
-            // Text/memory page - clean card design
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Page number badge
-                    Text("Page \(item.pageIndex + 1) of \(max(1, book.pageCount))")
+            if isInteriorTitlePage(item), hasDisplayableAICover {
+                aiGeneratedCoverPanel()
+            } else {
+                // Text/memory page - clean card design
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 20) {
+                        // Page number badge
+                        Text("Page \(item.pageIndex + 1) of \(max(1, book.pageCount))")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(terracotta)
                             .padding(.horizontal, 12)
@@ -874,33 +1115,34 @@ private struct StorybookReaderView: View, Identifiable {
                                 Capsule()
                                     .fill(terracotta.opacity(0.15))
                             )
-                    
-                    // Main text content
-                    Text(item.textContent ?? "")
-                        .font(.system(size: 18, weight: .regular, design: .serif))
-                        .foregroundColor(textPrimary)
-                        .multilineTextAlignment(.leading)
-                        .lineSpacing(8)
+
+                        // Main text content
+                        Text(item.textContent ?? "")
+                            .font(.system(size: 18, weight: .regular, design: .serif))
+                            .foregroundColor(textPrimary)
+                            .multilineTextAlignment(.leading)
+                            .lineSpacing(8)
+                    }
+                    .padding(28)
                 }
-                .padding(28)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.99, green: 0.98, blue: 0.96),
-                                Color(red: 0.97, green: 0.95, blue: 0.92)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.99, green: 0.98, blue: 0.96),
+                                    Color(red: 0.97, green: 0.95, blue: 0.92)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
                         )
-                    )
-                    .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
-            )
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+                        .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
+                )
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+            }
             
         case "qrCode":
             // QR code page - clean modern design

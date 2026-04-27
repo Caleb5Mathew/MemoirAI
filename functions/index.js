@@ -6,6 +6,12 @@ const { defineSecret } = require("firebase-functions/params");
 const { PDFDocument } = require("pdf-lib");
 const crypto = require("crypto");
 const Stripe = require("stripe");
+const { computeBookBaseCentsFromLuluLineMake } = require("./merchantPricingMath");
+const {
+  mustAbortPdfPackagingForMissingCoverUrl,
+  nextCoverPreconditionAttemptMeta,
+  COVER_PRECONDITION_EXHAUSTED_STATUS
+} = require("./bookVersionPdfGuards");
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -91,13 +97,14 @@ function isLikelyTransientStripeError(error) {
 
 async function createStripeCheckoutSessionWithRetry(stripe, payload, logLabel, idempotencyKey) {
   const maxAttempts = 3;
+  const resolvedKey = resolveStripeCheckoutIdempotencyKey(idempotencyKey, logLabel);
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       if (attempt > 1) {
         console.warn(`${logLabel} stripe checkout retry attempt=${attempt}/${maxAttempts}`);
       }
-      return await stripe.checkout.sessions.create(payload, idempotencyKey ? { idempotencyKey } : undefined);
+      return await stripe.checkout.sessions.create(payload, { idempotencyKey: resolvedKey });
     } catch (error) {
       lastError = error;
       const transient = isLikelyTransientStripeError(error);
@@ -137,6 +144,25 @@ async function withTimeout(promise, timeoutMs, label) {
 /** Fast checkout (quote + session split). Default on; set FAST_CHECKOUT_ENABLED=false to disable server-side. */
 function isFastCartCheckoutEnabled() {
   return process.env.FAST_CHECKOUT_ENABLED !== "false";
+}
+
+/**
+ * Stripe Checkout session create failed (non-transient). Firebase iOS often omits HttpsError `details`
+ * for code `internal` (see firebase-ios-sdk#11376), so clients only see "INTERNAL". Use `failed-precondition`
+ * and put Stripe text in the top-level message for Xcode / in-app diagnostics.
+ */
+function throwStripeCheckoutSessionHttpsError(err, detailFields) {
+  const stripeMessage = String(err?.message || err || "unknown");
+  const prefix =
+    "Unable to start secure checkout. If this persists, check Stripe Dashboard (Developers → Logs). ";
+  const tail = stripeMessage.length > 280 ? `${stripeMessage.slice(0, 280)}…` : stripeMessage;
+  const message = (prefix + tail).slice(0, 480);
+  throw new HttpsError("failed-precondition", message, {
+    ...detailFields,
+    stripeType: err?.type || null,
+    stripeCode: err?.code || null,
+    stripeMessage
+  });
 }
 
 const CART_CHECKOUT_QUOTE_TTL_MS = 30 * 60 * 1000;
@@ -189,6 +215,80 @@ function sanitizeIdempotencyKey(raw) {
     return null;
   }
   return s;
+}
+
+/** Stripe requires Idempotency-Key length 8–255 and URL-safe characters; never omit or send an invalid key. */
+function resolveStripeCheckoutIdempotencyKey(preferred, logLabel) {
+  const fromPreferred = sanitizeIdempotencyKey(preferred);
+  if (fromPreferred) {
+    return fromPreferred;
+  }
+  const label = String(logLabel || "checkout").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "checkout";
+  const suffix = crypto.randomBytes(16).toString("hex");
+  const candidate = `${label}_${Date.now()}_${suffix}`.slice(0, 256);
+  const fromGenerated = sanitizeIdempotencyKey(candidate);
+  if (fromGenerated) {
+    return fromGenerated;
+  }
+  return `idem_${crypto.randomBytes(24).toString("hex")}`;
+}
+
+/** Resume token for fast checkout: same id as `pendingCartCheckouts` / `checkoutAttempts` doc (`book1`, `book2`, …). */
+function sanitizeCheckoutInstanceId(raw) {
+  const s = String(raw || "").trim();
+  if (!/^book\d+$/.test(s)) {
+    return null;
+  }
+  if (s.length > 96) {
+    return null;
+  }
+  return s;
+}
+
+/** Optional client correlation (UUID, etc.) stored on `checkoutAttempts` for logs; not used as Firestore doc id. */
+function sanitizeClientCorrelationId(raw) {
+  const s = String(raw || "").trim().slice(0, 256);
+  if (!s || s.length < 8) {
+    return null;
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(s)) {
+    return null;
+  }
+  return s;
+}
+
+const userCheckoutSeqRef = (userId) =>
+  db.collection("users").doc(userId).collection("_checkoutSeq").doc("v");
+
+/**
+ * Next monotonic `book{N}` id for this user (legacy cart path — attempt doc not used).
+ */
+async function allocateNextBookCheckoutId(userId) {
+  const seqRef = userCheckoutSeqRef(userId);
+  return db.runTransaction(async (tx) => {
+    const cSnap = await tx.get(seqRef);
+    const prev = cSnap.exists && cSnap.data() ? Number(cSnap.data().next) || 0 : 0;
+    const next = prev + 1;
+    tx.set(
+      seqRef,
+      { next, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    return `book${next}`;
+  });
+}
+
+/** User-facing memoir title from a `bookVersions` Firestore document (matches client `BookVersionRecord` fallbacks). */
+function printTitleFromBookVersionRecord(record) {
+  const rec = record && typeof record === "object" ? record : {};
+  const pt = rec.printTitle != null ? String(rec.printTitle).trim() : "";
+  if (pt) {
+    return pt;
+  }
+  const pages = Array.isArray(rec.pages) ? rec.pages : [];
+  const first = pages[0];
+  const t = first && first.title != null ? String(first.title).trim() : "";
+  return t || null;
 }
 
 /**
@@ -265,8 +365,14 @@ async function buildCartCheckoutResolved(userId, items, shippingAddress, shippin
       quantity
     });
 
+    const versionRecord = resolved.inputs.record || {};
+    const profileId = versionRecord.profileId != null ? String(versionRecord.profileId) : null;
+    const printTitle = printTitleFromBookVersionRecord(versionRecord);
+
     resolvedItems.push({
       bookVersionId,
+      profileId,
+      printTitle,
       productOptionId: resolved.inputs.selectedOption.optionId,
       selectedPodPackageId: resolved.inputs.selectedOption.podPackageId,
       quantity,
@@ -1046,6 +1152,8 @@ function optionAvailability(option, pageCount) {
 
 /**
  * Load book version + Firestore pricing config for ordering (shared by checkout + estimate).
+ * `baseCents` comes from `config/pricing` → `basePriceCents` and is the **minimum retail per copy** (floor).
+ * `marginPercent` is applied to Lulu's page-count-sensitive line make cost: ceil(luluMake × (1 + margin/100)).
  * @returns {Promise<{record: object, pageCount: number, podPackageId: string, baseCents: number, marginPercent: number, isLandscape: boolean, selectedOption: object, productOptions: object[]}>}
  */
 async function getBookVersionOrderInputs(userId, bookVersionId, requestedOptionId = null) {
@@ -1129,13 +1237,6 @@ function extractLuluLineItemMakeCents(costResult) {
   const makeRaw = firstLineItem?.total_cost_incl_tax ?? firstLineItem?.total_cost_excl_tax ?? "0";
   const makeDollars = parseFloat(makeRaw);
   return Number.isFinite(makeDollars) ? Math.max(0, Math.round(makeDollars * 100)) : 0;
-}
-
-function clampPageCountForOption(pageCount, option) {
-  if (!option) return pageCount;
-  const minPages = Number(option.minPages || 1);
-  const maxPages = Number(option.maxPages || 800);
-  return Math.min(maxPages, Math.max(minPages, pageCount));
 }
 
 function normalizeShippingForLuluCalc(shippingAddress) {
@@ -1319,28 +1420,12 @@ async function calculateMerchantPricingBreakdown({
   const selectedShippingCents = extractLuluShippingCents(selectedCost);
   const selectedMakeCents = extractLuluLineItemMakeCents(selectedCost);
 
-  let referenceHardcoverMakeCents = selectedMakeCents;
-  let hardcoverReferencePageCount = inputs.pageCount;
-  const hardcoverOption = inputs.productOptions.find((o) => String(o.optionId || "").includes("hardcover")) || null;
-  const selectedIsHardcover = String(inputs.selectedOption?.optionId || "").includes("hardcover");
-
-  if (!selectedIsHardcover && hardcoverOption) {
-    hardcoverReferencePageCount = clampPageCountForOption(inputs.pageCount, hardcoverOption);
-    const hardcoverQuote = await calculateLuluCostWithRetry({
-      podPackageId: hardcoverOption.podPackageId,
-      pageCount: hardcoverReferencePageCount,
-      shippingAddress,
-      shippingLevel,
-      logLabel: `${logLabel}:hardcoverReference`,
-      quantity: qty
-    });
-    referenceHardcoverMakeCents = extractLuluLineItemMakeCents(hardcoverQuote.costResult);
-  }
-
-  const retailLineCents = inputs.baseCents * qty;
-  const bookBaseCents = selectedIsHardcover
-    ? retailLineCents
-    : Math.max(0, retailLineCents - referenceHardcoverMakeCents + selectedMakeCents);
+  const { bookBaseCents, pricingFloorApplied } = computeBookBaseCentsFromLuluLineMake({
+    luluMakeLineCents: selectedMakeCents,
+    marginPercent: inputs.marginPercent,
+    floorCentsPerUnit: inputs.baseCents,
+    quantity: qty
+  });
   const shippingCents = selectedShippingCents;
   const estimatedTotalCents = bookBaseCents + shippingCents;
 
@@ -1349,6 +1434,7 @@ async function calculateMerchantPricingBreakdown({
     bookBaseCents,
     shippingCents,
     estimatedTotalCents,
+    pricingFloorApplied,
     luluShippingCostInclTax: (
       (selectedCost?.shipping_cost && typeof selectedCost.shipping_cost === "object"
         ? selectedCost.shipping_cost.total_cost_incl_tax
@@ -1361,10 +1447,10 @@ async function calculateMerchantPricingBreakdown({
         ? selectedCost.line_item_costs[0].total_cost_incl_tax || null
         : null
     ),
-    hardcoverReferenceLineItemCostInclTax: referenceHardcoverMakeCents > 0
-      ? (referenceHardcoverMakeCents / 100).toFixed(2)
-      : null,
-    hardcoverReferencePageCount
+    /** @deprecated Differential paperback/coil pricing removed; always null. */
+    hardcoverReferenceLineItemCostInclTax: null,
+    /** @deprecated Differential hardcover reference removed; always null. */
+    hardcoverReferencePageCount: null
   };
 }
 
@@ -1709,7 +1795,11 @@ exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB"
   }
 
   const record = snapshot.data() || {};
-  if (!forceRegenerate && record.renderStatus === "rendered" && record.pdfURL) {
+  if (!forceRegenerate
+    && record.renderStatus === "rendered"
+    && record.pdfURL
+    && !mustAbortPdfPackagingForMissingCoverUrl(record)
+  ) {
     return res.status(200).json({
       status: "rendered",
       pdfURL: record.pdfURL,
@@ -1730,6 +1820,40 @@ exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB"
       renderedAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
     return jsonError(res, 400, "No pages available for PDF packaging");
+  }
+
+  if (mustAbortPdfPackagingForMissingCoverUrl(record)) {
+    const { exhausted, nextCount } = nextCoverPreconditionAttemptMeta(record);
+    if (exhausted) {
+      await docRef.set(
+        {
+          renderStatus: "failed",
+          renderError: "exhausted cover-precondition retries; client must fix cover and retry",
+          renderAttemptCount: nextCount,
+          renderedAt: admin.firestore.FieldValue.serverTimestamp(),
+          pdfURL: admin.firestore.FieldValue.delete(),
+          pdfStoragePath: admin.firestore.FieldValue.delete()
+        },
+        { merge: true }
+      );
+      return res.status(200).json({
+        status: COVER_PRECONDITION_EXHAUSTED_STATUS,
+        message: "coverURL precondition failed too many times",
+        renderError: "exhausted cover-precondition retries; client must fix cover and retry"
+      });
+    }
+    await docRef.set(
+      {
+        renderStatus: "pending",
+        renderError: "missing cover; client must run regenerateCoverDesign",
+        renderAttemptCount: nextCount,
+        renderedAt: admin.firestore.FieldValue.serverTimestamp(),
+        pdfURL: admin.firestore.FieldValue.delete(),
+        pdfStoragePath: admin.firestore.FieldValue.delete()
+      },
+      { merge: true }
+    );
+    return jsonError(res, 409, "coverURL required before PDF packaging");
   }
 
   const trimWidthPt = Number(record.pageWidth || 612);
@@ -1904,7 +2028,7 @@ exports.estimateCheckoutPricing = onCall(
         selectedLineItemCostInclTax: pricing.selectedLineItemCostInclTax,
         hardcoverReferenceLineItemCostInclTax: pricing.hardcoverReferenceLineItemCostInclTax,
         hardcoverReferencePageCount: pricing.hardcoverReferencePageCount,
-        pricingFloorApplied: false,
+        pricingFloorApplied: Boolean(pricing.pricingFloorApplied),
         luluCurrency: pricing.selectedCost.currency || null,
         warnings,
         suggestedAddress,
@@ -1933,7 +2057,7 @@ exports.estimateCheckoutPricing = onCall(
         marginPercent: inputs.marginPercent,
         luluTotalCostInclTax: null,
         luluShippingCostInclTax: null,
-        pricingFloorApplied: false,
+        pricingFloorApplied: true,
         luluCurrency: null,
         warnings: [{ type: "lulu_error", code: "", path: "", message: String(err.message || err) }],
         ...luluFallbackDiagnostics(err),
@@ -2309,22 +2433,81 @@ exports.createCartCheckoutSessionFast = onCall(
     let stage = "input_validation";
     const {
       quoteId,
-      idempotencyKey: rawKey,
       clientEstimatedTotalCents,
-      cartHash: clientCartHash
+      cartHash: clientCartHash,
+      checkoutInstanceId: rawCheckoutInstanceId,
+      clientCorrelationId: rawClientCorrelationId,
+      idempotencyKey: legacyClientKey
     } = request.data || {};
     if (!quoteId || typeof quoteId !== "string") {
       throw new HttpsError("invalid-argument", "quoteId is required");
     }
-    const idempotencyKey = sanitizeIdempotencyKey(rawKey);
-    if (!idempotencyKey) {
-      throw new HttpsError("invalid-argument", "idempotencyKey is required (8-256 URL-safe chars)");
-    }
+    const resumeCheckoutId = sanitizeCheckoutInstanceId(rawCheckoutInstanceId);
+    const clientCorrelationId =
+      sanitizeClientCorrelationId(rawClientCorrelationId) ||
+      sanitizeClientCorrelationId(legacyClientKey);
 
-    const attemptRef = db.collection("users").doc(userId).collection("checkoutAttempts").doc(idempotencyKey);
+    const seqRef = userCheckoutSeqRef(userId);
+    const refCheckoutAttempt = (id) =>
+      db.collection("users").doc(userId).collection("checkoutAttempts").doc(id);
 
-    const replay = await db.runTransaction(async (transaction) => {
-      const attemptSnap = await transaction.get(attemptRef);
+    const openCheckout = await db.runTransaction(async (transaction) => {
+      let checkoutId;
+      if (resumeCheckoutId) {
+        // Resume: only read the attempt doc, then write — no seq doc involved.
+        checkoutId = resumeCheckoutId;
+        const ar = refCheckoutAttempt(checkoutId);
+        const attemptSnap = await transaction.get(ar);
+        if (attemptSnap.exists) {
+          const d = attemptSnap.data() || {};
+          if (d.stripeSessionId && d.checkoutUrl && d.cartOrderGroupId) {
+            return {
+              replay: true,
+              checkoutUrl: d.checkoutUrl,
+              sessionId: d.stripeSessionId,
+              cartOrderGroupId: d.cartOrderGroupId,
+              totalCents: d.totalCents || 0,
+              checkoutId
+            };
+          }
+          const startedMs = d.startedAt && d.startedAt.toMillis ? d.startedAt.toMillis() : 0;
+          if (d.status === "processing" && startedMs && Date.now() - startedMs < 120000) {
+            throw new HttpsError(
+              "resource-exhausted",
+              "Checkout is already in progress. Wait a moment and try again.",
+              { debugId, stage: "idempotency_in_flight", checkoutInstanceId: checkoutId }
+            );
+          }
+        } else {
+          throw new HttpsError("invalid-argument", "Unknown checkoutInstanceId.", {
+            checkoutInstanceId: resumeCheckoutId,
+            debugId,
+            stage: "resume_not_found"
+          });
+        }
+
+        const processingPayload = {
+          status: "processing",
+          quoteId,
+          userId,
+          debugId,
+          checkoutInstanceId: checkoutId,
+          startedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+        if (clientCorrelationId) {
+          processingPayload.clientCorrelationId = clientCorrelationId;
+        }
+        transaction.set(refCheckoutAttempt(checkoutId), processingPayload, { merge: true });
+        return { replay: false, checkoutId };
+      }
+
+      // New book{N}: read seq + attempt BEFORE any writes (Firestore rule).
+      const cSnap = await transaction.get(seqRef);
+      const prev = cSnap.exists && cSnap.data() ? Number(cSnap.data().next) || 0 : 0;
+      const next = prev + 1;
+      checkoutId = `book${next}`;
+      const ar = refCheckoutAttempt(checkoutId);
+      const attemptSnap = await transaction.get(ar);
       if (attemptSnap.exists) {
         const d = attemptSnap.data() || {};
         if (d.stripeSessionId && d.checkoutUrl && d.cartOrderGroupId) {
@@ -2333,7 +2516,8 @@ exports.createCartCheckoutSessionFast = onCall(
             checkoutUrl: d.checkoutUrl,
             sessionId: d.stripeSessionId,
             cartOrderGroupId: d.cartOrderGroupId,
-            totalCents: d.totalCents || 0
+            totalCents: d.totalCents || 0,
+            checkoutId
           };
         }
         const startedMs = d.startedAt && d.startedAt.toMillis ? d.startedAt.toMillis() : 0;
@@ -2341,44 +2525,55 @@ exports.createCartCheckoutSessionFast = onCall(
           throw new HttpsError(
             "resource-exhausted",
             "Checkout is already in progress. Wait a moment and try again.",
-            { debugId, stage: "idempotency_in_flight" }
+            { debugId, stage: "idempotency_in_flight", checkoutInstanceId: checkoutId }
           );
         }
       }
+
+      const processingPayload = {
+        status: "processing",
+        quoteId,
+        userId,
+        debugId,
+        checkoutInstanceId: checkoutId,
+        startedAt: admin.firestore.FieldValue.serverTimestamp()
+      };
+      if (clientCorrelationId) {
+        processingPayload.clientCorrelationId = clientCorrelationId;
+      }
       transaction.set(
-        attemptRef,
-        {
-          status: "processing",
-          quoteId,
-          userId,
-          debugId,
-          startedAt: admin.firestore.FieldValue.serverTimestamp()
-        },
+        seqRef,
+        { next, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
         { merge: true }
       );
-      return { replay: false };
+      transaction.set(ar, processingPayload, { merge: true });
+      return { replay: false, checkoutId };
     });
 
-    if (replay.replay) {
+    if (openCheckout.replay) {
       console.log(
         JSON.stringify({
           msg: "createCartCheckoutSessionFast:idempotent_replay",
           userId,
           debugId,
-          idempotencyKey,
+          checkoutInstanceId: openCheckout.checkoutId,
           stage: "idempotent_replay",
           fallback: false,
           elapsedMs: elapsedMs()
         })
       );
       return {
-        checkoutUrl: replay.checkoutUrl,
-        sessionId: replay.sessionId,
-        cartOrderGroupId: replay.cartOrderGroupId,
-        totalCents: replay.totalCents,
+        checkoutUrl: openCheckout.checkoutUrl,
+        sessionId: openCheckout.sessionId,
+        cartOrderGroupId: openCheckout.cartOrderGroupId,
+        checkoutInstanceId: openCheckout.checkoutId,
+        totalCents: openCheckout.totalCents,
         idempotentReplay: true
       };
     }
+
+    const checkoutId = openCheckout.checkoutId;
+    const attemptRef = db.collection("users").doc(userId).collection("checkoutAttempts").doc(checkoutId);
 
     const quoteRef = db.collection("users").doc(userId).collection("checkoutQuotes").doc(quoteId);
     const quoteSnap = await quoteRef.get();
@@ -2436,7 +2631,11 @@ exports.createCartCheckoutSessionFast = onCall(
     const totalCents = quote.totalCents || 0;
 
     if (!Array.isArray(stripeLineItems) || stripeLineItems.length === 0 || !Array.isArray(resolvedItems)) {
-      throw new HttpsError("internal", "Quote data is incomplete. Prepare a new quote.");
+      throw new HttpsError(
+        "failed-precondition",
+        "Quote data is incomplete. Pull to refresh the estimate, then try checkout again.",
+        { debugId, stage: "quote_incomplete" }
+      );
     }
 
     if (clientEstimatedTotalCents != null && Number.isFinite(Number(clientEstimatedTotalCents))) {
@@ -2447,7 +2646,7 @@ exports.createCartCheckoutSessionFast = onCall(
     }
 
     stage = "pending_checkout_write";
-    const cartOrderGroupId = `cg_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+    const cartOrderGroupId = checkoutId;
     const pendingRef = db.collection("users").doc(userId).collection("pendingCartCheckouts").doc(cartOrderGroupId);
 
     await pendingRef.set({
@@ -2461,7 +2660,8 @@ exports.createCartCheckoutSessionFast = onCall(
       orderShippingCents,
       status: "pending_stripe",
       quoteId,
-      idempotencyKey,
+      idempotencyKey: checkoutId,
+      checkoutAttemptDocId: checkoutId,
       checkoutPath: "fast",
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
@@ -2514,7 +2714,7 @@ exports.createCartCheckoutSessionFast = onCall(
           }
         },
         "createCartCheckoutSessionFast",
-        `fast_${idempotencyKey}`
+        `fast_${checkoutId}`
       );
     } catch (err) {
       const stripeMessage = String(err?.message || err || "unknown");
@@ -2566,19 +2766,12 @@ exports.createCartCheckoutSessionFast = onCall(
           }
         );
       }
-      throw new HttpsError(
-        "internal",
-        "Unable to start secure checkout. Please try again.",
-        {
-          debugId,
-          cartOrderGroupId,
-          stage,
-          transient,
-          stripeType: err?.type || null,
-          stripeCode: err?.code || null,
-          stripeMessage
-        }
-      );
+      throwStripeCheckoutSessionHttpsError(err, {
+        debugId,
+        cartOrderGroupId,
+        stage,
+        transient
+      });
     }
 
     await pendingRef.update({
@@ -2604,7 +2797,10 @@ exports.createCartCheckoutSessionFast = onCall(
         stripeSessionId: session.id,
         checkoutUrl: session.url,
         totalCents,
-        completedAt: admin.firestore.FieldValue.serverTimestamp()
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        items: resolvedItems,
+        paymentStatus: "pending",
+        checkoutPath: "fast"
       },
       { merge: true }
     );
@@ -2626,6 +2822,7 @@ exports.createCartCheckoutSessionFast = onCall(
       checkoutUrl: session.url,
       sessionId: session.id,
       cartOrderGroupId,
+      checkoutInstanceId: checkoutId,
       totalCents,
       idempotentReplay: false
     };
@@ -2841,18 +3038,11 @@ exports.createCheckoutSession = onCall(
           }
         );
       }
-      throw new HttpsError(
-        "internal",
-        "Unable to start secure checkout. Please try again.",
-        {
-          debugId,
-          stage: "stripe_session_create",
-          transient,
-          stripeType: err?.type || null,
-          stripeCode: err?.code || null,
-          stripeMessage
-        }
-      );
+      throwStripeCheckoutSessionHttpsError(err, {
+        debugId,
+        stage: "stripe_session_create",
+        transient
+      });
     }
 
     return { checkoutUrl: session.url, sessionId: session.id };
@@ -2882,7 +3072,7 @@ exports.createCartCheckoutSession = onCall(
       throw new HttpsError("invalid-argument", "Cart cannot exceed 25 lines");
     }
 
-    const cartOrderGroupId = `cg_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+    const cartOrderGroupId = await allocateNextBookCheckoutId(userId);
     stage = "start";
     console.log(
       JSON.stringify({
@@ -3044,19 +3234,12 @@ exports.createCartCheckoutSession = onCall(
           }
         );
       }
-      throw new HttpsError(
-        "internal",
-        "Unable to start secure checkout. Please try again.",
-        {
-          debugId,
-          cartOrderGroupId,
-          stage,
-          transient,
-          stripeType: err?.type || null,
-          stripeCode: err?.code || null,
-          stripeMessage
-        }
-      );
+      throwStripeCheckoutSessionHttpsError(err, {
+        debugId,
+        cartOrderGroupId,
+        stage,
+        transient
+      });
     }
 
     await pendingRef.update({ stripeSessionId: session.id, elapsedMs: elapsedMs(), finalStage: "stripe_session_created" });
@@ -3186,6 +3369,55 @@ exports.stripeWebhook = onRequest(
         paidAt: admin.firestore.FieldValue.serverTimestamp(),
         stripeSessionId: session.id
       });
+
+      const paidCheckoutRef = db
+        .collection("users")
+        .doc(userIdFromMeta)
+        .collection("paidBookCheckouts")
+        .doc(cartOrderGroupId);
+      batch.set(paidCheckoutRef, {
+        userId: userIdFromMeta,
+        cartOrderGroupId,
+        checkoutKind: "cart",
+        stripeSessionId: session.id,
+        stripePaymentIntentId: session.payment_intent || null,
+        currency: session.currency || "usd",
+        amountTotal: paidTotal != null ? paidTotal : null,
+        isTestOrder: isStripeTestMode,
+        quoteId: pend.quoteId || null,
+        idempotencyKey: pend.idempotencyKey || null,
+        checkoutPath: pend.checkoutPath || null,
+        items: pend.items || [],
+        shippingAddress,
+        shippingLevel,
+        booksSubtotalCents: pend.booksSubtotalCents != null ? pend.booksSubtotalCents : null,
+        orderShippingCents: pend.orderShippingCents != null ? pend.orderShippingCents : null,
+        totalCents: pend.totalCents != null ? pend.totalCents : null,
+        customerEmail: session.customer_details?.email || session.customer_email || null,
+        orderIds: createdOrderIds,
+        paidAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      const rawGroup = String(cartOrderGroupId || "").trim();
+      const attemptMergeId =
+        (pend.checkoutAttemptDocId && String(pend.checkoutAttemptDocId).trim()) ||
+        (/^book\d+$/.test(rawGroup) ? rawGroup : null) ||
+        (pend.idempotencyKey && String(pend.idempotencyKey).trim()) ||
+        null;
+      if (attemptMergeId) {
+        const attemptRef = db.collection("users").doc(userIdFromMeta).collection("checkoutAttempts").doc(attemptMergeId);
+        batch.set(
+          attemptRef,
+          {
+            paymentStatus: "paid",
+            paidAt: admin.firestore.FieldValue.serverTimestamp(),
+            stripePaymentIntentId: session.payment_intent || null,
+            orderIds: createdOrderIds
+          },
+          { merge: true }
+        );
+      }
+
       await batch.commit();
       console.log(`Cart paid: orders=${createdOrderIds.length} group=${cartOrderGroupId}`);
       return res.status(200).json({ received: true, cart: true, orderIds: createdOrderIds });
@@ -3225,6 +3457,20 @@ exports.stripeWebhook = onRequest(
     const orderId = `ord_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
 
     const isStripeTestMode = event.livemode === false;
+    const lineTotalCentsSingle = parseInt(session.metadata?.totalCents || "2999", 10);
+
+    let profileIdSingle = null;
+    let printTitleSingle = null;
+    try {
+      const bvSnap = await db.collection("users").doc(userId).collection("bookVersions").doc(bookVersionId).get();
+      if (bvSnap.exists) {
+        const rec = bvSnap.data() || {};
+        profileIdSingle = rec.profileId != null ? String(rec.profileId) : null;
+        printTitleSingle = printTitleFromBookVersionRecord(rec);
+      }
+    } catch (e) {
+      console.warn("Stripe webhook single-book: bookVersions fetch failed", e.message || e);
+    }
 
     const orderData = {
       orderId,
@@ -3242,10 +3488,10 @@ exports.stripeWebhook = onRequest(
       selectedProductOptionId: selectedProductOptionId || null,
       selectedPodPackageId: selectedPodPackageId || null,
       quantity: 1,
-      unitCents: parseInt(session.metadata?.totalCents || "2999", 10),
-      lineTotalCents: parseInt(session.metadata?.totalCents || "2999", 10),
+      unitCents: lineTotalCentsSingle,
+      lineTotalCents: lineTotalCentsSingle,
       pricing: {
-        totalCents: parseInt(session.metadata?.totalCents || "2999", 10),
+        totalCents: lineTotalCentsSingle,
         currency: "usd"
       },
       coverPdfStoragePath: coverStoragePath,
@@ -3256,7 +3502,46 @@ exports.stripeWebhook = onRequest(
       luluStatusHistory: []
     };
 
-    await db.collection("users").doc(userId).collection("orders").doc(orderId).set(orderData);
+    const orderRef = db.collection("users").doc(userId).collection("orders").doc(orderId);
+    const paidSingleRef = db.collection("users").doc(userId).collection("paidBookCheckouts").doc(orderId);
+    const batchSingle = db.batch();
+    batchSingle.set(orderRef, orderData);
+    batchSingle.set(paidSingleRef, {
+      userId,
+      checkoutKind: "single_book",
+      cartOrderGroupId: null,
+      stripeSessionId: session.id,
+      stripePaymentIntentId: session.payment_intent || null,
+      currency: session.currency || "usd",
+      amountTotal: session.amount_total != null ? session.amount_total : lineTotalCentsSingle,
+      isTestOrder: isStripeTestMode,
+      quoteId: null,
+      idempotencyKey: null,
+      checkoutPath: "single_book",
+      items: [
+        {
+          bookVersionId,
+          profileId: profileIdSingle,
+          printTitle: printTitleSingle,
+          productOptionId: selectedProductOptionId || null,
+          selectedPodPackageId: selectedPodPackageId || null,
+          quantity: 1,
+          unitCents: lineTotalCentsSingle,
+          lineTotalCents: lineTotalCentsSingle,
+          coverStoragePath,
+          pdfStoragePath
+        }
+      ],
+      shippingAddress,
+      shippingLevel: shippingLevel || "MAIL",
+      booksSubtotalCents: lineTotalCentsSingle,
+      orderShippingCents: 0,
+      totalCents: lineTotalCentsSingle,
+      customerEmail: session.customer_details?.email || session.customer_email || null,
+      orderIds: [orderId],
+      paidAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    await batchSingle.commit();
 
     console.log(`Order ${orderId} saved as 'paid'. Awaiting manual fulfillment.`);
     return res.status(200).json({ received: true, orderId, status: "paid" });
@@ -3540,3 +3825,6 @@ exports.reconcilePendingCartCheckouts = onSchedule(
     }
   }
 );
+
+// Storybook cloud AI generation (Firestore-triggered; secrets OPENAI_API_KEY + GEMINI_API_KEY)
+Object.assign(exports, require("./storybookWorker"));

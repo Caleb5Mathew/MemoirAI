@@ -5,6 +5,30 @@ import CoreImage.CIFilterBuiltins
 import PDFKit
 import UIKit
 import Photos
+import FirebaseAuth
+import FirebaseFirestore
+
+/// Filter Xcode console for `[StorybookGen]` to see storybook pipeline details.
+/// In **Release** builds, set `UserDefaults` key `MemoirAI_StorybookVerboseLogging` to `true` to enable the same verbose lines.
+private enum StorybookGenLog {
+    #if DEBUG
+    static let verbose: Bool = true
+    #else
+    static var verbose: Bool { UserDefaults.standard.bool(forKey: "MemoirAI_StorybookVerboseLogging") }
+    #endif
+
+    static func line(_ message: String) {
+        print("[StorybookGen] \(message)")
+    }
+
+    static func verboseLine(_ message: String) {
+        if verbose { line(message) }
+    }
+
+    static func fence(_ title: String) {
+        line("════════ \(title) ════════")
+    }
+}
 
 /// A memory that was dropped from the storybook because illustration generation did not produce an image.
 struct SkippedStoryImageMemory: Identifiable, Equatable {
@@ -76,10 +100,17 @@ class StoryPageViewModel: ObservableObject {
     }
 
     @Published var isLoading      : Bool = false
+    /// True while finishing a previously interrupted `bookVersions` upload for this profile (do not start competing saves).
+    @Published var isResumingPendingBookSync: Bool = false
+    /// Set while `FirestoreSyncService.queueBookSync` is still running (covers upload + `syncBook`).
+    @Published var isUploadingToCloud: Bool = false
+    private var bookSyncInFlightCount: Int = 0
+    /// Firestore listener for `users/{uid}/storybookJobs/{jobId}` (cloud AI generation).
+    private var storybookCloudJobListener: ListenerRegistration?
+    private var cloudStorybookFinalizeStarted = false
     /// True while saving, rendering page images, and waiting for canonical PDF after generation reached 100%.
     @Published var isFinalizingAssets: Bool = false
     @Published var errorMessage   : String?
-    @Published var images         : [UIImage] = []
     @Published var progress       : Double    = 0
     @Published var pageItems      : [PageItem] = []
 
@@ -103,6 +134,17 @@ class StoryPageViewModel: ObservableObject {
     // Image editing state
     @Published var editingImageIndex: Int? = nil
     @Published var imageEditingStates: [Int: Bool] = [:] // Track loading state per image index
+    /// When non-nil, user is regenerating print cover art for the front or back panel (instruction-based edit).
+    @Published private(set) var coverPanelEditing: BookCoverFlatPanel?
+
+    /// True when the synced book has a print cover PDF to load panels from.
+    var hasPrintCoverPDF: Bool {
+        currentBookVersionRecord?.printCoverPDFURL != nil
+    }
+
+    func isEditingCoverArt(for panel: BookCoverFlatPanel) -> Bool {
+        coverPanelEditing == panel
+    }
 
     @Published var subjectPhoto   : UIImage?
     @Published var subjectPhotoID : String?
@@ -198,7 +240,11 @@ class StoryPageViewModel: ObservableObject {
     private var loadedBookPageHeight: CGFloat?
 
     // Make currentArtStyle public so StoryPage can access it
-    var currentArtStyle : ArtStyle { ArtStyle(rawValue: artStyleRaw) ?? .kidsBook }
+    var currentArtStyle : ArtStyle {
+        if let resolved = ArtStyle(rawValue: artStyleRaw) { return resolved }
+        print("⚠️ currentArtStyle: unrecognized rawValue '\(artStyleRaw)' — falling back to kidsBook")
+        return .kidsBook
+    }
 
     /// True when the current book has required artifacts ready for entering print checkout.
     /// Page-count eligibility is handled in `OrderBookView` via selectable format options.
@@ -210,11 +256,17 @@ class StoryPageViewModel: ObservableObject {
     }
     private func canonicalVisualReadiness(for record: BookVersionRecord?) -> Bool {
         guard let record else { return false }
-        // Interior PDF is required to show the flipbook; cover PDF can be filled in later (see cover backfill).
+        // Require cover so the gallery cell stays unavailable until the full artifact set is ready.
         return record.renderStatus == BookRenderStatus.rendered.rawValue
             && record.pdfURL != nil
+            && record.coverURL != nil
     }
     var currentPrintSpec: BookPrintSpec { resolvedPrintSpec() }
+
+    /// Identity for the story `TabView`; cover panels already reload via `RemotePDFThumbnailView` `.task(id: cacheKey)`.
+    var tabViewCoverRefreshIdentity: String {
+        lastSyncedBookVersionId ?? ""
+    }
 
     /// User-facing summary for the “skipped memories” notice after partial storybook generation.
     var skippedMemoriesNoticeSummary: String {
@@ -227,7 +279,6 @@ class StoryPageViewModel: ObservableObject {
     }
 
     private var faceDescription : String?
-    private var currentSceneDescription: String?
 
     private let promptGen : PromptGenerator
     private let imageCtx  : ImageContext
@@ -395,6 +446,24 @@ class StoryPageViewModel: ObservableObject {
         
         // Restore settings from iCloud backup
         restoreSettingsFromCloud()
+
+        NotificationCenter.default.addObserver(forName: .storybookCloudUploadActivity, object: nil, queue: .main) { [weak self] n in
+            Task { @MainActor in
+                guard let self else { return }
+                if let d = n.userInfo?["bookSyncCountDelta"] as? Int {
+                    self.bookSyncInFlightCount = max(0, self.bookSyncInFlightCount + d)
+                    self.isUploadingToCloud = self.bookSyncInFlightCount > 0
+                } else if let uploading = n.userInfo?["isUploading"] as? Bool {
+                    // Legacy: boolean replaced by refcount delta on `queueBookSync`.
+                    self.isUploadingToCloud = uploading
+                }
+            }
+        }
+        NotificationCenter.default.addObserver(forName: .storybookGenerationBackgroundExpiring, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                self?.emergencyFlushInProgressGenerationToDisk()
+            }
+        }
     }
 
     func expectedPageCount() -> Int { pageCountSetting }
@@ -419,16 +488,52 @@ class StoryPageViewModel: ObservableObject {
         }
         requiresVisualReadyGate = false
         Task {
+            print("[StorybookLoad] loadStorybookForProfile START profile=\(profileID.uuidString.prefix(8)) isLoading=\(isLoading) pageItems=\(pageItems.count) isLoadingGalleryBook=\(isLoadingGalleryBook)")
             // Avoid racing `generateStorybook`: a load that started before generation can still finish after.
-            guard !isLoading else { return }
+            guard !isLoading else {
+                print("[StorybookLoad] loadStorybookForProfile ABORT (isLoading before migrate)")
+                return
+            }
+            guard !isLoadingGalleryBook else {
+                print("[StorybookLoad] loadStorybookForProfile ABORT (My Library book is opening — skip profile cloud load)")
+                return
+            }
             await migrateLegacyLocalBooksIfNeeded(for: profileID)
-            guard !isLoading else { return }
+            guard !isLoading else {
+                print("[StorybookLoad] loadStorybookForProfile ABORT (isLoading after migrate)")
+                return
+            }
+            guard !isLoadingGalleryBook else {
+                print("[StorybookLoad] loadStorybookForProfile ABORT (gallery load started during migrate)")
+                return
+            }
+            isResumingPendingBookSync = true
+            await FirestoreSyncService.shared.retryPendingSyncs(for: profileID)
+            isResumingPendingBookSync = false
+            guard !isLoading else {
+                print("[StorybookLoad] loadStorybookForProfile ABORT (isLoading after pending sync retry)")
+                return
+            }
+            guard !isLoadingGalleryBook else {
+                print("[StorybookLoad] loadStorybookForProfile ABORT (gallery load after pending sync retry)")
+                return
+            }
             // Do not auto-regenerate covers during normal book loading.
             // Auto backfill can make an existing book's cover art change unexpectedly.
             let loadedFromCloud = await loadLatestBookVersionFromCloud(for: profileID)
-            guard !isLoading else { return }
+            guard !isLoading else {
+                print("[StorybookLoad] loadStorybookForProfile ABORT (isLoading after cloud) loadedFromCloud=\(loadedFromCloud)")
+                return
+            }
+            guard !isLoadingGalleryBook else {
+                print("[StorybookLoad] loadStorybookForProfile ABORT (gallery load — skip disk fallback / duplicate apply)")
+                return
+            }
             if !loadedFromCloud {
+                print("[StorybookLoad] loadStorybookForProfile → loadPersistedStorybook (cloud skipped or none)")
                 loadPersistedStorybook(for: profileID)
+            } else {
+                print("[StorybookLoad] loadStorybookForProfile END applied cloud latest pageItems=\(pageItems.count)")
             }
         }
     }
@@ -436,7 +541,6 @@ class StoryPageViewModel: ObservableObject {
     // NEW: Clear current storybook (for regeneration)
     func clearCurrentStorybook() {
         pageItems.removeAll()
-        images.removeAll()
         hasGeneratedStorybook = false
         isVisualBookReady = false
         isFinalizingAssets = false
@@ -575,6 +679,7 @@ class StoryPageViewModel: ObservableObject {
         let fontStyle = BookFontStyle(artStyle: currentArtStyle)
         
         return pageItems.enumerated().map { idx, item in
+            autoreleasepool {
             let view: AnyView
             
             switch item {
@@ -667,7 +772,17 @@ class StoryPageViewModel: ObservableObject {
                 }
             }
             
-            return view.snapshot(width: bookWidth, height: bookHeight)
+            var shot = view.snapshot(width: bookWidth, height: bookHeight)
+            if min(shot.size.width, shot.size.height) <= 64 {
+                print("⚠️ [StorybookLoad] WARNING degenerate page snapshot at index=\(idx); substituting light placeholder")
+                let s = CGSize(width: max(bookWidth, 100), height: max(bookHeight, 100))
+                shot = UIGraphicsImageRenderer(size: s).image { ctx in
+                    UIColor(red: 0.98, green: 0.97, blue: 0.95, alpha: 1.0).setFill()
+                    ctx.fill(CGRect(origin: .zero, size: s))
+                }
+            }
+            return shot
+            }
         }
     }
     
@@ -997,6 +1112,33 @@ class StoryPageViewModel: ObservableObject {
         refreshInteriorBookends(openingBlurb: policy.interiorTitlePageBlurb(), closingPitch: pitch)
     }
 
+    /// Older books stored `title`/`subtitle` only on the first text page of a memory; continuation pages used `nil`, which hid headers.
+    private func backfillContinuationTextPageHeaders() {
+        var firstHeaderByMemory: [UUID: (title: String?, subtitle: String?)] = [:]
+        for i in pageItems.indices {
+            guard case .textPage(let idx, let total, let body, let t, let s, let mid) = pageItems[i] else { continue }
+            if mid == BookInteriorAnchor.titlePageMemoryId || mid == BookInteriorAnchor.closingPageMemoryId {
+                continue
+            }
+            if let existing = firstHeaderByMemory[mid] {
+                let newTitle = t ?? existing.title
+                let newSubtitle = s ?? existing.subtitle
+                if newTitle != t || newSubtitle != s {
+                    pageItems[i] = .textPage(
+                        index: idx,
+                        total: total,
+                        body: body,
+                        title: newTitle,
+                        subtitle: newSubtitle,
+                        memoryID: mid
+                    )
+                }
+            } else {
+                firstHeaderByMemory[mid] = (t, s)
+            }
+        }
+    }
+
     private func canonicalizedNarratorName(_ raw: String?) -> String? {
         guard var value = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
             return nil
@@ -1059,26 +1201,30 @@ class StoryPageViewModel: ObservableObject {
         )
     }
 
-    private func preparePrintPackagingBeforePersist() async {
+    private func preparePrintPackagingBeforePersist(existingBackCoverPitchFromCloud: String? = nil) async {
         let policy = CoverCopyPolicy(artStyle: currentArtStyle, profileDisplayName: profileName ?? "")
         if bookDisplayTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             bookDisplayTitle = policy.defaultBookTitle()
         }
         coverFontPreset = policy.coverFontPreset().rawValue
 
-        let excerpt = memorySnippetForPitch()
-        let themes = distinctMemoryTitlesForCover()
-        let prompt = policy.aiPitchSystemPrompt(
-            bookTitle: bookDisplayTitle,
-            storyExcerpt: excerpt,
-            memoryThemes: themes
-        )
         let pitch: String
-        if let geminiSvc = geminiImageSvc,
-           let raw = await geminiSvc.generateBackCoverPitch(prompt: prompt) {
-            pitch = CoverCopyPolicy.sanitizePitch(raw)
+        if let preset = existingBackCoverPitchFromCloud?.trimmingCharacters(in: .whitespacesAndNewlines), !preset.isEmpty {
+            pitch = CoverCopyPolicy.sanitizePitch(preset)
         } else {
-            pitch = policy.fallbackBackCoverPitch(bookTitle: bookDisplayTitle)
+            let excerpt = memorySnippetForPitch()
+            let themes = distinctMemoryTitlesForCover()
+            let prompt = policy.aiPitchSystemPrompt(
+                bookTitle: bookDisplayTitle,
+                storyExcerpt: excerpt,
+                memoryThemes: themes
+            )
+            if let geminiSvc = geminiImageSvc,
+               let raw = await geminiSvc.generateBackCoverPitch(prompt: prompt) {
+                pitch = CoverCopyPolicy.sanitizePitch(raw)
+            } else {
+                pitch = policy.fallbackBackCoverPitch(bookTitle: bookDisplayTitle)
+            }
         }
         backCoverPitch = pitch
         refreshInteriorBookends(openingBlurb: policy.interiorTitlePageBlurb(), closingPitch: pitch)
@@ -1112,31 +1258,170 @@ class StoryPageViewModel: ObservableObject {
     /// Re-uploads pages + cover when the user edits the print title after the initial sync.
     func resyncPrintPackagingAfterTitleEdit() async {
         syncBookendTitleFromDisplayTitle()
-        guard let bookId = lastSyncedBookVersionId,
-              let createdAt = lastPersistedBookCreatedAt,
-              let profileID = currentProfileID,
-              !pageItems.isEmpty else { return }
+        await saveCurrentBookInPlace(reason: "printTitle")
+    }
 
+    /// Assembles a `PersistableStorybook` and normalizes empty display title / back-cover copy in memory.
+    private func buildPersistableStorybookForSave(profileID: UUID, createdAt: Date) -> PersistableStorybook? {
+        guard !pageItems.isEmpty else { return nil }
         let persistableItems = persistablePageItemsFromCurrentState()
-        let policy = CoverCopyPolicy(artStyle: currentArtStyle, profileDisplayName: profileName ?? "")
         let trimmedTitle = bookDisplayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let titleForPrint = trimmedTitle.isEmpty ? policy.defaultBookTitle() : trimmedTitle
-        let pitch = backCoverPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? policy.fallbackBackCoverPitch(bookTitle: titleForPrint)
+        let policy = CoverCopyPolicy(artStyle: currentArtStyle, profileDisplayName: profileName ?? "")
+        let titleStored = trimmedTitle.isEmpty ? policy.defaultBookTitle() : trimmedTitle
+        let pitchStored = backCoverPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? policy.fallbackBackCoverPitch(bookTitle: titleStored)
             : backCoverPitch
-        coverFontPreset = policy.coverFontPreset().rawValue
-
-        let storybookData = PersistableStorybook(
+        let presetStored = coverFontPreset.isEmpty ? policy.coverFontPreset().rawValue : coverFontPreset
+        if bookDisplayTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            bookDisplayTitle = titleStored
+        }
+        if backCoverPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            backCoverPitch = pitchStored
+        }
+        return PersistableStorybook(
             profileID: profileID,
             pageItems: persistableItems,
             artStyle: artStyleRaw,
             createdAt: createdAt,
-            bookDisplayTitle: titleForPrint,
-            backCoverPitch: pitch,
-            coverFontPreset: coverFontPreset
+            bookDisplayTitle: titleStored,
+            backCoverPitch: pitchStored,
+            coverFontPreset: presetStored
         )
+    }
+
+    /// Encodes a storybook, writes to disk, optional iCloud, and when `appendToHistory` is true, appends history files + iCloud history metadata. Does not sync to Firestore.
+    private func writeStorybookToLocalAndICloudCaches(
+        _ storybookData: PersistableStorybook,
+        profileID: UUID,
+        appendToHistory: Bool
+    ) throws {
+        let encoder = JSONEncoder()
+        var data = try encoder.encode(storybookData)
+        var dataSizeMB = Double(data.count) / (1024 * 1024)
+
+        // Save to Application Support (avoids multi‑MB UserDefaults / CFPreferences failures)
+        do {
+            try StorybookLocalStore.writeCurrentBook(data: data, profileID: profileID)
+            if appendToHistory {
+                try StorybookLocalStore.appendHistory(data: data, profileID: profileID)
+            }
+        } catch {
+            print("❌ Local storybook file cache failed (continuing with cloud/Firebase): \(error.localizedDescription)")
+        }
+
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        let cloudKey = "memoir_storybook_\(profileID.uuidString)"
+        let cloudHistoryKey = "memoir_storybook_history_\(profileID.uuidString)"
+        let createdAt = storybookData.createdAt
+        if dataSizeMB < 0.95 {
+            cloudStore.set(data, forKey: cloudKey)
+            print("✅ Storybook synced to iCloud (\(String(format: "%.2f", dataSizeMB))MB)")
+        } else {
+            print("⚠️ Storybook large (\(String(format: "%.2f", dataSizeMB))MB), trying aggressive compression")
+            let compressedItems = storybookData.pageItems.map { item -> PersistablePageItem in
+                if item.type == "illustration", let imageData = item.imageData,
+                   let image = UIImage(data: imageData),
+                   let compressedData = image.jpegData(compressionQuality: 0.6) {
+                    return PersistablePageItem(
+                        type: item.type,
+                        imageData: compressedData,
+                        caption: item.caption,
+                        title: item.title,
+                        subtitle: item.subtitle,
+                        textContent: item.textContent,
+                        url: item.url,
+                        pageIndex: item.pageIndex,
+                        totalPages: item.totalPages
+                    )
+                }
+                return item
+            }
+            let compressedStorybook = PersistableStorybook(
+                profileID: storybookData.profileID,
+                pageItems: compressedItems,
+                artStyle: storybookData.artStyle,
+                createdAt: storybookData.createdAt,
+                bookDisplayTitle: storybookData.bookDisplayTitle,
+                backCoverPitch: storybookData.backCoverPitch,
+                coverFontPreset: storybookData.coverFontPreset
+            )
+            if let compressedData = try? encoder.encode(compressedStorybook),
+               Double(compressedData.count) / (1024 * 1024) < 0.95 {
+                data = compressedData
+                dataSizeMB = Double(data.count) / (1024 * 1024)
+                cloudStore.set(data, forKey: cloudKey)
+                do {
+                    try StorybookLocalStore.writeCurrentBook(data: data, profileID: profileID)
+                } catch {
+                    print("⚠️ Could not write compressed current book to disk: \(error.localizedDescription)")
+                }
+                print("✅ Storybook synced to iCloud with compression (\(String(format: "%.2f", dataSizeMB))MB)")
+            } else {
+                print("⚠️ Storybook still too large even after compression, storing metadata only")
+            }
+        }
+        if appendToHistory {
+            let historyMetadataKey = "\(cloudHistoryKey)_metadata"
+            var historyMetadata: [[String: Any]] = cloudStore.array(forKey: historyMetadataKey) as? [[String: Any]] ?? []
+            historyMetadata.append([
+                "createdAt": createdAt.timeIntervalSince1970,
+                "artStyle": artStyleRaw,
+                "profileID": profileID.uuidString
+            ])
+            cloudStore.set(historyMetadata, forKey: historyMetadataKey)
+        }
+        cloudStore.synchronize()
+    }
+
+    /// Re-syncs the current book in place: same `bookVersionId` / `createdAt` as the last cloud sync (no new Firestore doc, no new history file).
+    func saveCurrentBookInPlace(reason: String) async {
+        if isResumingPendingBookSync {
+            for _ in 0..<100 {
+                if !isResumingPendingBookSync { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+        guard let bookId = lastSyncedBookVersionId,
+              let bookCreatedAt = lastPersistedBookCreatedAt,
+              let profileID = currentProfileID,
+              !pageItems.isEmpty
+        else {
+            if let profileID = currentProfileID, !pageItems.isEmpty {
+                print("[Storybook] saveCurrentBookInPlace(\(reason)) — no lastSynced id; new book version via persistStorybook")
+                persistStorybook(for: profileID)
+            }
+            return
+        }
+        guard let storybookData = buildPersistableStorybookForSave(profileID: profileID, createdAt: bookCreatedAt) else { return }
+        do {
+            try writeStorybookToLocalAndICloudCaches(storybookData, profileID: profileID, appendToHistory: false)
+        } catch {
+            print("❌ saveCurrentBookInPlace: encode/cache failed: \(error)")
+        }
+        hasGeneratedStorybook = true
+        let layout = BookVersionLayoutFactory.layout(forArtStyle: artStyleRaw)
+        loadedBookOrientation = layout.orientation
+        loadedBookPageWidth = CGFloat(layout.pageWidth)
+        loadedBookPageHeight = CGFloat(layout.pageHeight)
+        print("[StorybookLoad] saveCurrentBookInPlace reason=\(reason) id=\(bookId.prefix(28))… pageItems=\(pageItems.count)")
         let renderedPages = renderCurrentBookPagesAsImages()
+        if renderedPages.count != pageItems.count {
+            print("⚠️ Rendered page count (\(renderedPages.count)) != pageItems count (\(pageItems.count)); sync may use fallbacks for missing pages")
+        }
         let coverInputs = makeCoverInputsIfAvailable()
+        var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "MemoirAI.BookInPlace") {
+            if backgroundTaskID != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTaskID)
+                backgroundTaskID = .invalid
+            }
+        }
+        defer {
+            if backgroundTaskID != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTaskID)
+                backgroundTaskID = .invalid
+            }
+        }
         await FirestoreSyncService.shared.syncBook(
             storybookData,
             bookId: bookId,
@@ -1147,153 +1432,49 @@ class StoryPageViewModel: ObservableObject {
             currentBookVersionRecord = updated
         }
     }
-    
-    private func persistStorybook(for profileID: UUID) {
-        guard !pageItems.isEmpty else { return }
-        
-        let encoder = JSONEncoder()
-        do {
-            let persistableItems = persistablePageItemsFromCurrentState()
-            
-            let createdAt = Date()
-            let trimmedTitle = bookDisplayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-            let policy = CoverCopyPolicy(artStyle: currentArtStyle, profileDisplayName: profileName ?? "")
-            let titleStored = trimmedTitle.isEmpty ? policy.defaultBookTitle() : trimmedTitle
-            let pitchStored = backCoverPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? policy.fallbackBackCoverPitch(bookTitle: titleStored)
-                : backCoverPitch
-            let presetStored = coverFontPreset.isEmpty ? policy.coverFontPreset().rawValue : coverFontPreset
-            if bookDisplayTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                bookDisplayTitle = titleStored
-            }
-            if backCoverPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                backCoverPitch = pitchStored
-            }
 
-            let storybookData = PersistableStorybook(
-                profileID: profileID,
-                pageItems: persistableItems,
-                artStyle: artStyleRaw,
-                createdAt: createdAt,
-                bookDisplayTitle: titleStored,
-                backCoverPitch: pitchStored,
-                coverFontPreset: presetStored
-            )
-            
-            let data = try encoder.encode(storybookData)
-            let dataSizeMB = Double(data.count) / (1024 * 1024)
-            
-            // Save to Application Support (avoids multi‑MB UserDefaults / CFPreferences failures)
-            do {
-                try StorybookLocalStore.writeCurrentBook(data: data, profileID: profileID)
-                try StorybookLocalStore.appendHistory(data: data, profileID: profileID)
-            } catch {
-                print("❌ Local storybook file cache failed (continuing with cloud/Firebase): \(error.localizedDescription)")
+    /// New book version (first full generation only): appends local + iCloud history, registers pending sync, queues a cloud sync.
+    private func persistStorybook(for profileID: UUID, reservedCreatedAt: Date? = nil, reservedBookVersionId: String? = nil) {
+        let createdAt = reservedCreatedAt ?? Date()
+        let bookVersionId: String
+        if let b = reservedBookVersionId, let t = reservedCreatedAt {
+            bookVersionId = b
+            if lastSyncedBookVersionId != b {
+                lastSyncedBookVersionId = b
             }
-
-            // ✅ SYNC TO ICLOUD for persistence across app deletion/reinstall
-            let cloudStore = NSUbiquitousKeyValueStore.default
-            let cloudKey = "memoir_storybook_\(profileID.uuidString)"
-            let cloudHistoryKey = "memoir_storybook_history_\(profileID.uuidString)"
-            
-            // Check size - iCloud KVS has 1MB limit per key
-            if dataSizeMB < 0.95 { // Leave some buffer
-                // Store current storybook in iCloud
-                cloudStore.set(data, forKey: cloudKey)
-                print("✅ Storybook synced to iCloud (\(String(format: "%.2f", dataSizeMB))MB)")
-            } else {
-                // Try more aggressive compression for large storybooks
-                print("⚠️ Storybook large (\(String(format: "%.2f", dataSizeMB))MB), trying aggressive compression")
-                
-                // Recompress images with lower quality
-                let compressedItems = storybookData.pageItems.map { item -> PersistablePageItem in
-                    if item.type == "illustration", let imageData = item.imageData,
-                       let image = UIImage(data: imageData) {
-                        // Try 0.6 compression quality for large storybooks
-                        if let compressedData = image.jpegData(compressionQuality: 0.6) {
-                            return PersistablePageItem(
-                                type: item.type,
-                                imageData: compressedData,
-                                caption: item.caption,
-                                title: item.title,
-                                subtitle: item.subtitle,
-                                textContent: item.textContent,
-                                url: item.url,
-                                pageIndex: item.pageIndex,
-                                totalPages: item.totalPages
-                            )
-                        }
-                    }
-                    return item
-                }
-                
-                let compressedStorybook = PersistableStorybook(
-                    profileID: profileID,
-                    pageItems: compressedItems,
-                    artStyle: artStyleRaw,
-                    createdAt: createdAt,
-                    bookDisplayTitle: titleStored,
-                    backCoverPitch: pitchStored,
-                    coverFontPreset: presetStored
-                )
-                
-                if let compressedData = try? encoder.encode(compressedStorybook),
-                   Double(compressedData.count) / (1024 * 1024) < 0.95 {
-                    cloudStore.set(compressedData, forKey: cloudKey)
-                    // Replace on-disk current book with compressed payload (history keeps full-fidelity snapshot)
-                    do {
-                        try StorybookLocalStore.writeCurrentBook(data: compressedData, profileID: profileID)
-                    } catch {
-                        print("⚠️ Could not write compressed current book to disk: \(error.localizedDescription)")
-                    }
-                    print("✅ Storybook synced to iCloud with compression (\(String(format: "%.2f", Double(compressedData.count) / (1024 * 1024)))MB)")
-                } else {
-                    print("⚠️ Storybook still too large even after compression, storing metadata only")
-                    // Store metadata only - full storybook won't survive deletion
-                    // But at least user knows they had a storybook
-                }
+            if lastPersistedBookCreatedAt != t {
+                lastPersistedBookCreatedAt = t
             }
-            
-            // Store history metadata in iCloud (store array of storybook identifiers)
-            // Full payloads live on disk under Application Support via StorybookLocalStore
-            let historyMetadataKey = "\(cloudHistoryKey)_metadata"
-            var historyMetadata: [[String: Any]] = cloudStore.array(forKey: historyMetadataKey) as? [[String: Any]] ?? []
-            historyMetadata.append([
-                "createdAt": createdAt.timeIntervalSince1970,
-                "artStyle": artStyleRaw,
-                "profileID": profileID.uuidString
-            ])
-            cloudStore.set(historyMetadata, forKey: historyMetadataKey)
-            
-            cloudStore.synchronize()
-            hasGeneratedStorybook = true
-            
-            // Persist layout metadata for deterministic exports.
-            let layout = BookVersionLayoutFactory.layout(forArtStyle: artStyleRaw)
-            loadedBookOrientation = layout.orientation
-            loadedBookPageWidth = CGFloat(layout.pageWidth)
-            loadedBookPageHeight = CGFloat(layout.pageHeight)
-            
-            // Cloud-first canonical book version sync (all pages rendered for PDF generation)
-            let bookVersionId = "\(profileID.uuidString)_\(Int(createdAt.timeIntervalSince1970))"
+        } else {
+            bookVersionId = "\(profileID.uuidString)_\(Int(createdAt.timeIntervalSince1970))"
             lastSyncedBookVersionId = bookVersionId
             lastPersistedBookCreatedAt = createdAt
-            let renderedPages = renderCurrentBookPagesAsImages()
-            if renderedPages.count != pageItems.count {
-                print("⚠️ Rendered page count (\(renderedPages.count)) != pageItems count (\(pageItems.count)); sync may use fallbacks for missing pages")
-            }
-            let coverInputs = makeCoverInputsIfAvailable()
-            FirestoreSyncService.shared.queueBookSync(
-                storybookData,
-                bookId: bookVersionId,
-                renderedPageImages: renderedPages,
-                coverInputs: coverInputs
-            )
-            
-            print("✅ Storybook persisted for profile: \(profileID) (\(renderedPages.count) pages → Firebase)")
-        } catch {
-            print("❌ Failed to persist storybook: \(error)")
         }
+        guard let storybookData = buildPersistableStorybookForSave(profileID: profileID, createdAt: createdAt) else { return }
+        do {
+            try writeStorybookToLocalAndICloudCaches(storybookData, profileID: profileID, appendToHistory: true)
+        } catch {
+            print("❌ persistStorybook: cache write failed: \(error)")
+        }
+        hasGeneratedStorybook = true
+        let layout = BookVersionLayoutFactory.layout(forArtStyle: artStyleRaw)
+        loadedBookOrientation = layout.orientation
+        loadedBookPageWidth = CGFloat(layout.pageWidth)
+        loadedBookPageHeight = CGFloat(layout.pageHeight)
+        print("[StorybookLoad] persistStorybook (new) sync queued id=\(bookVersionId.prefix(28))… createdAt=\(createdAt.timeIntervalSince1970) pageItems=\(pageItems.count)")
+        let renderedPages = renderCurrentBookPagesAsImages()
+        if renderedPages.count != pageItems.count {
+            print("⚠️ Rendered page count (\(renderedPages.count)) != pageItems count (\(pageItems.count)); sync may use fallbacks for missing pages")
+        }
+        let coverInputs = makeCoverInputsIfAvailable()
+        FirestoreSyncService.shared.registerPendingBookSyncForProfile(bookId: bookVersionId, profileId: profileID)
+        FirestoreSyncService.shared.queueBookSync(
+            storybookData,
+            bookId: bookVersionId,
+            renderedPageImages: renderedPages,
+            coverInputs: coverInputs
+        )
+        print("✅ Storybook persisted for profile: \(profileID) (\(renderedPages.count) pages → Firebase)")
     }
     
     private func loadPersistedStorybook(for profileID: UUID) {
@@ -1378,13 +1559,6 @@ class StoryPageViewModel: ObservableObject {
                 }
             }
             
-            // Extract images for the images array
-            images = pageItems.compactMap { item in
-                if case .illustration(let image, _, _) = item {
-                    return image
-                }
-                return nil
-            }
             precomposedIllustrationMemoryIDs = []
             
             bookDisplayTitle = storybook.bookDisplayTitle ?? ""
@@ -1392,12 +1566,14 @@ class StoryPageViewModel: ObservableObject {
             coverFontPreset = storybook.coverFontPreset
                 ?? CoverCopyPolicy(artStyle: ArtStyle(rawValue: storybook.artStyle) ?? .kidsBook, profileDisplayName: "").coverFontPreset().rawValue
             ensureInteriorBookendsPresent()
+            backfillContinuationTextPageHeaders()
             lastSyncedBookVersionId = "\(storybook.profileID.uuidString)_\(Int(storybook.createdAt.timeIntervalSince1970))"
             lastPersistedBookCreatedAt = storybook.createdAt
 
             hasGeneratedStorybook = true
             isVisualBookReady = true
             print("✅ Storybook loaded for profile: \(profileID)")
+            print("[StorybookLoad] loadPersistedStorybook disk createdAt=\(storybook.createdAt.timeIntervalSince1970) pageItems=\(pageItems.count) versionHint=\(lastSyncedBookVersionId?.prefix(28) ?? "nil")…")
         } catch {
             print("❌ Failed to load persisted storybook: \(error)")
             hasGeneratedStorybook = false
@@ -1405,10 +1581,43 @@ class StoryPageViewModel: ObservableObject {
         }
     }
     
+    /// `createdAt` of on-disk `current.book` for this profile, if decodable.
+    private func localPersistedStorybookCreatedAt(for profileID: UUID) -> Date? {
+        guard let data = StorybookLocalStore.readCurrentBookData(profileID: profileID),
+              let book = try? JSONDecoder().decode(PersistableStorybook.self, from: data) else {
+            return nil
+        }
+        return book.createdAt
+    }
+
     private func loadLatestBookVersionFromCloud(for profileID: UUID) async -> Bool {
         guard let record = await FirestoreSyncService.shared.fetchLatestBookVersion(profileID: profileID) else {
+            print("[StorybookLoad] fetchLatestBookVersion → nil")
             return false
         }
+        let cloudCreated = record.createdAt
+        let cloudId = record.bookVersionId
+        print("[StorybookLoad] fetchLatest id=\(cloudId.prefix(28))… createdAt=\(cloudCreated.timeIntervalSince1970) pages=\(record.pageCount) isLoading=\(isLoading)")
+
+        let applyOutcome = StorybookCloudApplyPolicy.outcome(
+            isLoading: isLoading,
+            localPersistedBookCreatedAt: localPersistedStorybookCreatedAt(for: profileID),
+            record: record
+        )
+        switch applyOutcome {
+        case .shouldApply:
+            break
+        case .skipBecauseGenerating:
+            print("[StorybookLoad] SKIP applyBookVersionRecord (isLoading) — avoid racing generateStorybook")
+            return false
+        case .skipBecauseLocalPersistedBookIsNewer(let localCreated, let cloudCreated, let delta):
+            print("[StorybookLoad] SKIP applyBookVersionRecord — local current.book newer by \(String(format: "%.1f", delta))s (local=\(localCreated.timeIntervalSince1970) cloud=\(cloudCreated.timeIntervalSince1970))")
+            return false
+        case .skipBecauseCloudIsPartial(let inArray, let count):
+            print("[StorybookLoad] SKIP applyBookVersionRecord — cloud book partial (pages.count=\(inArray) < pageCount=\(count)) id=\(cloudId.prefix(28))")
+            return false
+        }
+
         await applyBookVersionRecord(record)
         return true
     }
@@ -1422,28 +1631,32 @@ class StoryPageViewModel: ObservableObject {
     /// Fetch the current on-screen book version when possible, then fall back to latest for the profile.
     /// This avoids checking print readiness against a different newer/older book than the one being viewed.
     func fetchCurrentBookVersionRecord() async -> BookVersionRecord? {
-        if let current = currentBookVersionRecord,
-           let exact = await FirestoreSyncService.shared.fetchBookVersion(bookVersionId: current.bookVersionId) {
+        guard let current = currentBookVersionRecord else {
+            guard let profileID = currentProfileID else { return nil }
+            let latest = await FirestoreSyncService.shared.fetchLatestBookVersion(profileID: profileID)
+            if let latest {
+                await MainActor.run { currentBookVersionRecord = latest }
+            }
+            return latest
+        }
+
+        if let exact = await FirestoreSyncService.shared.fetchBookVersion(bookVersionId: current.bookVersionId) {
             await MainActor.run { currentBookVersionRecord = exact }
             return exact
         }
 
-        guard let profileID = currentProfileID else { return nil }
-        let latest = await FirestoreSyncService.shared.fetchLatestBookVersion(profileID: profileID)
-        if let latest {
-            await MainActor.run { currentBookVersionRecord = latest }
-        }
-        return latest
+        // Exact fetch failed (e.g. transient network) — keep the in-memory book so order/checkout
+        // cannot swap to an unrelated "latest" profile book with different cover art.
+        return current
     }
-    
-    private func applyBookVersionRecord(_ record: BookVersionRecord) async {
-        // Set canonical record immediately so Print / order flow can resolve readiness before page images finish downloading.
+
+    /// Publishes canonical print/readiness metadata from a `BookVersionRecord` (used after pages are ready for gallery loads, or up-front for normal cloud sync).
+    private func applyCanonicalBookMetadataFromCloudRecord(_ record: BookVersionRecord) {
         currentBookVersionRecord = record
         isVisualBookReady = canonicalVisualReadiness(for: record)
         loadedBookOrientation = record.orientation
         loadedBookPageWidth = CGFloat(record.pageWidth)
         loadedBookPageHeight = CGFloat(record.pageHeight)
-        // While generating, keep the user's @AppStorage art style; cloud apply can otherwise overwrite with the previous book's style mid-flight.
         if !isLoading {
             artStyleRaw = record.artStyle
         }
@@ -1453,92 +1666,335 @@ class StoryPageViewModel: ObservableObject {
             ?? CoverCopyPolicy(artStyle: ArtStyle(rawValue: record.artStyle) ?? .kidsBook, profileDisplayName: "").coverFontPreset().rawValue
         lastSyncedBookVersionId = record.bookVersionId
         lastPersistedBookCreatedAt = record.createdAt
-
-        illustrationReloadSources = [:]
-        illustrationRetryInProgress = []
-
-        var rebuilt: [PageItem] = []
-        var precomposedMemoryIDs: Set<UUID> = []
-        
-        for page in record.pages.sorted(by: { $0.pageIndex < $1.pageIndex }) {
-            let memoryUUID = UUID(uuidString: page.memoryId ?? "") ?? UUID()
-            
-            if page.type == "illustration" {
-                if let result = await fetchIllustrationImage(
-                    for: page,
-                    memoryUUID: memoryUUID,
-                    bookVersionId: record.bookVersionId
-                ) {
-                    rebuilt.append(.illustration(image: result.image, memoryID: memoryUUID, title: page.title))
-                    if result.precomposed { precomposedMemoryIDs.insert(memoryUUID) }
-                    continue
-                }
-                let placeholder = cloudIllustrationPlaceholderImage()
-                rebuilt.append(.illustration(image: placeholder, memoryID: memoryUUID, title: page.title))
-                illustrationReloadSources[memoryUUID] = page
-                print("📥 [IllustrationDownload] placeholder pageIndex=\(page.pageIndex) mem=\(memoryUUID.uuidString.prefix(8)) book=\(record.bookVersionId.prefix(12))")
-                continue
-            }
-            
-            if page.type == "textPage", let text = page.textContent {
-                rebuilt.append(
-                    .textPage(
-                        index: page.pageIndex + 1,
-                        total: max(1, record.pageCount),
-                        body: text,
-                        title: page.title,
-                        subtitle: page.subtitle,
-                        memoryID: memoryUUID
-                    )
-                )
-            }
-        }
-        
-        // If cloud payload is malformed, keep previous state unchanged.
-        guard !rebuilt.isEmpty else {
-            print("⚠️ Cloud book version \(record.bookVersionId) had no reconstructable pages")
-            return
-        }
-        
-        pageItems = rebuilt
-        precomposedIllustrationMemoryIDs = precomposedMemoryIDs
-        ensureInteriorBookendsPresent()
-        images = rebuilt.compactMap {
-            if case .illustration(let image, _, _) = $0 { return image }
-            return nil
-        }
-        
-        hasGeneratedStorybook = true
-
-        print("✅ Loaded cloud book version \(record.bookVersionId) with \(rebuilt.count) pages")
-
-        if let coverURL = record.printCoverPDFURL {
-            let layout = record.coverFlatLayoutKind
-            let revision = record.coverThumbnailCacheRevision
-            Task {
-                _ = await CoverPDFThumbnailService.loadAndCache(
-                    url: coverURL,
-                    layout: layout,
-                    panel: .front,
-                    targetSize: CGSize(width: 1200, height: 900),
-                    cacheRevision: revision
-                )
-            }
-        }
     }
 
+    /// Same book already hydrated with real illustrations (not incremental placeholders) and matching cover revision — skip full download pass.
+    private func canShortCircuitApplyBookVersionRecord(_ record: BookVersionRecord) -> Bool {
+        guard lastSyncedBookVersionId == record.bookVersionId,
+              !pageItems.isEmpty,
+              !StorybookCloudApplyPolicy.isIncompleteCloudRecord(record) else { return false }
+        guard let cur = currentBookVersionRecord,
+              cur.bookVersionId == record.bookVersionId,
+              cur.coverURL == record.coverURL,
+              cur.coverThumbnailCacheRevision == record.coverThumbnailCacheRevision else { return false }
+        guard record.pages.count == pageItems.count else { return false }
+        guard illustrationReloadSources.isEmpty else { return false }
+        for item in pageItems {
+            guard case .illustration(let img, _, _) = item else { continue }
+            if img.size.width <= 2, img.size.height <= 2 { return false }
+        }
+        return true
+    }
+
+    /// - Parameter galleryApplyToken: When non-`nil`, ties apply to `galleryBookLoadGeneration` / task cancellation so superseded selections never commit mixed state.
+    ///   Canonical metadata is applied up front; `pageItems` is published with placeholder illustrations immediately for My Library loads (`isLoadingGalleryBook` clears before downloads finish).
+    /// - Returns: `true` if `pageItems` were committed for this record.
+    @discardableResult
+    private func applyBookVersionRecord(_ record: BookVersionRecord, galleryApplyToken: UInt64? = nil) async -> Bool {
+        print("[StorybookLoad] applyBookVersionRecord id=\(record.bookVersionId.prefix(28))… createdAt=\(record.createdAt.timeIntervalSince1970) pages=\(record.pages.count) isLoading=\(isLoading) hasPrintCoverPDF=\(record.printCoverPDFURL != nil) galleryToken=\(galleryApplyToken.map(String.init) ?? "nil")")
+        if StorybookCloudApplyPolicy.isIncompleteCloudRecord(record) {
+            print("⚠️ applyBookVersionRecord — incomplete cloud (pages in doc=\(record.pages.count), pageCount=\(record.pageCount)) — not applying; consider repair sync")
+            if lastSyncedBookVersionId == record.bookVersionId, !pageItems.isEmpty, pageItems.count > record.pages.count {
+                Task { await saveCurrentBookInPlace(reason: "repairPartialCloud") }
+            }
+            return false
+        }
+
+        if canShortCircuitApplyBookVersionRecord(record) {
+            print("[StorybookLoad] applyBookVersionRecord SHORT-CIRCUIT same book=\(record.bookVersionId.prefix(20))…")
+            applyCanonicalBookMetadataFromCloudRecord(record)
+            enqueuePrefetchPrintCoverPanels(for: record)
+            return true
+        }
+
+        let galleryToken = galleryApplyToken
+        let isDeferredGalleryApply = galleryToken != nil
+
+        func stillValidForGallery() -> Bool {
+            guard let t = galleryToken else { return true }
+            return t == galleryBookLoadGeneration && !Task.isCancelled
+        }
+
+        if isDeferredGalleryApply {
+            guard stillValidForGallery() else { return false }
+        }
+
+        applyCanonicalBookMetadataFromCloudRecord(record)
+        illustrationReloadSources = [:]
+
+        let placeholderW = CGFloat(record.pageWidth)
+        let placeholderH = CGFloat(record.pageHeight)
+        let incrementalPh = Self.incrementalIllustrationPlaceholderUIImage()
+        var deferredIllustrationReload: [UUID: BookVersionPageRecord] = [:]
+
+        let sortedPages = record.pages.sorted(by: { $0.pageIndex < $1.pageIndex })
+        var slots: [PageItem?] = Array(repeating: nil, count: sortedPages.count)
+        var precomposedMemoryIDs: Set<UUID> = []
+
+        for (idx, page) in sortedPages.enumerated() {
+            let memoryUUID = UUID(uuidString: page.memoryId ?? "") ?? UUID()
+            if page.type == "textPage" {
+                let text = page.textContent ?? ""
+                slots[idx] = .textPage(
+                    index: page.pageIndex + 1,
+                    total: max(1, record.pageCount),
+                    body: text,
+                    title: page.title,
+                    subtitle: page.subtitle,
+                    memoryID: memoryUUID
+                )
+            } else if page.type == "illustration" {
+                slots[idx] = .illustration(image: incrementalPh, memoryID: memoryUUID, title: page.title)
+            }
+        }
+
+        struct IllustrationPageWork {
+            let slotIndex: Int
+            let page: BookVersionPageRecord
+            let memoryUUID: UUID
+        }
+        let illustrationWork: [IllustrationPageWork] = sortedPages.enumerated().compactMap { idx, page in
+            guard page.type == "illustration" else { return nil }
+            let memoryUUID = UUID(uuidString: page.memoryId ?? "") ?? UUID()
+            return IllustrationPageWork(slotIndex: idx, page: page, memoryUUID: memoryUUID)
+        }
+
+        let rebuilt = slots.compactMap { $0 }
+
+        guard !rebuilt.isEmpty else {
+            print("⚠️ Cloud book version \(record.bookVersionId) had no reconstructable pages")
+            if isDeferredGalleryApply, stillValidForGallery(), !record.pages.isEmpty {
+                errorMessage = "This book couldn’t be opened — its saved pages don’t match what we expect. Try another book or contact support if this keeps happening."
+            }
+            return false
+        }
+
+        guard stillValidForGallery() else {
+            print("[StorybookLoad] applyBookVersionRecord discarding slot publish (stale gallery token)")
+            return false
+        }
+
+        if !pageItems.isEmpty, rebuilt.count < pageItems.count, lastSyncedBookVersionId == record.bookVersionId {
+            print("⚠️ applyBookVersionRecord — would shrink in-memory book from \(pageItems.count) to \(rebuilt.count) for id=\(record.bookVersionId.prefix(24))…; refusing & repairing cloud from local state")
+            Task { await saveCurrentBookInPlace(reason: "repairShorterCloudRebuild") }
+            return false
+        }
+
+        pageItems = rebuilt
+        precomposedIllustrationMemoryIDs = []
+        ensureInteriorBookendsPresent()
+        backfillContinuationTextPageHeaders()
+
+        hasGeneratedStorybook = true
+
+        if isDeferredGalleryApply, stillValidForGallery() {
+            isLoadingGalleryBook = false
+        }
+
+        print("✅ Published storybook slots id=\(record.bookVersionId) count=\(rebuilt.count) (illustrations streaming…)")
+        enqueuePrefetchPrintCoverPanels(for: record)
+
+        let bookVersionId = record.bookVersionId
+        /// Parallelize cloud illustration fetches (sequential was very slow for large books). Chunked to avoid hundreds of simultaneous connections.
+        let parallelIllustrationChunk = 6
+        for chunkStart in stride(from: 0, to: illustrationWork.count, by: parallelIllustrationChunk) {
+            guard stillValidForGallery() else {
+                print("[StorybookLoad] applyBookVersionRecord aborted mid-load (superseded My Library selection or cancellation)")
+                return false
+            }
+            let end = min(chunkStart + parallelIllustrationChunk, illustrationWork.count)
+            let chunk = Array(illustrationWork[chunkStart..<end])
+            await withTaskGroup(of: (Int, PageItem, UUID, Bool, BookVersionPageRecord?).self) { group in
+                for item in chunk {
+                    group.addTask { [weak self] in
+                        guard let self else {
+                            let ph = Self.makeCloudIllustrationPlaceholderUIImage(pageWidth: placeholderW, pageHeight: placeholderH)
+                            return (item.slotIndex, PageItem.illustration(image: ph, memoryID: item.memoryUUID, title: item.page.title), item.memoryUUID, false, item.page)
+                        }
+                        if let result = await self.fetchIllustrationImage(
+                            for: item.page,
+                            memoryUUID: item.memoryUUID,
+                            bookVersionId: bookVersionId
+                        ) {
+                            return (
+                                item.slotIndex,
+                                PageItem.illustration(image: result.image, memoryID: item.memoryUUID, title: item.page.title),
+                                item.memoryUUID,
+                                result.precomposed,
+                                nil
+                            )
+                        }
+                        let placeholder = Self.makeCloudIllustrationPlaceholderUIImage(pageWidth: placeholderW, pageHeight: placeholderH)
+                        print(
+                            "📥 [IllustrationDownload] placeholder pageIndex=\(item.page.pageIndex) mem=\(item.memoryUUID.uuidString.prefix(8)) book=\(bookVersionId.prefix(12))"
+                        )
+                        return (
+                            item.slotIndex,
+                            PageItem.illustration(image: placeholder, memoryID: item.memoryUUID, title: item.page.title),
+                            item.memoryUUID,
+                            false,
+                            item.page
+                        )
+                    }
+                }
+                for await (slotIndex, pageItem, mem, precomposed, failedPage) in group {
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        guard stillValidForGallery() else { return }
+                        guard pageItems.indices.contains(slotIndex) else { return }
+                        pageItems[slotIndex] = pageItem
+                        if precomposed {
+                            precomposedMemoryIDs.insert(mem)
+                        }
+                        if let fp = failedPage {
+                            if isDeferredGalleryApply {
+                                deferredIllustrationReload[mem] = fp
+                            } else {
+                                illustrationReloadSources[mem] = fp
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        guard stillValidForGallery() else {
+            print("[StorybookLoad] applyBookVersionRecord discarding illustration stream results (stale gallery token)")
+            return false
+        }
+
+        await MainActor.run { [weak self] in
+            guard let self else { return }
+            guard stillValidForGallery() else { return }
+            if isDeferredGalleryApply {
+                illustrationReloadSources = deferredIllustrationReload
+            }
+            precomposedIllustrationMemoryIDs = precomposedMemoryIDs
+            ensureInteriorBookendsPresent()
+            backfillContinuationTextPageHeaders()
+        }
+
+        print("✅ Loaded cloud book version \(record.bookVersionId) with \(pageItems.count) pages (illustrations resolved)")
+
+        return true
+    }
+
+    /// Monotonic token + structured task so superseded My Library selections never commit mixed state or clear the spinner for the wrong load.
+    private var galleryBookLoadGeneration: UInt64 = 0
+    private var galleryBookLoadTask: Task<Void, Never>?
+
     /// Load a book from My Library: always apply canonical Firestore record (print metadata), then overlay local illustration bytes when matched legacy is present.
+    @Published var isLoadingGalleryBook: Bool = false
+
     func loadGalleryBook(record: BookVersionRecord, legacyBook: PersistableStorybook?) {
-        print("🧭 VM loadGalleryBook start: id=\(record.bookVersionId), source=\(record.source), pages=\(record.pageCount), hasLegacy=\(legacyBook != nil)")
-        Task {
+        galleryBookLoadTask?.cancel()
+        galleryBookLoadGeneration &+= 1
+        let token = galleryBookLoadGeneration
+        print("🧭 VM loadGalleryBook start: id=\(record.bookVersionId), source=\(record.source), pages=\(record.pageCount), hasLegacy=\(legacyBook != nil) token=\(token)")
+        print("[StorybookLoad] loadGalleryBook record.createdAt=\(record.createdAt.timeIntervalSince1970) bookVersionId=\(record.bookVersionId.prefix(28))…")
+        errorMessage = nil
+        isLoadingGalleryBook = true
+        galleryBookLoadTask = Task { @MainActor in
+            defer {
+                if token == galleryBookLoadGeneration {
+                    isLoadingGalleryBook = false
+                }
+            }
+            guard token == galleryBookLoadGeneration, !Task.isCancelled else { return }
             skippedMemoriesDuringGeneration = []
-            await applyBookVersionRecord(record)
+            let committed = await applyBookVersionRecord(record, galleryApplyToken: token)
+            guard token == galleryBookLoadGeneration, !Task.isCancelled else { return }
+            if !committed {
+                if record.pages.isEmpty, let legacy = legacyBook, !legacy.pageItems.isEmpty {
+                    applyLegacyBookFallback(from: legacy, cloudRecord: record)
+                    print("🧭 VM loadGalleryBook recovered from local disk (cloud pages empty); re-queued sync id=\(record.bookVersionId)")
+                    FirestoreSyncService.shared.queueBookSync(legacy, bookId: record.bookVersionId)
+                } else if record.pages.isEmpty, legacyBook == nil {
+                    errorMessage = "This book’s upload was interrupted before it finished saving to the cloud. Regenerate the storybook on this device, or open it from a device that still has the original copy."
+                    print("🧭 VM loadGalleryBook no cloud pages and no local match for id=\(record.bookVersionId)")
+                } else {
+                    print("🧭 VM loadGalleryBook skip legacy merge (apply did not commit this record)")
+                }
+                return
+            }
+            guard currentBookVersionRecord?.bookVersionId == record.bookVersionId else {
+                print("🧭 VM loadGalleryBook record mismatch after apply")
+                return
+            }
             if let legacy = legacyBook {
                 mergeLegacyIllustrationData(from: legacy)
                 print("🧭 VM loadGalleryBook merged legacy image bytes for id=\(record.bookVersionId)")
             }
-            print("🧭 VM loadGalleryBook end: pageItems=\(pageItems.count), images=\(images.count), hasGeneratedStorybook=\(hasGeneratedStorybook)")
+            print("🧭 VM loadGalleryBook end: pageItems=\(pageItems.count), illustrations=\(storybookGeneratedIllustrationCount), hasGeneratedStorybook=\(hasGeneratedStorybook)")
         }
+    }
+
+    /// When Firestore has no `pages` rows yet (interrupted sync) but this device still has the full `PersistableStorybook`, load locally and let `queueBookSync` repair the cloud doc.
+    private func applyLegacyBookFallback(from legacy: PersistableStorybook, cloudRecord: BookVersionRecord) {
+        applyCanonicalBookMetadataFromCloudRecord(cloudRecord)
+        let layout = BookVersionLayoutFactory.layout(forArtStyle: legacy.artStyle)
+        loadedBookOrientation = layout.orientation
+        loadedBookPageWidth = CGFloat(layout.pageWidth)
+        loadedBookPageHeight = CGFloat(layout.pageHeight)
+
+        pageItems = legacy.pageItems.compactMap { persistableItem in
+            var memoryID: UUID?
+            if let urlString = persistableItem.url,
+               let url = URL(string: urlString),
+               url.scheme == "memoirai",
+               url.host == "memory" {
+                let pathComponents = url.pathComponents
+                if pathComponents.count > 1 {
+                    memoryID = UUID(uuidString: pathComponents[1])
+                }
+            }
+            let finalMemoryID = memoryID ?? UUID()
+            switch persistableItem.type {
+            case "illustration":
+                guard let imageData = persistableItem.imageData,
+                      let image = UIImage(data: imageData) else { return nil }
+                return PageItem.illustration(image: image, memoryID: finalMemoryID, title: persistableItem.title)
+            case "textPage":
+                let body = persistableItem.textContent ?? ""
+                return PageItem.textPage(
+                    index: persistableItem.pageIndex ?? 1,
+                    total: persistableItem.totalPages ?? max(1, legacy.pageItems.count),
+                    body: body,
+                    title: persistableItem.title,
+                    subtitle: persistableItem.subtitle,
+                    memoryID: finalMemoryID
+                )
+            case "qrCode":
+                return nil
+            default:
+                return nil
+            }
+        }
+        precomposedIllustrationMemoryIDs = []
+        illustrationReloadSources = [:]
+        illustrationRetryInProgress = []
+
+        if (cloudRecord.printTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let localTitle = legacy.bookDisplayTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !localTitle.isEmpty {
+            bookDisplayTitle = localTitle
+        }
+        if (cloudRecord.backCoverPitch ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let pitch = legacy.backCoverPitch?.trimmingCharacters(in: .whitespacesAndNewlines), !pitch.isEmpty {
+            backCoverPitch = pitch
+        }
+        if cloudRecord.coverFontPreset == nil || (cloudRecord.coverFontPreset ?? "").isEmpty {
+            coverFontPreset = legacy.coverFontPreset
+                ?? CoverCopyPolicy(artStyle: ArtStyle(rawValue: legacy.artStyle) ?? .kidsBook, profileDisplayName: bookDisplayTitle).coverFontPreset().rawValue
+        }
+
+        ensureInteriorBookendsPresent()
+        backfillContinuationTextPageHeaders()
+        lastSyncedBookVersionId = cloudRecord.bookVersionId
+        lastPersistedBookCreatedAt = legacy.createdAt
+        hasGeneratedStorybook = true
+        isVisualBookReady = true
+        errorMessage = nil
+        print("[StorybookLoad] applyLegacyBookFallback pageItems=\(pageItems.count) bookVersionId=\(cloudRecord.bookVersionId.prefix(28))…")
     }
 
     private func mergeLegacyIllustrationData(from legacy: PersistableStorybook) {
@@ -1565,10 +2021,7 @@ class StoryPageViewModel: ObservableObject {
             newItems.append(item)
         }
         pageItems = newItems
-        images = newItems.compactMap { entry in
-            if case .illustration(let image, _, _) = entry { return image }
-            return nil
-        }
+        backfillContinuationTextPageHeaders()
     }
     
     func isPrecomposedIllustration(memoryID: UUID) -> Bool {
@@ -1606,12 +2059,22 @@ class StoryPageViewModel: ObservableObject {
         memoryUUID: UUID,
         bookVersionId: String
     ) async -> (image: UIImage, precomposed: Bool)? {
+        if Task.isCancelled { return nil }
         let ctx = "book=\(bookVersionId.prefix(10)) pageIdx=\(page.pageIndex) mem=\(memoryUUID.uuidString.prefix(8))"
 
+        let diskKey = "\(bookVersionId)|\(page.pageIndex)|\(memoryUUID.uuidString)"
+        if let hit = IllustrationImageDiskCache.shared.image(forKey: diskKey) {
+            let precomposed = !(page.renderedPageStoragePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+                || !(page.renderedPageURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+            return (hit, precomposed)
+        }
+
         for candidate in illustrationURLCandidates(for: page) {
+            if Task.isCancelled { return nil }
             let label = "\(ctx) source=firestoreURL precomposed=\(candidate.precomposed)"
             if let data = await downloadImageData(from: candidate.url, context: label, maxAttempts: 3),
                let image = UIImage(data: data) {
+                IllustrationImageDiskCache.shared.store(image: image, forKey: diskKey)
                 return (image, candidate.precomposed)
             }
         }
@@ -1622,6 +2085,7 @@ class StoryPageViewModel: ObservableObject {
                 let label = "\(ctx) source=freshStoragePath kind=png precomposed=true"
                 if let data = await downloadImageData(from: fresh.absoluteString, context: label, maxAttempts: 3),
                    let image = UIImage(data: data) {
+                    IllustrationImageDiskCache.shared.store(image: image, forKey: diskKey)
                     return (image, true)
                 }
             } catch {
@@ -1636,6 +2100,7 @@ class StoryPageViewModel: ObservableObject {
                 let label = "\(ctx) source=freshStoragePath kind=jpeg precomposed=\(jpegIsPrecomposed)"
                 if let data = await downloadImageData(from: fresh.absoluteString, context: label, maxAttempts: 3),
                    let image = UIImage(data: data) {
+                    IllustrationImageDiskCache.shared.store(image: image, forKey: diskKey)
                     return (image, jpegIsPrecomposed)
                 }
             } catch {
@@ -1648,9 +2113,20 @@ class StoryPageViewModel: ObservableObject {
         return nil
     }
 
-    private func cloudIllustrationPlaceholderImage() -> UIImage {
-        let w = max(loadedBookPageWidth ?? 612, 100)
-        let h = max(loadedBookPageHeight ?? 792, 100)
+    /// 1×1 paper-colored bitmap used as a lightweight slot until a real illustration is decoded (gallery incremental load).
+    private nonisolated static func incrementalIllustrationPlaceholderUIImage() -> UIImage {
+        let size = CGSize(width: 1, height: 1)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { ctx in
+            UIColor(white: 0.97, alpha: 1).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+        }
+    }
+
+    /// Safe to call from concurrent download tasks (not MainActor-isolated).
+    private nonisolated static func makeCloudIllustrationPlaceholderUIImage(pageWidth: CGFloat, pageHeight: CGFloat) -> UIImage {
+        let w = max(pageWidth, 100)
+        let h = max(pageHeight, 100)
         let size = CGSize(width: w, height: h)
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { ctx in
@@ -1670,6 +2146,12 @@ class StoryPageViewModel: ObservableObject {
         }
     }
 
+    private func cloudIllustrationPlaceholderImage(pageWidth: CGFloat? = nil, pageHeight: CGFloat? = nil) -> UIImage {
+        let w = pageWidth ?? loadedBookPageWidth ?? 612
+        let h = pageHeight ?? loadedBookPageHeight ?? 792
+        return Self.makeCloudIllustrationPlaceholderUIImage(pageWidth: w, pageHeight: h)
+    }
+
     private func replaceIllustration(memoryID: UUID, image: UIImage, precomposed: Bool) {
         var newItems = pageItems
         for i in newItems.indices {
@@ -1678,10 +2160,6 @@ class StoryPageViewModel: ObservableObject {
             break
         }
         pageItems = newItems
-        images = newItems.compactMap { entry in
-            if case .illustration(let img, _, _) = entry { return img }
-            return nil
-        }
         if precomposed {
             precomposedIllustrationMemoryIDs.insert(memoryID)
         } else {
@@ -1722,6 +2200,10 @@ class StoryPageViewModel: ObservableObject {
         }
 
         for attempt in 1...maxAttempts {
+            if Task.isCancelled {
+                print("📥 [IllustrationDownload] cancelled context=\(context)")
+                return nil
+            }
             do {
                 let (data, response) = try await Self.illustrationDownloadSession.data(from: url)
                 guard let http = response as? HTTPURLResponse else {
@@ -1741,12 +2223,19 @@ class StoryPageViewModel: ObservableObject {
                     return data
                 }
                 print("📥 [IllustrationDownload] HTTP \(http.statusCode) context=\(context) attempt=\(attempt)")
+            } catch is CancellationError {
+                print("📥 [IllustrationDownload] cancelled (URLSession) context=\(context)")
+                return nil
             } catch {
                 print("📥 [IllustrationDownload] error context=\(context) attempt=\(attempt) \(error.localizedDescription)")
             }
             if attempt < maxAttempts {
                 let delayNs = UInt64(350_000_000 * UInt64(attempt))
-                try? await Task.sleep(nanoseconds: delayNs)
+                do {
+                    try await Task.sleep(nanoseconds: delayNs)
+                } catch is CancellationError {
+                    return nil
+                } catch {}
             }
         }
         return nil
@@ -1833,14 +2322,6 @@ class StoryPageViewModel: ObservableObject {
                 return nil
             }
         }
-        
-        // Extract images for the images array
-        images = pageItems.compactMap { item in
-            if case .illustration(let image, _, _) = item {
-                return image
-            }
-            return nil
-        }
         precomposedIllustrationMemoryIDs = []
         
         // Update art style to match the loaded book (ensures correct layout/fonts)
@@ -1858,6 +2339,7 @@ class StoryPageViewModel: ObservableObject {
         lastPersistedBookCreatedAt = book.createdAt
         
         hasGeneratedStorybook = true
+        backfillContinuationTextPageHeaders()
         print("✅ Historic book loaded into editor: \(book.createdAt)")
     }
     
@@ -1949,8 +2431,11 @@ class StoryPageViewModel: ObservableObject {
                     pages.append(currentSentenceGroup.joined(separator: " "))
                 }
             } else {
-                // Paragraph fits, check if it fits on current page
-                if currentPageHeight + paragraphHeight > maxHeight && !currentPageText.isEmpty {
+                // Paragraph fits — include separator height if there's already content on this page
+                let separatorHeight: CGFloat = currentPageText.isEmpty
+                    ? 0
+                    : measureTextHeight(paragraphSeparator, width: width, font: font, lineSpacing: lineSpacing)
+                if currentPageHeight + separatorHeight + paragraphHeight > maxHeight && !currentPageText.isEmpty {
                     // Start new page
                     pages.append(currentPageText.joined(separator: paragraphSeparator))
                     currentPageText = [paragraph]
@@ -1958,7 +2443,7 @@ class StoryPageViewModel: ObservableObject {
                 } else {
                     // Add to current page
                     currentPageText.append(paragraph)
-                    currentPageHeight += paragraphHeight
+                    currentPageHeight += separatorHeight + paragraphHeight
                 }
             }
         }
@@ -1993,29 +2478,29 @@ class StoryPageViewModel: ObservableObject {
         guard !text.isEmpty else { return [] }
         
         let isKidsBook = currentArtStyle == .kidsBook
-        // Kids book: header bar ~6%, text area 65%; others: 70% for text content
-        let availableHeight = pageHeight * (isKidsBook ? 0.65 : 0.70)
-        let textWidth = pageWidth * 0.85  // 85% width accounting for margins
+        // Kids: header bar unchanged per page; vertical: title+subtitle on every page → less body height than old 0.70 model
+        let availableHeight = pageHeight * (isKidsBook ? 0.65 : 0.62)
+        let textWidth = pageWidth * (isKidsBook ? 0.81 : 0.84) // kids: side 8.5% + right 10.5%; vertical: 6% + 10%
         
         // Get font for current art style - use same relative sizing as display
         let fontStyle = BookFontStyle(artStyle: currentArtStyle)
         let font = uiFont(from: fontStyle, frameHeight: pageHeight)
         
         // Kids book: double spacing (2× line height) + no blank line between paragraphs
-        let lineSpacing: CGFloat = isKidsBook ? 12 : font.pointSize * 0.15
+        let lineSpacing: CGFloat = isKidsBook ? 12 : pageHeight * 0.006  // matches VerticalBookTextPage.lineSpacing
         let paragraphSeparator = isKidsBook ? "\n" : "\n\n"
         
         // Split text into pages
         let pageTexts = splitTextToFitHeight(text, maxHeight: availableHeight, width: textWidth, font: font, lineSpacing: lineSpacing, paragraphSeparator: paragraphSeparator)
         
-        // Create PageItem array
+        // Create PageItem array — repeat title/subtitle on every text page (match-first continuation UX)
         return pageTexts.enumerated().map { index, pageText in
             PageItem.textPage(
                 index: index + 1,
                 total: pageTexts.count,
                 body: pageText,
-                title: index == 0 ? title : nil,  // Title only on first page
-                subtitle: index == 0 ? subtitle : nil,  // Subtitle only on first page
+                title: title,
+                subtitle: subtitle,
                 memoryID: memoryID
             )
         }
@@ -2332,13 +2817,12 @@ class StoryPageViewModel: ObservableObject {
         
         // Get the main character's description from face analysis
         if let vision = faceDescription, !vision.isEmpty {
-            identityBits.append(translateRaceToDescriptor(vision))
+            identityBits.append(vision)
         }
         
         // Add user-specified details from settings
         if !ethnicity.isEmpty {
-            let translatedEthnicity = translateRaceToDescriptor(ethnicity)
-            identityBits.append(translatedEthnicity)
+            identityBits.append(ethnicity)
         }
         
         if !gender.isEmpty {
@@ -2346,7 +2830,7 @@ class StoryPageViewModel: ObservableObject {
         }
         
         if !otherDetails.isEmpty {
-            identityBits.append(translateRaceToDescriptor(otherDetails))
+            identityBits.append(otherDetails)
         }
         
         guard !identityBits.isEmpty else { return "" }
@@ -2403,7 +2887,7 @@ class StoryPageViewModel: ObservableObject {
         return nil  // Unknown - let AI decide
     }
 
-    private func normalizeFaceDescriptor(_ descriptor: String, explicitGender: String, explicitEthnicity: String) -> String {
+    private func normalizeFaceDescriptor(_ descriptor: String, explicitGender: String) -> String {
         var cleaned = descriptor.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return "" }
 
@@ -2411,15 +2895,6 @@ class StoryPageViewModel: ObservableObject {
             let genderPattern = #"\b(a\s+man|a\s+woman|man|woman|male|female)\b"#
             cleaned = cleaned.replacingOccurrences(
                 of: genderPattern,
-                with: "",
-                options: [.regularExpression, .caseInsensitive]
-            )
-        }
-
-        if !explicitEthnicity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let ancestryPattern = #"\b(indian|south asian|asian|east asian|chinese|japanese|korean|hispanic|latino|mexican|black|african american|african|caucasian|white|european|middle eastern|arabic|persian|native american|indigenous|mixed|biracial)\b"#
-            cleaned = cleaned.replacingOccurrences(
-                of: ancestryPattern,
                 with: "",
                 options: [.regularExpression, .caseInsensitive]
             )
@@ -3400,7 +3875,12 @@ class StoryPageViewModel: ObservableObject {
     /// Confidence-based scoring system for narrator detection
     /// Returns a weighted score indicating how likely a character is the narrator
     /// Higher scores indicate stronger confidence
-    private func narratorScore(_ char: CharacterDetails.Character, in details: CharacterDetails, derivedNarratorName: String?) -> Int {
+    private func narratorScore(
+        _ char: CharacterDetails.Character,
+        in details: CharacterDetails,
+        derivedNarratorName: String?,
+        sceneTextForNarratorScoring: String? = nil
+    ) -> Int {
         var score = 0
         let name = char.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         let relationship = char.relationshipToNarrator.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3448,7 +3928,7 @@ class StoryPageViewModel: ObservableObject {
         }
         
         // Weak: scene analysis (+15)
-        if let sceneText = self.currentSceneDescription?.lowercased() {
+        if let sceneText = sceneTextForNarratorScoring?.lowercased() {
             let otherCharNames = details.characters
                 .filter { $0.id != char.id }
                 .map { $0.name.lowercased() }
@@ -3475,8 +3955,18 @@ class StoryPageViewModel: ObservableObject {
     
     /// Multi-filter detection: checks if a character is the narrator/main character
     /// Uses confidence scoring threshold (>= 30) for robust detection
-    private func isNarratorCharacter(_ char: CharacterDetails.Character, in details: CharacterDetails, derivedNarratorName: String?) -> Bool {
-        return narratorScore(char, in: details, derivedNarratorName: derivedNarratorName) >= 30
+    private func isNarratorCharacter(
+        _ char: CharacterDetails.Character,
+        in details: CharacterDetails,
+        derivedNarratorName: String?,
+        sceneTextForNarratorScoring: String? = nil
+    ) -> Bool {
+        narratorScore(
+            char,
+            in: details,
+            derivedNarratorName: derivedNarratorName,
+            sceneTextForNarratorScoring: sceneTextForNarratorScoring
+        ) >= 30
     }
     
     private func traitListFromCharacter(_ character: CharacterDetails.Character) -> [String] {
@@ -3721,7 +4211,7 @@ class StoryPageViewModel: ObservableObject {
         var traits: [String] = []
         let eth = ethnicity.trimmingCharacters(in: .whitespacesAndNewlines)
         if !eth.isEmpty {
-            traits.append(translateRaceToDescriptor(eth))
+            traits.append(eth)
         }
         let gen = gender.trimmingCharacters(in: .whitespacesAndNewlines)
         if !gen.isEmpty {
@@ -3751,11 +4241,11 @@ class StoryPageViewModel: ObservableObject {
         }
         var bits: [String] = []
         if let vision = faceDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !vision.isEmpty {
-            bits.append(translateRaceToDescriptor(vision))
+            bits.append(vision)
         }
         let eth = ethnicity.trimmingCharacters(in: .whitespacesAndNewlines)
         if !eth.isEmpty {
-            bits.append("self-described heritage / appearance notes: \(translateRaceToDescriptor(eth))")
+            bits.append("Ethnicity / heritage (for skin tone and features): \(eth). Render with appropriate skin tone, facial features, and hair characteristics for this heritage.")
         }
         let gen = gender.trimmingCharacters(in: .whitespacesAndNewlines)
         if !gen.isEmpty {
@@ -3775,8 +4265,6 @@ class StoryPageViewModel: ObservableObject {
 
     /// Builds final character lines using explicit character-card details with minimal mutation.
     private func buildCharacterList(for entry: MemoryEntry, sceneDescription: String? = nil, includeNarrator: Bool) -> String {
-        // Store scene for isNarratorCharacter to use
-        self.currentSceneDescription = sceneDescription
         var characterLines: [String] = []
         var characterIndex = 1
         let derivedNarratorName = deriveSubjectName(from: entry)
@@ -3794,8 +4282,8 @@ class StoryPageViewModel: ObservableObject {
             let enrichedDetails = CharacterDetails(characters: enrichedDetailsCharacters)
             
             let narratorCandidate = enrichedDetails.characters.max { lhs, rhs in
-                narratorScore(lhs, in: enrichedDetails, derivedNarratorName: derivedNarratorName) <
-                narratorScore(rhs, in: enrichedDetails, derivedNarratorName: derivedNarratorName)
+                narratorScore(lhs, in: enrichedDetails, derivedNarratorName: derivedNarratorName, sceneTextForNarratorScoring: sceneDescription) <
+                narratorScore(rhs, in: enrichedDetails, derivedNarratorName: derivedNarratorName, sceneTextForNarratorScoring: sceneDescription)
             }
             let narratorId = includeNarrator ? narratorCandidate?.id : nil
 
@@ -3973,64 +4461,6 @@ class StoryPageViewModel: ObservableObject {
             let text = (custom ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return text.isEmpty ? "Style: Artistic illustration." : "Style: \(text)."
         }
-    }
-    
-    /// Create a simplified prompt that's more likely to work with OpenAI API
-    /// ✅ IMPROVED: Keeps memory content but simplifies structure
-    private func createSimplifiedPrompt(from originalPrompt: String, enrichedMemory: String) -> String {
-        // Strategy: Use the enriched memory text directly, but keep it concise
-        // This preserves the actual memory content instead of stripping it out
-        
-        var simplified = "Children's book illustration: "
-        
-        // Extract key elements from enriched memory (people, actions, setting)
-        // Remove overly complex descriptors but keep the core scene
-        let sentences = enrichedMemory.components(separatedBy: ". ")
-        var coreScene = ""
-        
-        // Take first 2-3 sentences which usually contain the main action
-        let sentencesToKeep = min(3, sentences.count)
-        for i in 0..<sentencesToKeep {
-            if i < sentences.count {
-                var sentence = sentences[i].trimmingCharacters(in: .whitespacesAndNewlines)
-                
-                // Simplify overly detailed descriptors
-                sentence = sentence.replacingOccurrences(of: "with warm brown skin tone, prominent cheekbones, bright smile, and curly black hair", with: "with warm brown skin and dark hair")
-                sentence = sentence.replacingOccurrences(of: "expressive dark eyes", with: "dark eyes")
-                sentence = sentence.replacingOccurrences(of: "around \\d+ years old", with: "young adult", options: .regularExpression)
-                sentence = sentence.replacingOccurrences(of: "aged around \\d+", with: "young adult", options: .regularExpression)
-                
-                // Remove overly long clothing descriptions
-                sentence = sentence.replacingOccurrences(of: ", wearing a casual [^,]+", with: "", options: .regularExpression)
-                sentence = sentence.replacingOccurrences(of: ", his [^,]+ in [^,]+", with: "", options: .regularExpression)
-                
-                coreScene += sentence
-                if !sentence.hasSuffix(".") {
-                    coreScene += ". "
-                } else {
-                    coreScene += " "
-                }
-            }
-        }
-        
-        // If core scene is still too long, truncate intelligently
-        if coreScene.count > 400 {
-            let words = coreScene.components(separatedBy: " ")
-            let keepWords = words.prefix(50) // Keep first 50 words
-            coreScene = keepWords.joined(separator: " ")
-            if !coreScene.hasSuffix(".") {
-                coreScene += "."
-            }
-        }
-        
-        simplified += coreScene
-        
-        // Add style instruction
-        simplified += " Soft watercolor children's book art style."
-        
-        print("🔄 Simplified from \(enrichedMemory.count) chars to \(simplified.count) chars while keeping core memory content")
-        
-        return simplified
     }
     
     /// Sends prompt to the selected Gemini image model for image generation
@@ -4269,10 +4699,19 @@ class StoryPageViewModel: ObservableObject {
         let styleText = extractStyleRequirement(for: style, custom: customStyle)
 
         parts.append("IMAGE STYLE (high priority, must follow): \(styleText)")
+        parts.append(ArtStyle.coverStyleBindingInstruction)
         parts.append("")
+        if hasHeadshot {
+            if style == .kidsBook {
+                parts.append("STYLE OVERRIDE (highest priority): The attached reference photo is for IDENTITY/LIKENESS ONLY. RE-RENDER the person in the IMAGE STYLE above. Do NOT preserve photographic skin texture, lens depth-of-field, photo lighting, fabric weave, or HDR tonality. Pose and clothing may be illustrative; only the face must read as the same person as the reference.")
+            } else {
+                parts.append("STYLE OVERRIDE (highest priority): The final rendering MUST match the IMAGE STYLE above. The attached reference photo is for IDENTITY/LIKENESS ONLY — do NOT copy its photographic textures. Do NOT default to watercolor, children's-book, or storybook rendering. Pose and clothing may be illustrative; only the face must read as the same person as the reference. Render strictly in: \(styleText)")
+            }
+            parts.append("")
+        }
         parts.append("TEXT RENDERING RULE (mandatory): Do not render any words, letters, numbers, titles, chapter headings, captions, page numbers, QR codes, watermarks, signs, logos, or any typographic marks anywhere in the image. The output must be pure illustration with zero text.")
         if style == .kidsBook {
-            parts.append("FACIAL DETAIL RULE: Keep eyes expressive and human-like with visible iris/pupil detail and gentle eyelid/eyebrow definition, while preserving the soft watercolor children's-book vibe.")
+            parts.append("FACIAL DETAIL RULE: Eyes warm, painted, and expressive in a soft children's-book way. Suggest iris and pupil with gentle painted shapes, not photographic detail. Faces stay soft and hand-drawn.")
         }
         parts.append("")
         parts.append("MEMORY TEXT (do not contradict): \(memoryText)")
@@ -4314,7 +4753,8 @@ class StoryPageViewModel: ObservableObject {
         }
 
         parts.append("")
-        parts.append("STYLE REMINDER: \(styleText)")
+        parts.append("STYLE REMINDER (must follow):")
+        parts.append(styleText)
 
         return parts.joined(separator: "\n")
     }
@@ -4416,7 +4856,158 @@ class StoryPageViewModel: ObservableObject {
         return sceneDescription
     }
 
-    
+    /// One memory’s storybook pipeline result (parallel generation merges by `index`).
+    private struct StorybookMemoryPipelineOutcome {
+        let index: Int
+        let generatedImage: UIImage?
+        let skipped: SkippedStoryImageMemory?
+        let appendedPageItems: [PageItem]
+    }
+
+    /// Bounded concurrent memories during storybook generation (OpenAI + Gemini). Higher values increase 429/OOM risk.
+    private static let storybookMemoryParallelism = 3
+
+    /// Runs the same per-memory steps as the original sequential loop; must be called from `MainActor`.
+    private func runStorybookMemoryPipeline(
+        index idx: Int,
+        entry: MemoryEntry,
+        sortedEntriesCount: Int,
+        totalMemories: Int,
+        artStyleForGeneration: ArtStyle,
+        customArtStyleTextSnapshot: String,
+        subjectPhotoSnapshot: UIImage?
+    ) async throws -> StorybookMemoryPipelineOutcome {
+        guard let entryID = entry.id else {
+            return StorybookMemoryPipelineOutcome(index: idx, generatedImage: nil, skipped: nil, appendedPageItems: [])
+        }
+        let raw = entry.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty else {
+            return StorybookMemoryPipelineOutcome(index: idx, generatedImage: nil, skipped: nil, appendedPageItems: [])
+        }
+
+        StorybookGenLog.fence("MEMORY PIPELINE (on-device) \(idx + 1)/\(sortedEntriesCount) id=\(entryID.uuidString.prefix(8))…")
+        StorybookGenLog.verboseLine("artStyle=\(artStyleForGeneration.rawValue) customStyleLen=\(customArtStyleTextSnapshot.count) hasProfilePhoto=\(subjectPhotoSnapshot != nil)")
+        StorybookGenLog.verboseLine("memoryText (\(raw.count) chars): \(String(raw.prefix(500)))\(raw.count > 500 ? "…" : "")")
+
+        let characterContextForExtraction = buildCharacterContext(for: entry)
+        StorybookGenLog.verboseLine("characterContextForExtraction (\(characterContextForExtraction.count) chars): \(characterContextForExtraction)")
+        let sceneDescription: String
+        if let s1 = try? await extractVisualScene(memory: raw, characterContext: characterContextForExtraction) {
+            sceneDescription = s1
+        } else {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if let s2 = try? await extractVisualScene(memory: raw, characterContext: characterContextForExtraction) {
+                sceneDescription = s2
+            } else {
+                let label = memoryDisplayLabel(for: entry, fallbackOrdinal: idx + 1)
+                let skipped = SkippedStoryImageMemory(
+                    id: entryID,
+                    memoryLabel: label,
+                    detail: "Couldn’t read this memory’s visual scene. Try again in a moment."
+                )
+                return StorybookMemoryPipelineOutcome(index: idx, generatedImage: nil, skipped: skipped, appendedPageItems: [])
+            }
+        }
+        let extracted = await extractTitleAndCharacters(from: raw, characterContext: characterContextForExtraction)
+        StorybookGenLog.verboseLine("extractTitleAndCharacters → title=\"\(extracted.title)\" featuring=\"\(extracted.featuring)\"")
+
+        let narratorDecision = inferNarratorPresence(memoryText: raw, entry: entry)
+        let narratorPresence = narratorDecision.presence
+        print("🧭 Narrator presence classification: \(narratorPresence.rawValue) [score: \(narratorDecision.confidenceScore), reason: \(narratorDecision.reason)]")
+        let includeNarrator = narratorPresence.shouldAttachHeadshot
+        if narratorDecision.firstPersonDetected {
+            print("🧷 Narrator reference trigger: first-person cues detected; score = \(narratorDecision.confidenceScore); headshot attachment enabled = \(includeNarrator)")
+        } else {
+            print("🧷 Narrator reference trigger: \(narratorDecision.reason); score = \(narratorDecision.confidenceScore); headshot attachment enabled = \(includeNarrator)")
+        }
+
+        let characterList = buildCharacterList(
+            for: entry,
+            sceneDescription: sceneDescription,
+            includeNarrator: includeNarrator
+        )
+        StorybookGenLog.verboseLine("characterList (\(characterList.count) chars):\n\(characterList)")
+
+        let assembledPrompt = assembleFinalPrompt(
+            memoryText: raw,
+            characters: characterList,
+            narratorPresence: narratorPresence,
+            sceneDescription: sceneDescription,
+            style: artStyleForGeneration,
+            customStyle: customArtStyleTextSnapshot,
+            hasHeadshot: subjectPhotoSnapshot != nil
+        )
+
+        print("🖼️ ASSEMBLED PROMPT (\(assembledPrompt.count) chars) ►", assembledPrompt)
+        StorybookGenLog.line("ASSEMBLED_PROMPT length=\(assembledPrompt.count) (see line above: 🖼️ ASSEMBLED PROMPT)")
+
+        print("🔍 Attempting image generation with Gemini only (no fallback)...")
+        let headshotReferences: [UIImage] = includeNarrator ? (subjectPhotoSnapshot.map { [$0] } ?? []) : []
+        let styleReferenceImage = loadSelectedStyleReferenceIfNeeded(lockedArtStyle: artStyleForGeneration)
+        var referenceImages = headshotReferences
+        if let styleReferenceImage {
+            referenceImages.append(styleReferenceImage.image)
+        }
+        print("🖌️ Style reference profile selected: \(styleReferenceProfile.rawValue)")
+        print("🖼️ Headshot attachment count for generation: \(headshotReferences.count)")
+        print("🖼️ Style reference file for generation: \(styleReferenceImage?.filename ?? "none")")
+        print("🖼️ Style reference attachment count for generation: \(styleReferenceImage == nil ? 0 : 1)")
+        print("🖼️ Total reference attachment count for generation: \(referenceImages.count)")
+        let geminiSize = artStyleForGeneration == .kidsBook ? "4:3" : "1792x1024"
+        var geminiImageErrorDescription: String?
+        let img: UIImage?
+        do {
+            img = try await generateImageWithGemini(
+                assembledPrompt,
+                size: geminiSize,
+                referenceImages: referenceImages
+            )
+        } catch {
+            geminiImageErrorDescription = error.localizedDescription
+            print("⚠️ Gemini image generation threw for memory \(idx + 1) of \(sortedEntriesCount): \(error.localizedDescription)")
+            img = nil
+        }
+
+        guard let img else {
+            let label = memoryDisplayLabel(for: entry, fallbackOrdinal: idx + 1)
+            let detail: String
+            if let geminiImageErrorDescription {
+                detail = geminiImageErrorDescription
+            } else if geminiImageSvc == nil {
+                detail = "Image generation is not configured (missing Gemini API key or service)."
+            } else {
+                detail = "The illustration request did not return an image. Try generating the storybook again."
+            }
+            let skipped = SkippedStoryImageMemory(id: entryID, memoryLabel: label, detail: detail)
+            print("⏭️ Skipping memory \(idx + 1) (no image); continuing with remaining memories.")
+            return StorybookMemoryPipelineOutcome(index: idx, generatedImage: nil, skipped: skipped, appendedPageItems: [])
+        }
+
+        let isKids = artStyleForGeneration == .kidsBook
+        let exportHeight: CGFloat = isKids ? 612 : 792
+        let exportWidth: CGFloat = isKids ? 792 : 612
+        let memoryPrompt = entry.prompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let questionDriven = isQuestionDrivenMemory(entry)
+        let displayTitle = questionDriven ? (memoryPrompt?.isEmpty == false ? memoryPrompt : extracted.title) : extracted.title
+        let displaySubtitle = questionDriven ? extracted.title : nil
+
+        let textPages = paginateText(
+            raw,
+            title: displayTitle,
+            subtitle: displaySubtitle,
+            pageHeight: exportHeight,
+            pageWidth: exportWidth,
+            memoryID: entryID
+        )
+        var newPages: [PageItem] = textPages
+
+        let llmBarTitle = extracted.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let illustrationBarTitle = llmBarTitle.isEmpty ? displayTitle : llmBarTitle
+        newPages.append(.illustration(image: img, memoryID: entryID, title: illustrationBarTitle))
+
+        return StorybookMemoryPipelineOutcome(index: idx, generatedImage: img, skipped: nil, appendedPageItems: newPages)
+    }
+
     /// A temporary struct to hold a memory and its inferred chronological age.
     private struct ChronologicalMemory {
         let entry: MemoryEntry
@@ -4628,8 +5219,492 @@ class StoryPageViewModel: ObservableObject {
             print("🚫 Age extraction failed:", error.localizedDescription)
         }
         
-        print("🧠 Age inference source: fallback_999")
+        // Caller logs per-memory context; avoid spamming "fallback_999" for every unknown age.
         return 999
+    }
+
+    private var storybookGenerationCounter: UInt64 = 0
+
+    /// How many full illustrated pages are in the current in-memory book (replaces the legacy `images` array for allowance accounting).
+    var storybookGeneratedIllustrationCount: Int {
+        pageItems.reduce(0) { n, p in
+            if case .illustration = p { return n + 1 }
+            return n
+        }
+    }
+
+    // MARK: - In-progress generation persistence (resume / kill)
+
+    private func buildPersistableStorybookForInProgress(
+        profileID: UUID,
+        createdAt: Date
+    ) -> PersistableStorybook? {
+        guard !pageItems.isEmpty else { return nil }
+        let policy = CoverCopyPolicy(artStyle: currentArtStyle, profileDisplayName: profileName ?? "")
+        var titleStored = bookDisplayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if titleStored.isEmpty { titleStored = policy.defaultBookTitle() }
+        let pitchRaw = backCoverPitch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pitchStored = pitchRaw.isEmpty ? policy.fallbackBackCoverPitch(bookTitle: titleStored) : backCoverPitch
+        let presetStored = coverFontPreset.isEmpty ? policy.coverFontPreset().rawValue : coverFontPreset
+        return PersistableStorybook(
+            profileID: profileID,
+            pageItems: persistablePageItemsFromCurrentState(),
+            artStyle: artStyleRaw,
+            createdAt: createdAt,
+            bookDisplayTitle: titleStored,
+            backCoverPitch: pitchStored,
+            coverFontPreset: presetStored
+        )
+    }
+
+    private func mergeGenerationMarkerFromChunkOutcomes(
+        marker: inout GenerationProgressMarker,
+        chunkOutcomes: [StorybookMemoryPipelineOutcome]
+    ) {
+        for o in chunkOutcomes {
+            if let skipped = o.skipped, !marker.skippedMemoryIDs.contains(skipped.id) {
+                marker.skippedMemoryIDs.append(skipped.id)
+            }
+            if o.generatedImage != nil, o.skipped == nil {
+                let list = o.appendedPageItems
+                for item in list {
+                    if case .illustration(_, let mid, _) = item {
+                        if !marker.completedMemoryIDs.contains(mid) {
+                            marker.completedMemoryIDs.append(mid)
+                        }
+                    }
+                }
+            }
+        }
+        marker.lastHeartbeatAt = Date()
+    }
+
+    private func flushInProgressBookToDisk(profileID: UUID, bookVersionId: String, createdAt: Date, marker: inout GenerationProgressMarker) {
+        autoreleasepool {
+            guard let data = buildPersistableStorybookForInProgress(profileID: profileID, createdAt: createdAt) else { return }
+            do {
+                var encoded = try JSONEncoder().encode(data)
+                _ = try StorybookLocalStore.writeCurrentBook(data: encoded, profileID: profileID)
+            } catch {
+                print("❌ flushInProgressBookToDisk: \(error.localizedDescription)")
+            }
+        }
+        marker.lastHeartbeatAt = Date()
+        marker.save()
+    }
+
+    private func emergencyFlushInProgressGenerationToDisk() {
+        guard let profileID = currentProfileID, let b = lastSyncedBookVersionId, let c = lastPersistedBookCreatedAt, !pageItems.isEmpty,
+              var marker = GenerationProgressMarker.load(for: profileID), marker.bookVersionId == b else { return }
+        marker.phase = .finalizing
+        print("⚠️ [Storybook] background task expiring — emergency flush; pages=\(pageItems.count)")
+        flushInProgressBookToDisk(profileID: profileID, bookVersionId: b, createdAt: c, marker: &marker)
+    }
+
+    /// Returns `true` when a resume was started; caller should set `hasRequestedGeneration` and skip an immediate full `loadStorybookForProfile`.
+    func resumeInProgressGenerationIfMarkerExists(
+        profileID: UUID,
+        profileName: String?,
+        profileEthnicity: String?
+    ) async -> Bool {
+        if let job = try? await FirestoreSyncService.shared.fetchLatestActiveStorybookJob(profileId: profileID) {
+            await attachToCloudStorybookJob(
+                jobId: job.jobId,
+                profileID: profileID,
+                profileName: profileName,
+                profileEthnicity: profileEthnicity
+            )
+            return true
+        }
+        if GenerationProgressMarker.load(for: profileID) != nil {
+            GenerationProgressMarker.clear(for: profileID)
+        }
+        return false
+    }
+
+    // MARK: - Cloud storybook generation (Firestore job + worker)
+
+    private func stopStorybookCloudJobListener() {
+        storybookCloudJobListener?.remove()
+        storybookCloudJobListener = nil
+        cloudStorybookFinalizeStarted = false
+    }
+
+    /// Dumps every entry from the `memoryFailures` map written by the cloud
+    /// worker into the device console (so we can copy/paste exact reasons when
+    /// debugging) and returns the most-common reason as a short user-readable
+    /// string for the error banner.
+    ///
+    /// Returns `nil` when the doc has no `memoryFailures` map yet — in that
+    /// case the existing `error` string from the cloud is enough.
+    static func logAndSummariseMemoryFailures(data: [String: Any], jobId: String) -> String? {
+        guard let failures = data["memoryFailures"] as? [String: [String: Any]],
+              !failures.isEmpty else {
+            return nil
+        }
+        print("🩺 [storybookJob \(jobId)] memoryFailures count=\(failures.count)")
+        var reasonCounts: [String: Int] = [:]
+        for (memoryId, info) in failures {
+            let stage = (info["stage"] as? String) ?? "unknown"
+            let message = (info["message"] as? String) ?? "no message"
+            let http = info["httpStatus"]
+            let finishReason = info["geminiFinishReason"]
+            let blockReason = info["geminiBlockReason"]
+            let textResponse = info["geminiTextResponse"]
+            let noImage = info["noImageBytes"]
+            print("🩺   memory=\(memoryId.prefix(8))… stage=\(stage) http=\(String(describing: http)) finishReason=\(String(describing: finishReason)) blockReason=\(String(describing: blockReason)) noImageBytes=\(String(describing: noImage)) textResponse=\(String(describing: textResponse))")
+            print("🩺     message: \(message)")
+            let key = "[\(stage)] \(message)"
+            reasonCounts[key, default: 0] += 1
+        }
+        guard let top = reasonCounts.sorted(by: { $0.value > $1.value }).first else {
+            return nil
+        }
+        if reasonCounts.count == 1 {
+            return "Reason: \(top.key)"
+        }
+        return "Most common reason (\(top.value)/\(failures.count)): \(top.key)"
+    }
+
+    private func memoryPlainText(_ entry: MemoryEntry) -> String {
+        entry.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private func rebuildPageItemsFromCloudJobData(_ data: [String: Any], profileID: UUID) async throws {
+        let ordered = (data["orderedMemoryIds"] as? [String]) ?? []
+        let results = (data["memoryResults"] as? [String: [String: Any]]) ?? [:]
+        let skippedStrings = (data["skippedMemoryIds"] as? [String]) ?? []
+        var skipped: [SkippedStoryImageMemory] = []
+        for s in skippedStrings {
+            guard let u = UUID(uuidString: s) else { continue }
+            skipped.append(SkippedStoryImageMemory(id: u, memoryLabel: "Memory", detail: "Skipped during cloud generation."))
+        }
+        skippedMemoriesDuringGeneration = skipped
+
+        let isKids = currentArtStyle == .kidsBook
+        let exportHeight: CGFloat = isKids ? 612 : 792
+        let exportWidth: CGFloat = isKids ? 792 : 612
+
+        var newPages: [PageItem] = []
+        let pool = try await fetchMemoryEntries(for: profileID)
+        var byId: [UUID: MemoryEntry] = [:]
+        for e in pool { if let mid = e.id { byId[mid] = e } }
+
+        for midString in ordered {
+            guard let mid = UUID(uuidString: midString),
+                  let res = results[midString],
+                  let entry = byId[mid] else { continue }
+            let raw = memoryPlainText(entry)
+            guard !raw.isEmpty else { continue }
+            guard let urlStr = res["illustrationURL"] as? String,
+                  let u = URL(string: urlStr) else { continue }
+            let (imgData, _) = try await URLSession.shared.data(from: u)
+            guard let img = UIImage(data: imgData) else { continue }
+
+            let displayTitle = (res["displayTitle"] as? String) ?? (entry.prompt ?? "Memory")
+            let displaySubtitle = res["displaySubtitle"] as? String
+            let illustrationBarTitle = (res["illustrationBarTitle"] as? String) ?? displayTitle
+
+            let textPages = paginateText(
+                raw,
+                title: displayTitle,
+                subtitle: displaySubtitle,
+                pageHeight: exportHeight,
+                pageWidth: exportWidth,
+                memoryID: mid
+            )
+            newPages.append(contentsOf: textPages)
+            newPages.append(.illustration(image: img, memoryID: mid, title: illustrationBarTitle))
+        }
+        pageItems = newPages
+    }
+
+    private func startStorybookCloudJobListener(jobId: String, profileID: UUID, thisRun: UInt64) {
+        stopStorybookCloudJobListener()
+        cloudStorybookFinalizeStarted = false
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        let ref = Firestore.firestore()
+            .collection("users").document(uid)
+            .collection("storybookJobs").document(jobId)
+        storybookCloudJobListener = ref.addSnapshotListener { [weak self] snap, err in
+            guard let self, err == nil, let snap, snap.exists else { return }
+            Task { @MainActor in
+                guard thisRun == self.storybookGenerationCounter else { return }
+                let data = snap.data() ?? [:]
+                await self.handleStorybookCloudJobSnapshot(data: data, jobId: jobId, profileID: profileID, thisRun: thisRun)
+            }
+        }
+    }
+
+    private func handleStorybookCloudJobSnapshot(data: [String: Any], jobId: String, profileID: UUID, thisRun: UInt64) async {
+        let status = String(describing: data["status"] ?? "")
+        let prog = data["progress"] as? [String: Any] ?? [:]
+        let completed = (prog["completedMemoryCount"] as? NSNumber)?.intValue ?? (prog["completedMemoryCount"] as? Int) ?? 0
+        let total = (prog["totalMemories"] as? NSNumber)?.intValue ?? (prog["totalMemories"] as? Int) ?? 0
+        if total > 0 {
+            totalMemories = total
+            currentMemoryIndex = min(completed, total)
+            progress = Double(completed) / Double(total)
+        }
+        if let cs = prog["currentStatus"] as? String, !cs.isEmpty {
+            currentStatus = cs
+        } else {
+            switch status {
+            case "queued": currentStatus = "Queued for cloud generation…"
+            case "ranking": currentStatus = "Selecting best memories…"
+            case "running": currentStatus = "Generating illustrations in the cloud…"
+            case "aiComplete": currentStatus = "Finalizing your book…"
+            case "failed": currentStatus = "Generation failed"
+            default: break
+            }
+        }
+
+        if status == "failed" {
+            let baseError = String(describing: data["error"] ?? "Unknown error")
+            // Dump every per-memory failure to the console so we never have to
+            // guess what went wrong — and append the top reason (if any) to the
+            // user-visible message.
+            let topReason = Self.logAndSummariseMemoryFailures(data: data, jobId: jobId)
+            if let topReason {
+                errorMessage = "\(baseError)\n\n\(topReason)"
+            } else {
+                errorMessage = baseError
+            }
+            stopStorybookCloudJobListener()
+            isLoading = false
+            isFinalizingAssets = false
+            return
+        }
+
+        if status == "running" || status == "ranking" || status == "queued" {
+            try? await rebuildPageItemsFromCloudJobData(data, profileID: profileID)
+            hasGeneratedStorybook = !pageItems.isEmpty
+            return
+        }
+
+        if status == "aiComplete" {
+            if cloudStorybookFinalizeStarted { return }
+            cloudStorybookFinalizeStarted = true
+            guard let reservedAt = lastPersistedBookCreatedAt else { return }
+            await runFinalizeAfterCloudAI(jobId: jobId, profileID: profileID, jobData: data, reservedCreatedAt: reservedAt, thisRun: thisRun)
+        }
+    }
+
+    private func runFinalizeAfterCloudAI(jobId: String, profileID: UUID, jobData: [String: Any], reservedCreatedAt: Date, thisRun: UInt64) async {
+        do {
+            currentStatus = "Finalizing your book…"
+            isFinalizingAssets = true
+            let cloudPitch = jobData["backCoverPitch"] as? String
+            try await rebuildPageItemsFromCloudJobData(jobData, profileID: profileID)
+            guard !pageItems.isEmpty else {
+                // The cloud job claims `aiComplete` but produced no usable
+                // illustrations.  Mark the job as `failed` in Firestore so the
+                // aggressive auto-route in `ContentView` doesn't keep
+                // re-attaching us to this same broken document and looping.
+                Task.detached { [jobId] in
+                    try? await FirestoreSyncService.shared.markStorybookJobFailed(
+                        jobId: jobId,
+                        reason: "Image generation failed for every memory. Please try again."
+                    )
+                }
+                stopStorybookCloudJobListener()
+                GenerationProgressMarker.clear(for: profileID)
+                throw NSError(
+                    domain: "MemoirAI",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Image generation failed. Please tap “Try Creating Again”."]
+                )
+            }
+            await preparePrintPackagingBeforePersist(existingBackCoverPitchFromCloud: cloudPitch)
+            persistStorybook(for: profileID, reservedCreatedAt: reservedCreatedAt, reservedBookVersionId: jobId)
+            currentStatus = "Finalizing cover and print assets…"
+            if let bookVersionId = lastSyncedBookVersionId {
+                let readinessTimeout = Self.canonicalReadinessBudgetSeconds(pageCount: pageItems.count)
+                let ready = await waitForCanonicalBookReadiness(bookVersionId: bookVersionId, timeoutSeconds: readinessTimeout)
+                if !ready {
+                    isVisualBookReady = !pageItems.isEmpty
+                }
+            }
+            if let bookId = lastSyncedBookVersionId {
+                let pollBudget = Self.canonicalReadinessBudgetSeconds(pageCount: pageItems.count)
+                await installFreshBookVersionRecordAfterGeneration(bookVersionId: bookId, pollBudgetSeconds: pollBudget)
+            }
+            if let bookId = lastSyncedBookVersionId, thisRun == storybookGenerationCounter {
+                scheduleBackgroundCoverBackfillIfNeeded(bookVersionId: bookId)
+            }
+            try await FirestoreSyncService.shared.markStorybookJobComplete(jobId: jobId)
+            stopStorybookCloudJobListener()
+            if thisRun == storybookGenerationCounter {
+                GenerationProgressMarker.clear(for: profileID)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            cloudStorybookFinalizeStarted = false
+        }
+        isFinalizingAssets = false
+        isLoading = false
+        isVisualBookReady = !pageItems.isEmpty
+        requiresVisualReadyGate = false
+    }
+
+    /// Force-syncs every Core Data memory the cloud worker is going to look
+    /// for to Firestore.  Runs in parallel with a small concurrency cap so we
+    /// don't blow up the network with hundreds of writes at once.
+    ///
+    /// `setData(merge: true)` makes this idempotent — already-synced memories
+    /// just get a `syncedAt` bump.  We use the same `profileName` that gets
+    /// written to the storybookJob doc so the cloud function always sees a
+    /// consistent label.
+    private func ensureMemoriesSyncedToCloud(entries: [MemoryEntry], profileID: UUID) async {
+        guard !entries.isEmpty else { return }
+        let profileName = self.profileName
+
+        let preflightStart = Date()
+        print("☁️ [storybookKickoff] preflight syncing \(entries.count) memories to Firestore for profile=\(profileID.uuidString.prefix(8))…")
+
+        await withTaskGroup(of: Void.self) { group in
+            let maxConcurrent = 6
+            var inFlight = 0
+            for entry in entries {
+                if inFlight >= maxConcurrent {
+                    await group.next()
+                    inFlight -= 1
+                }
+                group.addTask {
+                    await FirestoreSyncService.shared.syncMemory(entry, profileName: profileName)
+                }
+                inFlight += 1
+            }
+            await group.waitForAll()
+        }
+
+        let elapsed = String(format: "%.1f", Date().timeIntervalSince(preflightStart))
+        print("☁️ [storybookKickoff] preflight sync complete in \(elapsed)s")
+    }
+
+    private func kickoffCloudStorybookGeneration(
+        profileID: UUID,
+        profileEthnicity: String?,
+        artStyleForGeneration: ArtStyle,
+        targetPageCount: Int,
+        thisRun: UInt64
+    ) async throws {
+        stopStorybookCloudJobListener()
+        currentStatus = "Uploading subject photo…"
+        let photoPath = try await FirestoreSyncService.shared.uploadSubjectPhotoIfNeeded(subjectPhoto, profileId: profileID)
+
+        currentStatus = "Starting cloud generation…"
+        let entries = try await fetchMemoryEntries(for: profileID)
+        guard !entries.isEmpty else {
+            throw NSError(domain: "MemoirAI", code: 1, userInfo: [NSLocalizedDescriptionKey: "No memories available to generate."])
+        }
+        StorybookGenLog.fence("CLOUD STORYBOOK KICKOFF (iOS)")
+        StorybookGenLog.line("Illustration prompts for interior pages run in **Cloud Functions** (`processStorybookJob`), not in the app. Filter device logs for [StorybookGen] here, and Firebase/Cloud Logging for `storybook.*` / `storybook.assembledPreview` on the worker.")
+        StorybookGenLog.line("Local memory candidates: count=\(entries.count) (worker will rank + order by age; may use fewer than pageCountTarget).")
+        for (i, e) in entries.enumerated() {
+            let idStr = e.id?.uuidString ?? "nil"
+            let raw = e.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let promptLine = (e.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let ch = (e.value(forKey: "characterDetails") as? String) ?? ""
+            StorybookGenLog.verboseLine("  [\(i + 1)] id=\(idStr.prefix(8))… textLen=\(raw.count) prompt=\"\(String(promptLine.prefix(80)))\(promptLine.count > 80 ? "…" : "")\"")
+            StorybookGenLog.verboseLine("      memory text head: \(String(raw.prefix(320)))\(raw.count > 320 ? "…" : "")")
+            if !ch.isEmpty {
+                StorybookGenLog.verboseLine("      characterDetails head: \(String(ch.prefix(400)))\(ch.count > 400 ? "…" : "")")
+            }
+        }
+        self.profileName = resolvedNarratorDisplayName(profileName: self.profileName, from: entries)
+
+        // Make sure every memory we want the cloud to use is actually in
+        // Firestore *before* the cloud worker reads them.  Memories rely on a
+        // fire-and-forget queue (`queueMemorySyncWithProfile`) that can lag
+        // when the app is killed, was offline, or the row was created before
+        // sync existed.  `setData(merge:true)` makes this idempotent and cheap
+        // for already-synced rows.  Failures here just log — the cloud worker
+        // will surface a clear "no memories on cloud" error if uploads truly
+        // failed.
+        currentStatus = "Syncing memories to the cloud…"
+        await ensureMemoriesSyncedToCloud(entries: entries, profileID: profileID)
+
+        let reservedCreatedAt = Date()
+        let reservedBookId = "\(profileID.uuidString)_\(Int(reservedCreatedAt.timeIntervalSince1970))"
+        lastSyncedBookVersionId = reservedBookId
+        lastPersistedBookCreatedAt = reservedCreatedAt
+
+        if artStyleForGeneration == .kidsBook {
+            _ = loadSelectedStyleReferenceIfNeeded(lockedArtStyle: artStyleForGeneration)
+        }
+
+        var job: [String: Any] = [
+            "profileId": profileID.uuidString,
+            "bookVersionId": reservedBookId,
+            "artStyle": artStyleRaw,
+            "pageCountTarget": targetPageCount,
+            "profileName": self.profileName ?? "",
+            "profileEthnicity": profileEthnicity ?? "",
+            "customArtStyleText": customArtStyleText,
+            "styleReferencePreset": styleReferencePresetRawValue,
+            "gender": gender,
+            "otherDetails": otherDetails,
+            "faceDescription": faceDescription ?? "",
+            "status": "queued",
+            "clientVersion": 1,
+            "region": "us-central1",
+            "progress": [
+                "completedMemoryCount": 0,
+                "totalMemories": 0,
+                "currentStatus": "Queued…"
+            ] as [String: Any],
+            "memoryResults": [:] as [String: Any],
+            "skippedMemoryIds": [] as [String]
+        ]
+        if let photoPath {
+            job["subjectPhotoStoragePath"] = photoPath
+        }
+        let photoSummary: String = {
+            guard let p = photoPath, !p.isEmpty else { return "no" }
+            return "yes path=\(p)"
+        }()
+        StorybookGenLog.line("Job written: bookVersionId (jobId)=\(reservedBookId) artStyle=\(artStyleRaw) pageCountTarget=\(targetPageCount) styleRef=\(styleReferencePresetRawValue) subjectPhoto=\(photoSummary)")
+        StorybookGenLog.verboseLine("Job fields: profileName=\(self.profileName ?? "") ethnicity=\(profileEthnicity ?? "") gender=\(gender) customArtStyleLen=\(customArtStyleText.count) faceDescriptionLen=\(faceDescription?.count ?? 0) otherDetailsLen=\(otherDetails.count)")
+        try await FirestoreSyncService.shared.writeStorybookCloudJob(jobId: reservedBookId, data: job)
+
+        GenerationProgressMarker.clear(for: profileID)
+
+        startStorybookCloudJobListener(jobId: reservedBookId, profileID: profileID, thisRun: thisRun)
+        StorybookGenLog.line("Listener started for storybookJobs/\(reservedBookId.prefix(24))… — progress updates will follow from Firestore.")
+        currentStatus = "Generating in the cloud — you can close the app and come back."
+    }
+
+    /// Resume an in-flight cloud job (cold launch / auto-route).
+    func attachToCloudStorybookJob(jobId: String, profileID: UUID, profileName: String?, profileEthnicity: String?) async {
+        stopStorybookCloudJobListener()
+        currentProfileID = profileID
+        if let profileName, !profileName.isEmpty { self.profileName = profileName }
+        if ethnicity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let pe = profileEthnicity?.trimmingCharacters(in: .whitespacesAndNewlines), !pe.isEmpty {
+            ethnicity = pe
+        }
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        let snap = try? await Firestore.firestore()
+            .collection("users").document(uid)
+            .collection("storybookJobs").document(jobId)
+            .getDocument()
+        if let ts = snap?.data()?["createdAt"] as? Timestamp {
+            lastPersistedBookCreatedAt = ts.dateValue()
+        } else {
+            lastPersistedBookCreatedAt = Date()
+        }
+        lastSyncedBookVersionId = jobId
+        isLoading = true
+        isFinalizingAssets = false
+        requiresVisualReadyGate = true
+        isVisualBookReady = false
+        errorMessage = nil
+        let thisRun = storybookGenerationCounter
+        startStorybookCloudJobListener(jobId: jobId, profileID: profileID, thisRun: thisRun)
+        if let data = snap?.data() {
+            await handleStorybookCloudJobSnapshot(data: data, jobId: jobId, profileID: profileID, thisRun: thisRun)
+        }
     }
 
     func generateStorybook(forProfileID id: UUID, profileName name: String? = nil, overridePageCount: Int? = nil, profileEthnicity: String? = nil) async {
@@ -4652,7 +5727,7 @@ class StoryPageViewModel: ObservableObject {
         isVisualBookReady = false
         errorMessage = nil
         progress = 0
-        images.removeAll()
+        print("[StorybookLoad] generateStorybook START profile=\(id.uuidString.prefix(8)) — clearing in-memory book")
         pageItems.removeAll()
         precomposedIllustrationMemoryIDs = []
         illustrationReloadSources = [:]
@@ -4661,275 +5736,159 @@ class StoryPageViewModel: ObservableObject {
         currentMemoryIndex = 0
         totalMemories = 0
         currentStatus = "Preparing..."
+        // Clear stale book-identity state from any previously-loaded book so the
+        // cover/title/pitch don't leak from the previous generation into the new view.
+        // (Equivalent to clearCurrentStorybook() minus the on-disk delete.)
+        currentBookVersionRecord = nil
+        bookDisplayTitle = ""
+        backCoverPitch = ""
+        coverFontPreset = ""
+        lastSyncedBookVersionId = nil
+        lastPersistedBookCreatedAt = nil
+        loadedBookOrientation = nil
+        loadedBookPageWidth = nil
+        loadedBookPageHeight = nil
+        hasGeneratedStorybook = false
+        cloudStorybookFinalizeStarted = false
         // Snapshot before any async work so concurrent cloud loads cannot overwrite `artStyleRaw` mid-generation.
         let artStyleForGeneration = currentArtStyle
+        let thisRun: UInt64 = { storybookGenerationCounter += 1; return storybookGenerationCounter }()
 
         do {
-            currentStatus = "Loading memories..."
-            let entries = try await fetchMemoryEntries(for: id)
-            // Use override page count if provided, otherwise use settings
             let targetPageCount = max(1, overridePageCount ?? pageCountSetting)
-            
-            currentStatus = "Selecting best memories..."
-            let rankedChosen = await rankMemoriesWithLLM(entries, top: targetPageCount)
-            let chosen = Array(rankedChosen.prefix(targetPageCount))
-            
-            guard !chosen.isEmpty else {
-                throw NSError(domain: "MemoirAI", code: 1, userInfo: [NSLocalizedDescriptionKey: "No memories were selected to generate the story."])
-            }
-
-            // Resolve narrator display name for title generation:
-            // profile has higher weight, but cross-check memory narrator hints.
-            self.profileName = resolvedNarratorDisplayName(profileName: self.profileName, from: chosen)
-
-            // Set total memories for progress tracking
-            totalMemories = chosen.count
-
-            // --- SORT THE CHOSEN MEMORIES CHRONOLOGICALLY ---
-            currentStatus = "Organizing memories chronologically..."
-            print("🕥 Starting chronological sorting of \(chosen.count) memories...")
-            var chronologicalMemories: [ChronologicalMemory] = []
-            
-            // Use a TaskGroup to run age extraction in parallel for efficiency
-            await withTaskGroup(of: ChronologicalMemory?.self) { group in
-                for entry in chosen {
-                    group.addTask {
-                        guard let text = entry.text, !text.isEmpty else { return nil }
-                        // Default to a high age (999) if extraction fails, to sort them last.
-                        let age = await self.extractAge(from: text) ?? 999
-                        print(" -> Memory inferred age: \(age) for entry: \(entry.id?.uuidString ?? "N/A")")
-                        return ChronologicalMemory(entry: entry, age: age)
-                    }
-                }
-                
-                for await chronoMemory in group {
-                    if let memory = chronoMemory {
-                        chronologicalMemories.append(memory)
-                    }
-                }
-            }
-            
-            // Sort the temporary array by the extracted age
-            chronologicalMemories.sort { $0.age < $1.age }
-            
-            // Create the final, sorted list of entries to be generated
-            let sortedEntries = chronologicalMemories.map { $0.entry }
-            print("✅ Chronological sorting complete.")
-            
-            // --- USE THE NEWLY SORTED ARRAY FOR GENERATION ---
-            var generated: [UIImage] = []
-            var skippedMemories: [SkippedStoryImageMemory] = []
-
-            for (idx, entry) in sortedEntries.enumerated() { // <-- Use sortedEntries here
-                guard let entryID = entry.id else { continue }
-                let raw = entry.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                guard !raw.isEmpty else { continue }
-
-                // Calculate progress range for this memory (e.g., memory 2 of 5 = 20% to 40%)
-                let baseProgress = Double(idx) / Double(sortedEntries.count)
-                let progressPerMemory = 1.0 / Double(sortedEntries.count)
-                
-                // Update progress tracking
-                currentMemoryIndex = idx + 1
-                currentStatus = "Processing memory \(idx + 1) of \(totalMemories)"
-                
-                // Sub-progress: Analyzing (0-25% of this memory)
-                progress = baseProgress + (progressPerMemory * 0.0)
-                currentStatus = "Analyzing memory \(idx + 1) of \(totalMemories)..."
-                let characterContextForExtraction = buildCharacterContext(for: entry)
-                let sceneDescription = try await extractVisualScene(memory: raw, characterContext: characterContextForExtraction)
-                
-                // Sub-progress: Extracting details (25-50% of this memory)
-                progress = baseProgress + (progressPerMemory * 0.25)
-                currentStatus = "Extracting details for memory \(idx + 1) of \(totalMemories)..."
-                let extracted = await extractTitleAndCharacters(from: raw, characterContext: characterContextForExtraction)
-                
-                let narratorDecision = inferNarratorPresence(memoryText: raw, entry: entry)
-                let narratorPresence = narratorDecision.presence
-                print("🧭 Narrator presence classification: \(narratorPresence.rawValue) [score: \(narratorDecision.confidenceScore), reason: \(narratorDecision.reason)]")
-                let includeNarrator = narratorPresence.shouldAttachHeadshot
-                if narratorDecision.firstPersonDetected {
-                    print("🧷 Narrator reference trigger: first-person cues detected; score = \(narratorDecision.confidenceScore); headshot attachment enabled = \(includeNarrator)")
-                } else {
-                    print("🧷 Narrator reference trigger: \(narratorDecision.reason); score = \(narratorDecision.confidenceScore); headshot attachment enabled = \(includeNarrator)")
-                }
-
-                // Build character list from character cards with narrator inclusion hint
-                let characterList = buildCharacterList(
-                    for: entry,
-                    sceneDescription: sceneDescription,
-                    includeNarrator: includeNarrator
-                )
-                
-                // Assemble final prompt: characters + scene + style
-                let assembledPrompt = assembleFinalPrompt(
-                    memoryText: raw,
-                    characters: characterList,
-                    narratorPresence: narratorPresence,
-                    sceneDescription: sceneDescription,
-                    style: artStyleForGeneration,
-                    customStyle: customArtStyleText,
-                    hasHeadshot: subjectPhoto != nil
-                )
-                
-                print("🖼️ ASSEMBLED PROMPT (\(assembledPrompt.count) chars) ►", assembledPrompt)
-                
-                // Sub-progress: Generating image (50-90% of this memory)
-                progress = baseProgress + (progressPerMemory * 0.5)
-                currentStatus = "Generating image \(idx + 1) of \(totalMemories)..."
-                print("🔍 Attempting image generation with Gemini only (no fallback)...")
-                let headshotReferences: [UIImage] = includeNarrator ? (subjectPhoto.map { [$0] } ?? []) : []
-                let styleReferenceImage = loadSelectedStyleReferenceIfNeeded(lockedArtStyle: artStyleForGeneration)
-                var referenceImages = headshotReferences
-                if let styleReferenceImage {
-                    referenceImages.append(styleReferenceImage.image)
-                }
-                print("🖌️ Style reference profile selected: \(styleReferenceProfile.rawValue)")
-                print("🖼️ Headshot attachment count for generation: \(headshotReferences.count)")
-                print("🖼️ Style reference file for generation: \(styleReferenceImage?.filename ?? "none")")
-                print("🖼️ Style reference attachment count for generation: \(styleReferenceImage == nil ? 0 : 1)")
-                print("🖼️ Total reference attachment count for generation: \(referenceImages.count)")
-                let geminiSize = artStyleForGeneration == .kidsBook ? "4:3" : "1792x1024"
-                var geminiImageErrorDescription: String?
-                let img: UIImage?
-                do {
-                    img = try await generateImageWithGemini(
-                        assembledPrompt,
-                        size: geminiSize,
-                        referenceImages: referenceImages
-                    )
-                } catch {
-                    geminiImageErrorDescription = error.localizedDescription
-                    print("⚠️ Gemini image generation threw for memory \(idx + 1) of \(sortedEntries.count): \(error.localizedDescription)")
-                    img = nil
-                }
-
-                guard let img else {
-                    let label = memoryDisplayLabel(for: entry, fallbackOrdinal: idx + 1)
-                    let detail: String
-                    if let geminiImageErrorDescription {
-                        detail = geminiImageErrorDescription
-                    } else if geminiImageSvc == nil {
-                        detail = "Image generation is not configured (missing Gemini API key or service)."
-                    } else {
-                        detail = "The illustration request did not return an image. Try generating the storybook again."
-                    }
-                    skippedMemories.append(SkippedStoryImageMemory(id: entryID, memoryLabel: label, detail: detail))
-                    print("⏭️ Skipping memory \(idx + 1) (no image); continuing with remaining memories.")
-                    continue
-                }
-
-                generated.append(img)
-                
-                // Sub-progress: Saving (90-100% of this memory)
-                progress = baseProgress + (progressPerMemory * 0.9)
-                currentStatus = "Saving memory \(idx + 1) of \(totalMemories)..."
-
-                // NEW ORDER: Text pages first, then image
-                // Paginate text based on actual height measurement (matches export dimensions)
-                let isKids = artStyleForGeneration == .kidsBook
-                let exportHeight: CGFloat = isKids ? 612 : 792  // points
-                let exportWidth: CGFloat = isKids ? 792 : 612   // points
-                let memoryPrompt = entry.prompt?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let questionDriven = isQuestionDrivenMemory(entry)
-                let displayTitle = questionDriven ? (memoryPrompt?.isEmpty == false ? memoryPrompt : extracted.title) : extracted.title
-                let displaySubtitle = questionDriven ? extracted.title : nil
-
-                let textPages = paginateText(
-                    raw,
-                    title: displayTitle,
-                    subtitle: displaySubtitle,
-                    pageHeight: exportHeight,
-                    pageWidth: exportWidth,
-                    memoryID: entryID
-                )
-                pageItems.append(contentsOf: textPages)
-
-                // Image page comes after text — top bar uses the LLM memory title (short), not the chapter prompt.
-                let llmBarTitle = extracted.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                let illustrationBarTitle = llmBarTitle.isEmpty ? displayTitle : llmBarTitle
-                pageItems.append(.illustration(image: img, memoryID: entryID, title: illustrationBarTitle))
-
-                // Complete this memory - progress reaches 100% of this memory's range
-                progress = baseProgress + progressPerMemory
-            }
-
-            skippedMemoriesDuringGeneration = skippedMemories
-
-            guard !pageItems.isEmpty else {
-                throw NSError(
-                    domain: "MemoirAI",
-                    code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "Could not create illustrations for any of the selected memories. Try again, or change which memories are included."]
-                )
-            }
-
-            images = generated
-            
-            // NEW: Persist the generated storybook
-            if let profileID = currentProfileID {
-                isFinalizingAssets = true
-                currentStatus = "Saving your book and generating cover art..."
-                await preparePrintPackagingBeforePersist()
-                persistStorybook(for: profileID)
-                currentStatus = "Finalizing cover and print assets..."
-                let ready: Bool
-                if let bookVersionId = lastSyncedBookVersionId {
-                    ready = await waitForCanonicalBookReadiness(bookVersionId: bookVersionId, timeoutSeconds: 40)
-                } else {
-                    ready = false
-                }
-                if !ready {
-                    print("Canonical book readiness timed out; revealing local pages as fallback.")
-                    isVisualBookReady = !pageItems.isEmpty
-                }
-                if let bookId = lastSyncedBookVersionId {
-                    scheduleBackgroundCoverBackfillIfNeeded(bookVersionId: bookId)
-                }
-            }
-            
+            try await kickoffCloudStorybookGeneration(
+                profileID: id,
+                profileEthnicity: profileEthnicity,
+                artStyleForGeneration: artStyleForGeneration,
+                targetPageCount: targetPageCount,
+                thisRun: thisRun
+            )
+        } catch is CancellationError {
+            errorMessage = nil
+            isVisualBookReady = false
+            isFinalizingAssets = false
+            stopStorybookCloudJobListener()
+            print("[StorybookLoad] generateStorybook cancelled (new run or Task.cancel)")
         } catch {
-            // Handle rate limiting with user-friendly message
+            if thisRun == storybookGenerationCounter {
+                GenerationProgressMarker.clear(for: id)
+            }
+            stopStorybookCloudJobListener()
             if let nsError = error as? NSError, nsError.code == 429 {
                 errorMessage = "Too many requests to OpenAI. Please wait a few minutes and try again."
                 print("StoryPageViewModel ERROR: Rate limited (429)")
             } else {
-            errorMessage = error.localizedDescription
-            print("StoryPageViewModel ERROR:", error.localizedDescription)
+                errorMessage = error.localizedDescription
+                print("StoryPageViewModel ERROR:", error.localizedDescription)
             }
             isVisualBookReady = false
             isFinalizingAssets = false
         }
 
-        requiresVisualReadyGate = false
-        isFinalizingAssets = false
-        isLoading = false
+        if storybookCloudJobListener == nil {
+            requiresVisualReadyGate = false
+            isFinalizingAssets = false
+            isLoading = false
+        } else {
+            requiresVisualReadyGate = false
+        }
     }
 
     /// After generation, fill in a missing print cover in the background so the UI is not blocked on `coverURL`.
     private func scheduleBackgroundCoverBackfillIfNeeded(bookVersionId: String) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            _ = await FirestoreSyncService.shared.ensureCoverDesignExistsIfMissing(bookVersionId: bookVersionId)
-            await self.refreshBookVersionAfterCoverBackfill(bookVersionId: bookVersionId)
+            print("[CoverFlow] coverBackfillTask START book=\(bookVersionId.prefix(24))…")
+            // One shot: regenerate only when the doc exists but `coverURL` is still empty (do not repeat inside the poll loop).
+            _ = await FirestoreSyncService.shared.ensureCoverDesignExistsIfMissing(
+                bookVersionId: bookVersionId,
+                respectSessionBudget: false
+            )
+            let maxAttempts = 30
+            let delayNs: UInt64 = 2_000_000_000
+            for attempt in 0..<maxAttempts {
+                if let updated = await FirestoreSyncService.shared.fetchBookVersion(bookVersionId: bookVersionId) {
+                    let hasPdf = updated.printCoverPDFURL != nil
+                    if attempt == 0 || attempt == maxAttempts - 1 || hasPdf {
+                        print("[CoverFlow] coverBackfill poll \(attempt + 1)/\(maxAttempts) hasPdf=\(hasPdf)")
+                    }
+                    await refreshBookVersionAfterCoverBackfill(updated: updated, bookVersionId: bookVersionId)
+                    if hasPdf {
+                        print("[CoverFlow] coverBackfillTask END (has print PDF)")
+                        return
+                    }
+                }
+                if attempt + 1 < maxAttempts {
+                    try? await Task.sleep(nanoseconds: delayNs)
+                }
+            }
+            print("[CoverFlow] coverBackfillTask EXHAUSTED")
         }
     }
 
-    private func refreshBookVersionAfterCoverBackfill(bookVersionId: String) async {
-        guard let updated = await FirestoreSyncService.shared.fetchBookVersion(bookVersionId: bookVersionId) else { return }
+    /// Polls Firestore until `printCoverPDFURL` resolves or `pollBudgetSeconds` elapses (aligned with canonical readiness timeout).
+    private func installFreshBookVersionRecordAfterGeneration(
+        bookVersionId: String,
+        pollBudgetSeconds: TimeInterval
+    ) async {
+        let interval: TimeInterval = 1.5
+        let maxAttempts = max(10, Int(ceil(pollBudgetSeconds / interval)) + 6)
+        print("[CoverFlow] installFresh START book=\(bookVersionId.prefix(24))… maxAttempts=\(maxAttempts) budget=\(pollBudgetSeconds)s")
+        for attempt in 0..<maxAttempts {
+            if let fresh = await FirestoreSyncService.shared.fetchBookVersion(bookVersionId: bookVersionId) {
+                currentBookVersionRecord = fresh
+                let hasPdf = fresh.printCoverPDFURL != nil
+                if attempt == 0 || attempt == maxAttempts - 1 || hasPdf {
+                    print("[CoverFlow] installFresh poll \(attempt + 1)/\(maxAttempts) hasDoc=true hasPrintCoverPDF=\(hasPdf)")
+                }
+                if hasPdf {
+                    enqueuePrefetchPrintCoverPanels(for: fresh)
+                    print("[CoverFlow] installFresh END (print PDF ready)")
+                    return
+                }
+            } else if attempt == 0 || attempt == maxAttempts - 1 {
+                print("[CoverFlow] installFresh poll \(attempt + 1)/\(maxAttempts) hasDoc=false")
+            }
+            if attempt + 1 < maxAttempts {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            }
+        }
+        print("[CoverFlow] installFresh EXHAUSTED (no printCoverPDFURL)")
+    }
+
+    /// Prefetches the front panel thumbnail from the flat print cover PDF (best effort, background).
+    private func enqueuePrefetchPrintCoverPanels(for record: BookVersionRecord) {
+        guard let coverURL = record.printCoverPDFURL else {
+            print("[CoverFlow] prefetch SKIP (no printCoverPDFURL) book=\(record.bookVersionId.prefix(20))…")
+            return
+        }
+        let layout = record.coverFlatLayoutKind
+        let revision = record.coverThumbnailCacheRevision
+        let cacheId = record.coverStoragePath ?? ""
+        print("[CoverFlow] prefetch START book=\(record.bookVersionId.prefix(20))… layout=\(String(describing: layout)) revPrefix=\(String(revision.prefix(24)))…")
+        Task {
+            // Warm only the front panel on open; back loads lazily when the user reaches the closing page.
+            let frontThumb = await CoverPDFThumbnailService.loadAndCache(
+                url: coverURL,
+                layout: layout,
+                panel: .front,
+                targetSize: CGSize(width: 1200, height: 900),
+                cacheRevision: revision,
+                cacheIdentity: cacheId
+            )
+            print("[CoverFlow] prefetch END frontOK=\(frontThumb != nil) (back panel lazy)")
+        }
+    }
+
+    private func refreshBookVersionAfterCoverBackfill(updated: BookVersionRecord, bookVersionId: String) async {
         // Only update the record — do NOT call applyBookVersionRecord here, which would
         // trigger a full page rebuild and risk racing with the user's current view state.
         // currentBookVersionRecord is @Published, so StoryPageDetailView's printCoverPDFURL()
         // will re-evaluate automatically and show the AI cover.
         await MainActor.run { currentBookVersionRecord = updated }
-        if let coverURL = updated.printCoverPDFURL {
-            _ = await CoverPDFThumbnailService.loadAndCache(
-                url: coverURL,
-                layout: updated.coverFlatLayoutKind,
-                panel: .front,
-                targetSize: CGSize(width: 1200, height: 900),
-                cacheRevision: updated.coverThumbnailCacheRevision
-            )
+        if updated.printCoverPDFURL != nil {
+            print("[CoverFlow] refreshAfterCoverBackfill prefetch book=\(bookVersionId.prefix(20))…")
+            enqueuePrefetchPrintCoverPanels(for: updated)
             // Notify any open gallery views so they can update the matching card.
             await MainActor.run {
                 NotificationCenter.default.post(
@@ -4941,21 +5900,19 @@ class StoryPageViewModel: ObservableObject {
         }
     }
 
+    /// Firestore + Storage can lag behind local generation; keep poll budgets generous and aligned.
+    private static func canonicalReadinessBudgetSeconds(pageCount: Int) -> TimeInterval {
+        TimeInterval(min(180, max(95, 80 + pageCount * 4)))
+    }
+
     private func waitForCanonicalBookReadiness(bookVersionId: String, timeoutSeconds: TimeInterval) async -> Bool {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
             if let record = await FirestoreSyncService.shared.fetchBookVersion(bookVersionId: bookVersionId),
                canonicalVisualReadiness(for: record) {
+                print("[CoverFlow] canonicalReadiness MET book=\(bookVersionId.prefix(20))… renderStatus=\(record.renderStatus)")
                 await applyBookVersionRecord(record)
-                if let coverURL = record.printCoverPDFURL {
-                    _ = await CoverPDFThumbnailService.loadAndCache(
-                        url: coverURL,
-                        layout: record.coverFlatLayoutKind,
-                        panel: .front,
-                        targetSize: CGSize(width: 1200, height: 900),
-                        cacheRevision: record.coverThumbnailCacheRevision
-                    )
-                }
+                enqueuePrefetchPrintCoverPanels(for: record)
                 isVisualBookReady = true
                 return true
             }
@@ -4964,7 +5921,7 @@ class StoryPageViewModel: ObservableObject {
         return false
     }
 
-    private func fetchMemoryEntries(for profileID: UUID) async throws -> [MemoryEntry] {
+    func fetchMemoryEntries(for profileID: UUID) async throws -> [MemoryEntry] {
         let ctx = PersistenceController.shared.container.viewContext
         // Capture the setting before entering the closure
         let sourceSetting = self.memorySourceSetting
@@ -5175,9 +6132,7 @@ class StoryPageViewModel: ObservableObject {
         userRevision: String
     ) -> String {
         let trimmedUser = userRevision.trimmingCharacters(in: .whitespacesAndNewlines)
-        let previousScene = currentSceneDescription
-        defer { currentSceneDescription = previousScene }
-        
+
         var memoryText = ""
         var memoryPromptLine = ""
         if let entry {
@@ -5197,7 +6152,6 @@ class StoryPageViewModel: ObservableObject {
             let narratorDecision = inferNarratorPresence(memoryText: textForNarrator, entry: entry)
             narratorPresenceLabel = narratorDecision.presence.rawValue
             let includeNarrator = narratorDecision.presence.shouldAttachHeadshot
-            currentSceneDescription = sceneSummary
             characterCards = buildCharacterList(for: entry, sceneDescription: sceneSummary, includeNarrator: includeNarrator)
             
             let subjectRaw = deriveSubjectName(from: entry) ?? profileName
@@ -5334,29 +6288,13 @@ class StoryPageViewModel: ObservableObject {
                         memoryID: memoryID,
                         title: existingTitle
                     )
-                    
-                    // Update images array if it exists
-                    let illustrationIndices = pageItems.enumerated().compactMap { index, item -> Int? in
-                        if case .illustration = item { return index } else { return nil }
-                    }
-                    
-                    if let imageArrayIndex = illustrationIndices.firstIndex(of: pageIndex) {
-                        if imageArrayIndex < images.count {
-                            images[imageArrayIndex] = editedImage
-                        }
-                    }
-                    
                     // Clear loading state
                     imageEditingStates[pageIndex] = false
                     // Note: editingImageIndex is managed by the View, don't clear it here
-                    
-                    // Persist the updated storybook
-                    if let profileID = currentProfileID {
-                        persistStorybook(for: profileID)
-                    }
-                    
-                    print("✅ Successfully edited image at index \(pageIndex)")
                 }
+                // Persist the updated storybook in place (same `bookVersionId` — do not mint a new doc)
+                await saveCurrentBookInPlace(reason: "imageEdit")
+                print("✅ Successfully edited image at index \(pageIndex)")
             } else {
                 print("❌ Failed to edit image - no image returned from Gemini")
                 await MainActor.run {
@@ -5375,20 +6313,319 @@ class StoryPageViewModel: ObservableObject {
     func isEditingImage(at index: Int) -> Bool {
         return imageEditingStates[index] == true
     }
+
+    // MARK: - Print cover art editing (instruction-based, Gemini edit + PDF re-upload)
+
+    private func buildCoverPanelEditInstruction(panel: BookCoverFlatPanel, userRevision: String) -> String {
+        let trimmed = userRevision.trimmingCharacters(in: .whitespacesAndNewlines)
+        let custom = customArtStyleText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let styleLine = extractStyleRequirement(for: currentArtStyle, custom: custom.isEmpty ? nil : custom)
+        if panel == .front {
+            return """
+            BOOK COVER FRONT PANEL — full bleed print cover. The input is the current front cover (title may be painted into the art).
+
+            USER REVISION REQUEST:
+            \(trimmed)
+
+            RULES:
+            - Apply the revision while preserving the overall \(styleLine) look unless the user asks otherwise.
+            - If the title appears in the artwork, keep it legible in the lower area unless the user explicitly asks to change or remove it.
+            - Maintain professional dust-jacket composition; avoid clutter.
+            """
+        }
+        return """
+        BOOK COVER BACK PANEL — full bleed. The input may include illustration plus print typography from the current cover PDF.
+
+        USER REVISION REQUEST:
+        \(trimmed)
+
+        RULES:
+        - Apply the revision while preserving the overall \(styleLine) look unless the user asks otherwise.
+        - Prefer calmer upper-left and readable contrast for overlaid marketing copy; avoid adding new stray words unless the user asks.
+        """
+    }
+
+    /// Regenerates one panel of the print cover from user instructions, re-uploads `cover.pdf`, and refreshes `currentBookVersionRecord`.
+    func editCoverPanel(_ panel: BookCoverFlatPanel, revisionPrompt: String) async {
+        let trimmed = revisionPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard panel == .front || panel == .back else { return }
+        guard let bookId = lastSyncedBookVersionId,
+              let record = currentBookVersionRecord,
+              let pdfURL = record.printCoverPDFURL else {
+            print("❌ editCoverPanel: missing synced book, record, or print cover PDF")
+            return
+        }
+        guard let geminiSvc = geminiImageSvc else {
+            print("⚠️ Gemini not available for cover edit")
+            return
+        }
+
+        await MainActor.run { coverPanelEditing = panel }
+
+        let layout = record.coverFlatLayoutKind
+        let cacheRevision = record.coverThumbnailCacheRevision
+        let cacheId = record.coverStoragePath ?? ""
+        let targetSize = CGSize(width: 1536, height: 1152)
+
+        async let frontTask = CoverPDFThumbnailService.loadAndCache(
+            url: pdfURL,
+            layout: layout,
+            panel: .front,
+            targetSize: targetSize,
+            cacheRevision: cacheRevision,
+            cacheIdentity: cacheId
+        )
+        async let backTask = CoverPDFThumbnailService.loadAndCache(
+            url: pdfURL,
+            layout: layout,
+            panel: .back,
+            targetSize: targetSize,
+            cacheRevision: cacheRevision,
+            cacheIdentity: cacheId
+        )
+        let (frontLoaded, backLoaded) = await (frontTask, backTask)
+
+        guard let frontBase = frontLoaded else {
+            print("❌ editCoverPanel: failed to load front panel raster")
+            await MainActor.run { coverPanelEditing = nil }
+            return
+        }
+
+        let instruction = buildCoverPanelEditInstruction(panel: panel, userRevision: trimmed)
+        let editSize = "5:4"
+
+        do {
+            let frontFinal: UIImage
+            let backFinal: UIImage?
+
+            switch panel {
+            case .front:
+                guard let edited = try await geminiSvc.editImage(
+                    image: frontBase,
+                    editInstruction: instruction,
+                    size: editSize,
+                    model: effectiveGeminiModel
+                ) else {
+                    print("❌ editCoverPanel: Gemini returned no front image")
+                    await MainActor.run { coverPanelEditing = nil }
+                    return
+                }
+                frontFinal = edited
+                backFinal = backLoaded
+            case .back:
+                guard let backBase = backLoaded else {
+                    print("❌ editCoverPanel: failed to load back panel raster")
+                    await MainActor.run { coverPanelEditing = nil }
+                    return
+                }
+                guard let editedBack = try await geminiSvc.editImage(
+                    image: backBase,
+                    editInstruction: instruction,
+                    size: editSize,
+                    model: effectiveGeminiModel
+                ) else {
+                    print("❌ editCoverPanel: Gemini returned no back image")
+                    await MainActor.run { coverPanelEditing = nil }
+                    return
+                }
+                frontFinal = frontBase
+                backFinal = editedBack
+            case .full, .spine:
+                await MainActor.run { coverPanelEditing = nil }
+                return
+            }
+
+            let policy = CoverCopyPolicy(artStyle: currentArtStyle, profileDisplayName: profileName ?? "")
+            let titleForPrint = bookDisplayTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? policy.defaultBookTitle()
+                : bookDisplayTitle
+            let pitch = backCoverPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? policy.fallbackBackCoverPitch(bookTitle: titleForPrint)
+                : backCoverPitch
+            let preset = CoverFontPreset(rawValue: coverFontPreset) ?? policy.coverFontPreset()
+            let nameForRender = profileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? (profileName ?? "Narrator")
+                : "Narrator"
+            let pageCount = pageItems.count
+
+            let pdfData: Data?
+            if record.pageWidth > record.pageHeight {
+                pdfData = BookCoverRenderer.renderPDF(
+                    frontCoverArt: frontFinal,
+                    backCoverArt: backFinal,
+                    profileName: nameForRender,
+                    pageCount: pageCount,
+                    frontTitle: titleForPrint,
+                    backCoverPitch: pitch,
+                    fontPreset: preset,
+                    useNativeFrontTitleOverlay: false
+                )
+            } else {
+                pdfData = BookCoverRenderer.renderPortraitPDF(
+                    frontCoverArt: frontFinal,
+                    backCoverArt: backFinal,
+                    profileName: nameForRender,
+                    pageCount: pageCount,
+                    frontTitle: titleForPrint,
+                    backCoverPitch: pitch,
+                    fontPreset: preset,
+                    useNativeFrontTitleOverlay: false
+                )
+            }
+
+            guard let pdfData else {
+                print("❌ editCoverPanel: PDF render failed")
+                await MainActor.run { coverPanelEditing = nil }
+                return
+            }
+
+            try await FirestoreSyncService.shared.mergeUploadedPrintCoverPDF(bookVersionId: bookId, pdfData: pdfData)
+            if let updated = await FirestoreSyncService.shared.fetchBookVersion(bookVersionId: bookId) {
+                await MainActor.run {
+                    currentBookVersionRecord = updated
+                    coverPanelEditing = nil
+                }
+            } else {
+                await MainActor.run { coverPanelEditing = nil }
+            }
+            print("✅ editCoverPanel: cover PDF updated for panel \(panel)")
+        } catch {
+            print("❌ editCoverPanel: \(error.localizedDescription)")
+            await MainActor.run { coverPanelEditing = nil }
+        }
+    }
     
     // MARK: - Text Editing
+
+    /// Page dimensions (points) used by `paginateText` / generation; matches `runStorybookMemoryPipeline` fallbacks when not yet loaded.
+    private func paginationViewportSizePoints() -> (width: CGFloat, height: CGFloat) {
+        let isKids = currentArtStyle == .kidsBook
+        if let w = loadedBookPageWidth, let h = loadedBookPageHeight, w > 1, h > 1 {
+            return (w, h)
+        }
+        return isKids ? (792, 612) : (612, 792)
+    }
+
+    /// Rejoin split text pages before re-pagination (mirrors paragraph spacing per art style).
+    private func combineTextPageBodiesForRepagination(_ bodies: [String]) -> String {
+        guard !bodies.isEmpty else { return "" }
+        let sep = currentArtStyle == .kidsBook ? "\n" : "\n\n"
+        return bodies.joined(separator: sep)
+    }
+
+    /// Contiguous `.textPage` slice in `pageItems` for one memory (stops before illustration / other types).
+    private func contiguousTextPageRun(around index: Int, memoryID: UUID) -> Range<Int>? {
+        guard index >= 0, index < pageItems.count else { return nil }
+        guard case .textPage(_, _, _, _, _, let mid) = pageItems[index], mid == memoryID else { return nil }
+        var start = index
+        while start > 0 {
+            if case .textPage(_, _, _, _, _, let m) = pageItems[start - 1], m == memoryID {
+                start -= 1
+            } else { break }
+        }
+        var end = index
+        while end + 1 < pageItems.count {
+            if case .textPage(_, _, _, _, _, let m) = pageItems[end + 1], m == memoryID {
+                end += 1
+            } else { break }
+        }
+        return start..<(end + 1)
+    }
     
     /// Update text content for a text page at the given index. Persists automatically.
+    /// For ordinary memories, re-joins all text pages of that memory, applies the edit, re-paginates, and replaces the run.
     func updatePageText(at index: Int, title: String?, body: String?, subtitle: String?) {
         guard index >= 0, index < pageItems.count else { return }
-        if case .textPage(let pageIndex, let total, _, _, _, let memoryID) = pageItems[index] {
-            pageItems[index] = .textPage(index: pageIndex, total: total,
-                                         body: body ?? "", title: title,
-                                         subtitle: subtitle, memoryID: memoryID)
-            if let profileID = currentProfileID {
-                persistStorybook(for: profileID)
+        guard case .textPage(_, _, _, _, _, let memoryID) = pageItems[index] else { return }
+
+        let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveTitle = (trimmedTitle?.isEmpty == false) ? trimmedTitle : nil
+        let trimmedSubtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveSubtitle = (trimmedSubtitle?.isEmpty == false) ? trimmedSubtitle : nil
+
+        if memoryID == BookInteriorAnchor.titlePageMemoryId || memoryID == BookInteriorAnchor.closingPageMemoryId {
+            if case .textPage(let pageIndex, let total, _, _, _, _) = pageItems[index] {
+                pageItems[index] = .textPage(
+                    index: pageIndex,
+                    total: total,
+                    body: body ?? "",
+                    title: effectiveTitle,
+                    subtitle: effectiveSubtitle,
+                    memoryID: memoryID
+                )
+                Task { await saveCurrentBookInPlace(reason: "textPageEdit") }
             }
+            return
         }
+
+        guard let run = contiguousTextPageRun(around: index, memoryID: memoryID) else {
+            if case .textPage(let pageIndex, let total, _, _, _, _) = pageItems[index] {
+                pageItems[index] = .textPage(
+                    index: pageIndex,
+                    total: total,
+                    body: body ?? "",
+                    title: effectiveTitle,
+                    subtitle: effectiveSubtitle,
+                    memoryID: memoryID
+                )
+                Task { await saveCurrentBookInPlace(reason: "textPageEdit") }
+            }
+            return
+        }
+
+        var bodies: [String] = []
+        for i in run {
+            guard case .textPage(_, _, let b, _, _, let m) = pageItems[i], m == memoryID else { continue }
+            bodies.append(i == index ? (body ?? "") : b)
+        }
+
+        let combined = combineTextPageBodiesForRepagination(bodies)
+        let trimmedCombined = combined.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let repaged: [PageItem]
+        if trimmedCombined.isEmpty {
+            repaged = [
+                .textPage(
+                    index: 1,
+                    total: 1,
+                    body: "",
+                    title: effectiveTitle,
+                    subtitle: effectiveSubtitle,
+                    memoryID: memoryID
+                )
+            ]
+        } else {
+            let (pw, ph) = paginationViewportSizePoints()
+            repaged = paginateText(
+                combined,
+                title: effectiveTitle,
+                subtitle: effectiveSubtitle,
+                pageHeight: ph,
+                pageWidth: pw,
+                memoryID: memoryID
+            )
+        }
+
+        guard !repaged.isEmpty else {
+            if case .textPage(let pageIndex, let total, _, _, _, _) = pageItems[index] {
+                pageItems[index] = .textPage(
+                    index: pageIndex,
+                    total: total,
+                    body: body ?? "",
+                    title: effectiveTitle,
+                    subtitle: effectiveSubtitle,
+                    memoryID: memoryID
+                )
+                Task { await saveCurrentBookInPlace(reason: "textPageEdit") }
+            }
+            return
+        }
+
+        var newItems = pageItems
+        newItems.replaceSubrange(run, with: repaged)
+        pageItems = newItems
+        Task { await saveCurrentBookInPlace(reason: "textPageEdit") }
     }
     
     /// Update the title for an illustration page at the given index. Persists automatically.
@@ -5396,9 +6633,7 @@ class StoryPageViewModel: ObservableObject {
         guard index >= 0, index < pageItems.count else { return }
         if case .illustration(let image, let memoryID, _) = pageItems[index] {
             pageItems[index] = .illustration(image: image, memoryID: memoryID, title: title)
-            if let profileID = currentProfileID {
-                persistStorybook(for: profileID)
-            }
+            Task { await saveCurrentBookInPlace(reason: "illustrationTitleEdit") }
         }
     }
     

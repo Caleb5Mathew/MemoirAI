@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import PhotosUI
 import Combine
 import RevenueCat
@@ -165,6 +166,7 @@ struct StoryPage: View {
     @State private var gender: String = ""
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
+    @Environment(\.storybookScreenEntry) private var storybookScreenEntry
     @State private var userRace: String = ""
     @StateObject private var subscriptionManager = RCSubscriptionManager.shared
     
@@ -178,6 +180,11 @@ struct StoryPage: View {
     @State private var showPageDetail = false
     @State private var detailPageIndex = 0
     @State private var detailStartsInEditMode = false
+    @State private var showCoverEditor = false
+    @State private var showCoverArtEditSheet = false
+    @State private var coverArtEditPanel: BookCoverFlatPanel = .front
+    @State private var coverArtEditRevisionText = ""
+    @State private var showCoverPDFMissingAlert = false
     
     // Progress simulation
     @State private var fakeProgress: Double = 0
@@ -215,6 +222,8 @@ struct StoryPage: View {
     @State private var orderBookRecordForSheet: BookVersionRecord?
     @State private var isOrderPreparing = false
     @State private var orderNotReadyAlert = false
+    @State private var orderNotReadyAlertTitle = "Book PDF Still Preparing"
+    @State private var orderNotReadyAlertMessage = ""
     @State private var showSkippedMemoriesExplanation = false
     @ObservedObject private var printOrderCart = OrderCartStore.shared
     @State private var debugSessionID: String = String(UUID().uuidString.prefix(8))
@@ -346,6 +355,8 @@ struct StoryPage: View {
     ) -> some View {
         if vm.isLoading {
             makeLoadingView()
+        } else if vm.isLoadingGalleryBook {
+            makeOpeningLibraryBookView()
         } else if hasRequestedGeneration && !vm.pageItems.isEmpty && vm.requiresVisualReadyGate && !vm.isVisualBookReady {
             makeFinalizingAssetsView()
         } else if let error = vm.errorMessage {
@@ -395,7 +406,7 @@ struct StoryPage: View {
                     .foregroundColor(.gray)
             }
 
-            Text("Please keep the app open while we generate your storybook.")
+            Text("Generating in the cloud — you can close the app and come back. We’ll keep working on your storybook.")
                 .font(.caption2)
                 .foregroundColor(.gray.opacity(0.8))
         }
@@ -410,6 +421,24 @@ struct StoryPage: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(localColors.terracotta)
             Text("Your book will appear once the final AI cover is fully ready.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
+        }
+    }
+
+    /// Shown in the book preview while a My Library selection downloads/applies (avoids empty-state flash).
+    @ViewBuilder
+    private func makeOpeningLibraryBookView() -> some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: localColors.terracotta))
+                .scaleEffect(1.15)
+            Text("Opening your book…")
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundColor(localColors.terracotta)
+            Text("Loading pages and illustrations from the cloud.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -521,6 +550,7 @@ struct StoryPage: View {
                 }
             }
         }
+        .id(vm.tabViewCoverRefreshIdentity)
         .tabViewStyle(.page(indexDisplayMode: .never))
         .frame(width: contentWidth, height: contentHeight)
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -662,7 +692,7 @@ struct StoryPage: View {
                     }
                 )
                 .accessibilityIdentifier("createStorybookButton")
-                .disabled(vm.isLoading)
+                .disabled(vm.isLoading || vm.isUploadingToCloud)
             }
 
             Spacer()
@@ -671,7 +701,7 @@ struct StoryPage: View {
     }
 
     private func resetGenerationState() {
-        // Don't clear vm.pageItems or vm.images - let persistence handle this
+        // Don't clear vm.pageItems - let persistence handle this
         vm.errorMessage = nil
         currentPageIndex = 0
         fakeProgress = 0
@@ -727,15 +757,20 @@ struct StoryPage: View {
         }
         
         // ✨ Warn about large generations but still allow them
+        // `pagesToAttempt` is the settings / allowance cap for illustrated pages this run, not the DB memory count.
         if subscriptionManager.isLargeGeneration(pages: pagesToAttempt) {
-            print("⚠️ StoryPage: Large generation requested (\(pagesToAttempt) images). User was warned in settings.")
+            print("⚠️ StoryPage: Large generation requested (\(pagesToAttempt) illustrated pages cap). User was warned in settings.")
         }
         
-        print("StoryPage: Generation approved. Proceeding with \(pagesToAttempt) memories.")
+        print("StoryPage: Generation approved. Up to \(pagesToAttempt) illustrated pages this run (eligible memories are ranked and may be fewer).")
         startActualGenerationProcess(pagesExpected: pagesToAttempt)
     }
         
     private func startActualGenerationProcess(pagesExpected: Int) {
+        if vm.isLoading || vm.isUploadingToCloud {
+            print("StoryPage: startActualGenerationProcess ignored — isLoading=\(vm.isLoading) isUploadingToCloud=\(vm.isUploadingToCloud)")
+            return
+        }
         resetGenerationState()
         hasRequestedGeneration = true
         vm.isLoading = true
@@ -772,49 +807,59 @@ struct StoryPage: View {
         let wasSubscribed = isSubscribed // Capture subscription state before async
         let useTutorialBonus = pendingTutorialBonusGeneration
         
-        Task {
+        Task { @MainActor in
+            let backgroundExecution = StorybookGenerationBackgroundTask()
+            backgroundExecution.armForActiveGeneration()
+            defer { backgroundExecution.end() }
+
             await vm.generateStorybook(
                 forProfileID: currentProfileID,
                 profileName: profileVM.selectedProfile.name,
                 overridePageCount: finalPageCount,
                 profileEthnicity: profileVM.selectedProfile.ethnicity
             )
-            
-            await MainActor.run {
-                cancellableTimer?.cancel()
-                
-                if vm.errorMessage == nil && !vm.images.isEmpty {
-                    let actualImagesGenerated = vm.images.count
-                    if actualImagesGenerated > 0 {
-                        if wasSubscribed {
-                            // Subscribed users: deduct from monthly allowance
-                            subscriptionManager.consume(pages: actualImagesGenerated)
-                            print("StoryPage: Consumed \(actualImagesGenerated) images from subscription.")
-                        } else if useTutorialBonus {
-                            tutorialCoordinator.consumeTutorialBonus(profileID: currentProfileID)
-                            print("StoryPage: Consumed tutorial bonus image (free preview was exhausted).")
-                        } else {
-                            // Free users: increment free preview counter (stored in iCloud + UserDefaults)
-                            FreePreviewConfig.incrementFreeImagesUsed(by: actualImagesGenerated)
-                            print("StoryPage: Consumed \(actualImagesGenerated) free preview image(s). Remaining: \(FreePreviewConfig.freeImagesRemaining)")
-                        }
-                        if tutorialCoordinator.isTutorialActive {
-                            tutorialCoordinator.completeTutorial(profileID: currentProfileID)
-                        }
-                    }
-                    self.realProgress = 1.0
-                    self.fakeProgress = 1.0
-                    etaTimer?.cancel()
-                } else {
-                    print("StoryPage: Gen failed/no images. Error: \(vm.errorMessage ?? "N/A").")
-                    self.realProgress = 0.0
-                    self.fakeProgress = 0.0
-                    etaTimer?.cancel()
-                    // Note: We don't consume free preview images on failure
-                }
-                self.pendingTutorialBonusGeneration = false
-                if vm.isLoading { print("Warning: vm.isLoading is still true post-generation.")}
+
+            cancellableTimer?.cancel()
+
+            // Cloud generation: `generateStorybook` returns immediately after
+            // kicking off the Firestore job — actual completion happens later
+            // via the cloud listener.  Wait until the VM has finished
+            // finalizing (or hit an error) before deciding whether to consume
+            // the user's free-preview / tutorial / subscription allowance.
+            for await stillLoading in vm.$isLoading.values {
+                if !stillLoading { break }
             }
+
+            if vm.errorMessage == nil && vm.storybookGeneratedIllustrationCount > 0 {
+                let actualImagesGenerated = vm.storybookGeneratedIllustrationCount
+                if actualImagesGenerated > 0 {
+                    if wasSubscribed {
+                        // Subscribed users: deduct from monthly allowance
+                        subscriptionManager.consume(pages: actualImagesGenerated)
+                        print("StoryPage: Consumed \(actualImagesGenerated) images from subscription.")
+                    } else if useTutorialBonus {
+                        tutorialCoordinator.consumeTutorialBonus(profileID: currentProfileID)
+                        print("StoryPage: Consumed tutorial bonus image (free preview was exhausted).")
+                    } else {
+                        // Free users: increment free preview counter (stored in iCloud + UserDefaults)
+                        FreePreviewConfig.incrementFreeImagesUsed(by: actualImagesGenerated)
+                        print("StoryPage: Consumed \(actualImagesGenerated) free preview image(s). Remaining: \(FreePreviewConfig.freeImagesRemaining)")
+                    }
+                    if tutorialCoordinator.isTutorialActive {
+                        tutorialCoordinator.completeTutorial(profileID: currentProfileID)
+                    }
+                }
+                self.realProgress = 1.0
+                self.fakeProgress = 1.0
+                etaTimer?.cancel()
+            } else {
+                print("StoryPage: Cloud generation finished without illustrations. Error: \(vm.errorMessage ?? "N/A").")
+                self.realProgress = 0.0
+                self.fakeProgress = 0.0
+                etaTimer?.cancel()
+                // Note: We don't consume free preview images on failure
+            }
+            self.pendingTutorialBonusGeneration = false
         }
     }
 
@@ -869,22 +914,58 @@ struct StoryPage: View {
             realProgress: $realProgress,
             showPageDetail: $showPageDetail,
             detailPageIndex: $detailPageIndex,
-            detailStartsInEditMode: $detailStartsInEditMode
+            detailStartsInEditMode: $detailStartsInEditMode,
+            showCoverEditor: $showCoverEditor,
+            storybookScreenEntry: storybookScreenEntry
         )
+        .sheet(isPresented: $showCoverArtEditSheet) {
+            CoverArtEditSheet(
+                panel: coverArtEditPanel,
+                revisionText: $coverArtEditRevisionText,
+                isPresented: $showCoverArtEditSheet,
+                onSend: { text in
+                    Task {
+                        await vm.editCoverPanel(coverArtEditPanel, revisionPrompt: text)
+                    }
+                },
+                isEditing: vm.isEditingCoverArt(for: coverArtEditPanel),
+                onEditTitleBlurb: {
+                    showCoverArtEditSheet = false
+                    showCoverEditor = true
+                }
+            )
+            .presentationDetents([PresentationDetent.height(196)])
+            .presentationDragIndicator(Visibility.visible)
+        }
+        .onChange(of: vm.coverPanelEditing) { oldVal, newVal in
+            if oldVal != nil && newVal == nil && showCoverArtEditSheet {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    coverArtEditRevisionText = ""
+                    showCoverArtEditSheet = false
+                }
+            }
+        }
+        .alert("Print cover not ready", isPresented: $showCoverPDFMissingAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Wait until your cover PDF has finished generating and synced, then try again. You can also open the book from My Library once the cover appears there.")
+        }
         .fullScreenCover(item: $orderBookRecordForSheet) { record in
             OrderBookView(book: record)
         }
-        .alert("Book PDF Still Preparing", isPresented: $orderNotReadyAlert) {
+        .alert(orderNotReadyAlertTitle, isPresented: $orderNotReadyAlert) {
             Button("Retry") {
                 orderBookTapped()
             }
             Button("OK", role: .cancel) { }
         } message: {
-            Text("Your book PDF is still being generated — this usually takes 1–2 minutes after your storybook is created. Tap Retry to check again.")
+            Text(orderNotReadyAlertMessage)
         }
         .sheet(isPresented: $showSkippedMemoriesExplanation) {
             skippedMemoriesExplanationContent
         }
+        // Loading UI: only `makeOpeningLibraryBookView()` (terra cotta) inside `storybookContentView` — do not stack `GalleryBookLoadingOverlay` here or text duplicates.
+        .animation(.easeInOut(duration: 0.2), value: vm.isLoadingGalleryBook)
     }
 
     private var skippedMemoriesExplanationContent: some View {
@@ -1284,19 +1365,41 @@ struct StoryPage: View {
         isOrderPreparing = true
         Task {
             _ = await vm.fetchCurrentBookVersionRecord()
+            let versionId = vm.currentBookVersionRecord?.bookVersionId ?? vm.lastSyncedBookVersionId
+            if !vm.isBookOrderable, let id = versionId {
+                let r = vm.currentBookVersionRecord
+                let needsInteriorPDF =
+                    r == nil
+                    || r?.renderStatus != BookRenderStatus.rendered.rawValue
+                    || r?.pdfURL == nil
+                if needsInteriorPDF {
+                    _ = await FirestoreSyncService.shared.fetchOrGenerateBookPDF(
+                        bookVersionId: id,
+                        timeoutSeconds: 60
+                    )
+                    _ = await vm.fetchCurrentBookVersionRecord()
+                }
+            }
             await MainActor.run {
                 isOrderPreparing = false
                 if vm.isBookOrderable, let record = vm.currentBookVersionRecord {
                     orderBookRecordForSheet = record
                 } else {
                     if let record = vm.currentBookVersionRecord {
+                        let copy = Self.orderNotReadyAlertCopy(for: record)
+                        orderNotReadyAlertTitle = copy.title
+                        orderNotReadyAlertMessage = copy.message
                         print(
                             "🧭 StoryPage print blocked: " +
                             "renderStatus=\(record.renderStatus), " +
                             "hasPDF=\(record.pdfURL != nil), " +
                             "hasCover=\(record.coverURL != nil), " +
-                            "pageCount=\(record.pageCount)"
+                            "pageCount=\(record.pageCount), " +
+                            "renderError=\(record.renderError ?? "nil")"
                         )
+                    } else {
+                        orderNotReadyAlertTitle = "Book Not Ready"
+                        orderNotReadyAlertMessage = "We could not load this book’s print status. Check your connection and tap Retry."
                     }
                     orderNotReadyAlert = true
                 }
@@ -1304,8 +1407,56 @@ struct StoryPage: View {
         }
     }
 
+    private static func orderNotReadyAlertCopy(for record: BookVersionRecord) -> (title: String, message: String) {
+        if record.renderStatus != BookRenderStatus.rendered.rawValue {
+            return (
+                "Book Still Processing",
+                "The print server is still assembling your interior PDF. This can take a few minutes on slower connections. Tap Retry to check again."
+            )
+        }
+        if record.pdfURL == nil {
+            return (
+                "Interior PDF Still Preparing",
+                "Your book’s printable interior is not ready yet. Tap Retry to trigger another check — this usually finishes within a couple of minutes."
+            )
+        }
+        if record.coverURL == nil {
+            return (
+                "Cover Still Preparing",
+                "Your cover file is still being prepared for print. Tap Retry in a moment — if this persists, open the book from the gallery and try Order again."
+            )
+        }
+        return (
+            "Book Not Ready for Order",
+            "Something unexpected prevented checkout. Tap Retry, or contact support if this continues."
+        )
+    }
+
     private func handleCurrentPageEditTapped() {
         guard currentPageIndex >= 0, currentPageIndex < vm.pageItems.count else { return }
+
+        if case .textPage(_, _, _, _, _, let memoryID) = vm.pageItems[currentPageIndex] {
+            if memoryID == BookInteriorAnchor.titlePageMemoryId {
+                if vm.hasPrintCoverPDF {
+                    coverArtEditPanel = .front
+                    coverArtEditRevisionText = ""
+                    showCoverArtEditSheet = true
+                } else {
+                    showCoverPDFMissingAlert = true
+                }
+                return
+            }
+            if memoryID == BookInteriorAnchor.closingPageMemoryId {
+                if vm.hasPrintCoverPDF {
+                    coverArtEditPanel = .back
+                    coverArtEditRevisionText = ""
+                    showCoverArtEditSheet = true
+                } else {
+                    showCoverPDFMissingAlert = true
+                }
+                return
+            }
+        }
 
         switch vm.pageItems[currentPageIndex] {
         case .illustration:
@@ -1443,6 +1594,115 @@ struct StoryPage: View {
         } else {
             print("❌ StoryPage: Failed to fetch memories")
             incompleteCount = 0
+        }
+    }
+
+    /// Instruction-based edit for print cover PDF panels (front / back), matching interior `ImageEditSheet` UX.
+    struct CoverArtEditSheet: View {
+        let panel: BookCoverFlatPanel
+        @Binding var revisionText: String
+        @Binding var isPresented: Bool
+        let onSend: (String) -> Void
+        let isEditing: Bool
+        let onEditTitleBlurb: () -> Void
+
+        @FocusState private var isTextFieldFocused: Bool
+        @State private var isSendPressed: Bool = false
+
+        private var trimmedRevisionText: String {
+            revisionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        private var canSend: Bool {
+            !trimmedRevisionText.isEmpty && !isEditing
+        }
+
+        private func sendRevision() {
+            guard canSend else { return }
+            let payload = trimmedRevisionText
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onSend(payload)
+        }
+
+        private var panelTitle: String {
+            panel == .front ? "Edit front cover art" : "Edit back cover art"
+        }
+
+        private let localColors = StoryPageLocalColors()
+
+        var body: some View {
+            VStack(spacing: 0) {
+                Text(panelTitle)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 10)
+
+                HStack(spacing: 10) {
+                    TextField("Describe the changes you want...", text: $revisionText, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 15))
+                        .padding(.leading, 4)
+                        .focused($isTextFieldFocused)
+                        .lineLimit(1...3)
+                        .disabled(isEditing)
+                        .submitLabel(.send)
+                        .onSubmit { sendRevision() }
+
+                    Button(action: { sendRevision() }) {
+                        ZStack {
+                            if isEditing {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white.opacity(0.95)))
+                                    .scaleEffect(0.9)
+                            } else {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                        }
+                        .foregroundColor(.white)
+                        .frame(width: 36, height: 36)
+                        .background(canSend ? localColors.terracotta : Color.gray.opacity(0.45))
+                        .clipShape(Circle())
+                        .scaleEffect(isSendPressed ? 0.92 : 1.0)
+                        .animation(.spring(response: 0.22, dampingFraction: 0.75), value: isSendPressed)
+                        .animation(.easeInOut(duration: 0.15), value: canSend)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend)
+                    .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity, pressing: { pressing in
+                        isSendPressed = pressing
+                    }, perform: {})
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color.white.opacity(0.55), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.12), radius: 16, x: 0, y: 8)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 8)
+
+                Button(action: onEditTitleBlurb) {
+                    Text("Edit book title & back cover text")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(localColors.terracotta)
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 14)
+            }
+            .background(Color.clear)
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    isTextFieldFocused = true
+                }
+            }
         }
     }
 }
@@ -1596,6 +1856,13 @@ extension StoryPage {
             isKidsBook: isKidsBook
         )
 
+        let fallbackBackCover = MemoirCoverBackPage(
+            heading: title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? (title ?? "About this Memoir") : "About this Memoir",
+            bodyText: text,
+            frameWidth: frameWidth,
+            frameHeight: frameHeight
+        )
+
         if memoryID == BookInteriorAnchor.titlePageMemoryId {
             if let pdfURL = printCoverPDFURL() {
                 RemotePDFThumbnailView(
@@ -1603,9 +1870,28 @@ extension StoryPage {
                     targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
                     layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook,
                     panel: .front,
-                    cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? ""
+                    cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
+                    cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""
                 ) {
                     TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
+                }
+                .frame(width: frameWidth, height: frameHeight)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else if let rasterURL = rasterCoverDisplayURL() {
+                AsyncImage(url: rasterURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .empty:
+                        TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
+                    case .failure:
+                        fallbackFrontCover
+                    @unknown default:
+                        TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
+                    }
                 }
                 .frame(width: frameWidth, height: frameHeight)
                 .clipped()
@@ -1614,12 +1900,41 @@ extension StoryPage {
                 fallbackFrontCover
             }
         } else if memoryID == BookInteriorAnchor.closingPageMemoryId {
-            MemoirCoverBackPage(
-                heading: title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? (title ?? "About this Memoir") : "About this Memoir",
-                bodyText: text,
-                frameWidth: frameWidth,
-                frameHeight: frameHeight
-            )
+            if let pdfURL = printCoverPDFURL() {
+                RemotePDFThumbnailView(
+                    url: pdfURL,
+                    targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
+                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook,
+                    panel: .back,
+                    cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
+                    cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""
+                ) {
+                    TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
+                }
+                .frame(width: frameWidth, height: frameHeight)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else if let rasterURL = rasterCoverDisplayURL() {
+                AsyncImage(url: rasterURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .empty:
+                        TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
+                    case .failure:
+                        fallbackBackCover
+                    @unknown default:
+                        TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
+                    }
+                }
+                .frame(width: frameWidth, height: frameHeight)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                fallbackBackCover
+            }
         } else {
             Group {
                 if isKidsBook {
@@ -1659,6 +1974,84 @@ extension StoryPage {
     private func printCoverPDFURL() -> URL? {
         vm.currentBookVersionRecord?.printCoverPDFURL
     }
+
+    /// When `printCoverPDFURL` is nil but `coverURL` is an http(s) raster, match `OrderBookView` so the in-book cover matches checkout preview.
+    private func rasterCoverDisplayURL() -> URL? {
+        guard let raw = vm.currentBookVersionRecord?.coverURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        guard shouldAttemptRemoteRasterCoverImage(urlString: raw) else { return nil }
+        return URL(string: raw)
+    }
+
+    private func shouldAttemptRemoteRasterCoverImage(urlString: String) -> Bool {
+        let lower = urlString.lowercased()
+        guard lower.hasPrefix("http://") || lower.hasPrefix("https://") else { return false }
+        if lower.contains(".pdf") { return false }
+        return true
+    }
+}
+
+struct GalleryBookLoadingOverlay: View {
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35).ignoresSafeArea()
+            VStack(spacing: 14) {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.4)
+                Text("Opening your book…")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white)
+            }
+            .padding(28)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.black.opacity(0.55))
+            )
+        }
+        .allowsHitTesting(true)
+    }
+}
+
+struct StorybookCoverEditorSheet: View {
+    @ObservedObject var vm: StoryPageViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var titleDraft: String = ""
+    @State private var pitchDraft: String = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("Book Title")) {
+                    TextField("Memoir title", text: $titleDraft)
+                        .textInputAutocapitalization(.words)
+                }
+                Section(header: Text("Back Cover Blurb"),
+                        footer: Text("Shown on the back cover of the printed book.")) {
+                    TextEditor(text: $pitchDraft)
+                        .frame(minHeight: 120)
+                }
+            }
+            .navigationTitle("Edit Cover")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        vm.bookDisplayTitle = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        vm.backCoverPitch = pitchDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .onAppear {
+            titleDraft = vm.bookDisplayTitle
+            pitchDraft = vm.backCoverPitch
+        }
+    }
 }
 
 private struct TitleCoverLoadingPlaceholder: View {
@@ -1692,21 +2085,23 @@ struct KidsBookIllustrationPage: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Top bar: memory title left, page number right
-            HStack(alignment: .top) {
+            // Top bar: memory title left, page number right (vertically centered in the bar)
+            HStack(alignment: .center) {
                 Text(title ?? "Memory")
                     .font(.kidsBookTitleFont(for: frameHeight))
                     .foregroundColor(colors.chapterTitleColor)
                     .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                    // Serif cap height leaves empty space above glyphs; nudge down so the bar feels vertically balanced.
+                    .offset(y: max(1, barHeight * 0.1))
                 Spacer()
                 Text("\(pageNumber)")
                     .font(.kidsBookPageNumberFont(for: frameHeight))
                     .foregroundColor(colors.pageNumberColor)
             }
             .padding(.horizontal, frameWidth * 0.08)
-            .padding(.vertical, barHeight * 0.2)
-            .frame(minHeight: barHeight)
-            .frame(maxWidth: .infinity)
+            .padding(.vertical, barHeight * 0.1)
+            .frame(maxWidth: .infinity, minHeight: barHeight, alignment: .center)
             .background(colors.bookPageBackground)
 
             // Full page illustration fills remaining space
@@ -1745,21 +2140,22 @@ struct KidsBookTextPage: View {
         VStack(spacing: 0) {
             Spacer().frame(height: topMargin)
             
-            // Header bar: title left, page number right
-            HStack(alignment: .top) {
-                Text(title ?? "Memory")
+            // Header bar: title left, page number right (vertically centered in the bar)
+            HStack(alignment: .center) {
+                Text(title ?? "")
                     .font(fontStyle.titleFont(for: frameHeight))
                     .foregroundColor(colors.chapterTitleColor)
                     .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                    .offset(y: max(1, barHeight * 0.1))
                 Spacer()
                 Text("\(pageNumber)")
                     .font(fontStyle.pageNumberFont(for: frameHeight))
                     .foregroundColor(colors.pageNumberColor)
             }
             .padding(.horizontal, sideMargin)
-            .padding(.vertical, barHeight * 0.2)
-            .frame(minHeight: barHeight)
-            .frame(maxWidth: .infinity)
+            .padding(.vertical, barHeight * 0.1)
+            .frame(maxWidth: .infinity, minHeight: barHeight, alignment: .center)
             .background(colors.bookPageBackground)
             
             // Body text with book-like spacing below header
@@ -1807,20 +2203,21 @@ struct VerticalBookIllustrationPage: View {
             colors.bookPageBackground
             
             VStack(spacing: 0) {
-                HStack(alignment: .top) {
+                HStack(alignment: .center) {
                     Text(headerTitle)
                         .font(fontStyle.titleFont(for: frameHeight))
                         .foregroundColor(colors.chapterTitleColor)
                         .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                        .offset(y: max(1, barHeight * 0.1))
                     Spacer()
                     Text("\(pageNumber)")
                         .font(fontStyle.pageNumberFont(for: frameHeight))
                         .foregroundColor(colors.pageNumberColor)
                 }
                 .padding(.horizontal, frameWidth * 0.06)
-                .padding(.vertical, barHeight * 0.2)
-                .frame(minHeight: barHeight)
-                .frame(maxWidth: .infinity)
+                .padding(.vertical, barHeight * 0.1)
+                .frame(maxWidth: .infinity, minHeight: barHeight, alignment: .center)
                 .background(colors.bookPageBackground)
 
                 Spacer()
@@ -2187,7 +2584,9 @@ extension View {
         realProgress: Binding<Double>,
         showPageDetail: Binding<Bool>,
         detailPageIndex: Binding<Int>,
-        detailStartsInEditMode: Binding<Bool>
+        detailStartsInEditMode: Binding<Bool>,
+        showCoverEditor: Binding<Bool>,
+        storybookScreenEntry: StorybookScreenEntry
     ) -> some View {
         let withSheets = addSheets(
             showSettings: showSettings,
@@ -2212,9 +2611,10 @@ extension View {
             hasRequestedGeneration: hasRequestedGeneration,
             showPageDetail: showPageDetail,
             detailPageIndex: detailPageIndex,
-            detailStartsInEditMode: detailStartsInEditMode
+            detailStartsInEditMode: detailStartsInEditMode,
+            showCoverEditor: showCoverEditor
         )
-        
+
         let withAlerts = withSheets.addAlerts(
             showDownloadSuccess: showDownloadSuccess,
             showRegenerateConfirmation: showRegenerateConfirmation,
@@ -2231,7 +2631,8 @@ extension View {
             headshotImage: headshotImage,
             hasRequestedGeneration: hasRequestedGeneration,
             updateIncompleteCount: updateIncompleteCount,
-            realProgress: realProgress
+            realProgress: realProgress,
+            storybookScreenEntry: storybookScreenEntry
         )
         
         withLifecycle.addOverlays(
@@ -2263,7 +2664,8 @@ extension View {
         hasRequestedGeneration: Binding<Bool>,
         showPageDetail: Binding<Bool>,
         detailPageIndex: Binding<Int>,
-        detailStartsInEditMode: Binding<Bool>
+        detailStartsInEditMode: Binding<Bool>,
+        showCoverEditor: Binding<Bool>
     ) -> some View {
         self
             .background(
@@ -2281,7 +2683,10 @@ extension View {
                     print("🧭 StoryPage gallery selection received: id=\(record.bookVersionId), source=\(record.source), pages=\(record.pageCount)")
                     hasRequestedGeneration.wrappedValue = true
                     vm.loadGalleryBook(record: record, legacyBook: legacyBook)
-                    showGallery.wrappedValue = false
+                    // Dismiss next run loop so `isLoadingGalleryBook` can publish and the story view can show loading under/after the cover.
+                    DispatchQueue.main.async {
+                        showGallery.wrappedValue = false
+                    }
                 })
                 .environmentObject(profileVM)
             }
@@ -2327,8 +2732,8 @@ extension View {
                         },
                         isEditing: vm.isEditingImage(at: index)
                     )
-                    .presentationDetents([.height(152)])
-                    .presentationDragIndicator(.visible)
+                    .presentationDetents([PresentationDetent.height(152)])
+                    .presentationDragIndicator(Visibility.visible)
                 }
             }
             .onChange(of: vm.imageEditingStates) { _, _ in
@@ -2357,8 +2762,11 @@ extension View {
                     }
                 )
             }
+            .sheet(isPresented: showCoverEditor) {
+                StorybookCoverEditorSheet(vm: vm)
+            }
     }
-    
+
     @ViewBuilder
     private func addAlerts(
         showDownloadSuccess: Binding<Bool>,
@@ -2400,16 +2808,31 @@ extension View {
         headshotImage: Binding<UIImage?>,
         hasRequestedGeneration: Binding<Bool>,
         updateIncompleteCount: @escaping () -> Void,
-        realProgress: Binding<Double>
+        realProgress: Binding<Double>,
+        storybookScreenEntry: StorybookScreenEntry
     ) -> some View {
         self
             .onAppear {
-                print("🧭 StoryPage lifecycle onAppear; profile=\(profileVM.selectedProfile.id.uuidString), hasGenerated=\(vm.hasGeneratedStorybook), hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count)")
-                vm.loadStorybookForProfile(
-                    profileVM.selectedProfile.id,
-                    name: profileVM.selectedProfile.name,
-                    profileEthnicity: profileVM.selectedProfile.ethnicity
-                )
+                print("🧭 StoryPage lifecycle onAppear; profile=\(profileVM.selectedProfile.id.uuidString), hasGenerated=\(vm.hasGeneratedStorybook), hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count), entry=\(storybookScreenEntry)")
+                Task { @MainActor in
+                    let shouldTryResume = storybookScreenEntry == .autoResumePendingGeneration
+                    let resuming = shouldTryResume
+                        ? await vm.resumeInProgressGenerationIfMarkerExists(
+                            profileID: profileVM.selectedProfile.id,
+                            profileName: profileVM.selectedProfile.name,
+                            profileEthnicity: profileVM.selectedProfile.ethnicity
+                        )
+                        : false
+                    if resuming {
+                        hasRequestedGeneration.wrappedValue = true
+                    } else {
+                        vm.loadStorybookForProfile(
+                            profileVM.selectedProfile.id,
+                            name: profileVM.selectedProfile.name,
+                            profileEthnicity: profileVM.selectedProfile.ethnicity
+                        )
+                    }
+                }
                 
                 if let data = profileVM.selectedProfile.photoData,
                    let image = UIImage(data: data) {
@@ -2539,5 +2962,63 @@ extension View {
             Spacer()
         }
         .transition(.opacity.combined(with: .scale(scale: 0.95)))
+    }
+}
+
+// MARK: - Extended background time (storybook generation)
+
+/// Coordinates `UIApplication.beginBackgroundTask` so generation can finish after the user backgrounds.
+/// We do **not** call `beginBackgroundTask` for long foreground runs (that only produces the ~30s
+/// "task created over 30 seconds ago" warning). Instead we arm `didEnterBackground` and begin then.
+@MainActor
+private final class StorybookGenerationBackgroundTask {
+    private var taskID: UIBackgroundTaskIdentifier = .invalid
+    private var didEnterBackgroundObserver: NSObjectProtocol?
+
+    /// Starts a background task immediately if already backgrounded; otherwise waits for `didEnterBackground`.
+    func armForActiveGeneration() {
+        let state = UIApplication.shared.applicationState
+        if state != .active {
+            begin()
+            return
+        }
+        guard didEnterBackgroundObserver == nil else { return }
+        didEnterBackgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.beginAfterEnteringBackgroundIfNeeded()
+        }
+    }
+
+    private func beginAfterEnteringBackgroundIfNeeded() {
+        if let token = didEnterBackgroundObserver {
+            NotificationCenter.default.removeObserver(token)
+            didEnterBackgroundObserver = nil
+        }
+        begin()
+    }
+
+    func begin() {
+        guard taskID == .invalid else { return }
+        taskID = UIApplication.shared.beginBackgroundTask(withName: "MemoirAI.StorybookGeneration") { [weak self] in
+            guard let self else { return }
+            print("StoryPage: storybook generation background time is expiring (system limit).")
+            NotificationCenter.default.post(name: .storybookGenerationBackgroundExpiring, object: nil)
+            self.end()
+        }
+    }
+
+    func end() {
+        if let token = didEnterBackgroundObserver {
+            NotificationCenter.default.removeObserver(token)
+            didEnterBackgroundObserver = nil
+        }
+        guard taskID != .invalid else { return }
+        let id = taskID
+        taskID = .invalid
+        UIApplication.shared.endBackgroundTask(id)
     }
 }

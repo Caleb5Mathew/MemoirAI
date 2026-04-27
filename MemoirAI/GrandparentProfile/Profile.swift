@@ -88,4 +88,10 @@ struct Profile: Identifiable, Codable, Equatable {
     var isComplete: Bool {
         return !name.isEmpty && photoData != nil && birthdate != nil
     }
+
+    func withPhotoData(_ data: Data?) -> Profile {
+        var copy = self
+        copy.photoData = data
+        return copy
+    }
 }

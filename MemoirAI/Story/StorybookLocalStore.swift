@@ -143,6 +143,25 @@ enum StorybookLocalStore {
     }
 
     /// All history payloads in chronological order (sorted by encoded filename).
+    /// Removes any `history/*.book` whose decoded `PersistableStorybook.createdAt` (whole seconds) matches this profile.
+    static func removeHistoryFiles(matchingBookCreatedAt: Date, profileID: UUID) {
+        migrateLegacyUserDefaultsIfNeeded(profileID: profileID)
+        guard let historyDir = try? historyDirectory(profileID: profileID),
+              let urls = try? FileManager.default.contentsOfDirectory(
+                at: historyDir,
+                includingPropertiesForKeys: nil
+              ) else { return }
+        let wantSec = Int(matchingBookCreatedAt.timeIntervalSince1970)
+        let decoder = JSONDecoder()
+        for url in urls where url.pathExtension == bookExtension {
+            guard let d = try? Data(contentsOf: url),
+                  let b = try? decoder.decode(PersistableStorybook.self, from: d) else { continue }
+            if b.profileID == profileID, Int(b.createdAt.timeIntervalSince1970) == wantSec {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
     static func readHistoryDataArray(profileID: UUID) -> [Data] {
         migrateLegacyUserDefaultsIfNeeded(profileID: profileID)
         guard let historyDir = try? historyDirectory(profileID: profileID),

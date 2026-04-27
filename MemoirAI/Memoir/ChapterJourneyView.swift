@@ -103,9 +103,11 @@ struct ChapterJourneyView: View {
             ZStack {
                 backgroundImageView
                 promptNodesView(geo: geo)
-                titleBarView(geo: geo)
-                backButtonView
                 floatingQuoteView
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .overlay(alignment: .top) {
+                headerStack
             }
 //            .navigationBarBackButtonHidden(true)
             .fullScreenCover(item: $selectedPrompt, onDismiss: {
@@ -234,43 +236,50 @@ struct ChapterJourneyView: View {
         }
     }
 
-    private func titleBarView(geo: GeometryProxy) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 20)
-                .fill(Color.white.opacity(0.35))
-                .padding(.horizontal, 24)
-                .frame(height: 80)
+    private var headerStack: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundColor(deepGreen)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+            }
+            .padding(.leading, 8)
 
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 Text("Chapter \(chapter.number): \(chapter.title)")
                     .font(.customSerifFallback(size: 28))
                     .foregroundColor(deepGreen)
                     .multilineTextAlignment(.center)
-                    .lineLimit(2)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.58)
+                    .layoutPriority(1)
+                    .frame(maxWidth: .infinity, alignment: .center)
 
                 Text("\(completedPromptIDs.count) of \(chapter.prompts.count) memories recorded")
                     .font(.subheadline)
                     .foregroundColor(deepGreen)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(Color.white.opacity(0.35))
+            )
+            .padding(.horizontal, 16)
         }
-        .padding(.top, 50)
-        // Remove the fixed offset so it stays centered
-         .offset(x: -geo.size.width * 0.140)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-
-
-    private var backButtonView: some View {
-        Button {
-            dismiss()
-        } label: {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundColor(.black)
-                .padding(20)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .zIndex(100)
     }
 
     @ViewBuilder

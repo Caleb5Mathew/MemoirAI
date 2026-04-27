@@ -3,12 +3,36 @@ import PDFKit
 
 // MARK: - Shared load / cache (preview + prefetch before revealing storybook)
 
+/// Coalesces concurrent downloads for the same cache key (prefetch + SwiftUI `.task`).
+private actor CoverPDFThumbnailInflight {
+    private var tasks: [String: Task<UIImage?, Never>] = [:]
+
+    func deduped(key: String, compute: @escaping @Sendable () async -> UIImage?) async -> UIImage? {
+        if let existing = tasks[key] {
+            return await existing.value
+        }
+        let task = Task { await compute() }
+        tasks[key] = task
+        let value = await task.value
+        tasks[key] = nil
+        return value
+    }
+
+    static let shared = CoverPDFThumbnailInflight()
+}
+
+private struct PDFCoverDownloadResult: Sendable {
+    let data: Data?
+    let status: Int?
+}
+
 enum CoverPDFThumbnailService {
     static func cacheKey(
         url: URL,
         layout: BookCoverFlatLayoutKind,
         panel: BookCoverFlatPanel,
-        cacheRevision: String = ""
+        cacheRevision: String = "",
+        cacheIdentity: String = ""
     ) -> String {
         let layoutKey: String
         switch layout {
@@ -22,54 +46,114 @@ enum CoverPDFThumbnailService {
         case .spine: panelKey = "spine"
         case .front: panelKey = "front"
         }
+        let trimmedId = cacheIdentity.trimmingCharacters(in: .whitespacesAndNewlines)
+        let primary = trimmedId.isEmpty ? url.absoluteString : trimmedId
         let revSuffix = cacheRevision.isEmpty ? "" : "|rev:\(cacheRevision)"
-        return "\(url.absoluteString)|\(panelKey)|\(layoutKey)\(revSuffix)"
+        return "\(primary)|\(panelKey)|\(layoutKey)\(revSuffix)"
     }
 
     static func cachedImage(
         url: URL,
         layout: BookCoverFlatLayoutKind,
         panel: BookCoverFlatPanel,
-        cacheRevision: String = ""
+        cacheRevision: String = "",
+        cacheIdentity: String = ""
     ) -> UIImage? {
-        PDFThumbnailCache.shared.image(forKey: cacheKey(url: url, layout: layout, panel: panel, cacheRevision: cacheRevision))
+        let key = cacheKey(url: url, layout: layout, panel: panel, cacheRevision: cacheRevision, cacheIdentity: cacheIdentity)
+        if let hit = PDFThumbnailCache.shared.image(forKey: key) {
+            return hit
+        }
+        if let disk = PDFThumbnailDiskCache.shared.image(forKey: key) {
+            PDFThumbnailCache.shared.store(image: disk, forKey: key)
+            return disk
+        }
+        return nil
     }
 
-    @MainActor
     static func loadAndCache(
         url: URL,
         layout: BookCoverFlatLayoutKind,
         panel: BookCoverFlatPanel,
         targetSize: CGSize,
-        cacheRevision: String = ""
+        cacheRevision: String = "",
+        cacheIdentity: String = ""
     ) async -> UIImage? {
-        let key = cacheKey(url: url, layout: layout, panel: panel, cacheRevision: cacheRevision)
-        if let hit = PDFThumbnailCache.shared.image(forKey: key) {
-            return hit
+        let key = cacheKey(url: url, layout: layout, panel: panel, cacheRevision: cacheRevision, cacheIdentity: cacheIdentity)
+        if let mem = await MainActor.run(body: { PDFThumbnailCache.shared.image(forKey: key) }) {
+            return mem
+        }
+        if let disk = await MainActor.run(body: { PDFThumbnailDiskCache.shared.image(forKey: key) }) {
+            await MainActor.run {
+                PDFThumbnailCache.shared.store(image: disk, forKey: key)
+            }
+            return disk
         }
 
-        do {
-            var request = URLRequest(url: url)
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                return nil
-            }
-            guard let pdf = PDFDocument(data: data),
-                  let page = pdf.page(at: 0) else {
-                return nil
-            }
+        let trimmed = cacheIdentity.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pathForFreshURL = trimmed.isEmpty ? nil : trimmed
 
-            let thumb = renderThumbnail(page: page, targetSize: targetSize, layout: layout, panel: panel)
-            guard let thumb else { return nil }
-            PDFThumbnailCache.shared.store(image: thumb, forKey: key)
-            return thumb
-        } catch {
-            return nil
+        return await CoverPDFThumbnailInflight.shared.deduped(key: key) {
+            await Self.downloadRenderAndStore(
+                initialURL: url,
+                layout: layout,
+                panel: panel,
+                targetSize: targetSize,
+                cacheKey: key,
+                storagePathForFreshURL: pathForFreshURL
+            )
         }
     }
 
-    private static func renderThumbnail(
+    private static func downloadPDFBytes(from url: URL) async -> PDFCoverDownloadResult {
+        do {
+            let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
+            let code = (response as? HTTPURLResponse)?.statusCode
+            return PDFCoverDownloadResult(data: data, status: code)
+        } catch {
+            return PDFCoverDownloadResult(data: nil, status: nil)
+        }
+    }
+
+    private static func pdfPayloadLooksValid(_ r: PDFCoverDownloadResult) -> Bool {
+        guard let s = r.status, (200...299).contains(s),
+              let d = r.data,
+              !d.isEmpty,
+              PDFDocument(data: d)?.page(at: 0) != nil else {
+            return false
+        }
+        return true
+    }
+
+    private static func downloadRenderAndStore(
+        initialURL: URL,
+        layout: BookCoverFlatLayoutKind,
+        panel: BookCoverFlatPanel,
+        targetSize: CGSize,
+        cacheKey: String,
+        storagePathForFreshURL: String?
+    ) async -> UIImage? {
+        var result = await downloadPDFBytes(from: initialURL)
+        if !pdfPayloadLooksValid(result), let path = storagePathForFreshURL,
+           let fresh = try? await StorageService.shared.freshDownloadURL(forStoragePath: path) {
+            result = await downloadPDFBytes(from: fresh)
+        }
+
+        guard pdfPayloadLooksValid(result), let data = result.data else { return nil }
+
+        let thumb: UIImage? = await Task.detached(priority: .userInitiated) {
+            guard let pdf = PDFDocument(data: data), let page = pdf.page(at: 0) else { return nil }
+            return renderThumbnail(page: page, targetSize: targetSize, layout: layout, panel: panel)
+        }.value
+
+        guard let thumb else { return nil }
+        await MainActor.run {
+            PDFThumbnailCache.shared.store(image: thumb, forKey: cacheKey)
+            PDFThumbnailDiskCache.shared.store(image: thumb, forKey: cacheKey)
+        }
+        return thumb
+    }
+
+    nonisolated private static func renderThumbnail(
         page: PDFPage,
         targetSize: CGSize,
         layout: BookCoverFlatLayoutKind,
@@ -106,6 +190,8 @@ struct RemotePDFThumbnailView<Placeholder: View>: View {
     var panel: BookCoverFlatPanel = .full
     /// Busts in-memory cache when the same Storage URL is overwritten (e.g. new cover PDF).
     var cacheRevision: String = ""
+    /// When non-empty (e.g. Firebase Storage path for `cover.pdf`), cache keys stay stable across rotated signed URLs.
+    var cacheIdentity: String = ""
     @ViewBuilder let placeholder: () -> Placeholder
 
     @State private var image: UIImage?
@@ -113,7 +199,7 @@ struct RemotePDFThumbnailView<Placeholder: View>: View {
     @State private var loadFailed = false
 
     private var cacheKey: String {
-        CoverPDFThumbnailService.cacheKey(url: url, layout: layout, panel: panel, cacheRevision: cacheRevision)
+        CoverPDFThumbnailService.cacheKey(url: url, layout: layout, panel: panel, cacheRevision: cacheRevision, cacheIdentity: cacheIdentity)
     }
 
     init(
@@ -122,6 +208,7 @@ struct RemotePDFThumbnailView<Placeholder: View>: View {
         layout: BookCoverFlatLayoutKind = .kidsBook,
         panel: BookCoverFlatPanel = .full,
         cacheRevision: String = "",
+        cacheIdentity: String = "",
         @ViewBuilder placeholder: @escaping () -> Placeholder
     ) {
         self.url = url
@@ -129,8 +216,9 @@ struct RemotePDFThumbnailView<Placeholder: View>: View {
         self.layout = layout
         self.panel = panel
         self.cacheRevision = cacheRevision
+        self.cacheIdentity = cacheIdentity
         self.placeholder = placeholder
-        _image = State(initialValue: CoverPDFThumbnailService.cachedImage(url: url, layout: layout, panel: panel, cacheRevision: cacheRevision))
+        _image = State(initialValue: CoverPDFThumbnailService.cachedImage(url: url, layout: layout, panel: panel, cacheRevision: cacheRevision, cacheIdentity: cacheIdentity))
     }
 
     var body: some View {
@@ -150,7 +238,7 @@ struct RemotePDFThumbnailView<Placeholder: View>: View {
         }
         .task(id: cacheKey) {
             loadFailed = false
-            image = CoverPDFThumbnailService.cachedImage(url: url, layout: layout, panel: panel, cacheRevision: cacheRevision)
+            image = CoverPDFThumbnailService.cachedImage(url: url, layout: layout, panel: panel, cacheRevision: cacheRevision, cacheIdentity: cacheIdentity)
             await load()
         }
     }
@@ -160,6 +248,8 @@ struct RemotePDFThumbnailView<Placeholder: View>: View {
         if image != nil { return }
         if isLoading || loadFailed { return }
 
+        let panelLabel = String(describing: panel)
+        print("[CoverThumb] load START panel=\(panelLabel) cacheKeySuffix=\(cacheRevision.prefix(16))…")
         isLoading = true
         defer { isLoading = false }
 
@@ -168,11 +258,14 @@ struct RemotePDFThumbnailView<Placeholder: View>: View {
             layout: layout,
             panel: panel,
             targetSize: targetSize,
-            cacheRevision: cacheRevision
+            cacheRevision: cacheRevision,
+            cacheIdentity: cacheIdentity
         ) {
             image = thumb
+            print("[CoverThumb] load OK panel=\(panelLabel)")
         } else {
             loadFailed = true
+            print("[CoverThumb] load FAIL panel=\(panelLabel)")
         }
     }
 }
@@ -192,6 +285,101 @@ final class PDFThumbnailCache {
     /// Clears all cached cover thumbnails (e.g. after sign-out). Panel keys include URL + revision.
     func removeAll() {
         cache.removeAllObjects()
+    }
+}
+
+/// Persistent disk cache for rendered cover thumbnails. Keys include `cacheRevision`,
+/// so regenerating the cover naturally invalidates.
+final class PDFThumbnailDiskCache {
+    static let shared = PDFThumbnailDiskCache()
+    private let queue = DispatchQueue(label: "PDFThumbnailDiskCache", qos: .utility)
+    private let directory: URL?
+
+    init() {
+        let fm = FileManager.default
+        if let base = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            let dir = base.appendingPathComponent("memoir-cover-thumbs", isDirectory: true)
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            self.directory = dir
+        } else {
+            self.directory = nil
+        }
+    }
+
+    private func fileURL(forKey key: String) -> URL? {
+        guard let directory else { return nil }
+        let hash = String(key.hashValue)
+        return directory.appendingPathComponent("\(hash).jpg", isDirectory: false)
+    }
+
+    func image(forKey key: String) -> UIImage? {
+        guard let url = fileURL(forKey: key),
+              let data = try? Data(contentsOf: url),
+              let img = UIImage(data: data) else { return nil }
+        return img
+    }
+
+    func store(image: UIImage, forKey key: String) {
+        guard let url = fileURL(forKey: key),
+              let data = image.jpegData(compressionQuality: 0.88) else { return }
+        queue.async {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    func removeAll() {
+        guard let directory else { return }
+        queue.async {
+            try? FileManager.default.removeItem(at: directory)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+    }
+}
+
+/// Persistent disk cache for full-resolution page illustration images.
+final class IllustrationImageDiskCache {
+    static let shared = IllustrationImageDiskCache()
+    private let queue = DispatchQueue(label: "IllustrationImageDiskCache", qos: .utility)
+    private let directory: URL?
+
+    init() {
+        let fm = FileManager.default
+        if let base = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            let dir = base.appendingPathComponent("memoir-illustrations", isDirectory: true)
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            self.directory = dir
+        } else {
+            self.directory = nil
+        }
+    }
+
+    private func fileURL(forKey key: String) -> URL? {
+        guard let directory else { return nil }
+        let hash = String(key.hashValue)
+        return directory.appendingPathComponent("\(hash).jpg", isDirectory: false)
+    }
+
+    func image(forKey key: String) -> UIImage? {
+        guard let url = fileURL(forKey: key),
+              let data = try? Data(contentsOf: url),
+              let img = UIImage(data: data) else { return nil }
+        return img
+    }
+
+    func store(image: UIImage, forKey key: String) {
+        guard let url = fileURL(forKey: key),
+              let data = image.jpegData(compressionQuality: 0.9) else { return }
+        queue.async {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    func removeAll() {
+        guard let directory else { return }
+        queue.async {
+            try? FileManager.default.removeItem(at: directory)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
     }
 }
 

@@ -75,3 +75,8 @@ final class FirebaseConfig {
         Auth.auth().currentUser != nil
     }
 }
+
+/// Shared `UserDefaults` keys for reinstall-safe flows (books backup nudge, etc.).
+enum MemoirPersistenceUserDefaults {
+    static let suggestAccountLinkAfterBook = "memoir_suggest_link_after_book"
+}

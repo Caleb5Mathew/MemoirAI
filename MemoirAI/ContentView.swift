@@ -33,25 +33,43 @@ struct ContentView: View {
         return Group {
             if done {
                 NavigationStack(path: $path) {
-                    MainTabView()
-                        .toolbar(.hidden, for: .navigationBar)
-                        .onReceive(nav.$selectedMemoryID.compactMap { $0 }) { id in
-                            path.append(id)
+                    MainTabView(path: $path)
+                    .toolbar(.hidden, for: .navigationBar)
+                    .onReceive(nav.$selectedMemoryID.compactMap { $0 }) { id in
+                        path.append(id)
+                    }
+                    .onChange(of: path) {
+                        if path.isEmpty { nav.clear() }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                        Task { await routeToActiveCloudStorybookIfNeeded() }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .navigateToCloudStorybookGeneration)) { _ in
+                        Task { await routeToActiveCloudStorybookIfNeeded() }
+                    }
+                    .navigationDestination(for: StorybookRootRoute.self) { _ in
+                        StoryPage()
+                            .environmentObject(profileVM)
+                            .environmentObject(tutorialCoordinator)
+                            .environment(\.storybookScreenEntry, .autoResumePendingGeneration)
+                    }
+                    .navigationDestination(for: UUID.self) { id in
+                        if let entry = PersistenceController.shared.entry(id: id) {
+                            MemoryDetailView(memory: entry)
+                                .environmentObject(profileVM)
+                                .onDisappear { nav.clear() }
+                        } else {
+                            Text("Memory not found").font(.headline)
                         }
-                        .onChange(of: path) {
-                            if path.isEmpty { nav.clear() }
-                        }
-                        .navigationDestination(for: UUID.self) { id in
-                            if let entry = PersistenceController.shared.entry(id: id) {
-                                MemoryDetailView(memory: entry)
-                                    .environmentObject(profileVM)
-                                    .onDisappear { nav.clear() }
-                            } else {
-                                Text("Memory not found").font(.headline)
-                            }
-                        }
+                    }
                 }
                 .environmentObject(nav)
+                .task {
+                    await routeToActiveCloudStorybookIfNeeded()
+                }
+                .onChange(of: profileVM.selectedProfile.id) { _, _ in
+                    Task { await routeToActiveCloudStorybookIfNeeded() }
+                }
                 .onAppear {
                     // Handle any pending deep link after onboarding completes
                     if let pendingID = pendingDeepLinkID {
@@ -66,10 +84,19 @@ struct ContentView: View {
                     Task {
                         await authService.signInAnonymouslyIfNeeded()
                         await backfillLocalMemoryOwnershipIfNeeded()
-                        
-                        // Trigger migration after sign-in
+
+                        await FirestoreSyncService.shared.hydrateMemoriesFromFirestoreIfStoreEmpty(
+                            context: PersistenceController.shared.container.viewContext
+                        )
+
+                        // Trigger migration after sign-in (includes memories restored from Firestore hydrate)
                         if authService.isSignedIn && !FirestoreSyncService.shared.isMigrationComplete {
                             triggerFirebaseMigration()
+                        }
+
+                        // Push profile name to user doc so admin can identify users
+                        if let name = profileVM.profiles.first?.name, !name.isEmpty {
+                            await authService.updateProfileNameInUserDoc(name)
                         }
                     }
                 }
@@ -204,6 +231,18 @@ struct ContentView: View {
             print("✅ Local ownership backfill complete for UID \(uid): \(legacyRows.count) rows updated")
         } catch {
             print("❌ Local ownership backfill failed for UID \(uid): \(error)")
+        }
+    }
+
+    /// Aggressive auto-resume: if a cloud storybook job is in progress, reset navigation to root and open `StoryPage`.
+    private func routeToActiveCloudStorybookIfNeeded() async {
+        guard authService.isSignedIn else { return }
+        guard (try? await FirestoreSyncService.shared.fetchLatestActiveStorybookJob(profileId: profileVM.selectedProfile.id)) != nil else {
+            return
+        }
+        await MainActor.run {
+            path = NavigationPath()
+            path.append(StorybookRootRoute.resumeInProgressGeneration)
         }
     }
 }

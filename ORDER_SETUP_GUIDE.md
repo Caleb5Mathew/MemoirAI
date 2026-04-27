@@ -96,6 +96,13 @@ Or create a document at `config/pricing` in Firestore manually with:
 }
 ```
 
+**Pricing semantics (Cloud Functions):**
+
+- **`marginPercent`**: Markup on Lulu’s live, page-count-sensitive print cost for the line. Retail book line = `max(basePriceCents × qty, ceil(luluMakeCents × (1 + marginPercent/100)))`.
+- **`basePriceCents`**: Minimum retail **per copy** (floor). Short books stay at least this price; thicker books price up with Lulu cost.
+
+Tune `marginPercent` (e.g. 35) in production after comparing a few real Lulu quotes to your target margins.
+
 Replace `luluPodPackageId` with the exact SKU from Lulu's calculator if different.
 
 ## Going Live (Production Stripe)

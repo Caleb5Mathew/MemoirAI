@@ -139,6 +139,9 @@ struct BookCoverRenderer {
     static let spineColor = UIColor(red: 0.6, green: 0.5, blue: 0.4, alpha: 1)
     static let backCoverTextColor = UIColor(red: 0.45, green: 0.38, blue: 0.3, alpha: 1)
     static let backCoverHeadingColor = UIColor(red: 0.22, green: 0.19, blue: 0.16, alpha: 1)
+    /// Cream-tinted plate behind back-cover type so it reads over busy AI art.
+    private static let backCoverTextPlateFill = UIColor(red: 0.99, green: 0.98, blue: 0.96, alpha: 0.91)
+    private static let backCoverTextPlateStroke = UIColor(red: 0.35, green: 0.30, blue: 0.24, alpha: 0.08)
 
     /// Typographic **points** → **pixels** at 300 DPI (`BookCoverTemplate.dpi`; same as Lulu portrait templates).
     /// Does not change template widths/heights — all flat-cover PDFs still use fixed `BookCoverTemplate` /
@@ -279,6 +282,30 @@ struct BookCoverRenderer {
         context.restoreGState()
     }
 
+    /// Keeps the blurb in a short measure (~6 words per line on typical pitch copy) instead of one long horizontal line.
+    private static func backCoverTextColumnWidth(contentWidth: CGFloat) -> CGFloat {
+        let capInches: CGFloat = 2.65
+        let capPx = capInches * BookCoverTemplate.dpi
+        return max(px(76), min(contentWidth * 0.27, capPx))
+    }
+
+    private static func drawBackCoverTextPlate(around textBounds: CGRect, context: CGContext) {
+        let padX = px(16)
+        let padY = px(14)
+        let corner = px(11)
+        let plate = textBounds.insetBy(dx: -padX, dy: -padY)
+        let path = UIBezierPath(roundedRect: plate, cornerRadius: corner)
+        context.saveGState()
+        context.setFillColor(backCoverTextPlateFill.cgColor)
+        context.addPath(path.cgPath)
+        context.fillPath()
+        context.setStrokeColor(backCoverTextPlateStroke.cgColor)
+        context.setLineWidth(px(0.75))
+        context.addPath(path.cgPath)
+        context.strokePath()
+        context.restoreGState()
+    }
+
     private static func drawFrontCoverTitle(text: String, in rect: CGRect, fontPreset: CoverFontPreset, context: CGContext) {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.alignment = .center
@@ -345,6 +372,7 @@ struct BookCoverRenderer {
             width: inner.width,
             height: max(px(80), inner.height - imprintAreaH)
         )
+        let textColumnWidth = backCoverTextColumnWidth(contentWidth: contentRect.width)
 
         let heading = "About this book"
         var headPt: CGFloat = 19
@@ -384,7 +412,7 @@ struct BookCoverRenderer {
 
         var combined = makeAttributed()
         var box = combined.boundingRect(
-            with: CGSize(width: contentRect.width, height: .greatestFiniteMagnitude),
+            with: CGSize(width: textColumnWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             context: nil
         )
@@ -398,7 +426,7 @@ struct BookCoverRenderer {
             bodyPt = max(bodyPt, minBodyPt)
             combined = makeAttributed()
             box = combined.boundingRect(
-                with: CGSize(width: contentRect.width, height: .greatestFiniteMagnitude),
+                with: CGSize(width: textColumnWidth, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
                 context: nil
             )
@@ -408,9 +436,11 @@ struct BookCoverRenderer {
         let drawRect = CGRect(
             x: contentRect.minX,
             y: contentRect.minY,
-            width: contentRect.width,
+            width: textColumnWidth,
             height: drawH
         )
+        let plateRect = box.offsetBy(dx: drawRect.minX, dy: drawRect.minY)
+        drawBackCoverTextPlate(around: plateRect, context: context)
         combined.draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
 
         drawBackCoverBrandImprint(in: panelRect, context: context)

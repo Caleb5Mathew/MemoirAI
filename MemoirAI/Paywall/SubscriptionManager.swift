@@ -1,6 +1,8 @@
 import Foundation
 import RevenueCat
 import SwiftUI
+import FirebaseAuth
+import FirebaseFirestore
 
 // Updated subscription tiers to match RevenueCat package identifiers
 enum Tier: String, CaseIterable {
@@ -215,6 +217,22 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
                 nextRenewalDate = nil
             }
         }
+        syncSubscriptionToFirestore()
+    }
+
+    private func syncSubscriptionToFirestore() {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        let data: [String: Any] = [
+            "hasActiveSubscription": activeTier != nil,
+            "subscriptionTier": activeTier?.rawValue ?? NSNull(),
+            "subscriptionUpdatedAt": FieldValue.serverTimestamp()
+        ]
+        Firestore.firestore().collection("users").document(uid)
+            .setData(data, merge: true) { error in
+                if let error = error {
+                    print("❌ Failed to sync subscription to Firestore: \(error)")
+                }
+            }
     }
 
     // Helper function to map product IDs to package-based tiers

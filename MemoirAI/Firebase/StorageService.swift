@@ -300,7 +300,23 @@ final class StorageService {
         guard let userId = Auth.auth().currentUser?.uid else {
             throw StorageError.notAuthenticated
         }
+        return try await uploadRenderedBookPageArtifacts(
+            image,
+            bookId: bookId,
+            pageIndex: pageIndex,
+            isKidsBook: isKidsBook,
+            asUserId: userId
+        )
+    }
 
+    /// Same as `uploadRenderedBookPageArtifacts` but uses a fixed Storage owner id (avoids mid-flow `Auth` uid changes during long syncs).
+    func uploadRenderedBookPageArtifacts(
+        _ image: UIImage,
+        bookId: String,
+        pageIndex: Int,
+        isKidsBook: Bool,
+        asUserId userId: String
+    ) async throws -> UploadedBookPageArtifacts {
         let preparedImage = resizedForBookUpload(image, isKidsBook: isKidsBook)
         guard let pngData = preparedImage.pngData(),
               let jpegData = preparedImage.jpegData(compressionQuality: 0.90) else {
@@ -367,7 +383,10 @@ final class StorageService {
         guard let userId = Auth.auth().currentUser?.uid else {
             throw StorageError.notAuthenticated
         }
+        return try await uploadBookCoverPDF(pdfData, bookId: bookId, asUserId: userId)
+    }
 
+    func uploadBookCoverPDF(_ pdfData: Data, bookId: String, asUserId userId: String) async throws -> (storagePath: String, downloadURL: String) {
         let path = "users/\(userId)/bookVersions/\(bookId)/cover.pdf"
         let ref = storage.reference().child(path)
 
@@ -459,6 +478,41 @@ final class StorageService {
         let ref = storage.reference().child(path)
         try await ref.delete()
         print("✅ Deleted file at: \(path)")
+    }
+
+    /// Recursively deletes all files under `users/{uid}/bookVersions/{bookId}/` (including `pages/`, `cover.pdf`, `book.pdf`).
+    func deleteBookVersionFolder(bookId: String) async {
+        guard let userId = Auth.auth().currentUser?.uid else { return }
+        let ref = storage.reference().child("users/\(userId)/bookVersions/\(bookId)")
+        await deleteStorageRefRecursively(ref)
+    }
+
+    private func deleteStorageRefRecursively(_ ref: StorageReference) async {
+        do {
+            let list = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<StorageListResult, Error>) in
+                ref.listAll { result, error in
+                    if let error = error { cont.resume(throwing: error) }
+                    else if let result = result { cont.resume(returning: result) }
+                    else { cont.resume(throwing: StorageError.uploadFailed("listAll returned no result")) }
+                }
+            }
+            for p in list.prefixes {
+                await deleteStorageRefRecursively(p)
+            }
+            for item in list.items {
+                do {
+                    try await item.delete()
+                } catch {
+                    print("⚠️ Storage delete \(item.fullPath): \(error.localizedDescription)")
+                }
+            }
+        } catch {
+            // Listing an empty or missing "folder" may return an error; skip noisy logs for not-found.
+            let msg = error.localizedDescription.lowercased()
+            if !msg.contains("not found") && !msg.contains("not exist") {
+                print("⚠️ deleteStorage list \(ref.fullPath): \(error.localizedDescription)")
+            }
+        }
     }
     
     // MARK: - Error Types

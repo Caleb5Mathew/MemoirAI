@@ -1,6 +1,9 @@
 import Foundation
 import SwiftUI
 import CoreData
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @MainActor
 class ProfileViewModel: ObservableObject {
@@ -134,11 +137,61 @@ class ProfileViewModel: ObservableObject {
         let url = getDocumentsDirectory().appendingPathComponent(profilesKey)
         if let data = try? JSONEncoder().encode(profiles) {
             try? data.write(to: url)
-            
-            NSUbiquitousKeyValueStore.default.set(data, forKey: "memoir_profiles_backup")
+
+            let cloudSnapshot = profilesEncodedForICloudKVS(profiles)
+            if let cloudData = cloudSnapshot {
+                NSUbiquitousKeyValueStore.default.set(cloudData, forKey: "memoir_profiles_backup")
+            } else {
+                print("⚠️ Skipping memoir_profiles_backup — payload still too large for iCloud KVS after compression")
+            }
             NSUbiquitousKeyValueStore.default.synchronize()
         }
     }
+
+    /// iCloud KVS allows ~1 MB total; keep backups small with JPEG caps and optional photo stripping.
+    private func profilesEncodedForICloudKVS(_ source: [Profile]) -> Data? {
+        let compressedProfiles = source.map { $0.withPhotoData(Self.compressPhotoDataForICloudKVS($0.photoData)) }
+        if let data = try? JSONEncoder().encode(compressedProfiles), data.count <= 950_000 {
+            return data
+        }
+        let withoutPhotos = source.map { $0.withPhotoData(nil) }
+        return try? JSONEncoder().encode(withoutPhotos)
+    }
+
+#if canImport(UIKit)
+    /// Downscale + JPEG-recompress profile photos before writing to `NSUbiquitousKeyValueStore` (1 MB store limit).
+    static func compressPhotoDataForICloudKVS(_ data: Data?) -> Data? {
+        guard let data, !data.isEmpty else { return nil }
+        let maxBytes = 88_000
+        if data.count <= maxBytes { return data }
+        guard let image = UIImage(data: data) else { return nil }
+
+        var working = image
+        for _ in 0..<6 {
+            let w = working.size.width
+            let h = working.size.height
+            let longest = max(w, h)
+            guard longest > 420 else { break }
+            let scale = 420 / longest
+            let newSize = CGSize(width: max(1, w * scale), height: max(1, h * scale))
+            let renderer = UIGraphicsImageRenderer(size: newSize)
+            working = renderer.image { _ in
+                working.draw(in: CGRect(origin: .zero, size: newSize))
+            }
+        }
+
+        var quality: CGFloat = 0.78
+        while quality >= 0.32 {
+            if let jpeg = working.jpegData(compressionQuality: quality), jpeg.count <= maxBytes {
+                return jpeg
+            }
+            quality -= 0.08
+        }
+        return working.jpegData(compressionQuality: 0.3)
+    }
+#else
+    static func compressPhotoDataForICloudKVS(_ data: Data?) -> Data? { data }
+#endif
 
     private func loadProfiles() {
         let url = getDocumentsDirectory().appendingPathComponent(profilesKey)
@@ -195,9 +248,10 @@ class ProfileViewModel: ObservableObject {
     private func syncProfileToCloudKit(_ profile: Profile) {
         // Sync individual profile fields to CloudKit for enhanced persistence
         let profileKey = "memoir_profile_\(profile.id.uuidString)"
-        
+        let profileForCloud = profile.withPhotoData(Self.compressPhotoDataForICloudKVS(profile.photoData))
+
         // Store profile data
-        if let profileData = try? JSONEncoder().encode(profile) {
+        if let profileData = try? JSONEncoder().encode(profileForCloud) {
             NSUbiquitousKeyValueStore.default.set(profileData, forKey: profileKey)
         }
         
@@ -216,8 +270,10 @@ class ProfileViewModel: ObservableObject {
             NSUbiquitousKeyValueStore.default.set(gender, forKey: "\(profileKey)_gender")
         }
         
-        if let photoData = profile.photoData {
+        if let photoData = profileForCloud.photoData {
             NSUbiquitousKeyValueStore.default.set(photoData, forKey: "\(profileKey)_photo")
+        } else {
+            NSUbiquitousKeyValueStore.default.removeObject(forKey: "\(profileKey)_photo")
         }
         
         NSUbiquitousKeyValueStore.default.synchronize()

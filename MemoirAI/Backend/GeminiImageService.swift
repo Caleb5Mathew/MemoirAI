@@ -394,7 +394,7 @@ actor GeminiImageService {
         ethnicity: String? = nil,
         gender: String? = nil,
         memoryThemes: [String] = [],
-        artStyle: ArtStyle = .kidsBook,
+        artStyle: ArtStyle,
         customStyle: String? = nil,
         printTitle: String? = nil
     ) async throws -> UIImage? {
@@ -513,7 +513,7 @@ actor GeminiImageService {
         ethnicity: String? = nil,
         gender: String? = nil,
         memoryThemes: [String] = [],
-        artStyle: ArtStyle = .kidsBook,
+        artStyle: ArtStyle,
         customStyle: String? = nil
     ) async throws -> UIImage? {
         let trimmedThemes = memoryThemes

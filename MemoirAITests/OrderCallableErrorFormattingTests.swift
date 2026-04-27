@@ -24,7 +24,7 @@ struct OrderCallableErrorFormattingTests {
             userInfo: [NSLocalizedDescriptionKey: "INTERNAL"]
         )
         let msg = OrderService.userFacingCallableErrorMessage(err)
-        #expect(msg.contains("start secure checkout"))
+        #expect(msg.contains("Checkout") && (msg.contains("connect") || msg.contains("connection")))
     }
 
     @Test func userFacingCallableErrorMessage_preservesExplicitServerMessage() {

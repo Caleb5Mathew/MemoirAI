@@ -3,6 +3,7 @@ import RevenueCat
 import RevenueCatUI
 import FirebaseAuth
 import FirebaseFirestore
+import AuthenticationServices
 
 // ArtStyle Enum - ensure this is defined once globally or is accessible.
 enum ArtStyle: String, CaseIterable, Identifiable {
@@ -256,6 +257,8 @@ struct SettingsView: View {
         .onAppear {
             sliderPageCount = Double(pageCountSetting)
             clampPageCountIfNeeded()
+            // Temporarily only Kid's Book is offered in Art Style; keep storage aligned.
+            selectedArtStyleRawValue = ArtStyle.kidsBook.rawValue
             if !canAccessDeveloperGeminiToggle {
                 geminiModelOverrideRawValue = GeminiImageModelOption.gemini3ProPreview.rawValue
             }
@@ -556,7 +559,18 @@ struct SettingsView: View {
             Text("Art Style")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(darkText)
-            
+
+            // Temporarily only Kid's Book — restore grid below when re-enabling other styles.
+            ArtStyleChip(
+                style: .kidsBook,
+                isSelected: true,
+                accentColor: terracotta
+            ) {
+                selectedArtStyleRawValue = ArtStyle.kidsBook.rawValue
+            }
+            .frame(maxWidth: .infinity)
+
+            /*
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                 ForEach(ArtStyle.allCases) { style in
                     ArtStyleChip(
@@ -568,8 +582,10 @@ struct SettingsView: View {
                     }
                 }
             }
-            
-            // Custom style input
+            */
+
+            // Custom style input (hidden while only Kid's Book is offered)
+            /*
             if currentSelectedArtStyle == .custom {
                 TextField("Describe your style...", text: $customArtStyleText, axis: .vertical)
                     .font(.system(size: 14))
@@ -584,6 +600,7 @@ struct SettingsView: View {
                     .tint(terracotta)
                     .padding(.top, 4)
             }
+            */
         }
         .padding(20)
         .background(Color.white.opacity(0.6))
@@ -775,24 +792,49 @@ struct SettingsView: View {
                         .padding(.vertical, 8)
                     
                     printOrdersLibraryRow
-                    
-                    // Link Google account button
+
+                    SignInWithAppleButton(.signIn) { request in
+                        request.nonce = AuthenticationService.shared.prepareAppleSignIn()
+                        request.requestedScopes = [.fullName, .email]
+                    } onCompletion: { result in
+                        switch result {
+                        case .success(let authorization):
+                            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else { return }
+                            Task { await linkAppleAccount(credential: credential) }
+                        case .failure(let error):
+                            print("❌ Apple sign-in failed: \(error.localizedDescription)")
+                        }
+                    }
+                    .signInWithAppleButtonStyle(.black)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
                     Button(action: linkGoogleAccount) {
-                        HStack {
+                        HStack(spacing: 10) {
                             ZStack {
                                 Circle()
                                     .fill(Color.white)
-                                    .frame(width: 20, height: 20)
+                                    .frame(width: 22, height: 22)
                                 Text("G")
                                     .font(.system(size: 12, weight: .bold))
                                     .foregroundColor(.blue)
                             }
                             Text("Link Google Account")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.system(size: 15, weight: .semibold))
                         }
-                        .foregroundColor(terracotta)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background(Color.white.opacity(0.95))
+                        .foregroundColor(Color.black.opacity(0.75))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Color.black.opacity(0.12), lineWidth: 1)
+                        )
                     }
-                    
+                    .buttonStyle(.plain)
+
                     developerModeRow
                 } else {
                     // Signed in with Google
@@ -920,6 +962,14 @@ struct SettingsView: View {
             } catch {
                 print("❌ Link failed: \(error)")
             }
+        }
+    }
+
+    private func linkAppleAccount(credential: ASAuthorizationAppleIDCredential) async {
+        do {
+            try await AuthenticationService.shared.linkAppleAccount(credential: credential)
+        } catch {
+            print("❌ Link Apple failed: \(error)")
         }
     }
     

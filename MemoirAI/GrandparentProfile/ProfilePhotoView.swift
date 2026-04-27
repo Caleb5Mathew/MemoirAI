@@ -195,7 +195,7 @@ struct ProfilePhotoView: View {
     }
 }
 
-// MARK: - Library Picker (PHPickerViewController, iOS 14+)
+// MARK: - Library Picker (UIImagePickerController — supports native crop via allowsEditing)
 
 struct LibraryPickerView: UIViewControllerRepresentable {
     var onPhotoPicked: (UIImage) -> Void
@@ -205,34 +205,34 @@ struct LibraryPickerView: UIViewControllerRepresentable {
         Coordinator(self)
     }
 
-    func makeUIViewController(context: Context) -> PHPickerViewController {
-        var config = PHPickerConfiguration()
-        config.selectionLimit = 1
-        config.filter = .images
-        let picker = PHPickerViewController(configuration: config)
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .photoLibrary
+        picker.allowsEditing = true
+        picker.mediaTypes = ["public.image"]
         picker.delegate = context.coordinator
         return picker
     }
 
-    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
 
-    class Coordinator: NSObject, PHPickerViewControllerDelegate {
+    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
         let parent: LibraryPickerView
 
         init(_ parent: LibraryPickerView) {
             self.parent = parent
         }
 
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            parent.dismiss()
-            guard let result = results.first else { return }
-            result.itemProvider.loadObject(ofClass: UIImage.self) { object, _ in
-                if let image = object as? UIImage {
-                    DispatchQueue.main.async {
-                        self.parent.onPhotoPicked(image)
-                    }
-                }
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            let image = (info[.editedImage] ?? info[.originalImage]) as? UIImage
+            if let image {
+                parent.onPhotoPicked(image)
             }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
         }
     }
 }

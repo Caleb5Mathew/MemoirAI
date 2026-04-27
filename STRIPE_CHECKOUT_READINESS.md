@@ -5,7 +5,7 @@ This doc matches the shipped flow: **Order Print** → live Lulu pricing + check
 ### Fast checkout (recommended)
 
 - **Prepare quote** (`prepareCartCheckoutQuote`): runs Lulu line + whole-order shipping once, stores `users/{uid}/checkoutQuotes/{quoteId}` (TTL ~30 minutes), returns `quoteId`, `cartHash`, `expiresAtMillis`, and the same estimate fields the UI already uses.
-- **Pay** (`createCartCheckoutSessionFast`): validates the quote, writes `pendingCartCheckouts`, creates the Stripe session only (no Lulu work). Uses per-attempt **idempotency** under `users/{uid}/checkoutAttempts/{idempotencyKey}` to avoid duplicate sessions on double-tap.
+- **Pay** (`createCartCheckoutSessionFast`): validates the quote, writes `pendingCartCheckouts`, creates the Stripe session only (no Lulu work). Each attempt uses a short per-user id **`book{N}`** (monotonic counter in `users/{uid}/_checkoutSeq/v`) as the Firestore document id for **`checkoutAttempts/{bookN}`** and **`pendingCartCheckouts/{bookN}`**, and as `metadata.cartOrderGroupId` for the Stripe session. Optional **`checkoutInstanceId`** on the callable resumes that same attempt; the app may send **`clientCorrelationId`** (e.g. UUID) for logging only.
 - **Disable server-side** (emergency): set `FAST_CHECKOUT_ENABLED=false` on the Functions runtime → `createCartCheckoutSessionFast` returns `failed-precondition` and the app falls back to `createCartCheckoutSession`.
 - **Reconciliation**: scheduled function `reconcilePendingCartCheckouts` (every 15 minutes) marks stale `pending_stripe` sessions when Stripe reports `expired` (requires Firestore composite index on collection group `pendingCartCheckouts`: `status` + `createdAt`).
 

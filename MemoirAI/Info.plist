@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.05</string>
+	<string>3.18</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -63,7 +63,7 @@
 	<key>BOOK_RENDER_FUNCTION_URL</key>
 	<string>https://us-central1-memoirai-7db06.cloudfunctions.net/generateBookVersionPdf</string>
 	<key>RevenueCatAPIKey</key>
-	<string></string>
+	<string>appl_HTtNKyhVPddJOKrcqGCnWtvZcto</string>
 	<key>FacebookAppID</key>
 	<string>896550005970816</string>
 	<key>FacebookDisplayName</key>

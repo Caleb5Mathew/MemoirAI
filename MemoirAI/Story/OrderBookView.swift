@@ -66,6 +66,8 @@ struct OrderBookView: View {
     @State private var showStripeCheckout = false
     @State private var checkoutURL: URL?
     @State private var lastCheckoutAttempt: Date?
+    /// Server `book{N}` id for fast checkout resume (`createCartCheckoutSessionFast`).
+    @State private var fastCheckoutInstanceId: String?
     /// Dev-only diagnistics for Firebase callable failures (see `OrderService.debugCallableErrorFootnote`).
     @State private var checkoutErrorDebugFootnote: String?
 
@@ -314,12 +316,14 @@ struct OrderBookView: View {
             .onReceive(NotificationCenter.default.publisher(for: .orderComplete)) { _ in
                 showStripeCheckout = false
                 checkoutURL = nil
+                fastCheckoutInstanceId = nil
                 orderCart.clear()
                 dismiss()
             }
             .onReceive(NotificationCenter.default.publisher(for: .orderCancelled)) { _ in
                 showStripeCheckout = false
                 checkoutURL = nil
+                fastCheckoutInstanceId = nil
             }
             .onChange(of: localAutocomplete.completions) { _, comps in
                 guard useLocalAutocompleteFallback else { return }
@@ -645,7 +649,8 @@ struct OrderBookView: View {
                 targetSize: CGSize(width: 160, height: 128),
                 layout: book.coverFlatLayoutKind,
                 panel: .front,
-                cacheRevision: book.coverThumbnailCacheRevision
+                cacheRevision: book.coverThumbnailCacheRevision,
+                cacheIdentity: book.coverStoragePath ?? ""
             ) {
                 orderCoverPlaceholder
             }
@@ -915,7 +920,8 @@ struct OrderBookView: View {
                 targetSize: CGSize(width: 88, height: 112),
                 layout: layout,
                 panel: .front,
-                cacheRevision: item.coverThumbnailCacheRevision ?? ""
+                cacheRevision: item.coverThumbnailCacheRevision ?? "",
+                cacheIdentity: ""
             ) {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(UIColor.tertiarySystemFill))
@@ -1603,6 +1609,7 @@ struct OrderBookView: View {
                     isEstimating = false
                     cartEstimate = nil
                     errorMessage = OrderService.userFacingCallableErrorMessage(error)
+                    OrderService.printCallableDiagnostics(error, context: "prepareCartCheckoutQuote (preview)")
                     #if DEBUG
                     print("📦 prepareCartCheckoutQuote (preview) failed: \(OrderService.debugCallableErrorFootnote(error, function: "prepareCartCheckoutQuote"))")
                     #else
@@ -1643,6 +1650,7 @@ struct OrderBookView: View {
                     isEstimating = false
                     cartEstimate = nil
                     errorMessage = OrderService.userFacingCallableErrorMessage(error)
+                    OrderService.printCallableDiagnostics(error, context: "prepareCartCheckoutQuote (cart estimate)")
                     #if DEBUG
                     print("📦 prepareCartCheckoutQuote failed: \(OrderService.debugCallableErrorFootnote(error, function: "prepareCartCheckoutQuote"))")
                     #else
@@ -2012,6 +2020,7 @@ struct OrderBookView: View {
             return
         }
         lastCheckoutAttempt = Date()
+        fastCheckoutInstanceId = nil
         errorMessage = nil
         #if DEBUG
         checkoutErrorDebugFootnote = nil
@@ -2030,11 +2039,14 @@ struct OrderBookView: View {
                     #endif
                 }
             } catch {
+                let dbgContext = await MainActor.run {
+                    "cart checkout ctx=step:\(activeStep.rawValue) lines:\(orderCart.items.count) level:\(shippingLevel)"
+                }
+                OrderService.printCallableDiagnostics(error, context: dbgContext)
                 await MainActor.run {
                     errorMessage = OrderService.userFacingCallableErrorMessage(error)
                     #if DEBUG
-                    let context = "ctx=step:\(activeStep.rawValue) lines:\(orderCart.items.count) level:\(shippingLevel)"
-                    let dbg = context + " " + OrderService.debugCallableErrorFootnote(error, function: "checkout")
+                    let dbg = dbgContext + " " + OrderService.debugCallableErrorFootnote(error, function: "createCartCheckoutSessionFast|createCartCheckoutSession")
                     checkoutErrorDebugFootnote = dbg
                     print("📦 \(dbg)")
                     #endif
@@ -2074,13 +2086,18 @@ struct OrderBookView: View {
         }
 
         func createFastCheckoutURL(quoteId: String, cartHash: String, totalCents: Int) async throws -> URL {
-            let idem = UUID().uuidString
-            let (url, _, _, _) = try await OrderService.shared.createCartCheckoutSessionFast(
+            let resume = await MainActor.run { fastCheckoutInstanceId }
+            let correlation = UUID().uuidString
+            let (url, _, groupId, _) = try await OrderService.shared.createCartCheckoutSessionFast(
                 quoteId: quoteId,
                 cartHash: cartHash,
-                idempotencyKey: idem,
-                clientEstimatedTotalCents: totalCents
+                clientEstimatedTotalCents: totalCents,
+                checkoutInstanceId: resume,
+                clientCorrelationId: correlation
             )
+            if let groupId {
+                await MainActor.run { fastCheckoutInstanceId = groupId }
+            }
             return url
         }
 

@@ -146,6 +146,8 @@ struct BookVersionRecord: Codable, Identifiable {
     let pdfPageCount: Int?
     let coverStoragePath: String?
     let coverURL: String?
+    /// Bumped on each cover bytes write (upload / regenerate / merge) so thumbnail cache stays aligned without overloading `syncedAt`.
+    let coverArtRevision: Int?
     /// Server/client timestamp of last Firestore write (used to bust cover PDF thumbnail cache when the file is overwritten at the same URL).
     let syncedAt: Date?
     let renderStatus: String
@@ -183,6 +185,7 @@ struct BookVersionRecord: Codable, Identifiable {
         if let pdfPageCount { data["pdfPageCount"] = pdfPageCount }
         if let coverStoragePath { data["coverStoragePath"] = coverStoragePath }
         if let coverURL { data["coverURL"] = coverURL }
+        if let coverArtRevision { data["coverArtRevision"] = coverArtRevision }
         if let renderedAt { data["renderedAt"] = Timestamp(date: renderedAt) }
         if let renderError { data["renderError"] = renderError }
         if let renderAttemptCount { data["renderAttemptCount"] = renderAttemptCount }
@@ -220,6 +223,11 @@ struct BookVersionRecord: Codable, Identifiable {
         let layoutVersion = data["layoutVersion"] as? Int ?? BookPrintSpec.layoutVersion
         let renderedAt = (data["renderedAt"] as? Timestamp)?.dateValue()
         let syncedAt = (data["syncedAt"] as? Timestamp)?.dateValue()
+        let coverArtRevision: Int? = {
+            if let v = data["coverArtRevision"] as? Int { return v }
+            if let v = data["coverArtRevision"] as? Int64 { return Int(v) }
+            return nil
+        }()
 
         return BookVersionRecord(
             bookVersionId: bookVersionId,
@@ -241,6 +249,7 @@ struct BookVersionRecord: Codable, Identifiable {
             pdfPageCount: data["pdfPageCount"] as? Int,
             coverStoragePath: data["coverStoragePath"] as? String,
             coverURL: data["coverURL"] as? String,
+            coverArtRevision: coverArtRevision,
             syncedAt: syncedAt,
             renderStatus: (data["renderStatus"] as? String) ?? BookRenderStatus.pending.rawValue,
             renderedAt: renderedAt,
@@ -343,6 +352,7 @@ enum BookVersionRecordFactory {
             pdfPageCount: nil,
             coverStoragePath: nil,
             coverURL: nil,
+            coverArtRevision: nil,
             syncedAt: nil,
             renderStatus: BookRenderStatus.pending.rawValue,
             renderedAt: nil,
@@ -367,12 +377,18 @@ extension BookVersionRecord {
         }
     }
 
-    /// Changes whenever the book version doc is written (including cover re-upload), so thumbnail caches do not reuse stale panel crops.
+    /// Stable fingerprint for cover thumbnail caches: prefer explicit revision, then storage path, then legacy `syncedAt` / URL fallbacks.
     var coverThumbnailCacheRevision: String {
+        if let r = coverArtRevision {
+            return "art:\(r)"
+        }
+        if let p = coverStoragePath?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
+            return "path:\(p)"
+        }
         if let s = syncedAt {
             return String(s.timeIntervalSince1970)
         }
-        return [coverURL, coverStoragePath, "\(renderDurationMs ?? 0)"]
+        return [coverURL, "\(renderDurationMs ?? 0)"]
             .compactMap { $0 }
             .joined(separator: "|")
     }

@@ -22,8 +22,12 @@ extension OrderService {
         }
         let desc = ns.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         if ns.code == FunctionsErrorCode.internal.rawValue {
+            if isLikelyCallableClientTransportFailure(error) {
+                return "The connection dropped before checkout could finish. Check your network and try again."
+            }
             if desc.isEmpty || desc.uppercased() == "INTERNAL" {
-                return "Couldn’t start secure checkout. Please try again. If this keeps happening, contact support."
+                // Often a dropped client HTTPS call (no server `details` in NSError); not necessarily Stripe.
+                return "Checkout didn’t connect to the server. Check Wi‑Fi or cellular, wait a few seconds, and try again."
             }
             return desc
         }
@@ -99,6 +103,108 @@ extension OrderService {
         return message.contains("temporarily unreachable") || message.contains("connection to stripe")
     }
 
+    /// Dropped connection / "Socket is not connected" in system logs often correlate with this when underlying errors are visible.
+    static func isLikelyCallableClientTransportFailure(_ error: Error) -> Bool {
+        var current: Error? = error
+        for _ in 0..<12 {
+            guard let err0 = current else { break }
+            if let u = err0 as? URLError {
+                switch u.code {
+                case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost,
+                        .cannotFindHost, .dnsLookupFailed, .timedOut, .dataNotAllowed,
+                        .secureConnectionFailed:
+                    return true
+                default:
+                    break
+                }
+            }
+            let ns = err0 as NSError
+            if ns.domain == NSURLErrorDomain { return true }
+            if ns.domain == NSPOSIXErrorDomain {
+                if [32, 50, 51, 54, 57, 60].contains(ns.code) { return true } // e.g. EPIPE, ENETUNREACH, ECONNABORTED, ECONNREFUSED, ENOTCONN, ETIMEDOUT
+            }
+            let d = ns.userInfo[NSLocalizedDescriptionKey] as? String
+            let line = d ?? ns.localizedDescription
+            let low = line.lowercased()
+            if low.contains("socket is not connected")
+                || low.contains("connection reset")
+                || low.contains("connection lost")
+                || low.contains("network connection was lost")
+                || low.contains("broken pipe") {
+                return true
+            }
+            current = ns.userInfo[NSUnderlyingErrorKey] as? Error
+        }
+        return false
+    }
+
+    /// Firebase iOS may surface a dropped HTTPS call as code 13 with message `INTERNAL` and **no** `details` (github.com/firebase/firebase-ios-sdk#11376). In that case a single retry is safe for idempotent `createCartCheckoutSessionFast` when the first response never arrived.
+    static func isBareInternalCallableErrorLikelyDroppedConnection(_ error: Error) -> Bool {
+        let ns = error as NSError
+        guard ns.domain == FunctionsErrorDomain,
+              ns.code == FunctionsErrorCode.internal.rawValue
+        else { return false }
+        if ns.userInfo[FunctionsErrorDetailsKey] != nil { return false }
+        if isLikelyCallableClientTransportFailure(error) { return true }
+        let d = ns.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if d == "INTERNAL" { return true }
+        return d.isEmpty
+    }
+
+    /// Logs Firebase Callable errors to the Xcode / device console.
+    ///
+    /// **Note:** Firebase iOS often omits `FunctionsErrorDetailsKey` for `INTERNAL` errors
+    /// (see https://github.com/firebase/firebase-ios-sdk/issues/11376 ), so we print the full
+    /// `userInfo` dictionary and any `NSUnderlyingErrorKey` chain. Server-side, prefer non-`internal`
+    /// `HttpsError` codes and put diagnostics in the top-level message when possible.
+    static func printCallableDiagnostics(_ error: Error, context: String) {
+        var lines: [String] = []
+        lines.append("📛 Callable error — \(context)")
+        if isBareInternalCallableErrorLikelyDroppedConnection(error) {
+            lines.append("   (hint) Bare INTERNAL, no server details — often a dropped client HTTPS call to Cloud Functions, not a Stripe HttpsError. A single retry is attempted in createCartCheckoutSessionFast. Check system log for nw_/socket lines.")
+        }
+
+        var depth = 0
+        var current: Error? = error
+        while let err = current, depth < 5 {
+            let ns = err as NSError
+            lines.append("   [depth \(depth)] domain=\(ns.domain) code=\(ns.code)")
+            lines.append("   [depth \(depth)] localizedDescription=\(ns.localizedDescription)")
+            if let reason = ns.userInfo[NSLocalizedFailureReasonErrorKey] {
+                lines.append("   [depth \(depth)] localizedFailureReason=\(reason)")
+            }
+
+            if ns.domain == FunctionsErrorDomain,
+               let details = ns.userInfo[FunctionsErrorDetailsKey] as? [String: Any],
+               !details.isEmpty {
+                lines.append("   [depth \(depth)] Functions details:")
+                for key in details.keys.sorted() {
+                    lines.append("     \(key): \(details[key] ?? "")")
+                }
+            } else if ns.domain == FunctionsErrorDomain,
+                      let rawDetails = ns.userInfo[FunctionsErrorDetailsKey] {
+                lines.append("   [depth \(depth)] Functions details (raw): \(String(describing: rawDetails))")
+            }
+
+            lines.append("   [depth \(depth)] full userInfo:")
+            if ns.userInfo.isEmpty {
+                lines.append("     (empty)")
+            } else {
+                for (key, value) in ns.userInfo {
+                    lines.append("     \(key): \(value)")
+                }
+            }
+
+            current = ns.userInfo[NSUnderlyingErrorKey] as? Error
+            depth += 1
+            if current != nil {
+                lines.append("   --- underlying ---")
+            }
+        }
+
+        print(lines.joined(separator: "\n"))
+    }
+
     #if DEBUG
     /// Console + optional in-app footnote: correlate with Cloud Logging (`createCartCheckoutSession`, `cartOrderGroupId`).
     static func debugCallableErrorFootnote(_ error: Error, function: String) -> String {
@@ -107,7 +213,11 @@ extension OrderService {
         if ns.domain == FunctionsErrorDomain {
             parts.append("domain=\(FunctionsErrorDomain)")
             parts.append("code=\(ns.code)")
-            if let details = ns.userInfo[FunctionsErrorDetailsKey] {
+            if let details = ns.userInfo[FunctionsErrorDetailsKey] as? [String: Any],
+               let data = try? JSONSerialization.data(withJSONObject: details, options: [.sortedKeys]),
+               let json = String(data: data, encoding: .utf8) {
+                parts.append("details=\(json)")
+            } else if let details = ns.userInfo[FunctionsErrorDetailsKey] {
                 parts.append("details=\(String(describing: details))")
             }
             if let region = ns.userInfo["region"] {
@@ -475,20 +585,42 @@ final class OrderService {
     func createCartCheckoutSessionFast(
         quoteId: String,
         cartHash: String,
-        idempotencyKey: String,
-        clientEstimatedTotalCents: Int? = nil
+        clientEstimatedTotalCents: Int? = nil,
+        checkoutInstanceId: String? = nil,
+        clientCorrelationId: String? = nil
     ) async throws -> (checkoutUrl: URL, sessionId: String, cartOrderGroupId: String?, totalCents: Int) {
         guard Auth.auth().currentUser != nil else {
             throw OrderError.notAuthenticated
         }
         var data: [String: Any] = [
             "quoteId": quoteId,
-            "cartHash": cartHash,
-            "idempotencyKey": idempotencyKey
+            "cartHash": cartHash
         ]
         if let c = clientEstimatedTotalCents {
             data["clientEstimatedTotalCents"] = c
         }
+        if let cid = checkoutInstanceId?.trimmingCharacters(in: .whitespacesAndNewlines), !cid.isEmpty {
+            data["checkoutInstanceId"] = cid
+        }
+        if let cc = clientCorrelationId?.trimmingCharacters(in: .whitespacesAndNewlines), !cc.isEmpty {
+            data["clientCorrelationId"] = cc
+        }
+        do {
+            return try await callCreateCartCheckoutSessionFastWithPayload(data)
+        } catch {
+            if OrderService.isBareInternalCallableErrorLikelyDroppedConnection(error) {
+                #if DEBUG
+                print("📦 createCartCheckoutSessionFast: one retry after bare INTERNAL / dropped connection (1.5s delay)")
+                #endif
+                try await Task.sleep(nanoseconds: 1_500_000_000)
+                return try await callCreateCartCheckoutSessionFastWithPayload(data)
+            }
+            throw error
+        }
+    }
+
+    private func callCreateCartCheckoutSessionFastWithPayload(_ data: [String: Any]) async throws
+        -> (checkoutUrl: URL, sessionId: String, cartOrderGroupId: String?, totalCents: Int) {
         let callable = Functions.functions().httpsCallable("createCartCheckoutSessionFast")
         callable.timeoutInterval = 120
         let result = try await callable.call(data)
@@ -498,7 +630,8 @@ final class OrderService {
               let sessionId = dict["sessionId"] as? String else {
             throw OrderError.badResponse
         }
-        let groupId = dict["cartOrderGroupId"] as? String
+        let groupId = (dict["cartOrderGroupId"] as? String)
+            ?? (dict["checkoutInstanceId"] as? String)
         let total = (dict["totalCents"] as? Int) ?? (dict["totalCents"] as? NSNumber)?.intValue ?? 0
         return (checkoutUrl, sessionId, groupId, total)
     }
@@ -726,11 +859,26 @@ final class OrderService {
         )
     }
 
+    private static let paidStatuses: Set<String> = [
+        "paid", "pending_fulfillment", "submitted_to_printer", "printing", "shipped", "delivered"
+    ]
+
+    private func updateBookVersionPaidFlag(userId: String, bookVersionId: String, hasPaidOrder: Bool) {
+        guard !bookVersionId.isEmpty else { return }
+        db.collection("users").document(userId)
+            .collection("bookVersions").document(bookVersionId)
+            .setData(["hasPaidOrder": hasPaidOrder], merge: true) { error in
+                if let error = error {
+                    print("❌ Failed to set hasPaidOrder on bookVersion \(bookVersionId): \(error)")
+                }
+            }
+    }
+
     func ordersListener(userId: String, completion: @escaping ([OrderRecord]) -> Void) -> ListenerRegistration {
         db.collection("users").document(userId).collection("orders")
             .order(by: "createdAt", descending: true)
-            .addSnapshotListener { snapshot, error in
-                guard let docs = snapshot?.documents, error == nil else {
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let self, let docs = snapshot?.documents, error == nil else {
                     completion([])
                     return
                 }
@@ -767,6 +915,11 @@ final class OrderService {
                         updatedAt: (d["updatedAt"] as? Timestamp)?.dateValue(),
                         createdAt: createdAt
                     )
+                }
+                // Stamp hasPaidOrder on each book version document
+                for order in orders {
+                    let isPaid = Self.paidStatuses.contains(order.status)
+                    self.updateBookVersionPaidFlag(userId: userId, bookVersionId: order.bookVersionId, hasPaidOrder: isPaid)
                 }
                 completion(orders)
             }

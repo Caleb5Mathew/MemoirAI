@@ -189,10 +189,15 @@ struct MemoirView: View {
                     Text("Chapter \(chapter.number): \(chapter.title)")
                         .font(.headline)
                         .foregroundColor(colors.deepGreen)
+                        .lineLimit(3)
+                        .minimumScaleFactor(0.75)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     Text("\(filledPromptSlotsForChapter(entries: entries, chapter: chapter)) of \(chapter.prompts.count) memories recorded")
                         .font(.subheadline)
                         .foregroundColor(colors.deepGreen)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
                 }
             }
 
@@ -435,10 +440,9 @@ struct ChapterTileView: View {
     let colors: ColorTheme
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .center, spacing: 8) {
             Image(systemName: isCompleted ? "checkmark" : "book")
                 .foregroundColor(colors.deepGreen)
-                .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Chapter \(chapterNumber)")
@@ -448,14 +452,16 @@ struct ChapterTileView: View {
                     .font(.caption)
                     .foregroundColor(colors.deepGreen)
                     .lineLimit(2)
+                    .minimumScaleFactor(0.72)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
         }
-        .padding()
-        .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(colors.tileBackground)
-        .cornerRadius(20)
+        .cornerRadius(16)
         .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 2)
     }
 }

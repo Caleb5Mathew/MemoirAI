@@ -94,6 +94,10 @@ struct StoryPageDetailView: View {
     @State private var isEditingImageInline = false
     @State private var imageRevisionText = ""
     @State private var isImageSendPressed = false
+    @State private var showCoverArtEditSheet = false
+    @State private var coverArtEditPanel: BookCoverFlatPanel = .front
+    @State private var coverArtRevisionText = ""
+    @State private var showTitleBlurbEditor = false
     
     @FocusState private var imageRevisionFieldFocused: Bool
     
@@ -103,7 +107,6 @@ struct StoryPageDetailView: View {
     
     // Character limits (matching PageZoomView / PageLimits)
     private let titleCharLimit = 80
-    private let bodyWordLimit = 500
     private let subtitleCharLimit = 120
     
     private var currentItem: StoryPageViewModel.PageItem? {
@@ -129,12 +132,48 @@ struct StoryPageDetailView: View {
             
             bottomChrome
         }
+        .sheet(isPresented: $showCoverArtEditSheet) {
+            StoryPage.CoverArtEditSheet(
+                panel: coverArtEditPanel,
+                revisionText: $coverArtRevisionText,
+                isPresented: $showCoverArtEditSheet,
+                onSend: { text in
+                    Task {
+                        await vm.editCoverPanel(coverArtEditPanel, revisionPrompt: text)
+                    }
+                },
+                isEditing: vm.isEditingCoverArt(for: coverArtEditPanel),
+                onEditTitleBlurb: {
+                    showCoverArtEditSheet = false
+                    showTitleBlurbEditor = true
+                }
+            )
+            .presentationDetents([PresentationDetent.height(196)])
+            .presentationDragIndicator(Visibility.visible)
+        }
+        .sheet(isPresented: $showTitleBlurbEditor) {
+            StorybookCoverEditorSheet(vm: vm)
+        }
+        .onChange(of: vm.coverPanelEditing) { oldVal, newVal in
+            if oldVal != nil && newVal == nil && showCoverArtEditSheet {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    coverArtRevisionText = ""
+                    showCoverArtEditSheet = false
+                }
+            }
+        }
         .onAppear {
             currentPageIndex = min(max(0, initialPageIndex), vm.pageItems.count - 1)
             syncEditedFieldsFromCurrentPage()
             if startEditingOnAppear {
                 if case .illustration = currentItem {
                     beginInlineImageEdit()
+                } else if case .textPage(_, _, _, _, _, let memoryID) = currentItem,
+                          (memoryID == BookInteriorAnchor.titlePageMemoryId || memoryID == BookInteriorAnchor.closingPageMemoryId),
+                          vm.hasPrintCoverPDF {
+                    coverArtEditPanel = memoryID == BookInteriorAnchor.titlePageMemoryId ? .front : .back
+                    coverArtRevisionText = ""
+                    showCoverArtEditSheet = true
                 } else {
                     isEditing = true
                 }
@@ -434,6 +473,32 @@ struct StoryPageDetailView: View {
                     beginInlineImageEdit()
                 }
             }
+        } else if case .textPage(_, _, _, _, _, let memoryID) = currentItem,
+                  memoryID == BookInteriorAnchor.titlePageMemoryId || memoryID == BookInteriorAnchor.closingPageMemoryId {
+            if vm.hasPrintCoverPDF {
+                VStack(spacing: 10) {
+                    compactFloatingEditPill(
+                        title: memoryID == BookInteriorAnchor.titlePageMemoryId ? "Edit cover art" : "Edit back cover",
+                        systemImage: "wand.and.stars"
+                    ) {
+                        coverArtEditPanel = memoryID == BookInteriorAnchor.titlePageMemoryId ? .front : .back
+                        coverArtRevisionText = ""
+                        showCoverArtEditSheet = true
+                    }
+                    Button {
+                        showTitleBlurbEditor = true
+                    } label: {
+                        Text("Edit book title & back cover text")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.white.opacity(0.9))
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else {
+                compactFloatingEditPill(title: "Edit", systemImage: "pencil") {
+                    isEditing = true
+                }
+            }
         } else if case .textPage = currentItem {
             compactFloatingEditPill(title: "Edit", systemImage: "pencil") {
                 isEditing = true
@@ -551,7 +616,8 @@ struct StoryPageDetailView: View {
                     targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
                     layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook,
                     panel: .front,
-                    cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? ""
+                    cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
+                    cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""
                 ) {
                     DetailTitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
                 }
@@ -562,12 +628,28 @@ struct StoryPageDetailView: View {
                 fallbackFrontCover
             }
         } else if memoryID == BookInteriorAnchor.closingPageMemoryId {
-            MemoirCoverBackPage(
-                heading: title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? (title ?? "About this Memoir") : "About this Memoir",
-                bodyText: text,
-                frameWidth: frameWidth,
-                frameHeight: frameHeight
-            )
+            if let pdfURL = printCoverPDFURL() {
+                RemotePDFThumbnailView(
+                    url: pdfURL,
+                    targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
+                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook,
+                    panel: .back,
+                    cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
+                    cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""
+                ) {
+                    DetailTitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
+                }
+                .frame(width: frameWidth, height: frameHeight)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                MemoirCoverBackPage(
+                    heading: title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? (title ?? "About this Memoir") : "About this Memoir",
+                    bodyText: text,
+                    frameWidth: frameWidth,
+                    frameHeight: frameHeight
+                )
+            }
         } else {
             Group {
                 if isKidsBook {
@@ -645,10 +727,11 @@ struct StoryPageDetailView: View {
                 // KidsBookIllustrationPage layout: top bar (title + page#) + image
                 VStack(spacing: 0) {
                     let barHeight = frameHeight * 0.065
-                    HStack(alignment: .top) {
+                    HStack(alignment: .center) {
                         TextField("Memory", text: $editedTitle, axis: .vertical)
                             .font(.kidsBookTitleFont(for: frameHeight))
                             .foregroundColor(colors.chapterTitleColor)
+                            .offset(y: max(1, barHeight * 0.1))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 2)
                                     .stroke(colors.chapterTitleColor.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
@@ -659,9 +742,8 @@ struct StoryPageDetailView: View {
                             .foregroundColor(colors.pageNumberColor)
                     }
                     .padding(.horizontal, frameWidth * 0.08)
-                    .padding(.vertical, barHeight * 0.2)
-                    .frame(minHeight: barHeight)
-                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, barHeight * 0.1)
+                    .frame(maxWidth: .infinity, minHeight: barHeight, alignment: .center)
                     .background(colors.bookPageBackground)
 
                     Image(uiImage: image)
@@ -674,10 +756,11 @@ struct StoryPageDetailView: View {
                 // VerticalBookIllustrationPage layout: add title bar when editing
                 VStack(spacing: 0) {
                     let titleBarHeight = frameHeight * 0.065
-                    HStack(alignment: .top) {
+                    HStack(alignment: .center) {
                         TextField("Memory", text: $editedTitle, axis: .vertical)
                             .font(fontStyle.titleFont(for: frameHeight))
                             .foregroundColor(colors.chapterTitleColor)
+                            .offset(y: max(1, titleBarHeight * 0.1))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 2)
                                     .stroke(colors.chapterTitleColor.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
@@ -688,9 +771,8 @@ struct StoryPageDetailView: View {
                             .foregroundColor(colors.pageNumberColor)
                     }
                     .padding(.horizontal, frameWidth * 0.06)
-                    .padding(.vertical, titleBarHeight * 0.2)
-                    .frame(minHeight: titleBarHeight)
-                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, titleBarHeight * 0.1)
+                    .frame(maxWidth: .infinity, minHeight: titleBarHeight, alignment: .center)
                     .background(colors.bookPageBackground)
 
                     Spacer()
@@ -740,10 +822,11 @@ struct StoryPageDetailView: View {
                 
                 VStack(spacing: 0) {
                     Spacer().frame(height: topMargin)
-                    HStack(alignment: .top) {
+                    HStack(alignment: .center) {
                         TextField("Memory", text: $editedTitle, axis: .vertical)
                             .font(fontStyle.titleFont(for: frameHeight))
                             .foregroundColor(colors.chapterTitleColor)
+                            .offset(y: max(1, barHeight * 0.1))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 2)
                                     .stroke(colors.chapterTitleColor.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
@@ -754,9 +837,8 @@ struct StoryPageDetailView: View {
                             .foregroundColor(colors.pageNumberColor)
                     }
                     .padding(.horizontal, sideMargin)
-                    .padding(.vertical, barHeight * 0.2)
-                    .frame(minHeight: barHeight)
-                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, barHeight * 0.1)
+                    .frame(maxWidth: .infinity, minHeight: barHeight, alignment: .center)
                     .background(colors.bookPageBackground)
                     
                     TextEditor(text: $editedBody)
@@ -834,10 +916,6 @@ struct StoryPageDetailView: View {
         }
         .onChange(of: editedSubtitle) { newValue in
             if newValue.count > subtitleCharLimit { editedSubtitle = String(newValue.prefix(subtitleCharLimit)) }
-        }
-        .onChange(of: editedBody) { newValue in
-            let words = newValue.split(whereSeparator: { $0.isWhitespace })
-            if words.count > bodyWordLimit { editedBody = words.prefix(bodyWordLimit).joined(separator: " ") }
         }
     }
     

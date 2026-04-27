@@ -474,12 +474,16 @@ struct RelationshipJourneyView: View {
                 .font(.customSerifFallback(size: 24))
                 .foregroundColor(deepGreen)
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.85)
+                .lineLimit(3)
+                .minimumScaleFactor(0.58)
+                .fixedSize(horizontal: false, vertical: true)
 
             Text("\(completedCount) of \(chapter.prompts.count) memories recorded")
                 .font(.subheadline)
                 .foregroundColor(deepGreen.opacity(0.9))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
 
             GeometryReader { geo in
                 ZStack(alignment: .leading) {

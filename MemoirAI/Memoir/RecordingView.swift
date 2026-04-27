@@ -315,20 +315,27 @@ struct RecordingView: View {
                 .padding(.horizontal)
                 .padding(.top, 16)
 
-                // Save toast
+                // Save toast — full-screen frame + HStack so the pill stays horizontally centered
                 if showSaveToast {
                     VStack {
                         Spacer()
-                        Text("Memory Saved!")
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 12)
-                            .background(.ultraThinMaterial)
-                            .cornerRadius(12)
-                            .foregroundColor(.white)
-                            .padding(.bottom, 60)
-                            .transition(.opacity)
+                        HStack {
+                            Spacer(minLength: 0)
+                            Text("Memory Saved!")
+                                .font(.system(size: 15, weight: .semibold))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 12)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                                .foregroundColor(.white)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 60)
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
                 }
             }
             .confirmationDialog("Exit without saving?", isPresented: $showExitConfirm) {

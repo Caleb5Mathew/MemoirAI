@@ -643,18 +643,18 @@ func relationshipChapterGradient(forChapterTitle title: String) -> LinearGradien
 let allChapters: [Chapter] = [
     Chapter(number: 1, title: "Beginnings", prompts: [
         MemoryPrompt(text: "What was one of your funniest childhood memories?", x: 0.25, y: 0.78),
-        MemoryPrompt(text: "Tell me about a moment from early childhood that captures what home felt like to you.", x: 0.40, y: 0.62),
+        MemoryPrompt(text: "Tell me a childhood story where you learned a lesson", x: 0.40, y: 0.62),
         MemoryPrompt(text: "Tell me about an early memory that reveals something about your personality.", x: 0.35, y: 0.44),
         MemoryPrompt(text: "What type of kid were you? Do you have any memories that best show who you were?", x: 0.50, y: 0.28)
     ]),
     Chapter(number: 2, title: "Growing Up", prompts: [
         MemoryPrompt(text: "Growing up what were one of the biggest ways you changed? Are there any memories that were the cause of that or came from that change?", x: 0.20, y: 0.80),
-        MemoryPrompt(text: "Tell me a story of when you broke a rule or took a risk", x: 0.45, y: 0.60),
+        MemoryPrompt(text: "Tell me a story of when you broke a rule or took a risk.", x: 0.45, y: 0.60),
         MemoryPrompt(text: "What was a moment where growing up felt real to you?", x: 0.70, y: 0.45),
         MemoryPrompt(text: "Where did you grow up? What was it like?", x: 0.60, y: 0.30)
     ]),
     Chapter(number: 3, title: "Belonging", prompts: [
-        MemoryPrompt(text: "Describe a moment when you realized a friendship or relationship mattered more than you had realized", x: 0.22, y: 0.76),
+        MemoryPrompt(text: "Describe a moment when you realized a friendship or relationship mattered more than you had realized.", x: 0.22, y: 0.76),
         MemoryPrompt(text: "If you wanted to show someone what love was through a memory, what memory would you choose?", x: 0.44, y: 0.60),
         MemoryPrompt(text: "What has been one of your favorite memories with your friends as you were growing up?", x: 0.65, y: 0.44),
         MemoryPrompt(text: "Who's been one of the most influential people in your life? Do you have a specific memory that best shows who they were?", x: 0.48, y: 0.28)
@@ -681,19 +681,19 @@ let allChapters: [Chapter] = [
         MemoryPrompt(text: "Tell me about a day when your work made you feel purposeful or proud.", x: 0.24, y: 0.80),
         MemoryPrompt(text: "What's one of the things you believe about the purpose of your life and when did you start believing it?", x: 0.45, y: 0.63),
         MemoryPrompt(text: "Tell me about a person or moment that shaped your sense of purpose.", x: 0.70, y: 0.46),
-        MemoryPrompt(text: "Where does your motivation come from? When's a time where you've been incredibly driven to work on something?", x: 0.56, y: 0.30)
+        MemoryPrompt(text: "When's a time where you've been incredibly driven to work on something?", x: 0.56, y: 0.30)
     ]),
     Chapter(number: 8, title: "Hard Seasons", prompts: [
         MemoryPrompt(text: "What was one of the hardest periods of your life and what's a specific memory from it?", x: 0.30, y: 0.80),
         MemoryPrompt(text: "Have any hard times changed how you treat other people or saw the world and if so how?", x: 0.48, y: 0.63),
         MemoryPrompt(text: "Tell me about a time when someone showed up for you during a hard time and what it meant to you.", x: 0.70, y: 0.44),
-        MemoryPrompt(text: "What's a difficult memory that later became part of your strength.", x: 0.55, y: 0.30)
+        MemoryPrompt(text: "What's a difficult memory that later became part of your strength?", x: 0.55, y: 0.30)
     ]),
     Chapter(number: 9, title: "Change", prompts: [
         MemoryPrompt(text: "Tell me about a move, ending, beginning, or transition that changed you.", x: 0.26, y: 0.78),
         MemoryPrompt(text: "Across your life what have been one of the biggest ways your personality has changed and was there anything that caused that? A moment, a person, a story?", x: 0.45, y: 0.61),
         MemoryPrompt(text: "Describe a moment when change felt frightening.", x: 0.66, y: 0.45),
-        MemoryPrompt(text: "Tell me about a moment that taught you what really mattered to you", x: 0.50, y: 0.29)
+        MemoryPrompt(text: "Tell me about a moment that taught you what really mattered to you.", x: 0.50, y: 0.29)
     ]),
     Chapter(number: 10, title: "Legacy", prompts: [
         MemoryPrompt(text: "Describe a value, tradition, or way of living that has shaped you", x: 0.25, y: 0.78),
