@@ -159,6 +159,11 @@ struct BookVersionRecord: Codable, Identifiable {
     let pdfBytes: Int?
     let source: String
     let pages: [BookVersionPageRecord]
+    /// Cloud-assigned stable label, e.g. `caleb_mathew1_book42` (Firestore trigger).
+    let bookDisplayName: String?
+    /// Same handle as on `users/{uid}` when allocated (optional).
+    let userHandle: String?
+    let bookSeq: Int?
 
     var id: String { bookVersionId }
 
@@ -195,6 +200,9 @@ struct BookVersionRecord: Codable, Identifiable {
         if let printTitle { data["printTitle"] = printTitle }
         if let backCoverPitch { data["backCoverPitch"] = backCoverPitch }
         if let coverFontPreset { data["coverFontPreset"] = coverFontPreset }
+        if let bookDisplayName { data["bookDisplayName"] = bookDisplayName }
+        if let userHandle { data["userHandle"] = userHandle }
+        if let bookSeq { data["bookSeq"] = bookSeq }
         return data
     }
 
@@ -259,7 +267,14 @@ struct BookVersionRecord: Codable, Identifiable {
             totalPngBytes: data["totalPngBytes"] as? Int,
             pdfBytes: data["pdfBytes"] as? Int,
             source: source,
-            pages: pages
+            pages: pages,
+            bookDisplayName: data["bookDisplayName"] as? String,
+            userHandle: data["userHandle"] as? String,
+            bookSeq: {
+                if let v = data["bookSeq"] as? Int { return v }
+                if let v = data["bookSeq"] as? Int64 { return Int(v) }
+                return nil
+            }()
         )
     }
 }
@@ -362,16 +377,27 @@ enum BookVersionRecordFactory {
             totalPngBytes: nil,
             pdfBytes: nil,
             source: source.rawValue,
-            pages: pages
+            pages: pages,
+            bookDisplayName: nil,
+            userHandle: nil,
+            bookSeq: nil
         )
     }
 }
 
 extension BookVersionRecord {
+    /// Title for library / cart rows: cloud `bookDisplayName`, then print title, then first page title.
+    var bookCatalogDisplayTitle: String {
+        if let d = bookDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty { return d }
+        if let p = printTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty { return p }
+        if let t = pages.first?.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { return t }
+        return "Story"
+    }
+
     /// Layout used when generating `cover.pdf` for this version (kids `BookCoverTemplate` vs portrait `PortraitLuluCoverTemplate`).
     var coverFlatLayoutKind: BookCoverFlatLayoutKind {
         if pageWidth > pageHeight {
-            return .kidsBook
+            return .kidsBook(pageCount: pageCount)
         } else {
             return .portraitCasewrap(pageCount: pageCount)
         }

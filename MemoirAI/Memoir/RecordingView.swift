@@ -25,6 +25,7 @@ struct RecordingView: View {
     @StateObject private var audioMonitor = AudioLevelMonitor()
     @StateObject private var permissionManager = PermissionManager.shared
     @StateObject private var realTimeTranscription = RealTimeTranscriptionManager.shared
+    @StateObject private var interruptionObserver = AudioSessionInterruptionObserver()
 
     @State private var typedText: String = ""
     @State private var audioRecorder: AVAudioRecorder?
@@ -40,6 +41,21 @@ struct RecordingView: View {
     @State private var timer: Timer?
     @State private var recordingTime: TimeInterval = 0
     @State private var recordingTimer: Timer?
+
+    // Interruption / backgrounding — set when the system (not the user) paused
+    // an in-progress recording, so the UI can explain why it's paused.
+    @State private var interruptionBannerMessage: String? = nil
+
+    // Recording safety-net parity with RecordMemoryView: hard cap, warning
+    // overlay, auto-stop-and-save, and periodic checkpoint copies.
+    @State private var showTimeoutWarning = false
+    @State private var finalCountdown: Int? = nil
+    @State private var checkpointFiles: [URL] = []
+    @State private var lastCheckpointTime: TimeInterval = 0
+    private let maxRecordingDuration: TimeInterval = 3600 // 60 minutes
+    private let checkpointInterval: TimeInterval = 600 // 10 minutes
+    private let warningThreshold: TimeInterval = 3570 // 59:30 (30s before limit)
+    private let countdownStart: TimeInterval = 3597 // 59:57 (3s before limit)
 
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var selectedImagesData: [Data] = []
@@ -83,6 +99,26 @@ struct RecordingView: View {
 
                     // Prompt & audio controls
                     VStack(spacing: 12) {
+                        // Interruption / backgrounding banner — only shown when the
+                        // system (not the user) paused an in-progress recording.
+                        if let message = interruptionBannerMessage {
+                            HStack(spacing: 10) {
+                                Image(systemName: "pause.circle.fill")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text(message)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(terracotta)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .shadow(color: .black.opacity(0.2), radius: 6, x: 0, y: 3)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+
                         VStack(spacing: 6) {
                             if let progressLabel = progressLabel {
                                 Text(progressLabel)
@@ -337,6 +373,15 @@ struct RecordingView: View {
                     .allowsHitTesting(false)
                     .transition(.opacity)
                 }
+
+                // Hard-cap warning overlay (shared with RecordMemoryView) —
+                // fires ~30s before the 60-minute recording limit.
+                if showTimeoutWarning {
+                    TimeoutWarningOverlay(
+                        countdown: finalCountdown,
+                        message: "Recording will save soon to protect your memory"
+                    )
+                }
             }
             .confirmationDialog("Exit without saving?", isPresented: $showExitConfirm) {
                 Button("Discard and Exit", role: .destructive) { dismiss() }
@@ -356,6 +401,7 @@ struct RecordingView: View {
                 setupAudioSession()
                 tutorialCoordinator.setVisibleScreen(.recording)
                 tutorialCoordinator.onRecordingViewAppeared(profileID: profileVM.selectedProfile.id)
+                configureInterruptionObserver()
             }
             .onDisappear {
                 tutorialCoordinator.clearAnchor(.recordingSaveMemory)
@@ -420,14 +466,82 @@ struct RecordingView: View {
     // MARK: - Recording Timer
     func startRecordingTimer() {
         recordingTime = 0
+        checkpointFiles.removeAll()
+        lastCheckpointTime = 0
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             recordingTime += 1
+
+            // Check for timeout warnings (mirrors RecordMemoryView's safety net).
+            if recordingTime >= countdownStart && recordingTime < maxRecordingDuration {
+                let remaining = Int(maxRecordingDuration - recordingTime)
+                finalCountdown = remaining
+            } else if recordingTime >= warningThreshold && recordingTime < countdownStart {
+                showTimeoutWarning = true
+            } else if recordingTime >= maxRecordingDuration {
+                // Auto-stop and save to protect the memory once the hard cap is hit.
+                stopRecording()
+                saveMemory()
+            }
+
+            // Checkpoint every 10 minutes (only trigger once per interval).
+            if recordingTime - lastCheckpointTime >= checkpointInterval && recordingTime > 0 {
+                saveCheckpoint()
+                lastCheckpointTime = recordingTime
+            }
         }
     }
-    
+
     func stopRecordingTimer() {
         recordingTimer?.invalidate()
         recordingTimer = nil
+    }
+
+    /// Copies the in-progress recording to a checkpoint file every 10 minutes so a
+    /// crash or force-quit during a long recording doesn't lose everything captured so far.
+    func saveCheckpoint() {
+        guard let currentURL = audioURL else { return }
+
+        let checkpointURL = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("checkpoint_\(UUID().uuidString).caf")
+
+        do {
+            try FileManager.default.copyItem(at: currentURL, to: checkpointURL)
+            checkpointFiles.append(checkpointURL)
+            print("✅ Checkpoint saved at \(formatTime(recordingTime))")
+        } catch {
+            print("❌ Failed to save checkpoint: \(error)")
+        }
+    }
+
+    // MARK: - Interruption / Backgrounding
+
+    /// Wires the shared observer so a phone call, Siri, unplugged headphones, or
+    /// the app moving to the background pauses recording the same way tapping
+    /// Pause does, instead of silently letting the timer/UI drift out of sync
+    /// with reality.
+    private func configureInterruptionObserver() {
+        interruptionObserver.onInterruptionBegan = {
+            guard isRecording, !isPaused else { return }
+            pauseRecording()
+            interruptionBannerMessage = "Recording paused — audio was interrupted"
+        }
+        interruptionObserver.onInterruptionEnded = { _ in
+            // Do not auto-resume: keep the existing paused UI and Resume button
+            // so the user makes the call themselves.
+            guard isPaused else { return }
+            interruptionBannerMessage = "Recording paused — tap Resume to continue"
+        }
+        interruptionObserver.onRouteChangeDeviceUnavailable = {
+            guard isRecording, !isPaused else { return }
+            pauseRecording()
+            interruptionBannerMessage = "Recording paused — audio device disconnected"
+        }
+        interruptionObserver.onAppBackgrounded = {
+            guard isRecording, !isPaused else { return }
+            pauseRecording()
+            interruptionBannerMessage = "Recording paused while MemoirAI was in the background"
+        }
     }
 
     // MARK: - Recorder Lifecycle
@@ -515,10 +629,11 @@ struct RecordingView: View {
     func resumeRecording() {
         audioRecorder?.record()
         isPaused = false
-        
+        interruptionBannerMessage = nil
+
         // Resume real-time transcription
         realTimeTranscription.resumeTranscription()
-        
+
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             recordingTime += 1
         }
@@ -528,9 +643,15 @@ struct RecordingView: View {
         audioRecorder?.stop()
         isRecording = false
         isPaused = false
+        interruptionBannerMessage = nil
         stopRecordingTimer()
+
+        // Hide the hard-cap warning if it was showing.
+        showTimeoutWarning = false
+        finalCountdown = nil
+
         audioMonitor.stopMonitoring()
-        
+
         // Stop real-time transcription and get final transcript
         realTimeTranscription.stopTranscription()
         let realTimeTranscript = realTimeTranscription.getFinalTranscript()
@@ -546,6 +667,12 @@ struct RecordingView: View {
         typedText = ""
         selectedImagesData.removeAll()
         photoItems.removeAll()
+
+        // Clean up checkpoint files
+        for checkpointURL in checkpointFiles {
+            try? FileManager.default.removeItem(at: checkpointURL)
+        }
+        checkpointFiles.removeAll()
     }
     // MARK: – Save & Transcribe (background + disk photos)
     // MARK: – Save & Transcribe (background + external-storage blobs)
@@ -613,6 +740,10 @@ struct RecordingView: View {
             // 5️⃣ Kick off speech-to-text if we have an audio URL
             if let urlString = entry.audioFileURL,
                let fileURL = URL(string: urlString) {
+                let entryID = entry.id
+                if let entryID {
+                    BatchTranscriptionManager.shared.markInFlight(entryID)
+                }
                 // Use enhanced transcription with better accuracy
                 SpeechTranscriber.shared.transcribe(url: fileURL) { result in
                     switch result {
@@ -620,7 +751,7 @@ struct RecordingView: View {
                         bgContext.perform {
                             entry.text = transcript
                             try? bgContext.save()
-                            
+
                             // Update transcription in Firebase
                             if let memoryId = entry.id {
                                 Task {
@@ -630,14 +761,19 @@ struct RecordingView: View {
                                     )
                                 }
                             }
-                            
+
                             DispatchQueue.main.async {
                                 NotificationCenter.default.post(name: .memorySaved, object: nil)
                                 print("✅ Enhanced transcription completed: \(transcript.prefix(50))...")
                             }
                         }
                     case .failure(let error):
+                        // Leave entry.text unset so BatchTranscriptionManager's
+                        // "needs transcription" predicate still matches and retries later.
                         print("❌ Enhanced transcription failed: \(error.localizedDescription)")
+                    }
+                    if let entryID {
+                        BatchTranscriptionManager.shared.markComplete(entryID)
                     }
                 }
             }

@@ -2,12 +2,15 @@ import SwiftUI
 import CoreData
 import Mixpanel
 
-/// Entry for the Enhance flow: intro → guided voice (or manual) → existing character editor for review/save.
+/// Entry for the Enhance flow: intro → guided voice or guided typing → auto-saved success screen.
+/// Voice and typing share `MemoryEnhancementGuidedSessionViewModel`, so both paths run the same
+/// preflight, tiered Q&A, and structured extraction logic — they only differ in how the user
+/// supplies each turn's answer.
 struct MemoryEnhancementCoordinatorView: View {
     private enum Route {
         case intro
         case guided
-        case manual
+        case guidedTyping
         case success
     }
 
@@ -32,8 +35,8 @@ struct MemoryEnhancementCoordinatorView: View {
                     onStartVoice: {
                         route = .guided
                     },
-                    onEditManually: {
-                        route = .manual
+                    onEnhanceByTyping: {
+                        route = .guidedTyping
                     },
                     onClose: { dismiss() },
                     voiceGuideAvailable: voiceAvailable
@@ -43,6 +46,10 @@ struct MemoryEnhancementCoordinatorView: View {
                     MemoryEnhancementGuidedSessionView(
                         memory: memory,
                         service: service,
+                        profileDisplayName: profileVM.selectedProfile.name,
+                        relationshipStyleProfileName: CharacterDetails.isRelationshipStyleProfileName(
+                            profileVM.selectedProfile.name
+                        ),
                         onComplete: { details in
                             preFilledDetails = details
                             route = .success
@@ -69,13 +76,41 @@ struct MemoryEnhancementCoordinatorView: View {
                             }
                         }
                 }
-            case .manual:
-                CharacterDetailsQuestionView(
-                    memory: memory,
-                    initialCharacterDetails: preFilledDetails,
-                    onBackInsteadOfDismiss: preFilledDetails == nil ? { route = .intro } : nil
-                )
-                .environmentObject(profileVM)
+            case .guidedTyping:
+                if let service = MemoryEnhancementService.fromMainBundle() {
+                    MemoryEnhancementGuidedTypingSessionView(
+                        memory: memory,
+                        service: service,
+                        profileDisplayName: profileVM.selectedProfile.name,
+                        relationshipStyleProfileName: CharacterDetails.isRelationshipStyleProfileName(
+                            profileVM.selectedProfile.name
+                        ),
+                        onComplete: { details in
+                            preFilledDetails = details
+                            route = .success
+                        },
+                        onBack: { route = .intro },
+                        onPartialSave: { details in
+                            persistExtractedCharacterDetails(
+                                details,
+                                memory: memory,
+                                context: context,
+                                profile: profileVM.selectedProfile,
+                                mergeWithExisting: true
+                            )
+                        }
+                    )
+                } else {
+                    Color(red: 0.98, green: 0.96, blue: 0.90)
+                        .ignoresSafeArea()
+                        .overlay {
+                            VStack(spacing: 16) {
+                                Text("Guided enhancement isn’t available.")
+                                    .font(.headline)
+                                Button("Back") { route = .intro }
+                            }
+                        }
+                }
             case .success:
                 if let details = preFilledDetails {
                     MemoryEnhancementAutoSaveSuccessView(
@@ -150,8 +185,8 @@ private struct MemoryEnhancementAutoSaveSuccessView: View {
                 } else {
                     Text(
                         characterCount == 1
-                            ? "1 character was added from your voice answers. Tap Characters on the memory to edit anytime."
-                            : "\(characterCount) characters were added from your voice answers. Tap Characters on the memory to edit anytime."
+                            ? "1 character was added from your answers. Tap Characters on the memory to edit anytime."
+                            : "\(characterCount) characters were added from your answers. Tap Characters on the memory to edit anytime."
                     )
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.secondary)

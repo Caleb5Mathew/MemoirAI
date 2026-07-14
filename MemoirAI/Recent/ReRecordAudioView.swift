@@ -16,6 +16,7 @@ struct ReRecordAudioView: View {
     @StateObject private var audioMonitor = AudioLevelMonitor()
     @StateObject private var permissionManager = PermissionManager.shared
     @StateObject private var realTimeTranscription = RealTimeTranscriptionManager.shared
+    @StateObject private var interruptionObserver = AudioSessionInterruptionObserver()
 
     @State private var audioRecorder: AVAudioRecorder?
     @State private var audioURL: URL?
@@ -24,6 +25,10 @@ struct ReRecordAudioView: View {
     @State private var recordingTime: TimeInterval = 0
     @State private var recordingTimer: Timer?
     @State private var isSaving = false
+
+    // Interruption / backgrounding — set when the system (not the user) paused
+    // an in-progress recording, so the UI can explain why.
+    @State private var interruptionBannerMessage: String? = nil
 
     private let terracotta = Color(red: 210/255, green: 112/255, blue: 45/255)
     private let softCream = Color(red: 253/255, green: 234/255, blue: 198/255)
@@ -50,6 +55,25 @@ struct ReRecordAudioView: View {
                             .foregroundColor(headerColor.opacity(0.85))
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
+
+                        if let message = interruptionBannerMessage {
+                            HStack(spacing: 10) {
+                                Image(systemName: "pause.circle.fill")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text(message)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(terracotta)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 3)
+                            .padding(.horizontal, 20)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                        }
 
                         if !isRecording && !isPaused && audioURL == nil {
                             Button(action: startRecording) {
@@ -149,6 +173,7 @@ struct ReRecordAudioView: View {
         }
         .onAppear {
             checkMicrophonePermission()
+            configureInterruptionObserver()
         }
         .onDisappear {
             cleanupSession()
@@ -254,6 +279,7 @@ struct ReRecordAudioView: View {
     private func resumeRecording() {
         audioRecorder?.record()
         isPaused = false
+        interruptionBannerMessage = nil
         realTimeTranscription.resumeTranscription()
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             recordingTime += 1
@@ -264,6 +290,7 @@ struct ReRecordAudioView: View {
         audioRecorder?.stop()
         isRecording = false
         isPaused = false
+        interruptionBannerMessage = nil
         stopRecordingTimer()
         audioMonitor.stopMonitoring()
         realTimeTranscription.stopTranscription()
@@ -282,6 +309,36 @@ struct ReRecordAudioView: View {
         stopRecording()
         realTimeTranscription.stopTranscription()
         audioMonitor.stopMonitoring()
+    }
+
+    // MARK: - Interruption / Backgrounding
+
+    /// Wires the shared observer so a phone call, Siri, unplugged headphones, or
+    /// the app moving to the background pauses recording the same way tapping
+    /// Pause does, instead of silently letting the timer/UI drift out of sync
+    /// with reality.
+    private func configureInterruptionObserver() {
+        interruptionObserver.onInterruptionBegan = {
+            guard isRecording, !isPaused else { return }
+            pauseRecording()
+            interruptionBannerMessage = "Recording paused — audio was interrupted"
+        }
+        interruptionObserver.onInterruptionEnded = { _ in
+            // Do not auto-resume: keep the existing paused UI and Resume button
+            // so the user makes the call themselves.
+            guard isPaused else { return }
+            interruptionBannerMessage = "Recording paused — tap Resume to continue"
+        }
+        interruptionObserver.onRouteChangeDeviceUnavailable = {
+            guard isRecording, !isPaused else { return }
+            pauseRecording()
+            interruptionBannerMessage = "Recording paused — audio device disconnected"
+        }
+        interruptionObserver.onAppBackgrounded = {
+            guard isRecording, !isPaused else { return }
+            pauseRecording()
+            interruptionBannerMessage = "Recording paused while MemoirAI was in the background"
+        }
     }
 
     private func saveToExistingMemory() {
@@ -316,6 +373,10 @@ struct ReRecordAudioView: View {
             }
 
             if let urlString = entry.audioFileURL, let fileURL = URL(string: urlString) {
+                let entryID = entry.id
+                if let entryID {
+                    BatchTranscriptionManager.shared.markInFlight(entryID)
+                }
                 SpeechTranscriber.shared.transcribe(url: fileURL) { result in
                     switch result {
                     case .success(let transcript):
@@ -335,7 +396,12 @@ struct ReRecordAudioView: View {
                             }
                         }
                     case .failure(let err):
+                        // Leave entry.text unset so BatchTranscriptionManager's
+                        // "needs transcription" predicate still matches and retries later.
                         print("ReRecord transcription failed: \(err.localizedDescription)")
+                    }
+                    if let entryID {
+                        BatchTranscriptionManager.shared.markComplete(entryID)
                     }
                 }
             }

@@ -53,10 +53,27 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
                     OrderCartStore.shared.clear()
                 }
                 NotificationCenter.default.post(name: .orderComplete, object: nil, userInfo: ["url": url, "sessionId": sessionId as Any])
-            } else if url.host == "order-cancelled" {
-                NotificationCenter.default.post(name: .orderCancelled, object: nil)
+                return true
             }
-            return true
+            if url.host == "order-cancelled" {
+                NotificationCenter.default.post(name: .orderCancelled, object: nil)
+                return true
+            }
+            if url.host == "memory" {
+                let trimmed = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                if UUID(uuidString: trimmed) != nil {
+                    print("[QRDeepLink] AppDelegate forwarding memory url=\(url.absoluteString)")
+                    NotificationCenter.default.post(
+                        name: .memoirOpenMemoryDeepLink,
+                        object: nil,
+                        userInfo: ["url": url]
+                    )
+                }
+                // Return false so the system may still deliver the URL to SwiftUI `.onOpenURL` (cold-launch parity).
+                return false
+            }
+            // Unknown custom-scheme host (e.g. join links): do not claim handled — let scene / other handlers see it.
+            return false
         }
         if GIDSignIn.sharedInstance.handle(url) { return true }
         return ApplicationDelegate.shared.application(app, open: url, options: options)
@@ -76,6 +93,8 @@ extension Notification.Name {
     static let generationProgressMarkerChanged = Notification.Name("generationProgressMarkerChanged")
     /// Navigate to `StoryPage` for cloud storybook generation (banner tap / secondary affordance).
     static let navigateToCloudStorybookGeneration = Notification.Name("memoirai.navigateToCloudStorybookGeneration")
+    /// Posted from `FBAppDelegate` for `memoirai://memory/{UUID}` so `ContentView` can route even when `.onOpenURL` is late on cold launch.
+    static let memoirOpenMemoryDeepLink = Notification.Name("memoirai.openMemoryDeepLink")
 }
 
 @main

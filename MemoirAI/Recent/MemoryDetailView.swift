@@ -295,6 +295,8 @@ struct MemoryDetailView: View {
                 memoryEditBlock
             } else if let saved = memory.text, !saved.isEmpty {
                 memoryReadTextBlock(saved)
+            } else if memory.hasAudio {
+                memoryTranscriptionStatusBlock
             }
 
             if shouldShowEnhanceButton {
@@ -473,6 +475,37 @@ struct MemoryDetailView: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// Shown in place of the transcript text when there is audio but no text yet
+    /// — distinguishes "actively transcribing right now" from "queued for
+    /// automatic retry" so the user isn't left guessing.
+    @ViewBuilder
+    private var memoryTranscriptionStatusBlock: some View {
+        HStack(spacing: 10) {
+            if isTranscribingNow {
+                ProgressView()
+                    .tint(terracotta)
+                Text("Transcribing…")
+                    .font(.system(size: 15, weight: .medium, design: .serif))
+                    .foregroundColor(textSecondary)
+            } else {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(terracotta.opacity(0.7))
+                Text("Audio saved — transcript coming soon. We'll retry automatically.")
+                    .font(.system(size: 15, weight: .medium, design: .serif))
+                    .foregroundColor(textSecondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// True while this memory's audio is actively being transcribed right now.
+    private var isTranscribingNow: Bool {
+        guard let id = memory.id else { return false }
+        return transcriptionManager.isInFlight(id)
     }
 
     private var memoryEditBlock: some View {
@@ -1179,12 +1212,7 @@ struct MemoryDetailView: View {
             return
         }
         
-        guard let apiKey = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String else {
-            print("⚠️ Cannot generate title: API key not found")
-            return
-        }
-        
-        let titleService = MemoryTitleService(apiKey: apiKey)
+        let titleService = MemoryTitleService()
         if let generatedTitle = await titleService.generateTitle(from: text) {
             await MainActor.run {
                 memory.prompt = generatedTitle

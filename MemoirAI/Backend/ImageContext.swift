@@ -3,20 +3,12 @@ import UIKit
 
 actor ImageContext {
 
-    private let openAI: OpenAIImageService
+    init() {
+        print("[ImageContext] init")
+    }
 
     // MODIFICATION 1: Added 'gender' to the function signature
     func faceDescriptor(fileID: String, jpegData: Data? = nil, race: String? = nil, gender: String? = nil) async throws -> String {
-
-        // ► If we already have the JPEG bytes, use a data: URI; otherwise fall
-        //   back to the internal file-id scheme. Passing the JPEG avoids all
-        //   download / permission issues.
-        let imageURL: String
-        if let bytes = jpegData {
-            imageURL = "data:image/jpeg;base64,\(bytes.base64EncodedString())"
-        } else {
-            imageURL = "openai://file/\(fileID)"       // requires OpenAI fetch
-        }
 
         // --- DYNAMIC PROMPT LOGIC (MODIFIED) ---
         // Build a context string from user-provided details
@@ -36,7 +28,7 @@ actor ImageContext {
             promptText = """
             For a fictional story, describe this person's physical appearance in ONE short, comma-separated sentence.
             \(contextString)
-            
+
             Based on the image and this context, detail their gender presentation, prominent facial features, skin tone, and hair.
             Do not use the word "individual". Use a gendered term like "man" or "woman" as appropriate.
             Absolutely NO words or hints about age (e.g. young, old, adult, child).
@@ -55,75 +47,40 @@ actor ImageContext {
         }
         // --- END OF DYNAMIC PROMPT LOGIC ---
 
-        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-        req.httpMethod = "POST"
-        req.addValue("Bearer \(openAI.apiKey)",  forHTTPHeaderField: "Authorization")
-        req.addValue("application/json",         forHTTPHeaderField: "Content-Type")
-
-        let bodyDict: [String: Any] = [
-            "model": "gpt-4o-mini",
-            "messages": [[
-                "role": "user",
-                "content": [
-                    [
-                        "type": "text",
-                        "text": promptText // Use the dynamically generated prompt
-                    ],
-                    [
-                        "type": "image_url",
-                        "image_url": ["url": imageURL]
-                    ]
-                ]
-            ]],
-            "max_tokens": 100, // Increased to allow for a more descriptive response
-            "temperature": 0.2
-        ]
-
-        let bodyData = try JSONSerialization.data(withJSONObject: bodyDict)
-        req.httpBody = bodyData
-        print("📤 Vision body (first 300 chars):",
-              String(data: bodyData.prefix(300), encoding: .utf8) ?? "<binary>")
+        guard let bytes = jpegData else {
+            throw NSError(domain: "MemoirAI",
+                          code: -44,
+                          userInfo: [NSLocalizedDescriptionKey: "Face descriptor requires JPEG image data"])
+        }
 
         let startedAt = Date()
-        let (data, rsp) = try await openAI.session.data(for: req)
-        if let http = rsp as? HTTPURLResponse {
-            print("📥 Vision HTTP \(http.statusCode) headers:", http.allHeaderFields)
-        }
-        let statusCode = (rsp as? HTTPURLResponse)?.statusCode
-        let usage = DevCostTelemetryService.extractOpenAIUsage(from: data)
+        let result = try await AIProxyService.shared.chatCompletion(
+            model: "gpt-5-mini",
+            messages: [["role": "user", "content": promptText]],
+            images: [(data: bytes, mimeType: "image/jpeg")],
+            temperature: 0.2,
+            maxTokens: 100
+        )
         await DevCostTelemetryService.shared.logEvent(
             DevCostEvent(
                 timestamp: Date(),
                 provider: .openAI,
                 operation: .openAIChat,
-                model: "gpt-4o-mini",
-                statusCode: statusCode,
-                success: (200...299).contains(statusCode ?? 0),
+                model: "gpt-5-mini",
+                statusCode: 200,
+                success: true,
                 durationMs: Date().timeIntervalSince(startedAt) * 1000,
                 promptCharacters: promptText.count,
-                inputTokens: usage.inputTokens,
-                outputTokens: usage.outputTokens,
+                inputTokens: result.inputTokens,
+                outputTokens: result.outputTokens,
                 inputImageCount: 1,
                 outputImageCount: 0,
-                uploadedBytes: jpegData?.count ?? 0
+                uploadedBytes: bytes.count
             )
         )
-        print("🖼️ Vision JSON raw:\n", String(data: data, encoding: .utf8) ?? "<binary>")
 
-        guard
-            let root    = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let choices = root["choices"] as? [[String: Any]],
-            let msg     = choices.first?["message"] as? [String: Any],
-            let text    = msg["content"] as? String,
-            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            // Check for safety filter responses in the JSON
-            if let responseString = String(data: data, encoding: .utf8), responseString.contains("I'm unable to provide that information") {
-                 throw NSError(domain: "MemoirAI",
-                               code: -43,
-                               userInfo: [NSLocalizedDescriptionKey: "AI refused due to safety policy. Try a different prompt or image."])
-            }
-            
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
             throw NSError(domain: "MemoirAI",
                           code: -42,
                           userInfo: [NSLocalizedDescriptionKey: "Vision descriptor empty / bad JSON"])
@@ -133,75 +90,6 @@ actor ImageContext {
         let final = removingExpressions(from: withoutAge)
         print("✅ Final descriptor:", final)
         return final
-    }
-
-    func createReference(from image: UIImage) async throws -> (id: String, jpeg: Data) {
-        guard let jpg = image.jpegData(compressionQuality: 0.9) else {
-            throw NSError(domain: "MemoirAI",
-                          code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "JPEG-encode failed"])
-        }
-
-        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/files")!)
-        req.httpMethod = "POST"
-        req.addValue("Bearer \(openAI.apiKey)", forHTTPHeaderField: "Authorization")
-
-        let boundary = UUID().uuidString
-        req.addValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-
-        var body = Data()
-        // purpose
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"purpose\"\r\n\r\nvision\r\n".data(using: .utf8)!)
-        // file
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"headshot.jpg\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
-        body.append(jpg)
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-        req.httpBody = body
-
-        print("📤 Uploading head-shot (\(jpg.count) bytes)…")
-
-        let startedAt = Date()
-        let (data, rsp) = try await openAI.session.data(for: req)
-        if let http = rsp as? HTTPURLResponse {
-            print("📥 Upload HTTP \(http.statusCode) headers:", http.allHeaderFields)
-        }
-        let statusCode = (rsp as? HTTPURLResponse)?.statusCode
-        await DevCostTelemetryService.shared.logEvent(
-            DevCostEvent(
-                timestamp: Date(),
-                provider: .openAI,
-                operation: .openAIFileUpload,
-                model: "openai-files-vision",
-                statusCode: statusCode,
-                success: (200...299).contains(statusCode ?? 0),
-                durationMs: Date().timeIntervalSince(startedAt) * 1000,
-                promptCharacters: 0,
-                inputTokens: 0,
-                outputTokens: 0,
-                inputImageCount: 1,
-                outputImageCount: 0,
-                uploadedBytes: jpg.count
-            )
-        )
-        print("🔄 Upload response raw:", String(data: data, encoding: .utf8) ?? "<binary>")
-
-        guard
-            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let id   = root["id"] as? String
-        else {
-            throw NSError(domain: "MemoirAI",
-                          code: -2,
-                          userInfo: [NSLocalizedDescriptionKey: "Upload JSON missing id"])
-        }
-        return (id, jpg)           // ← return JPEG bytes so caller can inline if desired
-    }
-
-    init(apiKey: String, session: URLSession = .shared) {
-        print("[ImageContext] init")
-        self.openAI = OpenAIImageService(apiKey: apiKey, session: session)
     }
 
     func enrichPrompts(prompts: [ImagePrompt], withPhotos photos: [UIImage]) async throws -> [ImagePrompt] {

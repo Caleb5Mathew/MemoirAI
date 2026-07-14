@@ -75,8 +75,10 @@ final class SpeechTranscriber {
         let asset = AVURLAsset(url: url)
         let duration = CMTimeGetSeconds(asset.duration)
         
-        // Set timeout: duration * 1.5, minimum 60s, maximum 600s (10 min)
-        let timeout = min(max(duration * 1.5, 60), 600)
+        // Set timeout: duration * 1.5, minimum 60s, maximum 1800s (30 min) so long
+        // recordings (up to the app's 60-minute recording cap) get a realistic
+        // window instead of being cut off at a fixed 10 minutes.
+        let timeout = min(max(duration * 1.5, 60), 1800)
         
         let request = SFSpeechURLRecognitionRequest(url: url)
         

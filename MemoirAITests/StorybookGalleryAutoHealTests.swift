@@ -72,6 +72,9 @@ private func makeGalleryRecord(
         totalPngBytes: nil,
         pdfBytes: nil,
         source: "story_generation",
-        pages: []
+        pages: [],
+        bookDisplayName: nil,
+        userHandle: nil,
+        bookSeq: nil
     )
 }

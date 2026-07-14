@@ -24,6 +24,11 @@ struct Profile: Identifiable, Codable, Equatable {
     /// Empty for non-parent modes or parents who haven't entered names yet.
     var childNames: [String]
 
+    /// Short vision-derived likeness line for cloud interior prompts (optional).
+    var faceDescription: String?
+    /// Cache key: hex SHA256 of photo bytes + ethnicity/gender — invalidates when inputs change.
+    var faceDescriptionPhotoHash: String?
+
     // Maintain backward compatibility with existing profiles
     init(id: UUID = UUID(),
          name: String,
@@ -33,7 +38,9 @@ struct Profile: Identifiable, Codable, Equatable {
          gender: String? = nil,
          createdAt: Date? = nil,
          updatedAt: Date? = nil,
-         childNames: [String] = []) {
+         childNames: [String] = [],
+         faceDescription: String? = nil,
+         faceDescriptionPhotoHash: String? = nil) {
         self.id = id
         self.name = name
         self.photoData = photoData
@@ -43,6 +50,8 @@ struct Profile: Identifiable, Codable, Equatable {
         self.createdAt = createdAt ?? Date()
         self.updatedAt = updatedAt ?? Date()
         self.childNames = childNames
+        self.faceDescription = faceDescription
+        self.faceDescriptionPhotoHash = faceDescriptionPhotoHash
     }
 
     // Custom decoding for backward compatibility
@@ -59,6 +68,13 @@ struct Profile: Identifiable, Codable, Equatable {
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         childNames = try container.decodeIfPresent([String].self, forKey: .childNames) ?? []
+        faceDescription = try container.decodeIfPresent(String.self, forKey: .faceDescription)
+        faceDescriptionPhotoHash = try container.decodeIfPresent(String.self, forKey: .faceDescriptionPhotoHash)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, photoData, birthdate, ethnicity, gender, createdAt, updatedAt, childNames
+        case faceDescription, faceDescriptionPhotoHash
     }
 
     var image: Image {

@@ -2,162 +2,304 @@ import Foundation
 
 /// OpenAI-backed analysis + extraction for guided memory enhancement.
 actor MemoryEnhancementService {
-    private let apiKey: String
-    private let session: URLSession
-
-    init(apiKey: String, session: URLSession = .shared) {
-        self.apiKey = apiKey
-        self.session = session
-    }
+    init() {}
 
     static func fromMainBundle() -> MemoryEnhancementService? {
-        guard let key = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String,
-              !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return nil
-        }
-        return MemoryEnhancementService(apiKey: key)
+        MemoryEnhancementService()
     }
 
-    /// First interview question tailored to gaps in the memory (people, scene, visuals).
-    func generateFirstQuestion(memoryTitle: String?, memoryText: String) async throws -> String {
-        let title = (memoryTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let body = memoryText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let system = """
-        Goal: fill **illustration gaps** for one memory—drawable people first, then a **simple** sense of place. Read the memory and adapt: only ask for what is **not** already there.
+    /// Preflight: parse the scene, score illustration gaps, skip Q&A only when nothing important is missing.
+    func runPreflight(memoryTitle: String?, memoryText: String) async throws -> MemoryEnhancementPreflight {
+        do {
+            let spec = try await parseSceneSpec(memoryTitle: memoryTitle, memoryText: memoryText, turns: [])
+            let gaps = SceneGapScorer.sortedGaps(SceneGapScorer.score(spec, turnsCompleted: 0, memoryText: memoryText))
+            if SceneGapScorer.shouldExtract(gaps: gaps, turnsCompleted: 0) {
+                return MemoryEnhancementPreflight(
+                    mode: "skip",
+                    tier_start: 1,
+                    character_focus: [],
+                    skip_people_tiers: !spec.hasPeople,
+                    rationale: "scene_ready"
+                )
+            }
+            let named = spec.people.filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            let focus = Array(named.prefix(3).map(\.label))
+            let body = memoryText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fallbackNames = Array(CharacterCanonHelper.capitalizedNameCandidates(in: body).prefix(3))
+            return MemoryEnhancementPreflight(
+                mode: "interview",
+                tier_start: 1,
+                character_focus: focus.isEmpty ? fallbackNames : focus,
+                skip_people_tiers: !spec.hasPeople,
+                rationale: nil
+            )
+        } catch {
+            let body = memoryText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return MemoryEnhancementPreflight(
+                mode: "interview",
+                tier_start: 1,
+                character_focus: Array(CharacterCanonHelper.capitalizedNameCandidates(in: body).prefix(3)),
+                skip_people_tiers: !CharacterCanonHelper.likelyPeoplePresent(in: body),
+                rationale: "parse_fallback"
+            )
+        }
+    }
 
-        **Order (important):**
-        1) **Character details first (main phase):** For each key person in the scene, gather what’s missing for drawing. **Ethnicity / cultural background, hair, and clothing** help a lot—**you may ask for several of these together in one natural, open-ended question** (one sentence) instead of splitting into tiny separate questions. Keep it respectful; include ethnicity when it would help depict someone and isn’t already in the text. Stay general (outfit vibe, hair length/color/style)—not every accessory.
-        2) **If someone is only referred to vaguely** (“my girlfriend,” “a friend”) **and** you need a name first, use **one short question that is only** the name or what they called them—then use a bundled character question next for look/background/clothes.
-        3) **Scene second:** Only after the main people have a drawable pass (or the text already describes them well), ask **one** question about **general** setting—where or what kind of place (broad strokes). Do not mix a full scene description request into the same question as a heavy character bundle unless the memory is very short.
-
-        Do **not** ask: how people met, relationship history, plot, why things happened, mood monologues, tiny props, or exact lighting.
-
-        One question per turn, open-ended, warm. Character bundles: aim under ~30 words. Name-only questions: under ~15 words. No yes/no.
-
-        If the text is empty, ask for one concrete moment tied to the title.
-        Return ONLY valid JSON: {"first_question":"..."}
-        """
-        let user = """
-        Memory title:
-        \(title.isEmpty ? "(none)" : title)
-
-        Memory text:
-        \(body.isEmpty ? "(empty — user may only have a title or fragment)" : body.prefix(2500))
-        """
-        struct FirstQ: Codable { var first_question: String }
-        let dto: FirstQ = try await postJSONDecoding(system: system, user: user)
-        let q = dto.first_question.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { throw MemoryEnhancementError.invalidResponse }
-        return q
+    /// First interview question — gap-targeted from parsed scene spec.
+    func generateFirstQuestion(
+        memoryTitle: String?,
+        memoryText: String,
+        context: MemoryEnhancementPromptContext
+    ) async throws -> GapQuestionBundle {
+        _ = context
+        let spec = try await parseSceneSpec(memoryTitle: memoryTitle, memoryText: memoryText, turns: [])
+        let gaps = SceneGapScorer.sortedGaps(SceneGapScorer.score(spec, turnsCompleted: 0, memoryText: memoryText))
+        guard !gaps.isEmpty, !SceneGapScorer.shouldExtract(gaps: gaps, turnsCompleted: 0) else {
+            throw MemoryEnhancementError.invalidResponse
+        }
+        let target = SceneGapScorer.gapsToTargetForQuestion(gaps)
+        guard !target.isEmpty else { throw MemoryEnhancementError.invalidResponse }
+        return try await generateGapTargetedQuestion(
+            memoryTitle: memoryTitle,
+            memoryText: memoryText,
+            turns: [],
+            spec: spec,
+            targetGaps: target
+        )
     }
 
     func analyzeTurn(
+        memoryTitle: String?,
         memoryText: String,
-        turns: [MemoryEnhancementTurn]
+        turns: [MemoryEnhancementTurn],
+        context: MemoryEnhancementPromptContext
     ) async throws -> MemoryEnhancementTurnAnalysis {
-        let qa = turns.map { "Q: \($0.question)\nA: \($0.answer)" }.joined(separator: "\n\n")
-        let answered = turns.count
-        let system = """
-        Goal: **character details first**, then **general scene**. Re-read the memory; list who appears; ask only what is **still missing** after prior answers. Adapt each question to **this** scenario.
-
-        **Character phase (primary):** For whoever still isn’t drawable, gather missing **ethnicity/cultural background (very helpful for illustration), hair, clothes, and rough look**. You **should often combine** those in **one** natural open-ended question per turn (single sentence)—e.g. invite them to describe background, hair, and what they wore together—rather than one tiny fact per question. Respectful; skip ethnicity if it would be intrusive or already stated.
-
-        **Name-only exception:** If someone is vague (“my girlfriend”) and you still need a name, that turn may be **only** name / what they called them—**then** use bundled character questions.
-
-        **Scene phase (after characters are mostly covered):** Ask for **general** setting—where or what kind of place. Broad only; no mood, lighting trivia, or small props. Prefer **not** to pack a big scene riddle into the same question as a full character bundle unless the memory is very thin.
-
-        Forbidden: how you met, backstory, plot, why things happened, relationship history, mood essays.
-
-        Rules:
-        - One question per turn; open-ended; no yes/no. Character bundles: ~30 words max; name-only: ~15 words.
-        - Use ONLY memory text + answers; don’t invent.
-        - Cap: \(MemoryEnhancementSessionRules.maxSessionTurns) user answers; completed: \(answered). At cap → next_step extract.
-        - Often finish in 2–3 answers if people + rough place are clear; use 4–5 only for real gaps.
-        - If user doesn’t remember, move on.
-        - next_question null iff extract; else non-empty.
-        Return JSON: next_step ("ask_next"|"extract"), next_question (string or null), reason (string or null).
-        """
-        let user = """
-        Original memory:
-        \(memoryText.prefix(2500))
-
-        Interview so far:
-        \(qa.isEmpty ? "(none yet)" : qa)
-        """
-        return try await postJSON(system: system, user: user)
+        _ = context
+        let spec = try await parseSceneSpec(memoryTitle: memoryTitle, memoryText: memoryText, turns: turns)
+        let gaps = SceneGapScorer.sortedGaps(SceneGapScorer.score(spec, turnsCompleted: turns.count, memoryText: memoryText))
+        if gaps.isEmpty || SceneGapScorer.shouldExtract(gaps: gaps, turnsCompleted: turns.count) {
+            return MemoryEnhancementTurnAnalysis(next_step: .extract, next_question: nil, reason: nil)
+        }
+        let target = SceneGapScorer.gapsToTargetForQuestion(gaps)
+        guard !target.isEmpty else {
+            return MemoryEnhancementTurnAnalysis(next_step: .extract, next_question: nil, reason: nil)
+        }
+        let bundle = try await generateGapTargetedQuestion(
+            memoryTitle: memoryTitle,
+            memoryText: memoryText,
+            turns: turns,
+            spec: spec,
+            targetGaps: target
+        )
+        return MemoryEnhancementTurnAnalysis(
+            next_step: .askNext,
+            next_question: bundle.question,
+            reason: bundle.caption
+        )
     }
 
     func extractStructuredDetails(
+        memoryTitle: String?,
         memoryText: String,
-        turns: [MemoryEnhancementTurn]
+        turns: [MemoryEnhancementTurn],
+        profileDisplayName: String? = nil,
+        relationshipStyleProfileName: Bool = false
     ) async throws -> CharacterDetails {
+        let spec = try await parseSceneSpec(memoryTitle: memoryTitle, memoryText: memoryText, turns: turns)
         let qa = turns.map { "Q: \($0.question)\nA: \($0.answer)" }.joined(separator: "\n\n")
+        let specBlock = Self.formatSceneSpecForPrompt(spec)
+        let title = (memoryTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let system = """
-        From the memory and the interview Q&A, build character cards for illustration. Users may answer one bundled question with ethnicity, hair, and clothes together—split those into the right fields. Focus on people the story needs to show; do not invent fine detail.
+        From the memory, the confirmed SCENE SPEC below, and interview Q&A, build character cards for illustration.
+
+        The SCENE SPEC is the single source of truth for what was explicitly stated or clearly implied. Copy ethnicity, hair, clothes, age, gender, and relationship strings **verbatim** from the spec when present. Use memory text + Q&A only to split combined answers into fields or to add detail the spec omitted.
+
         Rules:
         - Output ONLY JSON: {"characters":[...]}.
-        - Each character: name (required string), age, gender, ethnicity (use what the user said about background, heritage, or ethnicity—"" if never mentioned), hairAndFeatures, clothes, relationshipToNarrator (strings; use "" if unknown).
-        - Do NOT invent names or traits not grounded in the text or answers; leave fields empty when unknown.
+        - Each character: name (required string), age, gender, ethnicity, hairAndFeatures, clothes, relationshipToNarrator (strings; use "" if unknown).
+        - Do NOT invent names or traits not grounded in the spec, memory, or answers; leave fields empty when unknown.
+        - **Anti-hallucination (critical):** Leave `gender`, `ethnicity`, `hairAndFeatures`, `clothes`, and `age` as empty strings when the memory text, SCENE SPEC, or Q&A does not state or clearly imply them. Do NOT infer them from cultural priors, names, relationship labels, or stereotypes. Empty is the correct answer when unknown.
         - Merge duplicates (same person).
-        - If no people appear, return {"characters":[]}.
+        - If has_people is false in the spec, return {"characters":[]}.
+        - If the SCENE SPEC marks one person with is_narrator true, that character must use relationshipToNarrator exactly "memoir narrator" (so cloud generation can read narrator age from character cards).
         """
         let user = """
-        Memory:
+        Title: \(title.isEmpty ? "(none)" : title)
+
+        SCENE SPEC (authoritative):
+        \(specBlock)
+
+        Original memory:
         \(memoryText.prefix(2500))
 
-        Q&A:
+        Interview Q&A:
         \(qa.isEmpty ? "(none)" : qa)
         """
-        let dto: MemoryEnhancementExtractionPayload = try await postJSONExtraction(system: system, user: user)
-        return CharacterDetails.fromExtractionPayload(dto)
+        var dto: MemoryEnhancementExtractionPayload = try await postJSONExtraction(system: system, user: user)
+        Self.applyMemoirNarratorRelationshipMarker(spec: spec, payload: &dto)
+        var details = CharacterDetails.fromExtractionPayload(dto)
+        details.normalizeCardDisplayNames(
+            profileDisplayName: profileDisplayName,
+            relationshipStyleProfileName: relationshipStyleProfileName
+        )
+        return details
+    }
+
+    /// Ensures cloud image ranking can read narrator age from `characterDetails` even if the extraction model omits the marker.
+    private static func applyMemoirNarratorRelationshipMarker(spec: SceneSpec, payload: inout MemoryEnhancementExtractionPayload) {
+        let narratorLabels = spec.people.filter { $0.isNarrator }.map {
+            $0.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }.filter { !$0.isEmpty }
+        guard !narratorLabels.isEmpty else { return }
+        let labelSet = Set(narratorLabels)
+        for i in payload.characters.indices {
+            let nm = payload.characters[i].name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard labelSet.contains(nm) else { continue }
+            payload.characters[i].relationshipToNarrator = "memoir narrator"
+        }
+    }
+
+    // MARK: - Scene parsing & gap questions
+
+    private func parseSceneSpec(
+        memoryTitle: String?,
+        memoryText: String,
+        turns: [MemoryEnhancementTurn]
+    ) async throws -> SceneSpec {
+        let title = (memoryTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = memoryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let qa = turns.map { "Q: \($0.question)\nA: \($0.answer)" }.joined(separator: "\n\n")
+        let system = """
+        Extract a structured scene specification for **illustrating** one memoir memory, optionally with follow-up interview answers.
+
+        Rules:
+        - Only fill a field when the user stated it clearly OR it is unambiguously implied (e.g. "Grandma" implies an older woman — still do not invent a specific age).
+        - NEVER guess ethnicity, skin tone, hair color, or clothing. Leave null/empty when not grounded.
+        - **Do NOT infer `gender` (or ethnicity, hair, clothes, age) from names, relationship words, or cultural priors.** If the user did not state it, leave those fields null/empty.
+        - has_people: false only when there are no humans in the scene (pure landscape/object/still-life). If "I" or named people appear, has_people is true.
+        - people: one entry per distinct person with a short label (given name OR relationship like "Mom"). Mark is_narrator true for the first-person voice when applicable. For anyone marked is_narrator true, set relationship_to_narrator to "memoir narrator" once that identity is known (or null until then).
+        - era_appears_relevant: true when a historical war, decade, or period is central to how the scene should look and era is not yet known from text.
+
+        Return ONLY JSON with keys:
+        has_people (bool),
+        people (array of { "label", "is_narrator", "age", "gender", "ethnicity", "hair_and_features", "clothes", "relationship_to_narrator" } — use null for unknown strings),
+        setting, era, action, mood, motif (nullable strings),
+        era_appears_relevant (bool).
+        """
+        let user = """
+        Title: \(title.isEmpty ? "(none)" : title)
+
+        Memory:
+        \(body.isEmpty ? "(empty)" : String(body.prefix(2800)))
+
+        Interview Q&A (may be empty):
+        \(qa.isEmpty ? "(none)" : String(qa.prefix(4000)))
+        """
+        return try await postJSONDecoding(system: system, user: user, maxTokens: 1200, temperature: 0.1)
+    }
+
+    private func generateGapTargetedQuestion(
+        memoryTitle: String?,
+        memoryText: String,
+        turns: [MemoryEnhancementTurn],
+        spec: SceneSpec,
+        targetGaps: [SceneGap]
+    ) async throws -> GapQuestionBundle {
+        let title = (memoryTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = memoryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let qa = turns.map { "Q: \($0.question)\nA: \($0.answer)" }.joined(separator: "\n\n")
+        let specBlock = Self.formatSceneSpecForPrompt(spec)
+        let gapLines = targetGaps.map { gap in
+            "- [\(gap.priority)] \(gap.field.rawValue)\(gap.personLabel.map { " (\($0))" } ?? "") — \(gap.humanReason)"
+        }.joined(separator: "\n")
+        let captionFallback = targetGaps.map(\.humanReason).joined(separator: " · ")
+        let peopleNonEmpty = !spec.people.isEmpty
+
+        let system = """
+        You write ONE warm, open-ended interview question (~40 words max) to fill illustration gaps for a memoir app.
+
+        Confirmed facts — **never ask the user to repeat these**:
+        \(specBlock)
+
+        Target gaps — bundle ONLY these into a single question:
+        \(gapLines)
+
+        Rules:
+        - Do not ask who else was present if `people` is already non-empty unless the gap list explicitly includes identifyPeople.
+        - Do not ask for plot, backstory, or why relationships matter.
+        - No yes/no questions.
+        - Phrase heritage / ethnicity / background questions respectfully and optionally (users may decline).
+        - Keep it one question; if multiple people lack ethnicity, ask once for up to those names together.
+        - For narratorAge gaps: ask once, plainly (e.g. "Roughly how old were you in this memory?"). Accept ranges like "early 20s" or "around 30"; never demand an exact integer.
+        - For namedPeopleAge gaps: ask once for the listed names together (up to three people), e.g. "Roughly how old were Alex, Sam, and Jordan—teens, 20s, 30s is fine." Do not combine narrator age and friend ages in the same question.
+        - Age questions should feel optional; accept "not sure" or rough guesses.
+
+        Return ONLY JSON: {"question":"...","caption":"short subtitle for UI, under 72 characters"}
+        """
+        let user = """
+        Title: \(title.isEmpty ? "(none)" : title)
+
+        Memory:
+        \(body.isEmpty ? "(empty)" : String(body.prefix(2500)))
+
+        Interview so far:
+        \(qa.isEmpty ? "(none yet)" : String(qa.prefix(3500)))
+
+        Context: people list non-empty = \(peopleNonEmpty)
+        """
+        struct DTO: Codable {
+            var question: String
+            var caption: String?
+        }
+        let dto: DTO = try await postJSONDecoding(system: system, user: user, maxTokens: 320, temperature: 0.25)
+        let q = dto.question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { throw MemoryEnhancementError.invalidResponse }
+        let cap = (dto.caption ?? captionFallback).trimmingCharacters(in: .whitespacesAndNewlines)
+        let caption = cap.isEmpty ? captionFallback : cap
+        return GapQuestionBundle(question: q, caption: caption)
+    }
+
+    private static func formatSceneSpecForPrompt(_ spec: SceneSpec) -> String {
+        var lines: [String] = []
+        lines.append("has_people: \(spec.hasPeople)")
+        lines.append("era_appears_relevant: \(spec.eraAppearsRelevant)")
+        if spec.hasPeople {
+            if spec.people.isEmpty {
+                lines.append("people: (none listed yet)")
+            } else {
+                lines.append("people:")
+                for p in spec.people {
+                    let bits = [
+                        "label=\(p.label)",
+                        "narrator=\(p.isNarrator)",
+                        "age=\(p.age ?? "")",
+                        "gender=\(p.gender ?? "")",
+                        "ethnicity=\(p.ethnicity ?? "")",
+                        "hair=\(p.hairAndFeatures ?? "")",
+                        "clothes=\(p.clothes ?? "")",
+                        "relationship=\(p.relationshipToNarrator ?? "")"
+                    ].joined(separator: ", ")
+                    lines.append("  - \(bits)")
+                }
+            }
+        }
+        lines.append("setting: \(spec.setting ?? "")")
+        lines.append("era: \(spec.era ?? "")")
+        lines.append("action: \(spec.action ?? "")")
+        lines.append("mood: \(spec.mood ?? "")")
+        lines.append("motif: \(spec.motif ?? "")")
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Networking
 
-    private func postJSON(system: String, user: String) async throws -> MemoryEnhancementTurnAnalysis {
-        var body: [String: Any] = [
-            "model": "gpt-4o-mini",
-            "messages": [
-                ["role": "system", "content": system],
-                ["role": "user", "content": user]
-            ],
-            "temperature": 0.2,
-            "max_tokens": 220,
-            "response_format": ["type": "json_object"]
-        ]
-        let data = try await performChat(body: &body, promptChars: user.count)
-        struct Root: Decodable {
-            struct Choice: Decodable {
-                struct Message: Decodable { let content: String? }
-                let message: Message
-            }
-            let choices: [Choice]
-        }
-        let raw = try JSONDecoder().decode(Root.self, from: data).choices.first?.message.content ?? ""
-        guard let jsonStart = raw.firstIndex(of: "{"),
-              let jsonEnd = raw.lastIndex(of: "}") else {
-            throw MemoryEnhancementError.invalidResponse
-        }
-        let slice = String(raw[jsonStart...jsonEnd])
-        guard let jsonData = slice.data(using: .utf8) else {
-            throw MemoryEnhancementError.invalidResponse
-        }
-        return try JSONDecoder().decode(MemoryEnhancementTurnAnalysis.self, from: jsonData)
-    }
-
-    private func postJSONDecoding<T: Decodable>(system: String, user: String) async throws -> T {
-        var body: [String: Any] = [
-            "model": "gpt-4o-mini",
-            "messages": [
-                ["role": "system", "content": system],
-                ["role": "user", "content": user]
-            ],
-            "temperature": 0.2,
-            "max_tokens": 220,
-            "response_format": ["type": "json_object"]
-        ]
-        let data = try await performChat(body: &body, promptChars: user.count)
-        let raw = try MemoryEnhancementService.decodeOpenAIChatContent(from: data)
+    private func postJSONDecoding<T: Decodable>(
+        system: String,
+        user: String,
+        maxTokens: Int = 220,
+        temperature: Double = 0.2
+    ) async throws -> T {
+        let raw = try await performChat(system: system, user: user, maxTokens: maxTokens, temperature: temperature, promptChars: user.count)
         guard let jsonStart = raw.firstIndex(of: "{"),
               let jsonEnd = raw.lastIndex(of: "}") else {
             throw MemoryEnhancementError.invalidResponse
@@ -170,25 +312,7 @@ actor MemoryEnhancementService {
     }
 
     private func postJSONExtraction(system: String, user: String) async throws -> MemoryEnhancementExtractionPayload {
-        var body: [String: Any] = [
-            "model": "gpt-4o-mini",
-            "messages": [
-                ["role": "system", "content": system],
-                ["role": "user", "content": user]
-            ],
-            "temperature": 0.15,
-            "max_tokens": 1200,
-            "response_format": ["type": "json_object"]
-        ]
-        let data = try await performChat(body: &body, promptChars: user.count)
-        struct Root: Decodable {
-            struct Choice: Decodable {
-                struct Message: Decodable { let content: String? }
-                let message: Message
-            }
-            let choices: [Choice]
-        }
-        let raw = try JSONDecoder().decode(Root.self, from: data).choices.first?.message.content ?? ""
+        let raw = try await performChat(system: system, user: user, maxTokens: 1200, temperature: 0.15, promptChars: user.count)
         guard let jsonStart = raw.firstIndex(of: "{"),
               let jsonEnd = raw.lastIndex(of: "}") else {
             throw MemoryEnhancementError.invalidResponse
@@ -200,48 +324,42 @@ actor MemoryEnhancementService {
         return try JSONDecoder().decode(MemoryEnhancementExtractionPayload.self, from: jsonData)
     }
 
-    private func performChat(body: inout [String: Any], promptChars: Int) async throws -> Data {
-        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-        req.httpMethod = "POST"
-        req.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        req.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+    private func performChat(
+        system: String,
+        user: String,
+        maxTokens: Int,
+        temperature: Double,
+        promptChars: Int
+    ) async throws -> String {
         let startedAt = Date()
-        let (data, resp) = try await session.data(for: req)
-        let statusCode = (resp as? HTTPURLResponse)?.statusCode
-        let usage = DevCostTelemetryService.extractOpenAIUsage(from: data)
+        let result = try await AIProxyService.shared.chatCompletion(
+            model: "gpt-5-mini",
+            messages: [
+                ["role": "system", "content": system],
+                ["role": "user", "content": user]
+            ],
+            temperature: temperature,
+            maxTokens: maxTokens,
+            jsonMode: true
+        )
         await DevCostTelemetryService.shared.logEvent(
             DevCostEvent(
                 timestamp: Date(),
                 provider: .openAI,
                 operation: .openAIChat,
-                model: "gpt-4o-mini",
-                statusCode: statusCode,
-                success: (200...299).contains(statusCode ?? 0),
+                model: "gpt-5-mini",
+                statusCode: 200,
+                success: true,
                 durationMs: Date().timeIntervalSince(startedAt) * 1000,
                 promptCharacters: promptChars,
-                inputTokens: usage.inputTokens,
-                outputTokens: usage.outputTokens,
+                inputTokens: result.inputTokens,
+                outputTokens: result.outputTokens,
                 inputImageCount: 0,
                 outputImageCount: 0,
                 uploadedBytes: 0
             )
         )
-        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw MemoryEnhancementError.invalidResponse
-        }
-        return data
-    }
-
-    private static func decodeOpenAIChatContent(from data: Data) throws -> String {
-        struct OpenAIChatRoot: Decodable {
-            struct Choice: Decodable {
-                struct Message: Decodable { let content: String? }
-                let message: Message
-            }
-            let choices: [Choice]
-        }
-        return try JSONDecoder().decode(OpenAIChatRoot.self, from: data).choices.first?.message.content ?? ""
+        return result.text
     }
 
 }

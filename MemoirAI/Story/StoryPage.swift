@@ -6,6 +6,20 @@ import RevenueCat
 import RevenueCatUI
 import CoreData
 
+// MARK: - Temporary storybook headshot
+/// Set to `false` to use the profile photo again. Image: `Assets.xcassets/StorybookTempHeadshot`.
+private enum StorybookHeadshotOverride {
+    static let useBundledTemporaryHeadshot = true
+
+    static func resolvedHeadshot(profilePhotoData: Data?) -> UIImage? {
+        if useBundledTemporaryHeadshot, let temp = UIImage(named: "StorybookTempHeadshot") {
+            return temp
+        }
+        guard let data = profilePhotoData, let image = UIImage(data: data) else { return nil }
+        return image
+    }
+}
+
 // Enhanced color definitions for book-like appearance
 struct StoryPageLocalColors {
     let softCream = Color(red: 0.98, green: 0.96, blue: 0.89)
@@ -808,10 +822,7 @@ struct StoryPage: View {
         let useTutorialBonus = pendingTutorialBonusGeneration
         
         Task { @MainActor in
-            let backgroundExecution = StorybookGenerationBackgroundTask()
-            backgroundExecution.armForActiveGeneration()
-            defer { backgroundExecution.end() }
-
+            vm.syncFaceDescriptionFromProfile(profileVM.selectedProfile)
             await vm.generateStorybook(
                 forProfileID: currentProfileID,
                 profileName: profileVM.selectedProfile.name,
@@ -956,6 +967,17 @@ struct StoryPage: View {
         .alert(orderNotReadyAlertTitle, isPresented: $orderNotReadyAlert) {
             Button("Retry") {
                 orderBookTapped()
+            }
+            Button("Contact Support") {
+                SupportContact.contact {
+                    // No Mail client available — reuse this same alert to confirm the clipboard fallback
+                    // (deferred a tick since SwiftUI is already dismissing this presentation).
+                    DispatchQueue.main.async {
+                        orderNotReadyAlertTitle = "Email Copied"
+                        orderNotReadyAlertMessage = "We couldn't open Mail, so we copied \(SupportContact.email) to your clipboard."
+                        orderNotReadyAlert = true
+                    }
+                }
             }
             Button("OK", role: .cancel) { }
         } message: {
@@ -1868,7 +1890,7 @@ extension StoryPage {
                 RemotePDFThumbnailView(
                     url: pdfURL,
                     targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
-                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook,
+                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook(pageCount: max(1, vm.pageItems.count)),
                     panel: .front,
                     cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
                     cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""
@@ -1904,7 +1926,7 @@ extension StoryPage {
                 RemotePDFThumbnailView(
                     url: pdfURL,
                     targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
-                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook,
+                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook(pageCount: max(1, vm.pageItems.count)),
                     panel: .back,
                     cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
                     cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""
@@ -2815,14 +2837,11 @@ extension View {
             .onAppear {
                 print("🧭 StoryPage lifecycle onAppear; profile=\(profileVM.selectedProfile.id.uuidString), hasGenerated=\(vm.hasGeneratedStorybook), hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count), entry=\(storybookScreenEntry)")
                 Task { @MainActor in
-                    let shouldTryResume = storybookScreenEntry == .autoResumePendingGeneration
-                    let resuming = shouldTryResume
-                        ? await vm.resumeInProgressGenerationIfMarkerExists(
-                            profileID: profileVM.selectedProfile.id,
-                            profileName: profileVM.selectedProfile.name,
-                            profileEthnicity: profileVM.selectedProfile.ethnicity
-                        )
-                        : false
+                    let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
+                        profileID: profileVM.selectedProfile.id,
+                        profileName: profileVM.selectedProfile.name,
+                        profileEthnicity: profileVM.selectedProfile.ethnicity
+                    )
                     if resuming {
                         hasRequestedGeneration.wrappedValue = true
                     } else {
@@ -2831,17 +2850,18 @@ extension View {
                             name: profileVM.selectedProfile.name,
                             profileEthnicity: profileVM.selectedProfile.ethnicity
                         )
+                        hasRequestedGeneration.wrappedValue = vm.hasGeneratedStorybook
                     }
                 }
                 
-                if let data = profileVM.selectedProfile.photoData,
-                   let image = UIImage(data: data) {
+                if let image = StorybookHeadshotOverride.resolvedHeadshot(profilePhotoData: profileVM.selectedProfile.photoData) {
                     headshotImage.wrappedValue = image
                     vm.subjectPhoto = image
                 } else {
                     headshotImage.wrappedValue = nil
                     vm.subjectPhoto = nil
                 }
+                vm.syncFaceDescriptionFromProfile(profileVM.selectedProfile)
 
                 Task { @MainActor in
                     if vm.styleTilePublic == nil,
@@ -2858,21 +2878,32 @@ extension View {
             }
             .onChange(of: profileVM.selectedProfile.id) { _, newProfileID in
                 print("🧭 StoryPage profile changed to \(newProfileID.uuidString); reloading storybook")
-                vm.loadStorybookForProfile(
-                    newProfileID,
-                    name: profileVM.selectedProfile.name,
-                    profileEthnicity: profileVM.selectedProfile.ethnicity
-                )
-                if let data = profileVM.selectedProfile.photoData,
-                   let image = UIImage(data: data) {
-                    headshotImage.wrappedValue = image
-                    vm.subjectPhoto = image
-                } else {
-                    headshotImage.wrappedValue = nil
-                    vm.subjectPhoto = nil
+                Task { @MainActor in
+                    let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
+                        profileID: profileVM.selectedProfile.id,
+                        profileName: profileVM.selectedProfile.name,
+                        profileEthnicity: profileVM.selectedProfile.ethnicity
+                    )
+                    if resuming {
+                        hasRequestedGeneration.wrappedValue = true
+                    } else {
+                        vm.loadStorybookForProfile(
+                            newProfileID,
+                            name: profileVM.selectedProfile.name,
+                            profileEthnicity: profileVM.selectedProfile.ethnicity
+                        )
+                        hasRequestedGeneration.wrappedValue = vm.hasGeneratedStorybook
+                    }
+                    if let image = StorybookHeadshotOverride.resolvedHeadshot(profilePhotoData: profileVM.selectedProfile.photoData) {
+                        headshotImage.wrappedValue = image
+                        vm.subjectPhoto = image
+                    } else {
+                        headshotImage.wrappedValue = nil
+                        vm.subjectPhoto = nil
+                    }
+                    vm.syncFaceDescriptionFromProfile(profileVM.selectedProfile)
+                    updateIncompleteCount()
                 }
-                hasRequestedGeneration.wrappedValue = vm.hasGeneratedStorybook
-                updateIncompleteCount()
             }
             .onChange(of: vm.progress) { _, newProgress in
                 // Sync realProgress with vm.progress for accurate progress bar
@@ -2962,63 +2993,5 @@ extension View {
             Spacer()
         }
         .transition(.opacity.combined(with: .scale(scale: 0.95)))
-    }
-}
-
-// MARK: - Extended background time (storybook generation)
-
-/// Coordinates `UIApplication.beginBackgroundTask` so generation can finish after the user backgrounds.
-/// We do **not** call `beginBackgroundTask` for long foreground runs (that only produces the ~30s
-/// "task created over 30 seconds ago" warning). Instead we arm `didEnterBackground` and begin then.
-@MainActor
-private final class StorybookGenerationBackgroundTask {
-    private var taskID: UIBackgroundTaskIdentifier = .invalid
-    private var didEnterBackgroundObserver: NSObjectProtocol?
-
-    /// Starts a background task immediately if already backgrounded; otherwise waits for `didEnterBackground`.
-    func armForActiveGeneration() {
-        let state = UIApplication.shared.applicationState
-        if state != .active {
-            begin()
-            return
-        }
-        guard didEnterBackgroundObserver == nil else { return }
-        didEnterBackgroundObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.didEnterBackgroundNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
-            self.beginAfterEnteringBackgroundIfNeeded()
-        }
-    }
-
-    private func beginAfterEnteringBackgroundIfNeeded() {
-        if let token = didEnterBackgroundObserver {
-            NotificationCenter.default.removeObserver(token)
-            didEnterBackgroundObserver = nil
-        }
-        begin()
-    }
-
-    func begin() {
-        guard taskID == .invalid else { return }
-        taskID = UIApplication.shared.beginBackgroundTask(withName: "MemoirAI.StorybookGeneration") { [weak self] in
-            guard let self else { return }
-            print("StoryPage: storybook generation background time is expiring (system limit).")
-            NotificationCenter.default.post(name: .storybookGenerationBackgroundExpiring, object: nil)
-            self.end()
-        }
-    }
-
-    func end() {
-        if let token = didEnterBackgroundObserver {
-            NotificationCenter.default.removeObserver(token)
-            didEnterBackgroundObserver = nil
-        }
-        guard taskID != .invalid else { return }
-        let id = taskID
-        taskID = .invalid
-        UIApplication.shared.endBackgroundTask(id)
     }
 }

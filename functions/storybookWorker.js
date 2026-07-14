@@ -3,11 +3,13 @@
  */
 
 const admin = require("firebase-admin");
-const crypto = require("crypto");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const pLimit = require("p-limit");
-const { createStorybookAI } = require("./storybookAI");
+const { createStorybookAI, normalizeArtStyleKey, uploadPngWithDownloadURL } = require("./storybookAI");
+
+/** Bump when job payload / worker contract changes; older clients get a clear failure instead of obscure promptAssembly errors. */
+const STORYBOOK_WORKER_MIN_CLIENT_VERSION = 2;
 
 const openaiSecret = defineSecret("OPENAI_API_KEY");
 const geminiSecret = defineSecret("GEMINI_API_KEY");
@@ -21,6 +23,43 @@ function storageBucket() {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * When a new storybook job starts, prior failures for the same profile should not
+ * keep surfacing in the client banner / resume path. Mark them dismissedFailed (not "active").
+ */
+async function dismissPriorFailedStorybookJobs(userId, profileId, currentJobId) {
+  const pid = String(profileId || "")
+    .trim()
+    .toLowerCase();
+  if (!pid || !userId || !currentJobId) return;
+  const qs = await firestore()
+    .collection("users")
+    .doc(userId)
+    .collection("storybookJobs")
+    .orderBy("createdAt", "desc")
+    .limit(50)
+    .get();
+  const batch = firestore().batch();
+  let writes = 0;
+  for (const doc of qs.docs) {
+    if (doc.id === currentJobId) continue;
+    const d = doc.data() || {};
+    const p = String(d.profileId || "")
+      .trim()
+      .toLowerCase();
+    if (p !== pid) continue;
+    if (String(d.status || "") !== "failed") continue;
+    batch.update(doc.ref, {
+      status: "dismissedFailed",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      dismissedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    writes += 1;
+    if (writes >= 400) break;
+  }
+  if (writes > 0) await batch.commit();
 }
 
 /**
@@ -82,21 +121,6 @@ function createWriteQueue() {
   };
 }
 
-async function uploadPngWithDownloadURL(storagePath, buffer) {
-  const token = crypto.randomUUID();
-  const f = storageBucket().file(storagePath);
-  await f.save(buffer, {
-    resumable: false,
-    metadata: {
-      contentType: "image/png",
-      metadata: { firebaseStorageDownloadTokens: token }
-    }
-  });
-  const enc = encodeURIComponent(storagePath);
-  const url = `https://firebasestorage.googleapis.com/v0/b/${storageBucket().name}/o/${enc}?alt=media&token=${token}`;
-  return { storagePath, url };
-}
-
 exports.processStorybookJob = onDocumentCreated(
   {
     document: "users/{userId}/storybookJobs/{jobId}",
@@ -126,8 +150,21 @@ exports.processStorybookJob = onDocumentCreated(
       status: data.status,
       profileId: data.profileId,
       pageCountTarget: data.pageCountTarget,
-      artStyle: data.artStyle,
-      hasSubjectPhoto: !!data.subjectPhotoStoragePath
+      artStyleIn: data.artStyle,
+      artStyleResolved: normalizeArtStyleKey(data.artStyle),
+      hasSubjectPhoto: !!data.subjectPhotoStoragePath,
+      subjectPhotoPath: data.subjectPhotoStoragePath || null,
+      profileName: data.profileName || null,
+      profileEthnicity: data.profileEthnicity || null,
+      gender: data.gender || null,
+      otherDetailsLen: String(data.otherDetails || "").length,
+      faceDescriptionLen: String(data.faceDescription || "").length,
+      customArtStyleLen: String(data.customArtStyleText || "").length,
+      styleReferencePreset: data.styleReferencePreset || null,
+      faceDescriptionHead: String(data.faceDescription || "").slice(0, 240),
+      otherDetailsHead: String(data.otherDetails || "").slice(0, 240),
+      customArtStyleHead: String(data.customArtStyleText || "").slice(0, 240),
+      clientVersion: data.clientVersion != null ? data.clientVersion : null
     });
 
     if (["running", "aiComplete", "complete", "failed"].includes(data.status)) {
@@ -150,6 +187,29 @@ exports.processStorybookJob = onDocumentCreated(
     const ai = createStorybookAI(openaiApiKey, geminiApiKey);
     const enqueueWrite = createWriteQueue();
 
+    const clientVersion = parseInt(String(data.clientVersion ?? "0"), 10) || 0;
+    if (clientVersion < STORYBOOK_WORKER_MIN_CLIENT_VERSION) {
+      logJob("storybook.clientVersionRejected", {
+        clientVersion,
+        requiredMin: STORYBOOK_WORKER_MIN_CLIENT_VERSION
+      });
+      await ref.update({
+        status: "failed",
+        error:
+          "This storybook job was created with an older app version than this server supports. Please update MemoirAI from the App Store (or reinstall the latest build) and start a new generation.",
+        "progress.currentStatus": "Please update the app and retry.",
+        lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      return;
+    }
+
+    try {
+      await dismissPriorFailedStorybookJobs(userId, String(data.profileId || ""), jobId);
+    } catch (e) {
+      console.warn("[storybookWorker] dismissPriorFailedStorybookJobs", e);
+    }
+
     try {
       await ref.update({
         status: "ranking",
@@ -159,7 +219,7 @@ exports.processStorybookJob = onDocumentCreated(
 
       const profileId = String(data.profileId || "");
       const pageCountTarget = Math.max(1, parseInt(String(data.pageCountTarget || "1"), 10) || 1);
-      const artStyle = String(data.artStyle || "kidsBook");
+      const artStyle = normalizeArtStyleKey(data.artStyle);
       const stylePreset = String(data.styleReferencePreset || "normal");
 
       const job = {
@@ -202,6 +262,22 @@ exports.processStorybookJob = onDocumentCreated(
         sampleProfileIdsSeen: sampleProfileIds
       });
 
+      // Per-memory snapshot so we can reconstruct exactly what the worker saw.
+      // Cloud Logging supports ~256KB per entry; transcripts of 0–10k chars fit.
+      // characterDetails JSON is dumped wholesale so we can match traits in postmortems.
+      for (const m of memories) {
+        logJob("storybook.memorySnapshot", {
+          memoryId: m.id,
+          profileID: m.profileID,
+          chapter: m.chapter || null,
+          prompt: m.prompt || null,
+          transcriptionLen: m.transcription.length,
+          characterDetailsLen: m.characterDetails.length,
+          transcription: m.transcription,
+          characterDetails: m.characterDetails
+        });
+      }
+
       if (memories.length === 0) {
         // Distinguish "zero memories synced for this user at all" from
         // "memories exist but none match the profile we're generating for".
@@ -229,16 +305,77 @@ exports.processStorybookJob = onDocumentCreated(
         return;
       }
 
-      logJob("storybook.rankingStart", { input: memories.length, target: pageCountTarget });
-      const ranked = await ai.rankMemoriesWithLLM(memories, pageCountTarget);
-      logJob("storybook.rankingDone", { ranked: ranked.length });
-      const ages = await Promise.all(ranked.map((m) => ai.extractAge(String(m.transcription || ""))));
+      const pinnedRaw = data.pinnedMemoryIds;
+      const pinnedIds = Array.isArray(pinnedRaw)
+        ? pinnedRaw.map((x) => String(x || "").trim()).filter(Boolean)
+        : [];
+      const memById = new Map(memories.map((m) => [String(m.id || "").toLowerCase(), m]));
+
+      let ranked;
+      if (pinnedIds.length > 0) {
+        const pinnedOrdered = [];
+        const seenPin = new Set();
+        for (const pid of pinnedIds) {
+          const key = pid.toLowerCase();
+          if (seenPin.has(key)) continue;
+          seenPin.add(key);
+          const m = memById.get(key);
+          if (m) pinnedOrdered.push(m);
+        }
+        const pinSet = new Set(pinnedOrdered.map((m) => String(m.id || "").toLowerCase()));
+        logJob("storybook.rankingStart", {
+          input: memories.length,
+          target: pageCountTarget,
+          mode: "pinnedPlusRank",
+          pinnedCount: pinnedOrdered.length,
+          pinnedIds: pinnedOrdered.map((m) => m.id)
+        });
+        if (pinnedOrdered.length > pageCountTarget) {
+          ranked = await ai.rankMemoriesWithLLM(pinnedOrdered, pageCountTarget);
+        } else {
+          const needed = pageCountTarget - pinnedOrdered.length;
+          const rest = memories.filter((m) => !pinSet.has(String(m.id || "").toLowerCase()));
+          const rankedRest = needed > 0 ? await ai.rankMemoriesWithLLM(rest, needed) : [];
+          ranked = pinnedOrdered.concat(rankedRest);
+        }
+      } else {
+        logJob("storybook.rankingStart", { input: memories.length, target: pageCountTarget, mode: "rankAll" });
+        ranked = await ai.rankMemoriesWithLLM(memories, pageCountTarget);
+      }
+      logJob("storybook.rankingDone", {
+        ranked: ranked.length,
+        rankedIds: ranked.map((m) => m.id)
+      });
+      const ages = await Promise.all(
+        ranked.map((m) => ai.extractAge(String(m.transcription || ""), String(m.characterDetails || "")))
+      );
       const ordered = ranked
         .map((m, i) => ({ m, age: ages[i] ?? 999 }))
         .sort((a, b) => a.age - b.age)
         .map((x) => x.m);
 
       const orderedMemoryIds = ordered.map((m) => m.id);
+      logJob("storybook.orderedMemories", {
+        orderedIds: orderedMemoryIds,
+        ages: ranked.map((m, i) => ({ id: m.id, age: ages[i] ?? null }))
+      });
+
+      const castCanon = ai.buildCastCanon(ordered, job);
+      // Strip private debug fields (`_sources`, `ambiguous` markers) but keep the row shape so we can
+      // verify cross-memory continuity decisions in production.
+      const sanitizedCanon = (castCanon.rows || []).map((r) => ({
+        nameToken: r.nameToken,
+        displayLabel: r.displayLabel || null,
+        canonAmbiguous: !!r.canonAmbiguous,
+        ethnicity: r.ethnicity || null,
+        gender: r.gender || null,
+        age: r.age || null,
+        hairAndFeatures: r.hairAndFeatures || null,
+        clothing: r.clothing || null,
+        relationshipToNarrator: r.relationshipToNarrator || null,
+        memoryIds: r.memoryIds || null
+      }));
+      logJob("storybook.castCanon", { count: sanitizedCanon.length, rows: sanitizedCanon });
 
       await ref.update({
         status: "running",
@@ -272,6 +409,12 @@ exports.processStorybookJob = onDocumentCreated(
       job._hasHeadshot = !!headshotBuf;
 
       const styleRefBuf = artStyle === "kidsBook" ? ai.loadStyleReferencePng(stylePreset) : null;
+      logJob("storybook.styleReference", {
+        artStyle,
+        stylePreset,
+        styleRefAttached: !!styleRefBuf,
+        styleRefBytes: styleRefBuf ? styleRefBuf.length : 0
+      });
       const maxParallel = Math.max(
         1,
         Math.min(parseInt(process.env.STORYBOOK_MAX_PARALLEL || "12", 10) || 12, 24)
@@ -339,19 +482,75 @@ exports.processStorybookJob = onDocumentCreated(
         try {
           stage = "scene";
           phaseLog(entry.id, stage);
-          const characterContext = ai.buildCharacterContextFromDetails(entry.characterDetails, job);
-          const sceneDescription = await withRetries(() => ai.extractVisualScene(raw, characterContext));
+          const enrichedDetailsStr = ai.enrichEntryCharacterDetailsFromCanon(entry, castCanon, job);
+          const entryForPrompt = { ...entry, characterDetails: enrichedDetailsStr };
+          const characterContext = ai.buildCharacterContextFromDetails(enrichedDetailsStr, job, raw);
+          logJob("storybook.enrichment", {
+            memoryId: entry.id,
+            transcriptLen: raw.length,
+            characterDetailsInLen: String(entry.characterDetails || "").length,
+            characterDetailsEnrichedLen: enrichedDetailsStr.length,
+            characterDetailsEnriched: enrichedDetailsStr,
+            characterContextLen: String(characterContext || "").length,
+            characterContext: String(characterContext || "")
+          });
+          let sceneDescription = await withRetries(() => ai.extractVisualScene(raw, characterContext));
+          const COLLECTIVE_RE =
+            /\b(?:the group of (?:friends|kids|boys|girls)|the (?:kids|team|boys|girls|family))\b/i;
+          if (COLLECTIVE_RE.test(sceneDescription)) {
+            logJob("storybook.sceneCollectiveDetected", { memoryId: entry.id, sceneDescription });
+            sceneDescription = await withRetries(() =>
+              ai.extractVisualScene(
+                raw,
+                `${characterContext}\n\nIMPORTANT: Name every listed person by their exact display names in your paragraph. Do NOT use collective phrases like "the group of friends" or "the kids".`
+              )
+            );
+          }
+          logJob("storybook.scene", { memoryId: entry.id, sceneLen: sceneDescription.length, sceneDescription });
 
           stage = "title";
           phaseLog(entry.id, stage);
           const extracted = await withRetries(() => ai.extractTitleAndCharacters(raw, characterContext));
+          logJob("storybook.title", {
+            memoryId: entry.id,
+            extractedTitle: extracted.title,
+            featuring: extracted.featuring || ""
+          });
 
           stage = "narrator";
           const narrator = ai.inferNarratorPresence(raw, entry.chapter, job.profileName);
-          const includeNarrator = narrator.shouldAttachHeadshot;
+          const headshotDecision = ai.shouldAttachHeadshot({
+            narratorPresence: narrator.presence,
+            headshotBuf,
+            characterDetailsStr: enrichedDetailsStr,
+            transcript: raw,
+            profileName: job.profileName
+          });
+          const attachHeadshot = headshotDecision.attach;
+          const matchesProfileFirstToken = ai.nameMatchesProfileFirstToken(enrichedDetailsStr, raw, job.profileName);
+          const includeNarratorInRoster =
+            narrator.presence !== "likelyAbsent" || matchesProfileFirstToken;
+          logJob("storybook.narrator", {
+            memoryId: entry.id,
+            narratorPresence: narrator.presence,
+            narratorReason: narrator.reason || null,
+            narratorConfidenceScore: narrator.confidenceScore != null ? narrator.confidenceScore : null,
+            narratorFirstPersonDetected: !!narrator.firstPersonDetected,
+            attachHeadshot,
+            headshotReason: headshotDecision.reason,
+            hasHeadshotBuf: !!headshotBuf,
+            matchesProfileFirstToken,
+            includeNarratorInRoster
+          });
 
           stage = "promptAssembly";
-          const characterList = ai.buildCharacterList(entry, job, sceneDescription, includeNarrator);
+          const characterList = ai.buildCharacterList(entryForPrompt, job, sceneDescription, includeNarratorInRoster);
+          const filteredCanonRows = ai.filterCanonRowsForEntry(castCanon, entry);
+          const canonLines = filteredCanonRows.map((r) => ai.canonRowToPromptLine(r, { forImagePrompt: true, job }));
+          const referenceImageOrder = [];
+          if (styleRefBuf) referenceImageOrder.push("style");
+          if (attachHeadshot && headshotBuf) referenceImageOrder.push("headshot");
+
           const assembled = ai.assembleFinalPrompt(
             raw,
             characterList,
@@ -359,24 +558,63 @@ exports.processStorybookJob = onDocumentCreated(
             sceneDescription,
             artStyle,
             job.customArtStyleText,
-            !!headshotBuf,
+            !!(attachHeadshot && headshotBuf),
             job,
-            stylePreset
+            stylePreset,
+            { canonLines, referenceImageOrder, characterDetailsForAge: enrichedDetailsStr }
           );
 
+          logJob("storybook.assembledPreview", {
+            memoryId: entry.id,
+            artStyleIn: data.artStyle,
+            artStyleResolved: artStyle,
+            hasStyleRef: !!styleRefBuf,
+            attachHeadshot,
+            refs: referenceImageOrder,
+            canonLineCount: canonLines.length,
+            characterListLen: String(characterList || "").length,
+            characterList: String(characterList || ""),
+            canonLines,
+            styleParagraph: ai.artStyleMemoryIllustrationStyleDescription(artStyle, job.customArtStyleText),
+            promptLen: assembled.length
+          });
+          // Full assembled prompt — chunked across multiple log lines because Cloud Logging
+          // entries are capped (~256KB) and the Firebase console truncates very long values.
+          // Disable by setting `STORYBOOK_LOG_FULL_PROMPT=false` in the function env.
+          if (process.env.STORYBOOK_LOG_FULL_PROMPT !== "false") {
+            const PROMPT_CHUNK = 3500;
+            const total = assembled.length;
+            const chunkCount = Math.ceil(total / PROMPT_CHUNK);
+            for (let i = 0; i < chunkCount; i += 1) {
+              const start = i * PROMPT_CHUNK;
+              const end = Math.min(start + PROMPT_CHUNK, total);
+              logJob("storybook.assembledFull", {
+                memoryId: entry.id,
+                part: i + 1,
+                totalParts: chunkCount,
+                offset: start,
+                total,
+                chunk: assembled.slice(start, end)
+              });
+            }
+          }
+
           const refs = [];
-          if (includeNarrator && headshotBuf) refs.push(headshotBuf);
           if (styleRefBuf) refs.push(styleRefBuf);
+          if (attachHeadshot && headshotBuf) refs.push(headshotBuf);
 
           stage = "image";
           phaseLog(entry.id, stage, {
             promptLen: assembled.length,
-            includesNarrator: includeNarrator,
+            includesNarrator: includeNarratorInRoster,
+            attachHeadshot,
             hasHeadshot: !!headshotBuf,
             hasStyleRef: !!styleRefBuf,
-            artStyle
+            artStyle,
+            headshotReason: headshotDecision.reason
           });
           const geminiSize = artStyle === "kidsBook" ? "4:3" : "1792x1024";
+          const imageStartMs = Date.now();
           // imageLimit caps concurrent Gemini image calls; isImageCall enables
           // the longer backoff + more retries tuned for 429 RESOURCE_EXHAUSTED.
           const imageBuf = await imageLimit(() =>
@@ -391,6 +629,15 @@ exports.processStorybookJob = onDocumentCreated(
             err.noImageBytes = true;
             throw err;
           }
+
+          const imageElapsedMs = Date.now() - imageStartMs;
+          logJob("storybook.imageDone", {
+            memoryId: entry.id,
+            elapsedMs: imageElapsedMs,
+            bytes: imageBuf.length,
+            geminiSize,
+            refsCount: refs.length
+          });
 
           stage = "upload";
           phaseLog(entry.id, stage);
@@ -412,9 +659,16 @@ exports.processStorybookJob = onDocumentCreated(
             illustrationStoragePath: storagePath,
             illustrationURL: url,
             narratorPresence: narrator.presence,
+            narratorReason: narrator.reason || null,
+            narratorConfidenceScore: narrator.confidenceScore != null ? narrator.confidenceScore : null,
             extractedTitle: extracted.title,
             illustrationBarTitle,
-            completedAt: admin.firestore.Timestamp.now()
+            completedAt: admin.firestore.Timestamp.now(),
+            headshotAttached: !!(attachHeadshot && headshotBuf),
+            headshotPolicyReason: headshotDecision.reason,
+            canonAmbiguousFor: filteredCanonRows.filter((r) => r.canonAmbiguous).map((r) => r.displayLabel || r.nameToken),
+            refsUsed: referenceImageOrder.slice(),
+            assembledPromptChars: assembled.length
           };
 
           await enqueueWrite(() =>
@@ -532,7 +786,41 @@ exports.processStorybookJob = onDocumentCreated(
         .slice(0, 2500);
       const bookTitle = String(data.bookDisplayTitle || data.profileName || "Memoir").trim();
       const pitchPrompt = `You are a book jacket copywriter. Write a short warm back-cover blurb (3-5 sentences) for a printed memoir titled "${bookTitle}" using this excerpt:\n\n${excerpt}`;
-      const pitch = (await ai.generateBackCoverPitch(pitchPrompt)) || "";
+      let pitch = "";
+      try {
+        pitch = (await ai.generateBackCoverPitch(pitchPrompt)) || "";
+      } catch (pitchErr) {
+        console.error(
+          JSON.stringify({
+            kind: "storybook.backCoverPitchFailed",
+            jobId,
+            userId,
+            message: String(pitchErr?.message || pitchErr)
+          })
+        );
+      }
+      if (!String(pitch || "").trim()) {
+        const themeHints = ordered
+          .map((m) => String(m.prompt || "").trim())
+          .filter(Boolean)
+          .slice(0, 5)
+          .join("; ");
+        pitch = themeHints
+          ? `A warm collection of life moments — including ${themeHints}. Perfect for family to read together.`
+          : "A warm collection of life moments captured as a keepsake memoir — perfect for family to read together.";
+      }
+
+      const profileTok = (() => {
+        const t = String(job.profileName || "")
+          .trim()
+          .split(/\s+/)[0];
+        return t ? t.toLowerCase() : "";
+      })();
+      const protagonistRow =
+        profileTok && castCanon.rows
+          ? castCanon.rows.find((r) => r.nameToken === profileTok)
+          : null;
+      const protagonistCanonCard = protagonistRow ? ai.canonRowToPromptLine(protagonistRow) : "";
 
       logJob("storybook.aiComplete", {
         successCount,
@@ -543,6 +831,7 @@ exports.processStorybookJob = onDocumentCreated(
       await ref.update({
         status: "aiComplete",
         backCoverPitch: pitch,
+        protagonistCanonCard,
         "progress.currentStatus": "AI complete — open app to finalize",
         lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp()

@@ -36,7 +36,7 @@ enum CoverPDFThumbnailService {
     ) -> String {
         let layoutKey: String
         switch layout {
-        case .kidsBook: layoutKey = "kids"
+        case .kidsBook(let n): layoutKey = "kids:\(n)"
         case .portraitCasewrap(let n): layoutKey = "portrait:\(n)"
         }
         let panelKey: String
@@ -186,7 +186,7 @@ enum CoverPDFThumbnailService {
 struct RemotePDFThumbnailView<Placeholder: View>: View {
     let url: URL
     let targetSize: CGSize
-    var layout: BookCoverFlatLayoutKind = .kidsBook
+    var layout: BookCoverFlatLayoutKind = .kidsBook(pageCount: 24)
     var panel: BookCoverFlatPanel = .full
     /// Busts in-memory cache when the same Storage URL is overwritten (e.g. new cover PDF).
     var cacheRevision: String = ""
@@ -205,7 +205,7 @@ struct RemotePDFThumbnailView<Placeholder: View>: View {
     init(
         url: URL,
         targetSize: CGSize,
-        layout: BookCoverFlatLayoutKind = .kidsBook,
+        layout: BookCoverFlatLayoutKind = .kidsBook(pageCount: 24),
         panel: BookCoverFlatPanel = .full,
         cacheRevision: String = "",
         cacheIdentity: String = "",

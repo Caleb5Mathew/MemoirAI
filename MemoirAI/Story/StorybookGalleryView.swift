@@ -674,6 +674,11 @@ private struct BookCardItem: View {
                         .foregroundColor(textPrimary)
                         .lineLimit(1)
 
+                    Text(book.bookCatalogDisplayTitle)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(textSecondary)
+                        .lineLimit(2)
+
                     HStack(spacing: 6) {
                         Label("\(book.pageCount)", systemImage: "doc.text")
                             .font(.system(size: 12, weight: .semibold))

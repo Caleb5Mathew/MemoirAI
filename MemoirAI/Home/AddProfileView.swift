@@ -344,7 +344,7 @@ struct AddProfileView: View {
             }
             
             Button(action: {
-                if devKey == "Apologist123!" {
+                if RCSubscriptionManager.verifyDeveloperPassword(devKey) {
                     RCSubscriptionManager.shared.enablePersistentDevMode()
                     withAnimation { devResult = .success }
                     devKey = ""

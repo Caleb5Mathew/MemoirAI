@@ -13,7 +13,8 @@ struct RecordMemoryView: View {
     @StateObject private var audioMonitor = AudioLevelMonitor()
     @StateObject private var permissionManager = PermissionManager.shared
     @StateObject private var realTimeTranscription = RealTimeTranscriptionManager.shared
-    
+    @StateObject private var interruptionObserver = AudioSessionInterruptionObserver()
+
     @State private var selectedPrompt: String? = nil
     @State private var showTextEntry: Bool = false
     @State private var typedText: String = ""
@@ -35,6 +36,10 @@ struct RecordMemoryView: View {
     // Timeout warning states
     @State private var showTimeoutWarning = false
     @State private var finalCountdown: Int? = nil
+
+    // Interruption / backgrounding state — set whenever the recorder was paused
+    // by the system (not by the user tapping Pause) so the UI can explain why.
+    @State private var interruptionBannerMessage: String? = nil
     
     // Store picked/cropped images as raw JPEG/PNG data for Core-Data persistence
     @State private var selectedImagesData: [Data] = []
@@ -150,7 +155,20 @@ struct RecordMemoryView: View {
     private var shouldShowVoiceRings: Bool {
         isRecording && !isPaused && (audioMonitor.isVoiceActive || liveAudioLevel > 0.08)
     }
-    
+
+    private func voiceRing(index: Int) -> some View {
+        let ringColor: Color = audioMonitor.isVoiceActive ? accent.opacity(0.2) : micColor.opacity(0.2)
+        let side: CGFloat = CGFloat(140 + index * 20)
+        let scale: Double = 1.0 + liveAudioLevel * (0.10 + Double(index) * 0.04)
+        let ringOpacity: Double = 0.25 + liveAudioLevel * 0.45
+        return Circle()
+            .stroke(ringColor, lineWidth: 2)
+            .frame(width: side, height: side)
+            .scaleEffect(scale)
+            .opacity(ringOpacity)
+            .animation(.easeOut(duration: 0.12), value: liveAudioLevel)
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             ScrollView {
@@ -176,7 +194,15 @@ struct RecordMemoryView: View {
                     }
                     .padding(.horizontal)
                     .padding(.top, 16)
-                    
+
+                    // Interruption / backgrounding banner — only shown when the
+                    // system (not the user) paused an in-progress recording.
+                    if let message = interruptionBannerMessage {
+                        InterruptionPauseBanner(message: message, tint: micColor)
+                            .padding(.horizontal)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+
                     // Header + Prompt
                     VStack(spacing: 8) {
                         Text(selectedPrompt ?? "What story would you like to tell?")
@@ -195,21 +221,7 @@ struct RecordMemoryView: View {
                         // Rings only appear when actively recording and speech is detected.
                         if shouldShowVoiceRings {
                             ForEach(0..<3, id: \.self) { i in
-                                Circle()
-                                    .stroke(
-                                        audioMonitor.isVoiceActive ?
-                                            accent.opacity(0.2) :
-                                            micColor.opacity(0.2),
-                                        lineWidth: 2
-                                    )
-                                    .frame(width: CGFloat(140 + i * 20),
-                                           height: CGFloat(140 + i * 20))
-                                    .scaleEffect(1.0 + liveAudioLevel * (0.10 + Double(i) * 0.04))
-                                    .opacity(0.25 + liveAudioLevel * 0.45)
-                                    .animation(
-                                        .easeOut(duration: 0.12),
-                                        value: liveAudioLevel
-                                    )
+                                voiceRing(index: i)
                             }
                         }
                         
@@ -542,6 +554,8 @@ struct RecordMemoryView: View {
             SFSpeechRecognizer.requestAuthorization { status in
                 print("🔑 Speech auth status (RecordMemoryView):", status.rawValue)
             }
+
+            configureInterruptionObserver()
         }
         .onDisappear {
             tutorialCoordinator.clearAnchor(.recordingSaveMemory)
@@ -731,43 +745,45 @@ struct RecordMemoryView: View {
         isPaused = true
         recordingTimer?.invalidate() // Pause the timer
         audioMonitor.setIdleState()
-        
+
         // Pause real-time transcription
         realTimeTranscription.pauseTranscription()
-        
+
         // Clear live meter visuals immediately while paused.
     }
-    
+
     func resumeRecording() {
         audioRecorder?.record()
         isPaused = false
-        
+        interruptionBannerMessage = nil
+
         // Resume real-time transcription
         realTimeTranscription.resumeTranscription()
-        
+
         // Resume timer from current time
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             recordingTime += 1
         }
     }
-    
+
     func stopRecording() {
         audioRecorder?.stop()
         isRecording = false
         isPaused = false
+        interruptionBannerMessage = nil
         stopRecordingTimer() // Stop the timer
-        
+
         // Stop checkpoint timer
         checkpointTimer?.invalidate()
         checkpointTimer = nil
-        
+
         // Hide timeout warning
         showTimeoutWarning = false
         finalCountdown = nil
-        
+
         // Stop audio level monitoring
         audioMonitor.stopMonitoring()
-        
+
         // Stop real-time transcription and get final transcript
         realTimeTranscription.stopTranscription()
         let realTimeTranscript = realTimeTranscription.getFinalTranscript()
@@ -775,19 +791,49 @@ struct RecordMemoryView: View {
             typedText = realTimeTranscript
         }
     }
-    
+
     func clearRecording() {
         stopRecording()
         audioURL = nil
         recordingTime = 0 // Reset timer
-        
+
         // Clean up checkpoint files
         for checkpointURL in checkpointFiles {
             try? FileManager.default.removeItem(at: checkpointURL)
         }
         checkpointFiles.removeAll()
-        
+
         // Audio monitor is already stopped in stopRecording()
+    }
+
+    // MARK: - Interruption / Backgrounding
+
+    /// Wires the shared observer so a phone call, Siri, unplugged headphones, or
+    /// the app moving to the background pauses recording the same way tapping
+    /// Pause does, instead of silently letting the timer/UI drift out of sync
+    /// with reality.
+    private func configureInterruptionObserver() {
+        interruptionObserver.onInterruptionBegan = {
+            guard isRecording, !isPaused else { return }
+            pauseRecording()
+            interruptionBannerMessage = "Recording paused — audio was interrupted"
+        }
+        interruptionObserver.onInterruptionEnded = { _ in
+            // Do not auto-resume: keep the existing paused UI and Resume button
+            // so the user makes the call themselves.
+            guard isPaused else { return }
+            interruptionBannerMessage = "Recording paused — tap Resume to continue"
+        }
+        interruptionObserver.onRouteChangeDeviceUnavailable = {
+            guard isRecording, !isPaused else { return }
+            pauseRecording()
+            interruptionBannerMessage = "Recording paused — audio device disconnected"
+        }
+        interruptionObserver.onAppBackgrounded = {
+            guard isRecording, !isPaused else { return }
+            pauseRecording()
+            interruptionBannerMessage = "Recording paused while MemoirAI was in the background"
+        }
     }
     // MARK: – Save & Transcribe (ENHANCED VERSION)
     func saveMemory() {
@@ -856,29 +902,38 @@ struct RecordMemoryView: View {
             // 4️⃣ Start transcription using same background context
             if let urlString = newEntry.audioFileURL,
                let fileURL = URL(string: urlString) {
+                let entryID = newEntry.id
+                if let entryID {
+                    BatchTranscriptionManager.shared.markInFlight(entryID)
+                }
                 // Use enhanced transcription with better accuracy
                 SpeechTranscriber.shared.transcribe(url: fileURL) { result in
                     switch result {
                     case .success(let transcript):
                         bgContext.perform {
                             newEntry.text = transcript
-                            
+
                             // Generate title if prompt is still "Untitled Prompt"
                             if newEntry.prompt == "Untitled Prompt" || newEntry.prompt == "Untitled" {
                                 Task {
                                     await generateAndUpdateTitle(for: newEntry, text: transcript, context: bgContext)
                                 }
                             }
-                            
+
                             try? bgContext.save()
-                            
+
                             DispatchQueue.main.async {
                                 NotificationCenter.default.post(name: .memorySaved, object: nil)
                                 print("✅ Enhanced transcription completed: \(transcript.prefix(50))...")
                             }
                         }
                     case .failure(let error):
+                        // Leave newEntry.text unset so BatchTranscriptionManager's
+                        // "needs transcription" predicate still matches and retries later.
                         print("❌ Enhanced transcription failed: \(error.localizedDescription)")
+                    }
+                    if let entryID {
+                        BatchTranscriptionManager.shared.markComplete(entryID)
                     }
                 }
             }
@@ -906,12 +961,7 @@ struct RecordMemoryView: View {
     
     // MARK: - Title Generation Helper
     private func generateAndUpdateTitle(for entry: MemoryEntry, text: String, context: NSManagedObjectContext) async {
-        guard let apiKey = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String else {
-            print("⚠️ Cannot generate title: API key not found")
-            return
-        }
-        
-        let titleService = MemoryTitleService(apiKey: apiKey)
+        let titleService = MemoryTitleService()
         if let generatedTitle = await titleService.generateTitle(from: text) {
             // Use performAndWait since we're already in an async context and want to wait for the save
             context.performAndWait {
@@ -925,6 +975,32 @@ struct RecordMemoryView: View {
                 print("✅ Title generated and updated: '\(generatedTitle)'")
             }
         }
+    }
+}
+
+// MARK: - Interruption Pause Banner
+/// Small, non-blocking banner shown when the system (not the user) paused an
+/// in-progress recording — phone call, Siri, disconnected headphones, or the
+/// app moving to the background. Reused by the other recording surfaces.
+struct InterruptionPauseBanner: View {
+    let message: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "pause.circle.fill")
+                .font(.system(size: 16, weight: .semibold))
+            Text(message)
+                .font(.system(size: 14, weight: .semibold))
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(tint)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
     }
 }
 

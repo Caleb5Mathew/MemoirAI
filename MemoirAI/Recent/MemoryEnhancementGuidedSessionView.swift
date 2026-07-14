@@ -5,6 +5,8 @@ import CoreData
 struct MemoryEnhancementGuidedSessionView: View {
     let memory: MemoryEntry
     let service: MemoryEnhancementService
+    let profileDisplayName: String?
+    let relationshipStyleProfileName: Bool
     let onComplete: (CharacterDetails) -> Void
     let onBack: () -> Void
     let onPartialSave: ((CharacterDetails) async -> Void)?
@@ -39,12 +41,16 @@ struct MemoryEnhancementGuidedSessionView: View {
     init(
         memory: MemoryEntry,
         service: MemoryEnhancementService,
+        profileDisplayName: String?,
+        relationshipStyleProfileName: Bool,
         onComplete: @escaping (CharacterDetails) -> Void,
         onBack: @escaping () -> Void,
         onPartialSave: ((CharacterDetails) async -> Void)? = nil
     ) {
         self.memory = memory
         self.service = service
+        self.profileDisplayName = profileDisplayName
+        self.relationshipStyleProfileName = relationshipStyleProfileName
         self.onComplete = onComplete
         self.onBack = onBack
         self.onPartialSave = onPartialSave
@@ -52,6 +58,8 @@ struct MemoryEnhancementGuidedSessionView: View {
             wrappedValue: MemoryEnhancementGuidedSessionViewModel(
                 memory: memory,
                 service: service,
+                profileDisplayName: profileDisplayName,
+                relationshipStyleProfileName: relationshipStyleProfileName,
                 onFinished: { details in
                     onComplete(details)
                 },
@@ -67,75 +75,78 @@ struct MemoryEnhancementGuidedSessionView: View {
             VStack(spacing: 0) {
                 topBar
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
-                        Text("Answer by voice. Tap Record, then Stop to review and send.")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                ZStack {
+                    VStack(spacing: 0) {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 24) {
+                                Text("Answer by voice. Tap Record, then Stop to review and send.")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
 
-                        memoryPreviewCard
+                                memoryPreviewCard
 
-                        if !vm.currentQuestion.isEmpty {
-                            progressRow
-                        }
+                                if !vm.currentQuestion.isEmpty {
+                                    progressRow
+                                }
 
-                        questionCard
+                                questionCard
 
-                        if let err = vm.errorMessage {
-                            Text(err)
-                                .font(.footnote)
-                                .foregroundStyle(.red)
-                        }
+                                if let err = vm.errorMessage {
+                                    Text(err)
+                                        .font(.footnote)
+                                        .foregroundStyle(.red)
+                                }
 
-                        RealTimeWaveformView(
-                            audioMonitor: audioMonitor,
-                            isRecording: isRecording,
-                            isPaused: false
-                        )
-                        .frame(maxWidth: .infinity)
-
-                        if realTimeTranscription.isTranscribing && !realTimeTranscription.currentTranscript.isEmpty {
-                            Text(realTimeTranscription.currentTranscript)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .padding(14)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .fill(Color.black.opacity(0.05))
+                                RealTimeWaveformView(
+                                    audioMonitor: audioMonitor,
+                                    isRecording: isRecording,
+                                    isPaused: false
                                 )
+                                .frame(maxWidth: .infinity)
+
+                                if realTimeTranscription.isTranscribing && !realTimeTranscription.currentTranscript.isEmpty {
+                                    Text(realTimeTranscription.currentTranscript)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                        .padding(14)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .fill(Color.black.opacity(0.05))
+                                        )
+                                }
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.top, 12)
+                            .padding(.bottom, 16)
                         }
+
+                        VStack(spacing: 0) {
+                            Divider()
+                                .opacity(0.12)
+                            recordPrimaryButton
+                                .padding(.horizontal, 20)
+                                .padding(.top, 12)
+                                .padding(.bottom, 8)
+                        }
+                        .background(cream)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
-                    .padding(.bottom, 16)
-                }
 
-                VStack(spacing: 0) {
-                    Divider()
-                        .opacity(0.12)
-                    recordPrimaryButton
-                        .padding(.horizontal, 20)
-                        .padding(.top, 12)
-                        .padding(.bottom, 8)
+                    if vm.isAnalyzing || vm.isBootstrapping {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .scaleEffect(1.1)
+                                .tint(terracotta)
+                            Text(vm.isBootstrapping ? "Preparing your question…" : "Thinking…")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(header)
+                        }
+                        .padding(28)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
+                    }
                 }
-                .background(cream)
-            }
-
-            if vm.isAnalyzing || vm.isBootstrapping {
-                Color.black.opacity(0.28).ignoresSafeArea()
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .scaleEffect(1.1)
-                        .tint(terracotta)
-                    Text(vm.isBootstrapping ? "Preparing your question…" : "Thinking…")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(header)
-                }
-                .padding(28)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
             }
         }
         .onAppear {
@@ -174,6 +185,11 @@ struct MemoryEnhancementGuidedSessionView: View {
             Text("Question \(current)")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(textSecondary)
+            if !vm.rubricTierCaption.isEmpty {
+                Text(vm.rubricTierCaption)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(textSecondary.opacity(0.75))
+            }
             Text("Usually 2–3 short answers · up to \(MemoryEnhancementSessionRules.maxSessionTurns)")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(textSecondary.opacity(0.85))
@@ -276,14 +292,12 @@ struct MemoryEnhancementGuidedSessionView: View {
                     showReviewSheet = false
                     discardPendingRecording()
                 } else {
-                    Task {
+                    cleanupRecording()
+                    vm.persistDraft()
+                    Task.detached { [vm] in
                         await vm.persistPartialProgress()
-                        await MainActor.run {
-                            cleanupRecording()
-                            vm.persistDraft()
-                            onBack()
-                        }
                     }
+                    onBack()
                 }
             } label: {
                 Image(systemName: "chevron.left")

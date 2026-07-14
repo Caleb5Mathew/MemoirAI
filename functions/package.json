@@ -6,15 +6,20 @@
   },
   "main": "index.js",
   "scripts": {
-    "test:merchant-pricing": "node merchantPricingMath.test.js"
+    "test:merchant-pricing": "node merchantPricingMath.test.js",
+    "check-style-sync": "node scripts/check-style-sync.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
-    "firebase-admin": "^13.6.1",
+    "firebase-admin": "^13.10.0",
     "firebase-functions": "^7.0.5",
+    "nodemailer": "^9.0.3",
     "openai": "^4.77.0",
     "p-limit": "^3.1.0",
     "pdf-lib": "^1.17.1",
     "stripe": "^17.4.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

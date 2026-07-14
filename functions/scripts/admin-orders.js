@@ -114,7 +114,7 @@ async function fulfillOrder(orderId) {
 
 async function fulfillOrderConfirm(orderId) {
   console.log("NOTE: This script cannot call the Cloud Function with its secrets.");
-  console.log("Use the Firebase callable function 'fulfillOrder' from the app or Firebase console.");
+  console.log("Use the Print Ops web UI (public/ops — see OPS_PRINT_QUEUE.md) or callable 'fulfillOrder'.");
   console.log(`\nAlternatively, use curl to call the function:\n`);
   console.log(`  # Get an ID token first, then:`);
   console.log(`  curl -X POST https://us-central1-${projectId}.cloudfunctions.net/fulfillOrder \\`);

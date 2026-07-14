@@ -152,8 +152,6 @@ struct QuestionGeneratorSheet: View {
 
     private func generateQuestion() async {
         guard generateCount < maxGenerations else { return }
-        guard let key = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String,
-              key.hasPrefix("sk-") else { return }
 
         isGenerating = true
         showError = false
@@ -168,36 +166,18 @@ struct QuestionGeneratorSheet: View {
         Return ONLY the question — no quotes, no intro text, nothing else.
         """
 
-        let body: [String: Any] = [
-            "model": "gpt-4o",
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": "Give me one memoir question for the \(chapterTitle) chapter."]
-            ],
-            "max_tokens": 80,
-            "temperature": 0.9
-        ]
-
         do {
-            var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-            req.httpMethod = "POST"
-            req.addValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-            req.addValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let result = try await AIProxyService.shared.chatCompletion(
+                model: "gpt-5-mini",
+                messages: [
+                    ["role": "system", "content": systemPrompt],
+                    ["role": "user", "content": "Give me one memoir question for the \(chapterTitle) chapter."]
+                ],
+                temperature: 0.9,
+                maxTokens: 80
+            )
 
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-                showError = true
-                isGenerating = false
-                return
-            }
-
-            struct Choice: Decodable { struct Msg: Decodable { let content: String? }; let message: Msg }
-            struct Root: Decodable { let choices: [Choice] }
-            let question = try JSONDecoder().decode(Root.self, from: data)
-                .choices.first?.message.content?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
+            let question = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             generatedQuestion = question.isEmpty ? "Tell me about a moment from your \(chapterTitle.lowercased()) that you still think about today." : question
             generateCount += 1
         } catch {

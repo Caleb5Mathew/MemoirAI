@@ -429,7 +429,10 @@ struct ProfileSetupView: View {
             ethnicity: raceValue.isEmpty ? nil : raceValue,
             gender: profile.gender,
             createdAt: profile.createdAt,
-            updatedAt: Date()
+            updatedAt: Date(),
+            childNames: profile.childNames,
+            faceDescription: profile.faceDescription,
+            faceDescriptionPhotoHash: profile.faceDescriptionPhotoHash
         )
         profileVM.updateSelectedProfile(with: updatedProfile)
     }
@@ -445,7 +448,10 @@ struct ProfileSetupView: View {
             ethnicity: profile.ethnicity,
             gender: genderValue.isEmpty ? nil : genderValue,
             createdAt: profile.createdAt,
-            updatedAt: Date()
+            updatedAt: Date(),
+            childNames: profile.childNames,
+            faceDescription: profile.faceDescription,
+            faceDescriptionPhotoHash: profile.faceDescriptionPhotoHash
         )
         profileVM.updateSelectedProfile(with: updatedProfile)
     }

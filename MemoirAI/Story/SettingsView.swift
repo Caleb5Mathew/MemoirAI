@@ -135,9 +135,11 @@ struct SettingsView: View {
     // Character Management
     @State private var showCharacterManagement: Bool = false
     @State private var showDevDashboard: Bool = false
+    @State private var showDevOpsDashboard: Bool = false
     @State private var hasUnseenOrders = false
     @State private var orderBadgeListener: ListenerRegistration?
-    @State private var showLibrary = false
+    @State private var showOrderHistory = false
+    @State private var showSupportCopiedAlert = false
     
     private enum DevUnlockResult {
         case success
@@ -241,9 +243,13 @@ struct SettingsView: View {
                         // Account Section
                         accountSection
 
+                        // Support Section
+                        supportSection
+
                         // Developer dashboard entry at the very bottom
                         if canAccessDevDashboard {
                             devDashboardSection
+                            printOpsDashboardSection
                         }
                     }
                     .padding(.horizontal, 20)
@@ -289,9 +295,18 @@ struct SettingsView: View {
                 DevDashboardView()
             }
         }
-        .fullScreenCover(isPresented: $showLibrary) {
-            StorybookGalleryView(onBookSelected: nil)
-                .environmentObject(profileVM)
+        .fullScreenCover(isPresented: $showDevOpsDashboard) {
+            NavigationStack {
+                DevOpsDashboardView()
+            }
+        }
+        .fullScreenCover(isPresented: $showOrderHistory) {
+            OrderHistoryView()
+        }
+        .alert("Email Copied", isPresented: $showSupportCopiedAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("We couldn't open Mail, so we copied \(SupportContact.email) to your clipboard.")
         }
     }
     
@@ -328,7 +343,7 @@ struct SettingsView: View {
             }
             
             Button(action: {
-                if devKey == "Apologist123!" {
+                if RCSubscriptionManager.verifyDeveloperPassword(devKey) {
                     RCSubscriptionManager.shared.enablePersistentDevMode()
                     withAnimation { devResult = .success }
                     devKey = ""
@@ -727,10 +742,10 @@ struct SettingsView: View {
         .buttonStyle(PlainButtonStyle())
     }
     
-    /// Opens My Library (`StorybookGalleryView`) for ordering prints from saved books. Uses full-screen cover so it works when Settings is a sheet (no `NavigationStack` in parent).
+    /// Opens `OrderHistoryView` to show past/active print orders. Uses full-screen cover so it works when Settings is a sheet (no `NavigationStack` in parent).
     private var printOrdersLibraryRow: some View {
         Button {
-            showLibrary = true
+            showOrderHistory = true
         } label: {
             HStack {
                 Image(systemName: "shippingbox")
@@ -749,7 +764,47 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
     }
-    
+
+    // MARK: - Support Section
+    private var supportSection: some View {
+        Button {
+            SupportContact.contact { showSupportCopiedAlert = true }
+        } label: {
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(terracotta.opacity(0.15))
+                        .frame(width: 44, height: 44)
+
+                    Image(systemName: "envelope.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(terracotta)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Contact Support")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(darkText)
+
+                    Text(SupportContact.email)
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.gray.opacity(0.5))
+            }
+            .padding(16)
+            .background(Color.white.opacity(0.6))
+            .cornerRadius(16)
+            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
     // MARK: - Account Section
     private var accountSection: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -954,7 +1009,47 @@ struct SettingsView: View {
         }
         .buttonStyle(PlainButtonStyle())
     }
-    
+
+    /// Print-order queue for Caleb. Visible only when developer-unlocked; the screen itself is
+    /// authorized server-side (see `Firebase/AdminOpsService.swift`), so a non-admin who reaches it
+    /// just sees a friendly explanation instead of any order data.
+    private var printOpsDashboardSection: some View {
+        Button(action: {
+            showDevOpsDashboard = true
+        }) {
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(terracotta.opacity(0.2))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "shippingbox.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(terracotta)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Print Ops Dashboard")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(darkText)
+                    Text("Review and fulfill print orders")
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.gray.opacity(0.5))
+            }
+            .padding(16)
+            .background(Color.white.opacity(0.6))
+            .cornerRadius(16)
+            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
     private func linkGoogleAccount() {
         Task {
             do {

@@ -17,6 +17,9 @@ private enum StorybookGenLog {
     static var verbose: Bool { UserDefaults.standard.bool(forKey: "MemoirAI_StorybookVerboseLogging") }
     #endif
 
+    /// Xcode console truncates long single-line prints (~1024 chars). Chunk large payloads so full transcripts / character JSON survive.
+    static let chunkSize: Int = 900
+
     static func line(_ message: String) {
         print("[StorybookGen] \(message)")
     }
@@ -27,6 +30,26 @@ private enum StorybookGenLog {
 
     static func fence(_ title: String) {
         line("════════ \(title) ════════")
+    }
+
+    /// Splits `body` into ~900-char chunks prefixed with `label`. No truncation. Always runs (not gated by `verbose`) — the caller decides.
+    static func dumpFull(label: String, body: String) {
+        guard !body.isEmpty else {
+            line("\(label): (empty)")
+            return
+        }
+        let total = body.count
+        var index = 0
+        var part = 1
+        var cursor = body.startIndex
+        while cursor < body.endIndex {
+            let end = body.index(cursor, offsetBy: chunkSize, limitedBy: body.endIndex) ?? body.endIndex
+            let segment = body[cursor..<end]
+            line("\(label) [part \(part), chars \(index)/\(total)]: \(segment)")
+            cursor = end
+            index += segment.count
+            part += 1
+        }
     }
 }
 
@@ -118,6 +141,8 @@ class StoryPageViewModel: ObservableObject {
     @Published var bookDisplayTitle: String = ""
     /// AI or fallback back-cover / colophon copy.
     @Published var backCoverPitch: String = ""
+    /// Cast-canon protagonist line from cloud storybook job (`protagonistCanonCard`) for cover generation continuity.
+    private var cloudProtagonistCanonCard: String?
     /// `CoverFontPreset.rawValue`; updated when print packaging runs.
     var coverFontPreset: String = ""
 
@@ -134,6 +159,8 @@ class StoryPageViewModel: ObservableObject {
     // Image editing state
     @Published var editingImageIndex: Int? = nil
     @Published var imageEditingStates: [Int: Bool] = [:] // Track loading state per image index
+    /// Scratch scene excerpt while building edit prompts (`buildFullImageEditInstruction` saves/restores).
+    private var currentSceneDescription: String = ""
     /// When non-nil, user is regenerating print cover art for the front or back panel (instruction-based edit).
     @Published private(set) var coverPanelEditing: BookCoverFlatPanel?
 
@@ -241,9 +268,7 @@ class StoryPageViewModel: ObservableObject {
 
     // Make currentArtStyle public so StoryPage can access it
     var currentArtStyle : ArtStyle {
-        if let resolved = ArtStyle(rawValue: artStyleRaw) { return resolved }
-        print("⚠️ currentArtStyle: unrecognized rawValue '\(artStyleRaw)' — falling back to kidsBook")
-        return .kidsBook
+        ArtStyle.resolvedFromStored(artStyleRaw)
     }
 
     /// True when the current book has required artifacts ready for entering print checkout.
@@ -278,20 +303,13 @@ class StoryPageViewModel: ObservableObject {
         return "\(n) memories were not included because their illustrations could not be created. Everything else is in your storybook."
     }
 
-    private var faceDescription : String?
+    /// Likeness notes passed to cloud jobs — hydrate from `Profile.faceDescription` via `syncFaceDescriptionFromProfile`.
+    private var faceDescription: String?
 
-    private let promptGen : PromptGenerator
-    private let imageCtx  : ImageContext
-    private let imageSvc  : OpenAIImageService
-    private let openAIKey : String
-    private let assembler : PromptAssembler
     private let geminiImageSvc : GeminiImageService?
     private var cachedNormalStyleImage: UIImage?
     private var cachedRef1StyleImage: UIImage?
     private var cachedRef2StyleImage: UIImage?
-
-    // Toggle to bypass expensive LLM sanitization if it's over-sanitising prompts.
-    private let useLLMSanitizer = false
 
     private var effectiveGeminiModel: String {
         // Production/default path: always use Nano Banana 3 Pro Preview.
@@ -424,26 +442,8 @@ class StoryPageViewModel: ObservableObject {
     }
 
     init() {
-        guard let key = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String,
-              !key.isEmpty, !key.contains("YOUR_API") else {
-            fatalError("OPENAI_API_KEY missing or invalid")
-        }
-        openAIKey = key
-        promptGen = PromptGenerator(apiKey: key)
-        imageCtx  = ImageContext(apiKey: key)
-        imageSvc  = OpenAIImageService(apiKey: key)
-        assembler = PromptAssembler(apiKey: key)
-        
-        // Initialize Gemini service if API key is available (optional)
-        if let geminiKey = Bundle.main.object(forInfoDictionaryKey: "GEMINI_API_KEY") as? String,
-           !geminiKey.isEmpty, !geminiKey.contains("YOUR_API") {
-            geminiImageSvc = GeminiImageService(apiKey: geminiKey)
-            print("✅ Gemini image service initialized")
-        } else {
-            geminiImageSvc = nil
-            print("⚠️ GEMINI_API_KEY not found, Gemini image generation will be skipped")
-        }
-        
+        geminiImageSvc = GeminiImageService()
+
         // Restore settings from iCloud backup
         restoreSettingsFromCloud()
 
@@ -945,7 +945,9 @@ class StoryPageViewModel: ObservableObject {
         "the", "and", "for", "with", "that", "this", "from", "into", "about", "have", "has", "had",
         "were", "was", "are", "our", "your", "their", "them", "they", "then", "than", "when", "where",
         "what", "which", "while", "after", "before", "over", "under", "through", "around", "very",
-        "just", "really", "also", "story", "memory", "memoir", "page"
+        "just", "really", "also", "story", "memory", "memoir", "page",
+        "came", "went", "said", "made", "took", "gave", "seen", "been", "left", "held", "done", "got",
+        "back", "inside", "outside", "again", "still", "even", "only", "ever", "much", "many", "some"
     ]
 
     /// Frequency-first cover signals with deterministic tie-breaks.
@@ -1251,7 +1253,8 @@ class StoryPageViewModel: ObservableObject {
             customArtStyleText: customTrimmed.isEmpty ? nil : customTrimmed,
             printTitle: titleForPrint,
             backCoverPitch: pitch,
-            coverFontPreset: preset
+            coverFontPreset: preset,
+            protagonistCanonLine: cloudProtagonistCanonCard
         )
     }
 
@@ -1281,7 +1284,7 @@ class StoryPageViewModel: ObservableObject {
         return PersistableStorybook(
             profileID: profileID,
             pageItems: persistableItems,
-            artStyle: artStyleRaw,
+            artStyle: currentArtStyle.firestoreKey,
             createdAt: createdAt,
             bookDisplayTitle: titleStored,
             backCoverPitch: pitchStored,
@@ -1365,7 +1368,7 @@ class StoryPageViewModel: ObservableObject {
             var historyMetadata: [[String: Any]] = cloudStore.array(forKey: historyMetadataKey) as? [[String: Any]] ?? []
             historyMetadata.append([
                 "createdAt": createdAt.timeIntervalSince1970,
-                "artStyle": artStyleRaw,
+                "artStyle": currentArtStyle.firestoreKey,
                 "profileID": profileID.uuidString
             ])
             cloudStore.set(historyMetadata, forKey: historyMetadataKey)
@@ -1564,7 +1567,7 @@ class StoryPageViewModel: ObservableObject {
             bookDisplayTitle = storybook.bookDisplayTitle ?? ""
             backCoverPitch = storybook.backCoverPitch ?? ""
             coverFontPreset = storybook.coverFontPreset
-                ?? CoverCopyPolicy(artStyle: ArtStyle(rawValue: storybook.artStyle) ?? .kidsBook, profileDisplayName: "").coverFontPreset().rawValue
+                ?? CoverCopyPolicy(artStyle: ArtStyle.resolvedFromStored(storybook.artStyle), profileDisplayName: "").coverFontPreset().rawValue
             ensureInteriorBookendsPresent()
             backfillContinuationTextPageHeaders()
             lastSyncedBookVersionId = "\(storybook.profileID.uuidString)_\(Int(storybook.createdAt.timeIntervalSince1970))"
@@ -1658,12 +1661,12 @@ class StoryPageViewModel: ObservableObject {
         loadedBookPageWidth = CGFloat(record.pageWidth)
         loadedBookPageHeight = CGFloat(record.pageHeight)
         if !isLoading {
-            artStyleRaw = record.artStyle
+            artStyleRaw = ArtStyle.resolvedFromStored(record.artStyle).rawValue
         }
         bookDisplayTitle = record.printTitle ?? ""
         backCoverPitch = record.backCoverPitch ?? ""
         coverFontPreset = record.coverFontPreset
-            ?? CoverCopyPolicy(artStyle: ArtStyle(rawValue: record.artStyle) ?? .kidsBook, profileDisplayName: "").coverFontPreset().rawValue
+            ?? CoverCopyPolicy(artStyle: ArtStyle.resolvedFromStored(record.artStyle), profileDisplayName: "").coverFontPreset().rawValue
         lastSyncedBookVersionId = record.bookVersionId
         lastPersistedBookCreatedAt = record.createdAt
     }
@@ -1984,7 +1987,7 @@ class StoryPageViewModel: ObservableObject {
         }
         if cloudRecord.coverFontPreset == nil || (cloudRecord.coverFontPreset ?? "").isEmpty {
             coverFontPreset = legacy.coverFontPreset
-                ?? CoverCopyPolicy(artStyle: ArtStyle(rawValue: legacy.artStyle) ?? .kidsBook, profileDisplayName: bookDisplayTitle).coverFontPreset().rawValue
+                ?? CoverCopyPolicy(artStyle: ArtStyle.resolvedFromStored(legacy.artStyle), profileDisplayName: bookDisplayTitle).coverFontPreset().rawValue
         }
 
         ensureInteriorBookendsPresent()
@@ -2325,7 +2328,7 @@ class StoryPageViewModel: ObservableObject {
         precomposedIllustrationMemoryIDs = []
         
         // Update art style to match the loaded book (ensures correct layout/fonts)
-        artStyleRaw = book.artStyle
+        artStyleRaw = ArtStyle.resolvedFromStored(book.artStyle).rawValue
         let layout = BookVersionLayoutFactory.layout(forArtStyle: book.artStyle)
         loadedBookOrientation = layout.orientation
         loadedBookPageWidth = CGFloat(layout.pageWidth)
@@ -2334,7 +2337,7 @@ class StoryPageViewModel: ObservableObject {
         bookDisplayTitle = book.bookDisplayTitle ?? ""
         backCoverPitch = book.backCoverPitch ?? ""
         coverFontPreset = book.coverFontPreset
-            ?? CoverCopyPolicy(artStyle: ArtStyle(rawValue: book.artStyle) ?? .kidsBook, profileDisplayName: "").coverFontPreset().rawValue
+            ?? CoverCopyPolicy(artStyle: ArtStyle.resolvedFromStored(book.artStyle), profileDisplayName: "").coverFontPreset().rawValue
         lastSyncedBookVersionId = "\(book.profileID.uuidString)_\(Int(book.createdAt.timeIntervalSince1970))"
         lastPersistedBookCreatedAt = book.createdAt
         
@@ -2559,36 +2562,11 @@ class StoryPageViewModel: ObservableObject {
         print("🗑️ Cleared persisted storybook for profile: \(profileID)")
     }
     
-    private func ensureSubjectPhotoIsRegistered() async {
-        guard subjectPhotoID == nil, let shot = subjectPhoto else { return }
-        do {
-            let (fid, jpeg) = try await imageCtx.createReference(from: shot)
-            subjectPhotoID   = fid
-            subjectPhotoJPEG = jpeg
-            print("✅ head-shot uploaded →", fid)
-        } catch {
-            print("🚫 head-shot upload failed:", error.localizedDescription)
-        }
-    }
-
-    private func ensureFaceDescription() async {
-        guard faceDescription == nil,
-              let fid = subjectPhotoID else { return }
-        do {
-            faceDescription = try await imageCtx.faceDescriptor(
-                fileID: fid,
-                jpegData: subjectPhotoJPEG,
-                race: self.ethnicity,
-                gender: self.gender
-            )
-            
-            if let desc = faceDescription {
-                print("✅ face descriptor →", desc)
-            } else {
-                print("⚠️ Face descriptor was nil after successful API call.")
-            }
-        } catch {
-            print("🚫 face descriptor failed:", error.localizedDescription)
+    /// Copies persisted vision likeness from the grandparent profile into the job payload for cloud generation.
+    func syncFaceDescriptionFromProfile(_ profile: Profile) {
+        if let d = profile.faceDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty {
+            faceDescription = d
+        } else {
             faceDescription = nil
         }
     }
@@ -2675,130 +2653,6 @@ class StoryPageViewModel: ObservableObject {
         return translated
     }
 
-    /// Intelligent LLM-based prompt sanitizer that preserves character details while ensuring DALL-E 3 compliance
-    private func sanitizePromptWithLLM(_ prompt: String) async -> String {
-        let systemPrompt = """
-        You are a DALL-E 3 prompt sanitizer. Your job is to rewrite prompts to be DALL-E 3 compliant while preserving ALL character details and visual information.
-
-        DALL-E 3 TRIGGERS TO AVOID:
-        - Explicit racial terms: "Caucasian", "Black", "Indian", "Asian", "Hispanic"
-        - Age + race combinations: "17 year old Indian", "21 Black person"
-        - Personal names with detailed descriptions
-        - Negative emotional states: "anxious", "angry", "sad"
-        - Harsh instructional language: "must", "never", "forbidden"
-        - Ancestry references: "of Indian descent", "suggesting ancestry"
-
-        SAFE ALTERNATIVES:
-        - Visual descriptors: "warm brown skin", "dark hair", "light eyes"
-        - General age ranges: "teenager", "young adult", "middle-aged"
-        - Positive emotions: "focused", "determined", "thoughtful"
-        - Gentle instructions: "showing", "featuring", "with"
-
-        PRESERVE THESE:
-        - All physical appearance details (hair, eyes, skin tone, build)
-        - Clothing and accessories
-        - Scene setting and activities
-        - Character relationships and roles
-        - Art style preferences
-
-        REWRITE RULES:
-        1. Replace racial terms with visual descriptors
-        2. Convert specific ages to age ranges when combined with appearance
-        3. Remove personal names or make them generic
-        4. Soften harsh language
-        5. Keep the prompt under 200 characters when possible
-        6. Maintain all essential visual information
-
-        Return ONLY the rewritten prompt, nothing else.
-        """
-
-        let body: [String: Any] = [
-            "model": "gpt-4o-mini",
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": prompt]
-            ],
-            "temperature": 0.2,
-            "max_tokens": 300
-        ]
-
-        do {
-            let startedAt = Date()
-            var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-            req.httpMethod = "POST"
-            req.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
-            req.addValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-            let (data, httpResponse) = try await URLSession.shared.data(for: req)
-            let statusCode = (httpResponse as? HTTPURLResponse)?.statusCode
-            
-            struct Choice: Decodable {
-                struct Msg: Decodable { let content: String? }
-                let message: Msg
-            }
-            struct Root: Decodable { let choices: [Choice] }
-            
-            let sanitized = try JSONDecoder().decode(Root.self, from: data).choices.first?.message.content ?? prompt
-            
-            print("🧹 LLM SANITIZED PROMPT:")
-            print("ORIGINAL: \(prompt)")
-            print("SANITIZED: \(sanitized)")
-            await logOpenAIChatTelemetry(
-                model: "gpt-4o-mini",
-                promptChars: prompt.count,
-                responseData: data,
-                statusCode: statusCode,
-                success: true,
-                startedAt: startedAt
-            )
-            
-            return sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
-            
-        } catch {
-            print("⚠️ LLM sanitization failed, using original prompt: \(error)")
-            return prompt
-        }
-    }
-
-    /// Enhanced sanitization that combines LLM intelligence with fallback rules
-    private func sanitizeForDALLE3(_ prompt: String) async -> String {
-        let llmSanitized: String
-        if useLLMSanitizer {
-            llmSanitized = await sanitizePromptWithLLM(prompt)
-        } else {
-            llmSanitized = prompt // skip LLM step
-        }
-        
-        // Apply additional safety checks as fallback
-        var finalSanitized = llmSanitized
-        
-        // Emergency fallback replacements for any missed terms
-        let emergencyReplacements = [
-            ("Caucasian", "light-skinned"),
-            ("Black person", "person with dark skin"),
-            ("Indian", "South Asian"),
-            ("Hispanic", "Latino"),
-            ("age 17", "teenage"),
-            ("age 21", "young adult"),
-            ("years old", "year old"),
-            ("NEGATIVE:", "Style note:"),
-            ("Avoid:", "Preferring:"),
-            ("must not", "should avoid"),
-            ("never", "rarely")
-        ]
-        
-        for (problematic, safe) in emergencyReplacements {
-            finalSanitized = finalSanitized.replacingOccurrences(of: problematic, with: safe, options: .caseInsensitive)
-        }
-        
-        // Final cleanup
-        finalSanitized = finalSanitized.replacingOccurrences(of: "  ", with: " ")
-        finalSanitized = finalSanitized.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        return finalSanitized
-    }
-
     private func negativesOpposite(to identity: [String]) -> String {
         let idLower = identity.joined(separator: ", ").lowercased()
         var bans: Set<String> = []
@@ -2840,51 +2694,6 @@ class StoryPageViewModel: ObservableObject {
         let positive = "MAIN CHARACTER: The narrator is a person with \(mainCharacterDescription). By default, family members and close friends should share similar skin tone and features, UNLESS specific descriptions are provided for them in SCENE CHARACTERS below."
         
         return positive + " "
-    }
-    
-    /// Infers gender from common names when gender field is empty
-    /// Gives the system creative freedom to infer gender from names like "Melody" (female) or "Caleb" (male)
-    private func inferGenderFromName(_ name: String) -> String? {
-        let firstName = name.components(separatedBy: " ").first?.lowercased() ?? name.lowercased()
-        
-        // Common feminine names
-        let feminineNames: Set<String> = [
-            "melody", "sarah", "emma", "olivia", "sophia", "isabella", "mia", "charlotte",
-            "amelia", "harper", "evelyn", "abigail", "emily", "elizabeth", "sofia", "avery",
-            "ella", "scarlett", "grace", "victoria", "riley", "aria", "lily", "aurora",
-            "zoey", "hannah", "layla", "penelope", "chloe", "nora", "hazel", "luna",
-            "savannah", "brooklyn", "leah", "zoe", "stella", "maya", "audrey", "claire",
-            "lucy", "anna", "caroline", "genesis", "aaliyah", "kennedy", "kinsley",
-            "allison", "natalie", "madelyn", "naomi", "eva", "alice",
-            "jessica", "jennifer", "ashley", "amanda", "stephanie", "nicole", "rachel",
-            "samantha", "katherine", "christine", "helen", "deborah", "laura", "karen",
-            "nancy", "betty", "dorothy", "lisa", "sandra", "donna", "carol", "ruth",
-            "sharon", "michelle", "kimberly", "amy", "angela", "melissa", "brenda",
-            "maria", "rosa", "priya", "ananya", "anika", "pooja", "neha", "kavya"
-        ]
-        
-        // Common masculine names  
-        let masculineNames: Set<String> = [
-            "caleb", "james", "john", "robert", "michael", "william", "david", "joseph",
-            "charles", "thomas", "daniel", "matthew", "anthony", "mark", "donald", "steven",
-            "paul", "andrew", "joshua", "kenneth", "kevin", "brian", "george", "timothy",
-            "ronald", "edward", "jason", "jeffrey", "ryan", "jacob", "gary", "nicholas",
-            "eric", "jonathan", "stephen", "larry", "justin", "scott", "brandon", "benjamin",
-            "samuel", "raymond", "gregory", "frank", "alexander", "patrick", "jack", "dennis",
-            "jerry", "tyler", "aaron", "jose", "adam", "nathan", "henry", "douglas", "zachary",
-            "peter", "kyle", "noah", "ethan", "jeremy", "walter", "christian", "keith",
-            "roger", "terry", "austin", "sean", "gerald", "carl", "dylan", "harold", "jordan",
-            "jesse", "bryan", "lawrence", "arthur", "gabriel", "bruce", "albert", "willie",
-            "alan", "wayne", "elijah", "eugene", "russell", "bobby", "mason", "philip",
-            "louis", "harry", "arjun", "raj", "vikram", "rahul", "amit", "sanjay", "ravi"
-        ]
-        
-        if feminineNames.contains(firstName) {
-            return "female"
-        } else if masculineNames.contains(firstName) {
-            return "male"
-        }
-        return nil  // Unknown - let AI decide
     }
 
     private func normalizeFaceDescriptor(_ descriptor: String, explicitGender: String) -> String {
@@ -3878,8 +3687,7 @@ class StoryPageViewModel: ObservableObject {
     private func narratorScore(
         _ char: CharacterDetails.Character,
         in details: CharacterDetails,
-        derivedNarratorName: String?,
-        sceneTextForNarratorScoring: String? = nil
+        derivedNarratorName: String?
     ) -> Int {
         var score = 0
         let name = char.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3927,46 +3735,7 @@ class StoryPageViewModel: ObservableObject {
             }
         }
         
-        // Weak: scene analysis (+15)
-        if let sceneText = sceneTextForNarratorScoring?.lowercased() {
-            let otherCharNames = details.characters
-                .filter { $0.id != char.id }
-                .map { $0.name.lowercased() }
-            
-            // If scene says "narrator and [otherChar]" and this char isn't mentioned, likely narrator
-            for otherName in otherCharNames {
-                if sceneText.contains("narrator") && sceneText.contains(otherName) && !sceneText.contains(name) {
-                    score += 15
-                    break
-                }
-            }
-            
-            // Also check: if scene says "only X people: narrator and [otherChar]", the unmentioned char is narrator
-            if sceneText.contains("only") && sceneText.contains("people") {
-                let mentionedChars = otherCharNames.filter { sceneText.contains($0) }
-                if mentionedChars.count == 1 && !sceneText.contains(name) {
-                    score += 15
-                }
-            }
-        }
-        
         return score
-    }
-    
-    /// Multi-filter detection: checks if a character is the narrator/main character
-    /// Uses confidence scoring threshold (>= 30) for robust detection
-    private func isNarratorCharacter(
-        _ char: CharacterDetails.Character,
-        in details: CharacterDetails,
-        derivedNarratorName: String?,
-        sceneTextForNarratorScoring: String? = nil
-    ) -> Bool {
-        narratorScore(
-            char,
-            in: details,
-            derivedNarratorName: derivedNarratorName,
-            sceneTextForNarratorScoring: sceneTextForNarratorScoring
-        ) >= 30
     }
     
     private func traitListFromCharacter(_ character: CharacterDetails.Character) -> [String] {
@@ -4227,42 +3996,6 @@ class StoryPageViewModel: ObservableObject {
         return "Character \(characterIndex): \(profileName) - narrator - \(traits.joined(separator: ", "))"
     }
 
-    /// Text-only and headshot policy for the memoir subject, injected into every interior image prompt when the narrator may appear.
-    private func narratorIdentityPromptSection(narratorPresence: NarratorPresence, hasHeadshot: Bool) -> String? {
-        guard narratorPresence != .likelyAbsent else { return nil }
-        var lines: [String] = []
-        if hasHeadshot {
-            lines.append("A headshot reference image is attached. Use it as the primary face and appearance anchor for the memoir subject when they appear.")
-        } else {
-            lines.append("No headshot reference image is attached. Follow the text guidance below for the memoir subject; do not substitute a different ethnicity or regional appearance than specified.")
-        }
-        if let name = profileName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
-            lines.append("Memoir subject display name (for 'I' / pronoun mapping): \(name).")
-        }
-        var bits: [String] = []
-        if let vision = faceDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !vision.isEmpty {
-            bits.append(vision)
-        }
-        let eth = ethnicity.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !eth.isEmpty {
-            bits.append("Ethnicity / heritage (for skin tone and features): \(eth). Render with appropriate skin tone, facial features, and hair characteristics for this heritage.")
-        }
-        let gen = gender.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !gen.isEmpty {
-            bits.append("presenting as \(gen.lowercased())")
-        }
-        let other = otherDetails.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !other.isEmpty {
-            bits.append(translateRaceToDescriptor(other))
-        }
-        if !bits.isEmpty {
-            lines.append("Apply when the memoir subject or narrator is shown: " + bits.joined(separator: "; ") + ".")
-        } else if !hasHeadshot {
-            lines.append("If CHARACTER CARDS list ethnicity or heritage for a named person, render it consistently.")
-        }
-        return lines.joined(separator: "\n")
-    }
-
     /// Builds final character lines using explicit character-card details with minimal mutation.
     private func buildCharacterList(for entry: MemoryEntry, sceneDescription: String? = nil, includeNarrator: Bool) -> String {
         var characterLines: [String] = []
@@ -4282,8 +4015,8 @@ class StoryPageViewModel: ObservableObject {
             let enrichedDetails = CharacterDetails(characters: enrichedDetailsCharacters)
             
             let narratorCandidate = enrichedDetails.characters.max { lhs, rhs in
-                narratorScore(lhs, in: enrichedDetails, derivedNarratorName: derivedNarratorName, sceneTextForNarratorScoring: sceneDescription) <
-                narratorScore(rhs, in: enrichedDetails, derivedNarratorName: derivedNarratorName, sceneTextForNarratorScoring: sceneDescription)
+                narratorScore(lhs, in: enrichedDetails, derivedNarratorName: derivedNarratorName) <
+                narratorScore(rhs, in: enrichedDetails, derivedNarratorName: derivedNarratorName)
             }
             let narratorId = includeNarrator ? narratorCandidate?.id : nil
 
@@ -4449,778 +4182,8 @@ class StoryPageViewModel: ObservableObject {
         style.memoryIllustrationStyleDescription(customText: custom)
     }
     
-    private func styleDescriptorLine(for style: ArtStyle, custom: String?) -> String {
-        switch style {
-        case .kidsBook:
-            return "Style: Children's book watercolor; simple shapes; gentle colors; no photorealism."
-        case .comic:
-            return "Style: Comic book art; bold ink outlines; halftone shading; vibrant colors; dynamic poses."
-        case .realistic:
-            return "Style: Soft naturalistic illustration; realistic proportions; gentle lighting."
-        case .custom:
-            let text = (custom ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? "Style: Artistic illustration." : "Style: \(text)."
-        }
-    }
-    
-    /// Sends prompt to the selected Gemini image model for image generation
-    private func generateImageWithGemini(
-        _ prompt: String,
-        size: String = "1792x1024",
-        referenceImages: [UIImage] = []
-    ) async throws -> UIImage? {
-        print("🔍 Checking Gemini service availability...")
-        print("🔍 geminiImageSvc is \(geminiImageSvc != nil ? "available" : "nil")")
-        
-        guard let geminiSvc = geminiImageSvc else {
-            print("⚠️ Gemini service not available (geminiImageSvc is nil), skipping")
-            return nil
-        }
-        
-        let model = effectiveGeminiModel
-        print("🚀 Using Gemini model \(model) for image generation with \(referenceImages.count) reference image(s)...")
-        return try await geminiSvc.generateImage(
-            prompt: prompt,
-            size: size,
-            model: model,
-            referenceImages: referenceImages
-        )
-    }
-
     private var imageGenerationSizeForCurrentStyle: String {
         currentArtStyle == .kidsBook ? "4:3" : "1792x1024"
-    }
-    
-    /// Sends prompt directly to GPT-5 - GPT-5 handles everything and returns the image
-    /// Just like ChatGPT web - no system prompts, no function calling setup, just the prompt
-    private func generateImageWithGPT5(_ prompt: String, size: String = "1792x1024") async throws -> UIImage? {
-        var body: [String: Any] = [
-            "model": "gpt-5",
-            "messages": [
-                ["role": "user", "content": prompt]
-            ]
-            // No system prompt, no tools, no instructions - just the prompt
-        ]
-        
-        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-        req.httpMethod = "POST"
-        req.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
-        req.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        // Set timeout to 3 minutes - image generation takes a while
-        req.timeoutInterval = 180.0
-        
-        print("🚀 Sending prompt directly to GPT-5 (no instructions, no function calling)...")
-        
-        do {
-            let startedAt = Date()
-            let (data, response) = try await URLSession.shared.data(for: req)
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                print("❌ GPT-5: Invalid response type")
-                return nil
-            }
-            await logOpenAIChatTelemetry(
-                model: "gpt-5",
-                promptChars: prompt.count,
-                responseData: data,
-                statusCode: httpResponse.statusCode,
-                success: (200...299).contains(httpResponse.statusCode),
-                startedAt: startedAt
-            )
-            
-            print("🔍 GPT-5 HTTP status: \(httpResponse.statusCode)")
-            
-            // If GPT-5 doesn't exist or doesn't support this, fall back
-            if httpResponse.statusCode == 404 {
-                let errorText = String(data: data, encoding: .utf8) ?? "Unknown error"
-                print("⚠️ GPT-5 model not found (404). Response: \(errorText)")
-                print("⚠️ GPT-5 not available, will fall back to GPT-4o enhancement + DALL-E 3")
-                return nil
-            }
-            
-            guard httpResponse.statusCode == 200 else {
-                let errorText = String(data: data, encoding: .utf8) ?? "Unknown error"
-                print("❌ GPT-5 returned error \(httpResponse.statusCode): \(errorText)")
-                return nil
-            }
-            
-            print("✅ GPT-5 request succeeded, parsing response...")
-        
-            // Parse response - GPT-5 might return image URL directly, function call, or content
-            let responseText = String(data: data, encoding: .utf8) ?? ""
-            print("🔍 GPT-5 raw response (first 1000 chars): \(responseText.prefix(1000))")
-            
-            struct ToolCall: Decodable {
-                let id: String?
-                let type: String
-                let function: FunctionCall?
-            }
-            
-            struct FunctionCall: Decodable {
-                let name: String?
-                let arguments: String?
-            }
-            
-            struct Message: Decodable {
-                let role: String?
-                let content: String?
-                let tool_calls: [ToolCall]?
-            }
-            
-            struct Choice: Decodable {
-                let message: Message
-            }
-            
-            struct Root: Decodable {
-                let choices: [Choice]
-            }
-            
-            let result = try JSONDecoder().decode(Root.self, from: data)
-            
-            // Check if GPT-5 returned a function call (it might do this automatically)
-            if let toolCalls = result.choices.first?.message.tool_calls,
-               let firstCall = toolCalls.first,
-               firstCall.type == "function",
-               let argsString = firstCall.function?.arguments,
-               let argsData = argsString.data(using: .utf8),
-               let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any] {
-                
-                // If GPT-5 called generate_image function, extract the prompt and call DALL-E 3
-                if let dallePrompt = args["prompt"] as? String {
-                    print("✅ GPT-5 automatically called image generation, using optimized prompt")
-                    let imageSvc = OpenAIImageService(apiKey: openAIKey)
-                    let images = try await imageSvc.generateImages(
-                        prompt: dallePrompt,
-                        referencedImageIDs: [],
-                        n: 1,
-                        size: args["size"] as? String ?? size
-                    )
-                    return images.first
-                }
-            }
-            
-            // Check if GPT-5 returned image URL directly in content
-            if let content = result.choices.first?.message.content {
-                // Try to extract image URL from content
-                if let urlRange = content.range(of: "https://[^\\s]+", options: .regularExpression),
-                   let imageURL = URL(string: String(content[urlRange])) {
-                    print("✅ GPT-5 returned image URL directly, downloading...")
-                    let (imageData, _) = try await URLSession.shared.data(from: imageURL)
-                    return UIImage(data: imageData)
-                }
-            }
-            
-            print("⚠️ GPT-5 response format not recognized, falling back")
-            return nil
-            
-        } catch let error as NSError {
-            if error.code == NSURLErrorTimedOut {
-                print("⏱️ GPT-5 request timed out after 3 minutes")
-                print("💡 This likely means GPT-5 is not available or the model name is incorrect")
-            } else {
-                print("❌ GPT-5 request failed with error: \(error.localizedDescription)")
-                print("❌ Error code: \(error.code), domain: \(error.domain)")
-            }
-            return nil
-        } catch {
-            print("❌ GPT-5 request failed with unknown error: \(error)")
-            return nil
-        }
-    }
-    
-    /// Fallback: Rewrites/enhances the prompt using GPT-4o if GPT-5 doesn't work
-    private func enhancePromptForDALLE3(_ prompt: String) async throws -> String {
-        let systemPrompt = """
-        You are an expert at creating image generation prompts for DALL-E 3. Your job is to rewrite the given prompt to be more effective, clear, and optimized for image generation.
-        
-        CRITICAL RULES:
-        - PRESERVE the character list section (Character 1, Character 2, etc.) EXACTLY as provided - do not remove or modify it
-        - PRESERVE the STYLE section exactly as provided
-        - Only enhance the scene description portion for better visual clarity
-        - Improve clarity and visual specificity in the scene description
-        - Ensure the prompt flows naturally
-        - Do not add details that weren't in the original prompt
-        - Do not remove important character or style information
-        
-        The prompt structure should remain: Character list, then scene description, then STYLE section.
-        
-        Return ONLY the enhanced prompt, no explanations or extra text.
-        """
-        
-        let body: [String: Any] = [
-            "model": "gpt-4o",
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": prompt]
-            ],
-            "temperature": 0.3
-        ]
-        
-        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-        req.httpMethod = "POST"
-        req.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
-        req.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        print("✨ Enhancing prompt with GPT-4o (fallback)...")
-        let startedAt = Date()
-        let (data, response) = try await URLSession.shared.data(for: req)
-        let statusCode = (response as? HTTPURLResponse)?.statusCode
-        
-        struct Choice: Decodable { struct Msg: Decodable { let content: String? }; let message: Msg }
-        struct Root: Decodable { let choices: [Choice] }
-        
-        let enhancedPrompt = try JSONDecoder().decode(Root.self, from: data).choices.first?.message.content ?? prompt
-        print("✨ Enhanced prompt → \(enhancedPrompt.prefix(200))...")
-        await logOpenAIChatTelemetry(
-            model: "gpt-4o",
-            promptChars: prompt.count,
-            responseData: data,
-            statusCode: statusCode,
-            success: true,
-            startedAt: startedAt
-        )
-        return enhancedPrompt
-    }
-    
-    /// Assembles a concise structured prompt: style + no-text rule first, then memory/scene, then reminders.
-    private func assembleFinalPrompt(
-        memoryText: String,
-        characters: String,
-        narratorPresence: NarratorPresence,
-        sceneDescription: String,
-        style: ArtStyle,
-        customStyle: String?,
-        hasHeadshot: Bool
-    ) -> String {
-        var parts: [String] = []
-        let styleText = extractStyleRequirement(for: style, custom: customStyle)
-
-        parts.append("IMAGE STYLE (high priority, must follow): \(styleText)")
-        parts.append(ArtStyle.coverStyleBindingInstruction)
-        parts.append("")
-        if hasHeadshot {
-            if style == .kidsBook {
-                parts.append("STYLE OVERRIDE (highest priority): The attached reference photo is for IDENTITY/LIKENESS ONLY. RE-RENDER the person in the IMAGE STYLE above. Do NOT preserve photographic skin texture, lens depth-of-field, photo lighting, fabric weave, or HDR tonality. Pose and clothing may be illustrative; only the face must read as the same person as the reference.")
-            } else {
-                parts.append("STYLE OVERRIDE (highest priority): The final rendering MUST match the IMAGE STYLE above. The attached reference photo is for IDENTITY/LIKENESS ONLY — do NOT copy its photographic textures. Do NOT default to watercolor, children's-book, or storybook rendering. Pose and clothing may be illustrative; only the face must read as the same person as the reference. Render strictly in: \(styleText)")
-            }
-            parts.append("")
-        }
-        parts.append("TEXT RENDERING RULE (mandatory): Do not render any words, letters, numbers, titles, chapter headings, captions, page numbers, QR codes, watermarks, signs, logos, or any typographic marks anywhere in the image. The output must be pure illustration with zero text.")
-        if style == .kidsBook {
-            parts.append("FACIAL DETAIL RULE: Eyes warm, painted, and expressive in a soft children's-book way. Suggest iris and pupil with gentle painted shapes, not photographic detail. Faces stay soft and hand-drawn.")
-        }
-        parts.append("")
-        parts.append("MEMORY TEXT (do not contradict): \(memoryText)")
-        parts.append("")
-
-        // Character cards (minimal mutation)
-        if !characters.isEmpty {
-            parts.append("CHARACTER CARDS:")
-            parts.append(characters)
-            parts.append("")
-        }
-
-        parts.append("NARRATOR PRESENCE HINT: \(narratorPresence.rawValue)")
-        parts.append("")
-        if let identityBlock = narratorIdentityPromptSection(narratorPresence: narratorPresence, hasHeadshot: hasHeadshot) {
-            parts.append("NARRATOR APPEARANCE (likeness policy + profile notes):")
-            parts.append(identityBlock)
-            parts.append("")
-        }
-
-        parts.append("SCENE SUMMARY: \(sceneDescription)")
-        parts.append("")
-
-        parts.append("STYLE: \(styleText)")
-        if let styleRefHint = styleReferencePromptHint(for: style) {
-            parts.append("")
-            parts.append(styleRefHint)
-        }
-        if narratorPresence != .likelyAbsent {
-            parts.append("")
-            parts.append("NARRATOR REFERENCE IMAGE RULE: If a narrator headshot reference image is attached, use it as the primary visual identity anchor for the narrator whenever the narrator is present or plausibly present in this memory.")
-            parts.append("NARRATOR IDENTITY RULE: If a narrator reference image is attached, preserve that person's core identity. You may adapt apparent age to fit memory-era cues without changing who the narrator is.")
-        }
-
-        // Add realistic face blurring if needed
-        if style == .realistic {
-            parts.append("")
-            parts.append("Camera pulled back, face partly turned away or softly out of focus so exact features are not discernible. Or another method where the face isn't perfectly clear.")
-        }
-
-        parts.append("")
-        parts.append("STYLE REMINDER (must follow):")
-        parts.append(styleText)
-
-        return parts.joined(separator: "\n")
-    }
-    
-    /// Extracts the key visual scene from a memory - identifies the most important moment and describes it visually
-    /// Trusts the LLM to be smart about condensing long memories or using them fully
-    private func extractVisualScene(memory rawText: String, characterContext: String = "") async throws -> String {
-        // Build character guidance if provided
-        let characterGuidance: String
-        if !characterContext.isEmpty {
-            characterGuidance = """
-            
-            CHARACTER INFORMATION PROVIDED:
-            \(characterContext)
-            
-            Use the exact physical descriptions provided above for each character when describing the scene.
-            """
-        } else {
-            characterGuidance = ""
-        }
-        
-        // Extract first character name (they are the narrator)
-        let narratorName: String? = {
-            // Parse "SCENE CHARACTERS: Name1 - ...; Name2 - ..."
-            if characterContext.hasPrefix("SCENE CHARACTERS:") {
-                let afterPrefix = characterContext.dropFirst("SCENE CHARACTERS:".count).trimmingCharacters(in: .whitespaces)
-                if let dashIndex = afterPrefix.firstIndex(of: "-") {
-                    return String(afterPrefix[..<dashIndex]).trimmingCharacters(in: .whitespaces)
-                }
-            }
-            return nil
-        }()
-        
-        let narratorGuidance: String
-        if let name = narratorName {
-            narratorGuidance = """
-            
-            NARRATOR IDENTITY: The first character listed (\(name)) IS the narrator/main character telling this story.
-            - When the memory says "I", "me", or "my", that refers to \(name).
-            - DO NOT say "the narrator and \(name)" - they are the SAME person.
-            - Use \(name)'s name directly instead of "the narrator".
-            """
-        } else {
-            narratorGuidance = ""
-        }
-        
-        let systemPrompt = """
-        You are a visual scene extractor. Extract the key visual moment from this memory.
-        
-        CRITICAL RULES:
-        1. **ACCURACY IS PARAMOUNT**: The number of people must match EXACTLY.
-           - Example: "Me and 4 roommates" = 5 people total.
-           - IMPORTANT: The narrator IS one of the named characters (usually the first one). Do NOT count them twice.
-           - If the narrator is "Melody" and the memory says "I and Caleb", that's 2 people (Melody + Caleb), NOT 3.
-        2. **Identify the Key Scene**: Pick the most important visual moment.
-        3. **Keep it Simple but Complete**: Describe the setting, who is there, and what they are doing.
-        4. **No Redundant Descriptions**: Do not describe physical appearance (hair, skin, etc.) as that is handled separately. Just use names.
-        5. **Direct Style**: Use simple, factual sentences.
-        6. **Body Position Accuracy**: Preserve the EXACT body positions described in the memory (sitting, standing, laying, kneeling, running, etc.). If the memory says "sitting", the scene MUST describe them sitting. If "laying down", they MUST be laying down. Never change or omit described postures.
-        \(narratorGuidance)
-        \(characterGuidance)
-        
-        Output: One paragraph describing the scene action and participants accurately.
-        """
-        
-        let body: [String: Any] = [
-            "model": "gpt-4o-mini",
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": rawText]
-            ],
-            "temperature": 0.1 // Low temperature - keep it minimal and factual
-        ]
-        
-        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-        req.httpMethod = "POST"
-        req.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
-        req.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        print("🎨 Extracting visual scene from memory...")
-        let startedAt = Date()
-        let (data, response) = try await URLSession.shared.data(for: req)
-        let statusCode = (response as? HTTPURLResponse)?.statusCode
-        
-        struct Choice: Decodable { struct Msg: Decodable { let content: String? }; let message: Msg }
-        struct Root: Decodable { let choices: [Choice] }
-        
-        let sceneDescription = try JSONDecoder().decode(Root.self, from: data).choices.first?.message.content ?? rawText
-        print("📝 Visual scene → \(sceneDescription)")
-        await logOpenAIChatTelemetry(
-            model: "gpt-4o-mini",
-            promptChars: rawText.count,
-            responseData: data,
-            statusCode: statusCode,
-            success: true,
-            startedAt: startedAt
-        )
-        return sceneDescription
-    }
-
-    /// One memory’s storybook pipeline result (parallel generation merges by `index`).
-    private struct StorybookMemoryPipelineOutcome {
-        let index: Int
-        let generatedImage: UIImage?
-        let skipped: SkippedStoryImageMemory?
-        let appendedPageItems: [PageItem]
-    }
-
-    /// Bounded concurrent memories during storybook generation (OpenAI + Gemini). Higher values increase 429/OOM risk.
-    private static let storybookMemoryParallelism = 3
-
-    /// Runs the same per-memory steps as the original sequential loop; must be called from `MainActor`.
-    private func runStorybookMemoryPipeline(
-        index idx: Int,
-        entry: MemoryEntry,
-        sortedEntriesCount: Int,
-        totalMemories: Int,
-        artStyleForGeneration: ArtStyle,
-        customArtStyleTextSnapshot: String,
-        subjectPhotoSnapshot: UIImage?
-    ) async throws -> StorybookMemoryPipelineOutcome {
-        guard let entryID = entry.id else {
-            return StorybookMemoryPipelineOutcome(index: idx, generatedImage: nil, skipped: nil, appendedPageItems: [])
-        }
-        let raw = entry.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !raw.isEmpty else {
-            return StorybookMemoryPipelineOutcome(index: idx, generatedImage: nil, skipped: nil, appendedPageItems: [])
-        }
-
-        StorybookGenLog.fence("MEMORY PIPELINE (on-device) \(idx + 1)/\(sortedEntriesCount) id=\(entryID.uuidString.prefix(8))…")
-        StorybookGenLog.verboseLine("artStyle=\(artStyleForGeneration.rawValue) customStyleLen=\(customArtStyleTextSnapshot.count) hasProfilePhoto=\(subjectPhotoSnapshot != nil)")
-        StorybookGenLog.verboseLine("memoryText (\(raw.count) chars): \(String(raw.prefix(500)))\(raw.count > 500 ? "…" : "")")
-
-        let characterContextForExtraction = buildCharacterContext(for: entry)
-        StorybookGenLog.verboseLine("characterContextForExtraction (\(characterContextForExtraction.count) chars): \(characterContextForExtraction)")
-        let sceneDescription: String
-        if let s1 = try? await extractVisualScene(memory: raw, characterContext: characterContextForExtraction) {
-            sceneDescription = s1
-        } else {
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            if let s2 = try? await extractVisualScene(memory: raw, characterContext: characterContextForExtraction) {
-                sceneDescription = s2
-            } else {
-                let label = memoryDisplayLabel(for: entry, fallbackOrdinal: idx + 1)
-                let skipped = SkippedStoryImageMemory(
-                    id: entryID,
-                    memoryLabel: label,
-                    detail: "Couldn’t read this memory’s visual scene. Try again in a moment."
-                )
-                return StorybookMemoryPipelineOutcome(index: idx, generatedImage: nil, skipped: skipped, appendedPageItems: [])
-            }
-        }
-        let extracted = await extractTitleAndCharacters(from: raw, characterContext: characterContextForExtraction)
-        StorybookGenLog.verboseLine("extractTitleAndCharacters → title=\"\(extracted.title)\" featuring=\"\(extracted.featuring)\"")
-
-        let narratorDecision = inferNarratorPresence(memoryText: raw, entry: entry)
-        let narratorPresence = narratorDecision.presence
-        print("🧭 Narrator presence classification: \(narratorPresence.rawValue) [score: \(narratorDecision.confidenceScore), reason: \(narratorDecision.reason)]")
-        let includeNarrator = narratorPresence.shouldAttachHeadshot
-        if narratorDecision.firstPersonDetected {
-            print("🧷 Narrator reference trigger: first-person cues detected; score = \(narratorDecision.confidenceScore); headshot attachment enabled = \(includeNarrator)")
-        } else {
-            print("🧷 Narrator reference trigger: \(narratorDecision.reason); score = \(narratorDecision.confidenceScore); headshot attachment enabled = \(includeNarrator)")
-        }
-
-        let characterList = buildCharacterList(
-            for: entry,
-            sceneDescription: sceneDescription,
-            includeNarrator: includeNarrator
-        )
-        StorybookGenLog.verboseLine("characterList (\(characterList.count) chars):\n\(characterList)")
-
-        let assembledPrompt = assembleFinalPrompt(
-            memoryText: raw,
-            characters: characterList,
-            narratorPresence: narratorPresence,
-            sceneDescription: sceneDescription,
-            style: artStyleForGeneration,
-            customStyle: customArtStyleTextSnapshot,
-            hasHeadshot: subjectPhotoSnapshot != nil
-        )
-
-        print("🖼️ ASSEMBLED PROMPT (\(assembledPrompt.count) chars) ►", assembledPrompt)
-        StorybookGenLog.line("ASSEMBLED_PROMPT length=\(assembledPrompt.count) (see line above: 🖼️ ASSEMBLED PROMPT)")
-
-        print("🔍 Attempting image generation with Gemini only (no fallback)...")
-        let headshotReferences: [UIImage] = includeNarrator ? (subjectPhotoSnapshot.map { [$0] } ?? []) : []
-        let styleReferenceImage = loadSelectedStyleReferenceIfNeeded(lockedArtStyle: artStyleForGeneration)
-        var referenceImages = headshotReferences
-        if let styleReferenceImage {
-            referenceImages.append(styleReferenceImage.image)
-        }
-        print("🖌️ Style reference profile selected: \(styleReferenceProfile.rawValue)")
-        print("🖼️ Headshot attachment count for generation: \(headshotReferences.count)")
-        print("🖼️ Style reference file for generation: \(styleReferenceImage?.filename ?? "none")")
-        print("🖼️ Style reference attachment count for generation: \(styleReferenceImage == nil ? 0 : 1)")
-        print("🖼️ Total reference attachment count for generation: \(referenceImages.count)")
-        let geminiSize = artStyleForGeneration == .kidsBook ? "4:3" : "1792x1024"
-        var geminiImageErrorDescription: String?
-        let img: UIImage?
-        do {
-            img = try await generateImageWithGemini(
-                assembledPrompt,
-                size: geminiSize,
-                referenceImages: referenceImages
-            )
-        } catch {
-            geminiImageErrorDescription = error.localizedDescription
-            print("⚠️ Gemini image generation threw for memory \(idx + 1) of \(sortedEntriesCount): \(error.localizedDescription)")
-            img = nil
-        }
-
-        guard let img else {
-            let label = memoryDisplayLabel(for: entry, fallbackOrdinal: idx + 1)
-            let detail: String
-            if let geminiImageErrorDescription {
-                detail = geminiImageErrorDescription
-            } else if geminiImageSvc == nil {
-                detail = "Image generation is not configured (missing Gemini API key or service)."
-            } else {
-                detail = "The illustration request did not return an image. Try generating the storybook again."
-            }
-            let skipped = SkippedStoryImageMemory(id: entryID, memoryLabel: label, detail: detail)
-            print("⏭️ Skipping memory \(idx + 1) (no image); continuing with remaining memories.")
-            return StorybookMemoryPipelineOutcome(index: idx, generatedImage: nil, skipped: skipped, appendedPageItems: [])
-        }
-
-        let isKids = artStyleForGeneration == .kidsBook
-        let exportHeight: CGFloat = isKids ? 612 : 792
-        let exportWidth: CGFloat = isKids ? 792 : 612
-        let memoryPrompt = entry.prompt?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let questionDriven = isQuestionDrivenMemory(entry)
-        let displayTitle = questionDriven ? (memoryPrompt?.isEmpty == false ? memoryPrompt : extracted.title) : extracted.title
-        let displaySubtitle = questionDriven ? extracted.title : nil
-
-        let textPages = paginateText(
-            raw,
-            title: displayTitle,
-            subtitle: displaySubtitle,
-            pageHeight: exportHeight,
-            pageWidth: exportWidth,
-            memoryID: entryID
-        )
-        var newPages: [PageItem] = textPages
-
-        let llmBarTitle = extracted.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let illustrationBarTitle = llmBarTitle.isEmpty ? displayTitle : llmBarTitle
-        newPages.append(.illustration(image: img, memoryID: entryID, title: illustrationBarTitle))
-
-        return StorybookMemoryPipelineOutcome(index: idx, generatedImage: img, skipped: nil, appendedPageItems: newPages)
-    }
-
-    /// A temporary struct to hold a memory and its inferred chronological age.
-    private struct ChronologicalMemory {
-        let entry: MemoryEntry
-        let age: Int
-    }
-
-    private struct TitleAndCharacters: Codable {
-        let title: String
-        let featuring: String
-    }
-
-    private func extractTitleAndCharacters(from memoryText: String, characterContext: String) async -> TitleAndCharacters {
-        let systemPrompt = """
-        You are a book editor. Your job is to create a title and a 'featuring' list for a memory.
-        
-        1. Title: Create a short, engaging title (max 5 words).
-        2. Featuring: List the people in the memory. Format: "Feat: [List]".
-           - Use "me" for the narrator.
-           - Use first names if known.
-           - If names are unknown, count them (e.g., "2 friends", "my mom").
-           - Format example: "Feat: me, Robbie, and 2 friends" or "Feat: me and my mom".
-           - Keep it concise.
-        
-        Return ONLY JSON: { "title": "...", "featuring": "..." }
-        """
-        
-        let prompt = """
-        Memory: \(memoryText)
-        
-        Known Characters: \(characterContext)
-        
-        Extract title and featuring list.
-        """
-
-        let body: [String: Any] = [
-            "model": "gpt-4o-mini",
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": prompt]
-            ],
-            "temperature": 0.3,
-            "max_tokens": 100,
-            "response_format": ["type": "json_object"]
-        ]
-
-        do {
-            let startedAt = Date()
-            var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-            req.httpMethod = "POST"
-            req.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
-            req.addValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-            let (data, response) = try await URLSession.shared.data(for: req)
-            let statusCode = (response as? HTTPURLResponse)?.statusCode
-            
-            struct Response: Decodable {
-                struct Choice: Decodable {
-                    struct Message: Decodable { let content: String }
-                    let message: Message
-                }
-                let choices: [Choice]
-            }
-            
-            let decodedResponse = try JSONDecoder().decode(Response.self, from: data)
-            if let content = decodedResponse.choices.first?.message.content,
-               let jsonData = content.data(using: .utf8),
-               let result = try? JSONDecoder().decode(TitleAndCharacters.self, from: jsonData) {
-                await logOpenAIChatTelemetry(
-                    model: "gpt-4o-mini",
-                    promptChars: prompt.count,
-                    responseData: data,
-                    statusCode: statusCode,
-                    success: true,
-                    startedAt: startedAt
-                )
-                return result
-            }
-        } catch {
-            print("⚠️ Failed to extract title/characters: \(error)")
-        }
-        
-        return TitleAndCharacters(title: "A Special Memory", featuring: "")
-    }
-
-    private func explicitAge(from memoryText: String) -> Int? {
-        let lower = memoryText.lowercased()
-        let patterns = [
-            #"\b(?:i was|when i was|at age|age|turned|turning)\s+(\d{1,2})\b"#,
-            #"\b(\d{1,2})\s*(?:years old|year old|yrs old)\b"#
-        ]
-        for pattern in patterns {
-            if let range = lower.range(of: pattern, options: .regularExpression) {
-                let match = String(lower[range])
-                if let number = match.components(separatedBy: CharacterSet.decimalDigits.inverted)
-                    .compactMap({ Int($0) })
-                    .first,
-                   (1...110).contains(number) {
-                    return number
-                }
-            }
-        }
-
-        let wordAges: [String: Int] = [
-            "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-            "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-            "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
-            "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20
-        ]
-        let wordPattern = #"\b(?:i was|when i was|at age|age|turned|turning)\s+([a-z\-]+)\b"#
-        if let range = lower.range(of: wordPattern, options: .regularExpression) {
-            let match = String(lower[range]).replacingOccurrences(of: "-", with: " ")
-            for (word, value) in wordAges where match.contains(word) {
-                return value
-            }
-        }
-        return nil
-    }
-
-    private func heuristicAgeFromLifeStage(memoryText: String) -> Int? {
-        let lower = memoryText.lowercased()
-
-        if lower.contains("kindergarten") { return 5 }
-        if lower.contains("elementary school") || lower.contains("primary school") { return 9 }
-        if lower.contains("middle school") || lower.contains("junior high") { return 12 }
-        if lower.contains("high school") || lower.contains("freshman year") || lower.contains("sophomore year") || lower.contains("junior year") || lower.contains("senior year") { return 16 }
-        if lower.contains("learned to drive") || lower.contains("learning to drive") || lower.contains("driver's license") || lower.contains("driving test") { return 16 }
-        if lower.contains("college") || lower.contains("university") || lower.contains("graduated college") { return 22 }
-        if lower.contains("first job") || lower.contains("my first job") || lower.contains("growing up") { return 18 }
-        if lower.contains("got married") || lower.contains("our wedding") || lower.contains("married") { return 28 }
-        if lower.contains("first child") || lower.contains("my daughter was born") || lower.contains("my son was born") { return 30 }
-        if lower.contains("first grandchild") || lower.contains("grandchild was born") || lower.contains("became a grandparent") { return 56 }
-        if lower.contains("retired") || lower.contains("retirement") { return 66 }
-
-        return nil
-    }
-
-    /// Uses deterministic + LLM + heuristic inference to extract user's age from memory text.
-    private func extractAge(from memoryText: String) async -> Int? {
-        if let explicit = explicitAge(from: memoryText) {
-            print("🧠 Age inference source: regex -> \(explicit)")
-            return explicit
-        }
-
-        let systemPrompt = """
-        You are a data extraction expert. Your task is to read a user's memory and determine the user's age at the time of the event.
-        - Look for explicit mentions of age like "I was 13", "when I turned ten", "at age seven".
-        - If no age is explicitly mentioned, infer a plausible age based on context and life-stage cues.
-        - You MUST respond with ONLY a single integer number and nothing else. For example: 13.
-        - If you cannot determine an age with reasonable confidence, respond with 999.
-        """
-        
-        let body: [String: Any] = [
-            "model": "gpt-4o-mini",
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": memoryText]
-            ],
-            "temperature": 0.0,
-            "max_tokens": 5
-        ]
-        
-        do {
-            let startedAt = Date()
-            var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-            req.httpMethod = "POST"
-            req.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
-            req.addValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
-            
-            let (data, response) = try await URLSession.shared.data(for: req)
-            let statusCode = (response as? HTTPURLResponse)?.statusCode
-            
-            struct Choice: Decodable { struct Msg: Decodable { let content: String? }; let message: Msg }
-            struct Root: Decodable { let choices: [Choice] }
-            
-            if let responseText = try JSONDecoder().decode(Root.self, from: data).choices.first?.message.content {
-                let trimmed = responseText.trimmingCharacters(in: .whitespacesAndNewlines)
-                let age = Int(trimmed)
-                    ?? trimmed.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap { Int($0) }.first
-                if let age, (1...110).contains(age), age != 999 {
-                    print("🧠 Age inference source: llm -> \(age)")
-                    await logOpenAIChatTelemetry(
-                        model: "gpt-4o-mini",
-                        promptChars: memoryText.count,
-                        responseData: data,
-                        statusCode: statusCode,
-                        success: true,
-                        startedAt: startedAt
-                    )
-                    return age
-                }
-                print("⚠️ Age LLM returned low-confidence/unknown value '\(trimmed)'; trying heuristic fallback.")
-            }
-
-            if let heuristic = heuristicAgeFromLifeStage(memoryText: memoryText) {
-                print("🧠 Age inference source: heuristic -> \(heuristic)")
-                await logOpenAIChatTelemetry(
-                    model: "gpt-4o-mini",
-                    promptChars: memoryText.count,
-                    responseData: data,
-                    statusCode: statusCode,
-                    success: true,
-                    startedAt: startedAt
-                )
-                return heuristic
-            }
-        } catch {
-            print("🚫 Age extraction failed:", error.localizedDescription)
-        }
-        
-        // Caller logs per-memory context; avoid spamming "fallback_999" for every unknown age.
-        return 999
     }
 
     private var storybookGenerationCounter: UInt64 = 0
@@ -5249,34 +4212,12 @@ class StoryPageViewModel: ObservableObject {
         return PersistableStorybook(
             profileID: profileID,
             pageItems: persistablePageItemsFromCurrentState(),
-            artStyle: artStyleRaw,
+            artStyle: currentArtStyle.firestoreKey,
             createdAt: createdAt,
             bookDisplayTitle: titleStored,
             backCoverPitch: pitchStored,
             coverFontPreset: presetStored
         )
-    }
-
-    private func mergeGenerationMarkerFromChunkOutcomes(
-        marker: inout GenerationProgressMarker,
-        chunkOutcomes: [StorybookMemoryPipelineOutcome]
-    ) {
-        for o in chunkOutcomes {
-            if let skipped = o.skipped, !marker.skippedMemoryIDs.contains(skipped.id) {
-                marker.skippedMemoryIDs.append(skipped.id)
-            }
-            if o.generatedImage != nil, o.skipped == nil {
-                let list = o.appendedPageItems
-                for item in list {
-                    if case .illustration(_, let mid, _) = item {
-                        if !marker.completedMemoryIDs.contains(mid) {
-                            marker.completedMemoryIDs.append(mid)
-                        }
-                    }
-                }
-            }
-        }
-        marker.lastHeartbeatAt = Date()
     }
 
     private func flushInProgressBookToDisk(profileID: UUID, bookVersionId: String, createdAt: Date, marker: inout GenerationProgressMarker) {
@@ -5441,6 +4382,8 @@ class StoryPageViewModel: ObservableObject {
         let prog = data["progress"] as? [String: Any] ?? [:]
         let completed = (prog["completedMemoryCount"] as? NSNumber)?.intValue ?? (prog["completedMemoryCount"] as? Int) ?? 0
         let total = (prog["totalMemories"] as? NSNumber)?.intValue ?? (prog["totalMemories"] as? Int) ?? 0
+        let progressStatus = (prog["currentStatus"] as? String) ?? ""
+        StorybookGenLog.verboseLine("[Listener] jobId=\(jobId.prefix(28))… status=\(status) progress=\(completed)/\(total) currentStatus=\"\(progressStatus)\"")
         if total > 0 {
             totalMemories = total
             currentMemoryIndex = min(completed, total)
@@ -5485,8 +4428,83 @@ class StoryPageViewModel: ObservableObject {
         if status == "aiComplete" {
             if cloudStorybookFinalizeStarted { return }
             cloudStorybookFinalizeStarted = true
+            Self.dumpCloudJobAuditTrail(jobId: jobId, data: data)
             guard let reservedAt = lastPersistedBookCreatedAt else { return }
             await runFinalizeAfterCloudAI(jobId: jobId, profileID: profileID, jobData: data, reservedCreatedAt: reservedAt, thisRun: thisRun)
+        }
+    }
+
+    /// Logs every per-memory result the worker wrote so we can reconstruct what the cloud
+    /// pipeline saw and decided. Runs once on `aiComplete` (and on `failed` via the
+    /// existing `logAndSummariseMemoryFailures` path).
+    private static func dumpCloudJobAuditTrail(jobId: String, data: [String: Any]) {
+        StorybookGenLog.fence("CLOUD JOB AUDIT TRAIL — \(jobId.prefix(24))")
+        let scalarKeys = [
+            "status", "createdAt", "updatedAt", "completedAt",
+            "artStyle", "styleReferencePreset", "subjectPhotoStoragePath",
+            "profileName", "profileEthnicity", "gender", "otherDetails",
+            "faceDescription", "customArtStyleText", "pageCountTarget",
+            "backCoverPitch", "protagonistCanonCard"
+        ]
+        for k in scalarKeys {
+            let value = data[k]
+            switch value {
+            case let s as String:
+                if s.count > 200 {
+                    StorybookGenLog.dumpFull(label: "Job.\(k)", body: s)
+                } else {
+                    StorybookGenLog.verboseLine("Job.\(k)=\(s)")
+                }
+            case let n as NSNumber:
+                StorybookGenLog.verboseLine("Job.\(k)=\(n)")
+            default:
+                if let v = value {
+                    StorybookGenLog.verboseLine("Job.\(k)=\(v)")
+                }
+            }
+        }
+        if let ordered = data["orderedMemoryIds"] as? [String] {
+            StorybookGenLog.verboseLine("Job.orderedMemoryIds=\(ordered.joined(separator: ", "))")
+        }
+        if let skipped = data["skippedMemoryIds"] as? [String], !skipped.isEmpty {
+            StorybookGenLog.verboseLine("Job.skippedMemoryIds=\(skipped.joined(separator: ", "))")
+        }
+        if let results = data["memoryResults"] as? [String: [String: Any]] {
+            StorybookGenLog.verboseLine("Job.memoryResults count=\(results.count)")
+            let sortedKeys = results.keys.sorted()
+            for (i, mid) in sortedKeys.enumerated() {
+                guard let r = results[mid] else { continue }
+                let title = (r["displayTitle"] as? String) ?? ""
+                let subtitle = (r["displaySubtitle"] as? String) ?? ""
+                let sceneDesc = (r["sceneDescription"] as? String) ?? ""
+                let illustrationURL = (r["illustrationURL"] as? String) ?? ""
+                let narratorPresence = (r["narratorPresence"] as? String) ?? ""
+                let narratorReason = (r["narratorReason"] as? String) ?? ""
+                let narratorConfStr: String = {
+                    if let n = r["narratorConfidenceScore"] as? NSNumber { return n.stringValue }
+                    if let i = r["narratorConfidenceScore"] as? Int { return String(i) }
+                    return "nil"
+                }()
+                let extractedTitle = (r["extractedTitle"] as? String) ?? ""
+                let illustrationBarTitle = (r["illustrationBarTitle"] as? String) ?? ""
+                let headshotAttached = (r["headshotAttached"] as? Bool) ?? false
+                let headshotPolicyReason = (r["headshotPolicyReason"] as? String) ?? ""
+                let canonAmbiguous = (r["canonAmbiguousFor"] as? [String]) ?? []
+                let refsUsed = (r["refsUsed"] as? [String]) ?? []
+                let assembledChars = (r["assembledPromptChars"] as? NSNumber)?.intValue
+                    ?? (r["assembledPromptChars"] as? Int) ?? 0
+                StorybookGenLog.verboseLine("  [\(i + 1)] memoryId=\(mid)")
+                StorybookGenLog.verboseLine("      narratorPresence=\(narratorPresence) narratorReason=\(narratorReason) narratorConfidenceScore=\(narratorConfStr) headshotAttached=\(headshotAttached) reason=\(headshotPolicyReason) refsUsed=\(refsUsed) canonAmbiguousFor=\(canonAmbiguous) assembledPromptChars=\(assembledChars)")
+                StorybookGenLog.verboseLine("      displayTitle=\(title) subtitle=\(subtitle) extractedTitle=\(extractedTitle) illustrationBarTitle=\(illustrationBarTitle)")
+                StorybookGenLog.verboseLine("      illustrationURL=\(illustrationURL)")
+                StorybookGenLog.dumpFull(label: "      sceneDescription", body: sceneDesc)
+            }
+        }
+        if let failures = data["memoryFailures"] as? [String: [String: Any]], !failures.isEmpty {
+            StorybookGenLog.verboseLine("Job.memoryFailures count=\(failures.count)")
+            for (mid, info) in failures {
+                StorybookGenLog.verboseLine("  failure memoryId=\(mid) info=\(info)")
+            }
         }
     }
 
@@ -5514,6 +4532,19 @@ class StoryPageViewModel: ObservableObject {
                     code: 2,
                     userInfo: [NSLocalizedDescriptionKey: "Image generation failed. Please tap “Try Creating Again”."]
                 )
+            }
+            if let card = jobData["protagonistCanonCard"] as? String,
+               !card.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                cloudProtagonistCanonCard = card
+                StorybookGenLog.dumpFull(label: "Cloud.protagonistCanonCard", body: card)
+            } else {
+                cloudProtagonistCanonCard = nil
+                StorybookGenLog.verboseLine("Cloud.protagonistCanonCard=<nil>")
+            }
+            if let pitch = cloudPitch?.trimmingCharacters(in: .whitespacesAndNewlines), !pitch.isEmpty {
+                StorybookGenLog.dumpFull(label: "Cloud.backCoverPitch", body: pitch)
+            } else {
+                StorybookGenLog.verboseLine("Cloud.backCoverPitch=<empty>")
             }
             await preparePrintPackagingBeforePersist(existingBackCoverPitchFromCloud: cloudPitch)
             persistStorybook(for: profileID, reservedCreatedAt: reservedCreatedAt, reservedBookVersionId: jobId)
@@ -5606,11 +4637,12 @@ class StoryPageViewModel: ObservableObject {
             let raw = e.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let promptLine = (e.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let ch = (e.value(forKey: "characterDetails") as? String) ?? ""
-            StorybookGenLog.verboseLine("  [\(i + 1)] id=\(idStr.prefix(8))… textLen=\(raw.count) prompt=\"\(String(promptLine.prefix(80)))\(promptLine.count > 80 ? "…" : "")\"")
-            StorybookGenLog.verboseLine("      memory text head: \(String(raw.prefix(320)))\(raw.count > 320 ? "…" : "")")
-            if !ch.isEmpty {
-                StorybookGenLog.verboseLine("      characterDetails head: \(String(ch.prefix(400)))\(ch.count > 400 ? "…" : "")")
-            }
+            let createdAtIso = (e.createdAt as Date?)?.timeIntervalSince1970.description ?? "?"
+            let chapter = (e.value(forKey: "chapter") as? String) ?? ""
+            StorybookGenLog.verboseLine("  [\(i + 1)] id=\(idStr) textLen=\(raw.count) characterDetailsLen=\(ch.count) chapter=\(chapter) createdAt=\(createdAtIso)")
+            StorybookGenLog.verboseLine("      prompt: \(promptLine)")
+            StorybookGenLog.dumpFull(label: "  [\(i + 1)] memory.text", body: raw)
+            StorybookGenLog.dumpFull(label: "  [\(i + 1)] characterDetails.json", body: ch)
         }
         self.profileName = resolvedNarratorDisplayName(profileName: self.profileName, from: entries)
 
@@ -5637,8 +4669,8 @@ class StoryPageViewModel: ObservableObject {
         var job: [String: Any] = [
             "profileId": profileID.uuidString,
             "bookVersionId": reservedBookId,
-            "artStyle": artStyleRaw,
-            "pageCountTarget": targetPageCount,
+                "artStyle": currentArtStyle.firestoreKey,
+            "pageCountTarget": min(targetPageCount, entries.count),
             "profileName": self.profileName ?? "",
             "profileEthnicity": profileEthnicity ?? "",
             "customArtStyleText": customArtStyleText,
@@ -5647,7 +4679,7 @@ class StoryPageViewModel: ObservableObject {
             "otherDetails": otherDetails,
             "faceDescription": faceDescription ?? "",
             "status": "queued",
-            "clientVersion": 1,
+            "clientVersion": 2,
             "region": "us-central1",
             "progress": [
                 "completedMemoryCount": 0,
@@ -5660,12 +4692,33 @@ class StoryPageViewModel: ObservableObject {
         if let photoPath {
             job["subjectPhotoStoragePath"] = photoPath
         }
+        let pinnedIds = entries.compactMap { $0.id?.uuidString }
+        if !pinnedIds.isEmpty {
+            job["pinnedMemoryIds"] = pinnedIds
+        }
         let photoSummary: String = {
             guard let p = photoPath, !p.isEmpty else { return "no" }
             return "yes path=\(p)"
         }()
-        StorybookGenLog.line("Job written: bookVersionId (jobId)=\(reservedBookId) artStyle=\(artStyleRaw) pageCountTarget=\(targetPageCount) styleRef=\(styleReferencePresetRawValue) subjectPhoto=\(photoSummary)")
-        StorybookGenLog.verboseLine("Job fields: profileName=\(self.profileName ?? "") ethnicity=\(profileEthnicity ?? "") gender=\(gender) customArtStyleLen=\(customArtStyleText.count) faceDescriptionLen=\(faceDescription?.count ?? 0) otherDetailsLen=\(otherDetails.count)")
+        StorybookGenLog.line("Job written: bookVersionId (jobId)=\(reservedBookId) artStyleKey=\(currentArtStyle.firestoreKey) artStyleDisplay=\(currentArtStyle.rawValue) pageCountTarget=\(min(targetPageCount, entries.count)) styleRef=\(styleReferencePresetRawValue) subjectPhoto=\(photoSummary)")
+        let faceDescriptionRaw = faceDescription ?? ""
+        StorybookGenLog.verboseLine("Job fields: profileName=\(self.profileName ?? "") ethnicity=\(profileEthnicity ?? "") gender=\(gender) customArtStyleLen=\(customArtStyleText.count) faceDescriptionLen=\(faceDescriptionRaw.count) otherDetailsLen=\(otherDetails.count)")
+        StorybookGenLog.dumpFull(label: "Job.customArtStyleText", body: customArtStyleText)
+        StorybookGenLog.dumpFull(label: "Job.otherDetails", body: otherDetails)
+        StorybookGenLog.dumpFull(label: "Job.faceDescription", body: faceDescriptionRaw)
+        StorybookGenLog.verboseLine("Job.subjectPhotoStoragePath=\(photoPath ?? "<nil>")")
+        do {
+            // Reproduce the JSON we wrote, redacting the per-memory results map (always empty here).
+            var snapshot = job
+            snapshot["memoryResults"] = "<empty map>"
+            snapshot["progress"] = "<initial>"
+            let raw = try JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted, .sortedKeys])
+            if let s = String(data: raw, encoding: .utf8) {
+                StorybookGenLog.dumpFull(label: "Job.firestorePayload", body: s)
+            }
+        } catch {
+            StorybookGenLog.verboseLine("Job.firestorePayload serialization failed: \(error.localizedDescription)")
+        }
         try await FirestoreSyncService.shared.writeStorybookCloudJob(jobId: reservedBookId, data: job)
 
         GenerationProgressMarker.clear(for: profileID)
@@ -5950,144 +5003,6 @@ class StoryPageViewModel: ObservableObject {
         }
     }
 
-    private struct MemoryStub: Codable { let id: UUID; let summary: String; let chapter: String? }
-    private struct ChatMessage: Encodable { let role: String; let content: String }
-    private struct ChatCompletionRequest: Encodable {
-        let model: String; let messages: [ChatMessage]
-        let max_tokens: Int; let temperature: Double
-    }
-
-    private func rankMemoriesWithLLM(_ all: [MemoryEntry], top n: Int) async -> [MemoryEntry] {
-        let requestedCount = max(1, n)
-        guard requestedCount < all.count else { return all }
-        let stubs = all.compactMap { mem -> MemoryStub? in
-            guard let id = mem.id, let txt = mem.text?.trimmingCharacters(in: .whitespacesAndNewlines), !txt.isEmpty else { return nil }
-            let words = txt.split(separator: " ")
-            let summary = words.prefix(100).joined(separator: " ")
-            return MemoryStub(id: id, summary: String(summary), chapter: mem.chapter)
-        }
-        guard let stubJSON = try? JSONEncoder().encode(stubs), let stubStr = String(data: stubJSON, encoding: .utf8) else {
-            return Array(all.prefix(requestedCount))
-        }
-        let system = ChatMessage(role: "system", content: """
-            You are a memoir editor selecting memories for a printed storybook. \
-            Pick the \(requestedCount) most emotionally significant, vivid, and visually rich memories. \
-            Prefer variety across different life chapters. Each memory includes a summary and optionally the chapter it belongs to.
-            """)
-        let user = ChatMessage(role: "user", content: "Return ONLY JSON { \"top\": [\"uuid1\",\"uuid2\"] }. \nMemories: \(stubStr)")
-        let req = ChatCompletionRequest(model: "gpt-4o-mini", messages: [system, user], max_tokens: 512, temperature: 0)
-        var urlReq = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-        urlReq.httpMethod = "POST"
-        urlReq.httpBody   = try? JSONEncoder().encode(req)
-        urlReq.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
-        urlReq.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        do {
-            let startedAt = Date()
-            let (data, response) = try await URLSession.shared.data(for: urlReq)
-            let statusCode = (response as? HTTPURLResponse)?.statusCode
-            await logOpenAIChatTelemetry(
-                model: "gpt-4o-mini",
-                promptChars: stubStr.count,
-                responseData: data,
-                statusCode: statusCode,
-                success: true,
-                startedAt: startedAt
-            )
-            
-            guard let content = extractContent(from: data) else {
-                print("⚠️ LLM ranking failed to extract content.")
-                return Array(all.prefix(requestedCount))
-            }
-            
-            guard let contentData = content.data(using: .utf8),
-                  let idsDict = try? JSONDecoder().decode([String:[UUID]].self, from: contentData),
-                  let ids = idsDict["top"] else {
-                print("⚠️ LLM ranking failed to decode UUIDs from content: \(content)")
-                return Array(all.prefix(requestedCount))
-            }
-
-            var normalizedIDs: [UUID] = []
-            var seen = Set<UUID>()
-            for id in ids where !seen.contains(id) {
-                seen.insert(id)
-                normalizedIDs.append(id)
-                if normalizedIDs.count == requestedCount { break }
-            }
-
-            guard !normalizedIDs.isEmpty else {
-                print("⚠️ LLM ranking returned no usable IDs.")
-                return Array(all.prefix(requestedCount))
-            }
-
-            let idOrder = normalizedIDs.enumerated().reduce(into: [UUID: Int]()) { $0[$1.element] = $1.offset }
-            return Array(
-                all.filter { $0.id.map { idOrder[$0] != nil } ?? false }
-                      .sorted {
-                          guard let id1 = $0.id, let id2 = $1.id,
-                                let order1 = idOrder[id1], let order2 = idOrder[id2] else { return false }
-                          return order1 < order2
-                      }
-                      .prefix(requestedCount)
-            )
-        } catch {
-            print("LLM ranking failed:", error.localizedDescription)
-            return Array(all.prefix(requestedCount))
-        }
-    }
-    
-    private func extractContent(from data: Data) -> String? {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = root["choices"] as? [[String: Any]],
-              let msgDict = choices.first?["message"] as? [String: Any],
-              let content = msgDict["content"] as? String else {
-            return nil
-        }
-        
-        // COMPLETELY SAFE VERSION: Use string methods instead of dangerous indexing
-        guard !content.isEmpty else { return content }
-        
-        // Find the first { and last } using safe string methods
-        if let startIndex = content.firstIndex(of: "{"),
-           let endIndex = content.lastIndex(of: "}"),
-           startIndex < endIndex {
-            
-            // Use safe substring extraction
-            let substring = content[startIndex...endIndex]
-            return String(substring)
-        }
-        
-        // If no JSON brackets found, return the original content
-        return content
-    }
-
-    private func logOpenAIChatTelemetry(
-        model: String,
-        promptChars: Int,
-        responseData: Data,
-        statusCode: Int?,
-        success: Bool,
-        startedAt: Date
-    ) async {
-        let usage = DevCostTelemetryService.extractOpenAIUsage(from: responseData)
-        await DevCostTelemetryService.shared.logEvent(
-            DevCostEvent(
-                timestamp: Date(),
-                provider: .openAI,
-                operation: .openAIChat,
-                model: model,
-                statusCode: statusCode,
-                success: success,
-                durationMs: Date().timeIntervalSince(startedAt) * 1000,
-                promptCharacters: promptChars,
-                inputTokens: usage.inputTokens,
-                outputTokens: usage.outputTokens,
-                inputImageCount: 0,
-                outputImageCount: 0,
-                uploadedBytes: 0
-            )
-        )
-    }
-    
     // MARK: - Image Editing (smart context)
     
     /// Caps very long memory text for API payloads while favoring sentence boundaries.
@@ -6132,6 +5047,8 @@ class StoryPageViewModel: ObservableObject {
         userRevision: String
     ) -> String {
         let trimmedUser = userRevision.trimmingCharacters(in: .whitespacesAndNewlines)
+        let previousScene = currentSceneDescription
+        defer { currentSceneDescription = previousScene }
 
         var memoryText = ""
         var memoryPromptLine = ""
@@ -6141,7 +5058,7 @@ class StoryPageViewModel: ObservableObject {
         }
         
         let textForNarrator = memoryText.isEmpty ? memoryPromptLine : memoryText
-        let cappedMemory = clampedMemoryTextForImageEdit(memoryText)
+        let cappedMemory = clampedMemoryTextForImageEdit(memoryText, maxChars: 600)
         let sceneSummary = deterministicSceneSummaryForImageEdit(from: memoryText)
         
         var characterCards = ""
@@ -6152,6 +5069,7 @@ class StoryPageViewModel: ObservableObject {
             let narratorDecision = inferNarratorPresence(memoryText: textForNarrator, entry: entry)
             narratorPresenceLabel = narratorDecision.presence.rawValue
             let includeNarrator = narratorDecision.presence.shouldAttachHeadshot
+            currentSceneDescription = sceneSummary
             characterCards = buildCharacterList(for: entry, sceneDescription: sceneSummary, includeNarrator: includeNarrator)
             
             let subjectRaw = deriveSubjectName(from: entry) ?? profileName
@@ -6204,32 +5122,33 @@ class StoryPageViewModel: ObservableObject {
         }
         
         return """
-        REVISION REQUEST (apply these changes — user's direct instruction):
+        REVISION REQUEST (user's direct instruction — apply on top of references below):
         \(trimmedUser.isEmpty ? "(empty)" : trimmedUser)
-        
+
+        REFERENCE IMAGE #1 (canvas — current illustration): Edit this composition; preserve identities unless the revision says otherwise.
+        REFERENCE IMAGE #2 (style anchor — when attached): Match illustration medium, palette temperature, and linework from this image; only the LOOK transfers — scene follows MEMORY EXCERPT.
+
         MEMORY ID (traceability): \(memoryID.uuidString)
-        \(titleLine)MEMORY SOURCE OF TRUTH (do not contradict unless the revision explicitly overrides):
+        \(titleLine)MEMORY EXCERPT (≤600 chars, ground truth for people-count and setting):
         \(cappedMemory.isEmpty ? "(No memory text on file.)" : cappedMemory)
         \(memoryPromptLine.isEmpty ? "" : "MEMORY PROMPT / QUESTION (context): \(memoryPromptLine)\n")
-        SCENE SUMMARY (excerpt for grounding):
+        SCENE ACTION (grounding excerpt):
         \(sceneSummary)
-        
-        CHARACTER IDENTITY CARDS (preserve faces, skin tone, hair, age cues, and clothing unless the user asks to change them):
+
+        CAST — CHARACTER ROSTER:
         \(characterSection)
-        
+
         NARRATOR / PRONOUN RESOLUTION:
         \(narratorLines.joined(separator: "\n"))
-        
-        STYLE AND QUALITY RULES:
+
+        STYLE LOCK AND RULES:
         \(styleParts.joined(separator: "\n"))
-        
+
         EDITING CONSTRAINTS:
-        - The INPUT IMAGE is the current illustration — use it as the starting canvas.
-        - Preserve overall art style, palette, and character identities unless the user asks to change them.
-        - Apply only the changes needed for the REVISION REQUEST.
-        - Keep the same number of distinct people unless the user explicitly asks to add or remove someone.
-        - Do not swap or merge identities between characters.
-        - For "him", "her", "they", map to specific people using CHARACTER IDENTITY CARDS and memory cues when possible.
+        - Preserve overall style and character identities unless the revision asks to change them.
+        - Apply only what the REVISION REQUEST needs.
+        - Keep the same number of distinct people unless explicitly asked to add/remove.
+        - Do not swap identities between characters.
         """
     }
     
@@ -6275,8 +5194,10 @@ class StoryPageViewModel: ObservableObject {
                 return
             }
             
+            let styleAnchor = (currentArtStyle == .kidsBook) ? styleTile : nil
             if let editedImage = try await geminiSvc.editImage(
                 image: currentImage,
+                styleAnchor: styleAnchor,
                 editInstruction: fullEditInstruction,
                 size: imageGenerationSizeForCurrentStyle,
                 model: effectiveGeminiModel
@@ -6399,10 +5320,12 @@ class StoryPageViewModel: ObservableObject {
             let frontFinal: UIImage
             let backFinal: UIImage?
 
+            let coverStyleAnchor = (currentArtStyle == .kidsBook) ? styleTile : nil
             switch panel {
             case .front:
                 guard let edited = try await geminiSvc.editImage(
                     image: frontBase,
+                    styleAnchor: coverStyleAnchor,
                     editInstruction: instruction,
                     size: editSize,
                     model: effectiveGeminiModel
@@ -6421,6 +5344,7 @@ class StoryPageViewModel: ObservableObject {
                 }
                 guard let editedBack = try await geminiSvc.editImage(
                     image: backBase,
+                    styleAnchor: coverStyleAnchor,
                     editInstruction: instruction,
                     size: editSize,
                     model: effectiveGeminiModel
@@ -6451,7 +5375,7 @@ class StoryPageViewModel: ObservableObject {
 
             let pdfData: Data?
             if record.pageWidth > record.pageHeight {
-                pdfData = BookCoverRenderer.renderPDF(
+                pdfData = BookCoverRenderer.renderLuluPDF(
                     frontCoverArt: frontFinal,
                     backCoverArt: backFinal,
                     profileName: nameForRender,

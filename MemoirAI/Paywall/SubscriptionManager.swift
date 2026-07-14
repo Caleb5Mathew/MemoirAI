@@ -3,6 +3,7 @@ import RevenueCat
 import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
+import CryptoKit
 
 // Updated subscription tiers to match RevenueCat package identifiers
 enum Tier: String, CaseIterable {
@@ -483,6 +484,28 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     }
 
     // MARK: – Developer mode unlock
+
+    /// SHA-256 digest (hex) of the developer unlock password. Never store the plaintext.
+    private static let developerPasswordDigestHex =
+        "03a3f52f7b1fbdbd8224152e8fcc06e7eff398f63c9961fce7d032f560002128"
+
+    /// Verifies a candidate developer unlock password against the stored digest
+    /// using a constant-time comparison to avoid timing side-channels.
+    static func verifyDeveloperPassword(_ input: String) -> Bool {
+        let inputDigest = SHA256.hash(data: Data(input.utf8))
+        let inputDigestHex = inputDigest.map { String(format: "%02x", $0) }.joined()
+
+        guard inputDigestHex.utf8.count == developerPasswordDigestHex.utf8.count else {
+            return false
+        }
+
+        var result: UInt8 = 0
+        for (a, b) in zip(inputDigestHex.utf8, developerPasswordDigestHex.utf8) {
+            result |= a ^ b
+        }
+        return result == 0
+    }
+
     func unlockDeveloperMode() {
         isDeveloperUnlockedSession = true
         activeTier = .monthly

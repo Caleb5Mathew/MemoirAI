@@ -190,8 +190,10 @@ final class FirestoreSyncService {
     }
 
     /// Re-attempt uploads for books that never finished syncing (same device, local `.book` still present). Uses the freshest `current.book` for that version when possible.
+    /// Also re-attempts any memory syncs queued by `queueMemorySyncWithProfile` that failed while offline (see `retryPendingMemorySyncs`).
     func retryPendingSyncs(for profileID: UUID) async {
         guard Auth.auth().currentUser?.uid != nil else { return }
+        await retryPendingMemorySyncs(for: profileID)
         let want = profileID.uuidString
         let pending = loadPendingBookSyncRecords().filter { $0.profileId == want }
         guard !pending.isEmpty else { return }
@@ -282,24 +284,147 @@ final class FirestoreSyncService {
         }
     }
     
+    // MARK: - Pending memory sync (resume interrupted uploads)
+
+    private static let pendingMemorySyncStorageKey = "memoirai_pending_memory_syncs"
+
+    private struct PendingMemorySyncRecord: Codable {
+        let memoryId: String
+        let profileId: String
+        let queuedAt: Date
+        /// Incremented when a retry attempt still fails; used for debugging, same as `PendingBookSyncRecord.renderRetryCount`.
+        var retryCount: Int
+
+        init(memoryId: String, profileId: String, queuedAt: Date, retryCount: Int = 0) {
+            self.memoryId = memoryId
+            self.profileId = profileId
+            self.queuedAt = queuedAt
+            self.retryCount = retryCount
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case memoryId, profileId, queuedAt, retryCount
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            memoryId = try c.decode(String.self, forKey: .memoryId)
+            profileId = try c.decode(String.self, forKey: .profileId)
+            queuedAt = try c.decode(Date.self, forKey: .queuedAt)
+            retryCount = try c.decodeIfPresent(Int.self, forKey: .retryCount) ?? 0
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(memoryId, forKey: .memoryId)
+            try c.encode(profileId, forKey: .profileId)
+            try c.encode(queuedAt, forKey: .queuedAt)
+            try c.encode(retryCount, forKey: .retryCount)
+        }
+    }
+
+    private func loadPendingMemorySyncRecords() -> [PendingMemorySyncRecord] {
+        guard let data = UserDefaults.standard.data(forKey: Self.pendingMemorySyncStorageKey),
+              let decoded = try? JSONDecoder().decode([PendingMemorySyncRecord].self, from: data) else {
+            return []
+        }
+        return decoded
+    }
+
+    private func registerPendingMemorySync(memoryId: String, profileId: String) {
+        var records = loadPendingMemorySyncRecords()
+        let existing = records.first { $0.memoryId == memoryId }
+        let preserveRetry = existing?.retryCount ?? 0
+        let preserveQueued = existing?.queuedAt ?? Date()
+        records.removeAll { $0.memoryId == memoryId }
+        records.append(
+            PendingMemorySyncRecord(
+                memoryId: memoryId,
+                profileId: profileId,
+                queuedAt: preserveQueued,
+                retryCount: preserveRetry
+            )
+        )
+        if let data = try? JSONEncoder().encode(records) {
+            UserDefaults.standard.set(data, forKey: Self.pendingMemorySyncStorageKey)
+        }
+    }
+
+    /// Non-private so tests can exercise the same register/re-register contract as `registerPendingBookSyncForProfile`.
+    func registerPendingMemorySyncForProfile(memoryId: String, profileId: UUID) {
+        registerPendingMemorySync(memoryId: memoryId, profileId: profileId.uuidString)
+    }
+
+    private func incrementPendingMemorySyncRetry(memoryId: String) {
+        var records = loadPendingMemorySyncRecords()
+        guard let i = records.firstIndex(where: { $0.memoryId == memoryId }) else { return }
+        records[i].retryCount += 1
+        if let data = try? JSONEncoder().encode(records) {
+            UserDefaults.standard.set(data, forKey: Self.pendingMemorySyncStorageKey)
+        }
+        print("[MemorySync] incrementPendingMemorySyncRetry memoryId=\(memoryId.prefix(8))… count=\(records[i].retryCount)")
+    }
+
+    private func clearPendingMemorySync(memoryId: String) {
+        var records = loadPendingMemorySyncRecords()
+        records.removeAll { $0.memoryId == memoryId }
+        if let data = try? JSONEncoder().encode(records) {
+            UserDefaults.standard.set(data, forKey: Self.pendingMemorySyncStorageKey)
+        }
+    }
+
+    /// Re-attempt Firestore uploads for memories whose background sync previously failed (offline save).
+    /// Dedupes by memory id; drops the pending record once synced or once the local `MemoryEntry` no longer exists.
+    @MainActor
+    private func retryPendingMemorySyncs(for profileID: UUID) async {
+        guard Auth.auth().currentUser?.uid != nil else { return }
+        let want = profileID.uuidString
+        let pending = loadPendingMemorySyncRecords().filter { $0.profileId == want }
+        guard !pending.isEmpty else { return }
+
+        let context = PersistenceController.shared.container.viewContext
+        for record in pending {
+            guard let memoryUUID = UUID(uuidString: record.memoryId) else {
+                clearPendingMemorySync(memoryId: record.memoryId)
+                continue
+            }
+            let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", memoryUUID as CVarArg)
+            request.fetchLimit = 1
+            guard let entry = try? context.fetch(request).first else {
+                // Memory no longer exists locally (deleted) — nothing left to sync.
+                clearPendingMemorySync(memoryId: record.memoryId)
+                continue
+            }
+            let synced = await syncMemory(entry)
+            if synced {
+                clearPendingMemorySync(memoryId: record.memoryId)
+            } else {
+                incrementPendingMemorySyncRetry(memoryId: record.memoryId)
+            }
+        }
+    }
+
     // MARK: - Memory Sync
-    
+
     /// Sync a memory entry to Firestore
     /// Call this after saving to Core Data
-    func syncMemory(_ entry: MemoryEntry, profileName: String? = nil) async {
+    /// - Returns: `true` when the Firestore write (and audio upload, if any) succeeded; `false` on any failure so callers can queue a retry.
+    @discardableResult
+    func syncMemory(_ entry: MemoryEntry, profileName: String? = nil) async -> Bool {
         guard let userId = Auth.auth().currentUser?.uid else {
             print("⚠️ Cannot sync memory - user not signed in")
-            return
+            return false
         }
-        
+
         guard let memoryId = entry.id else {
             print("⚠️ Cannot sync memory - no ID")
-            return
+            return false
         }
-        
+
         let memoryRef = db.collection("users").document(userId)
             .collection("memories").document(memoryId.uuidString)
-        
+
         do {
             // Upload audio if available; otherwise remove stale audioURL in Firestore (e.g. after re-record clear).
             var memoryData: [String: Any] = [
@@ -310,29 +435,31 @@ final class FirestoreSyncService {
                 "profileID": entry.profileID?.uuidString ?? "",
                 "syncedAt": FieldValue.serverTimestamp()
             ]
-            
+
             if let audioData = entry.audioData, !audioData.isEmpty {
                 let uploaded = try await StorageService.shared.uploadAudio(audioData, memoryId: memoryId.uuidString)
                 memoryData["audioURL"] = uploaded
             } else {
                 memoryData["audioURL"] = FieldValue.delete()
             }
-            
+
             // Include profile name for easy identification
             if let profileName = profileName {
                 memoryData["profileName"] = profileName
             }
-            
+
             if let characterDetails = entry.characterDetails {
                 memoryData["characterDetails"] = characterDetails
             }
-            
+
             // Save to Firestore
             try await memoryRef.setData(memoryData, merge: true)
             print("✅ Synced memory \(memoryId.uuidString) to Firebase")
-            
+            return true
+
         } catch {
             print("❌ Failed to sync memory to Firebase: \(error)")
+            return false
         }
     }
     
@@ -406,6 +533,8 @@ final class FirestoreSyncService {
         /// Back panel marketing copy.
         let backCoverPitch: String
         let coverFontPreset: CoverFontPreset
+        /// Server-built protagonist row from cloud storybook cast canon (optional).
+        let protagonistCanonLine: String?
     }
 
     /// Sync a generated storybook to Firestore with rendered page artifacts. Concurrency: serialized per `bookId`.
@@ -434,7 +563,7 @@ final class FirestoreSyncService {
 
     /// When `coverInputs` and `renderedPageImages` were both nil (e.g. `retryPendingSyncs`), still allow Gemini + title-only cover from persisted text.
     private static func syntheticCoverInputsIfPossible(from book: PersistableStorybook) -> CoverInputs? {
-        let art = ArtStyle(rawValue: book.artStyle) ?? .kidsBook
+        let art = ArtStyle.resolvedFromStored(book.artStyle)
         let rawTitle = book.bookDisplayTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let firstLine = book.pageItems.first?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let title = !rawTitle.isEmpty ? rawTitle : (!firstLine.isEmpty ? firstLine : "Memoir")
@@ -453,7 +582,8 @@ final class FirestoreSyncService {
             customArtStyleText: nil,
             printTitle: title,
             backCoverPitch: pitch,
-            coverFontPreset: CoverFontPreset(rawValue: book.coverFontPreset ?? "") ?? policy.coverFontPreset()
+            coverFontPreset: CoverFontPreset(rawValue: book.coverFontPreset ?? "") ?? policy.coverFontPreset(),
+            protagonistCanonLine: nil
         )
     }
 
@@ -481,34 +611,46 @@ final class FirestoreSyncService {
             var coverStoragePath: String?
             var coverURL: String?
 
-            let geminiKey = (Bundle.main.object(forInfoDictionaryKey: "GEMINI_API_KEY") as? String ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let canUseGemini = !geminiKey.isEmpty
-
             // Landscape trim (11×8.5): AI cover (headshot → likeness; no headshot → non-human art). Title is painted in-image.
-            if isLandscapeTrim, let inputs = coverInputs, canUseGemini {
-                let svc = GeminiImageService(apiKey: geminiKey)
-                if let coverArt = try? await svc.generateCoverIllustration(
-                    headshot: inputs.headshot,
-                    profileName: inputs.profileName,
-                    ethnicity: inputs.ethnicity,
-                    gender: inputs.gender,
-                    memoryThemes: inputs.memoryThemes,
-                    artStyle: inputs.artStyle,
-                    customStyle: inputs.customArtStyleText,
-                    printTitle: inputs.printTitle
-                ) {
-                    let backCoverArt = try? await svc.generateBackCoverIllustration(
-                        frontCoverArt: coverArt,
+            if isLandscapeTrim, let inputs = coverInputs {
+                let svc = GeminiImageService()
+                let themesPreview = inputs.memoryThemes.prefix(8).joined(separator: " | ")
+                let canonPreview = inputs.protagonistCanonLine?.prefix(160).description ?? "<nil>"
+                print("[CoverFlow] AI cover START trim=landscape bookId=\(bookId.prefix(28))… artStyleKey=\(inputs.artStyle.firestoreKey) hasHeadshot=\(inputs.headshot != nil) printTitle=\"\(inputs.printTitle)\" themesCount=\(inputs.memoryThemes.count) themesPreview=[\(themesPreview)] backCoverPitchLen=\(inputs.backCoverPitch.count) protagonistCanonLine.head=\(canonPreview) ethnicity=\(inputs.ethnicity ?? "<nil>") gender=\(inputs.gender ?? "<nil>")")
+                do {
+                    guard let coverArt = try await svc.generateCoverIllustration(
                         headshot: inputs.headshot,
                         profileName: inputs.profileName,
                         ethnicity: inputs.ethnicity,
                         gender: inputs.gender,
                         memoryThemes: inputs.memoryThemes,
                         artStyle: inputs.artStyle,
-                        customStyle: inputs.customArtStyleText
-                    )
-                    if let coverPDFData = BookCoverRenderer.renderPDF(
+                        customStyle: inputs.customArtStyleText,
+                        printTitle: inputs.printTitle,
+                        protagonistCanonLine: inputs.protagonistCanonLine
+                    ) else {
+                        print("⚠️ [CoverFlow] AI cover FRONT_NIL trim=landscape bookId=\(bookId.prefix(28))… (Gemini returned no image)")
+                        throw NSError(domain: "MemoirAI", code: -2, userInfo: [NSLocalizedDescriptionKey: "generateCoverIllustration returned nil"])
+                    }
+                    var backCoverArt: UIImage?
+                    do {
+                        backCoverArt = try await svc.generateBackCoverIllustration(
+                            frontCoverArt: coverArt,
+                            headshot: inputs.headshot,
+                            profileName: inputs.profileName,
+                            ethnicity: inputs.ethnicity,
+                            gender: inputs.gender,
+                            memoryThemes: inputs.memoryThemes,
+                            artStyle: inputs.artStyle,
+                            customStyle: inputs.customArtStyleText
+                        )
+                    } catch {
+                        print("⚠️ [CoverFlow] AI back cover FAILED trim=landscape bookId=\(bookId.prefix(28))… — \(error.localizedDescription)")
+                    }
+                    if backCoverArt == nil {
+                        print("⚠️ [CoverFlow] AI back cover returned nil trim=landscape bookId=\(bookId.prefix(28))… (continuing with front only)")
+                    }
+                    if let coverPDFData = BookCoverRenderer.renderLuluPDF(
                         frontCoverArt: coverArt,
                         backCoverArt: backCoverArt,
                         profileName: inputs.profileName,
@@ -523,10 +665,10 @@ final class FirestoreSyncService {
                         coverURL = result.downloadURL
                         print("✅ Landscape trim cover PDF generated and uploaded")
                     } else {
-                        print("⚠️ Landscape cover generation skipped (render failed)")
+                        print("⚠️ [CoverFlow] Landscape cover PDF render failed after AI success bookId=\(bookId.prefix(28))…")
                     }
-                } else {
-                    print("⚠️ Landscape cover generation skipped (AI or render failed)")
+                } catch {
+                    print("⚠️ [CoverFlow] AI cover FRONT_FAILED trim=landscape bookId=\(bookId.prefix(28))… — \(error.localizedDescription)")
                 }
             }
 
@@ -547,7 +689,7 @@ final class FirestoreSyncService {
                     if !trimmedDisplay.isEmpty { return trimmedDisplay }
                     return firstPageTitle.isEmpty ? nil : firstPageTitle
                 }()
-                let artStyle = ArtStyle(rawValue: book.artStyle) ?? .kidsBook
+                let artStyle = ArtStyle.resolvedFromStored(book.artStyle)
                 let policy = CoverCopyPolicy(artStyle: artStyle, profileDisplayName: resolvedTitle ?? "Memoir")
                 let trimmedPitch = book.backCoverPitch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let pitch = trimmedPitch.isEmpty
@@ -559,20 +701,17 @@ final class FirestoreSyncService {
                     let memoryThemesForBack = book.pageItems.prefix(8).compactMap { item in
                         item.title?.trimmingCharacters(in: .whitespacesAndNewlines)
                     }.filter { !$0.isEmpty }
-                    var backCoverArt: UIImage? = nil
-                    if canUseGemini {
-                        let svc = GeminiImageService(apiKey: geminiKey)
-                        backCoverArt = try? await svc.generateBackCoverIllustration(
-                            frontCoverArt: coverArt,
-                            headshot: nil,
-                            profileName: resolvedTitle ?? "Memoir",
-                            ethnicity: nil,
-                            gender: nil,
-                            memoryThemes: memoryThemesForBack,
-                            artStyle: artStyle
-                        )
-                    }
-                    if let coverPDFData = BookCoverRenderer.renderPDF(
+                    let backCoverSvc = GeminiImageService()
+                    let backCoverArt = try? await backCoverSvc.generateBackCoverIllustration(
+                        frontCoverArt: coverArt,
+                        headshot: nil,
+                        profileName: resolvedTitle ?? "Memoir",
+                        ethnicity: nil,
+                        gender: nil,
+                        memoryThemes: memoryThemesForBack,
+                        artStyle: artStyle
+                    )
+                    if let coverPDFData = BookCoverRenderer.renderLuluPDF(
                         frontCoverArt: coverArt,
                         backCoverArt: backCoverArt,
                         profileName: resolvedTitle ?? "Memoir",
@@ -594,29 +733,45 @@ final class FirestoreSyncService {
                 }
             }
 
-            // Portrait trim: prefer Gemini + AI title when API key and `coverInputs` are available.
-            if !isLandscapeTrim, coverStoragePath == nil, let inputs = coverInputs, canUseGemini {
-                let svc = GeminiImageService(apiKey: geminiKey)
-                if let coverArt = try? await svc.generateCoverIllustration(
-                    headshot: inputs.headshot,
-                    profileName: inputs.profileName,
-                    ethnicity: inputs.ethnicity,
-                    gender: inputs.gender,
-                    memoryThemes: inputs.memoryThemes,
-                    artStyle: inputs.artStyle,
-                    customStyle: inputs.customArtStyleText,
-                    printTitle: inputs.printTitle
-                ) {
-                    let backCoverArt = try? await svc.generateBackCoverIllustration(
-                        frontCoverArt: coverArt,
+            // Portrait trim: prefer Gemini + AI title when `coverInputs` are available.
+            if !isLandscapeTrim, coverStoragePath == nil, let inputs = coverInputs {
+                let svc = GeminiImageService()
+                let themesPreview = inputs.memoryThemes.prefix(8).joined(separator: " | ")
+                let canonPreview = inputs.protagonistCanonLine?.prefix(160).description ?? "<nil>"
+                print("[CoverFlow] AI cover START trim=portrait bookId=\(bookId.prefix(28))… artStyleKey=\(inputs.artStyle.firestoreKey) hasHeadshot=\(inputs.headshot != nil) printTitle=\"\(inputs.printTitle)\" themesCount=\(inputs.memoryThemes.count) themesPreview=[\(themesPreview)] backCoverPitchLen=\(inputs.backCoverPitch.count) protagonistCanonLine.head=\(canonPreview) ethnicity=\(inputs.ethnicity ?? "<nil>") gender=\(inputs.gender ?? "<nil>")")
+                do {
+                    guard let coverArt = try await svc.generateCoverIllustration(
                         headshot: inputs.headshot,
                         profileName: inputs.profileName,
                         ethnicity: inputs.ethnicity,
                         gender: inputs.gender,
                         memoryThemes: inputs.memoryThemes,
                         artStyle: inputs.artStyle,
-                        customStyle: inputs.customArtStyleText
-                    )
+                        customStyle: inputs.customArtStyleText,
+                        printTitle: inputs.printTitle,
+                        protagonistCanonLine: inputs.protagonistCanonLine
+                    ) else {
+                        print("⚠️ [CoverFlow] AI cover FRONT_NIL trim=portrait bookId=\(bookId.prefix(28))… (Gemini returned no image)")
+                        throw NSError(domain: "MemoirAI", code: -2, userInfo: [NSLocalizedDescriptionKey: "generateCoverIllustration returned nil"])
+                    }
+                    var backCoverArt: UIImage?
+                    do {
+                        backCoverArt = try await svc.generateBackCoverIllustration(
+                            frontCoverArt: coverArt,
+                            headshot: inputs.headshot,
+                            profileName: inputs.profileName,
+                            ethnicity: inputs.ethnicity,
+                            gender: inputs.gender,
+                            memoryThemes: inputs.memoryThemes,
+                            artStyle: inputs.artStyle,
+                            customStyle: inputs.customArtStyleText
+                        )
+                    } catch {
+                        print("⚠️ [CoverFlow] AI back cover FAILED trim=portrait bookId=\(bookId.prefix(28))… — \(error.localizedDescription)")
+                    }
+                    if backCoverArt == nil {
+                        print("⚠️ [CoverFlow] AI back cover returned nil trim=portrait bookId=\(bookId.prefix(28))…")
+                    }
                     if let coverPDFData = BookCoverRenderer.renderPortraitPDF(
                         frontCoverArt: coverArt,
                         backCoverArt: backCoverArt,
@@ -632,10 +787,10 @@ final class FirestoreSyncService {
                         coverURL = result.downloadURL
                         print("✅ Portrait Book AI cover PDF generated and uploaded")
                     } else {
-                        print("⚠️ Portrait AI cover render failed; may fall back to first illustration")
+                        print("⚠️ [CoverFlow] Portrait AI cover PDF render failed bookId=\(bookId.prefix(28))…")
                     }
-                } else {
-                    print("⚠️ Portrait AI cover generation skipped (AI or render failed); may fall back to first illustration")
+                } catch {
+                    print("⚠️ [CoverFlow] AI cover FRONT_FAILED trim=portrait bookId=\(bookId.prefix(28))… — \(error.localizedDescription)")
                 }
             }
 
@@ -655,7 +810,7 @@ final class FirestoreSyncService {
                     if !trimmedDisplay.isEmpty { return trimmedDisplay }
                     return firstPageTitle.isEmpty ? nil : firstPageTitle
                 }()
-                let artStyle = ArtStyle(rawValue: book.artStyle) ?? .realistic
+                let artStyle = ArtStyle.resolvedFromStored(book.artStyle)
                 let policy = CoverCopyPolicy(artStyle: artStyle, profileDisplayName: resolvedTitle ?? "Memoir")
                 let trimmedPitch = book.backCoverPitch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let pitch = trimmedPitch.isEmpty
@@ -667,19 +822,16 @@ final class FirestoreSyncService {
                     let memoryThemesForBack = book.pageItems.prefix(8).compactMap { item in
                         item.title?.trimmingCharacters(in: .whitespacesAndNewlines)
                     }.filter { !$0.isEmpty }
-                    var backCoverArt: UIImage? = nil
-                    if canUseGemini {
-                        let svc = GeminiImageService(apiKey: geminiKey)
-                        backCoverArt = try? await svc.generateBackCoverIllustration(
-                            frontCoverArt: coverArt,
-                            headshot: nil,
-                            profileName: resolvedTitle ?? "Memoir",
-                            ethnicity: nil,
-                            gender: nil,
-                            memoryThemes: memoryThemesForBack,
-                            artStyle: artStyle
-                        )
-                    }
+                    let backCoverSvc = GeminiImageService()
+                    let backCoverArt = try? await backCoverSvc.generateBackCoverIllustration(
+                        frontCoverArt: coverArt,
+                        headshot: nil,
+                        profileName: resolvedTitle ?? "Memoir",
+                        ethnicity: nil,
+                        gender: nil,
+                        memoryThemes: memoryThemesForBack,
+                        artStyle: artStyle
+                    )
                     if let coverPDFData = BookCoverRenderer.renderPortraitPDF(
                         frontCoverArt: coverArt,
                         backCoverArt: backCoverArt,
@@ -819,7 +971,10 @@ final class FirestoreSyncService {
                 totalPngBytes: totalPngBytes,
                 pdfBytes: nil,
                 source: baseRecord.source,
-                pages: uploadedPages
+                pages: uploadedPages,
+                bookDisplayName: baseRecord.bookDisplayName,
+                userHandle: baseRecord.userHandle,
+                bookSeq: baseRecord.bookSeq
             )
             
             try await bookRef.setData(canonicalRecord.toFirestoreData(), merge: true)
@@ -1320,7 +1475,7 @@ final class FirestoreSyncService {
                 ? (record.pages.first?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Memoir")
                 : "Memoir")
 
-        let artStyle = ArtStyle(rawValue: record.artStyle) ?? .realistic
+        let artStyle = ArtStyle.resolvedFromStored(record.artStyle)
         let policy = CoverCopyPolicy(artStyle: artStyle, profileDisplayName: title)
         let pitch = record.backCoverPitch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? (record.backCoverPitch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
@@ -1328,40 +1483,52 @@ final class FirestoreSyncService {
         let fontPreset = CoverFontPreset(rawValue: record.coverFontPreset ?? "") ?? policy.coverFontPreset()
         let themes = rankedCoverSignals(from: record.pages, maxCount: 5)
 
-        guard let geminiKey = Bundle.main.object(forInfoDictionaryKey: "GEMINI_API_KEY") as? String,
-              !geminiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            print("⚠️ regenerateCoverDesign skipped — no GEMINI_API_KEY (no-people AI title covers require Gemini)")
-            return false
-        }
-        let svc = GeminiImageService(apiKey: geminiKey.trimmingCharacters(in: .whitespacesAndNewlines))
-        guard let frontCoverArt = try? await svc.generateCoverIllustration(
-            headshot: nil,
-            profileName: title,
-            ethnicity: nil,
-            gender: nil,
-            memoryThemes: themes,
-            artStyle: artStyle,
-            customStyle: nil,
-            printTitle: title
-        ) else {
-            print("⚠️ regenerateCoverDesign failed — Gemini cover generation returned nil")
+        let svc = GeminiImageService()
+        print("[CoverFlow] AI cover START regenerateCoverDesign bookId=\(record.bookVersionId.prefix(28))… artStyleKey=\(artStyle.firestoreKey) trim=\(record.pageWidth > record.pageHeight ? "landscape" : "portrait")")
+        let frontCoverArt: UIImage
+        do {
+            guard let img = try await svc.generateCoverIllustration(
+                headshot: nil,
+                profileName: title,
+                ethnicity: nil,
+                gender: nil,
+                memoryThemes: themes,
+                artStyle: artStyle,
+                customStyle: nil,
+                printTitle: title,
+                protagonistCanonLine: nil
+            ) else {
+                print("⚠️ [CoverFlow] regenerateCoverDesign FRONT_NIL bookId=\(record.bookVersionId.prefix(28))…")
+                return false
+            }
+            frontCoverArt = img
+        } catch {
+            print("⚠️ [CoverFlow] regenerateCoverDesign FRONT_FAILED bookId=\(record.bookVersionId.prefix(28))… — \(error.localizedDescription)")
             return false
         }
 
-        let backCoverArt = try? await svc.generateBackCoverIllustration(
-            frontCoverArt: frontCoverArt,
-            headshot: nil,
-            profileName: title,
-            ethnicity: nil,
-            gender: nil,
-            memoryThemes: themes,
-            artStyle: artStyle,
-            customStyle: nil
-        )
+        var backCoverArt: UIImage?
+        do {
+            backCoverArt = try await svc.generateBackCoverIllustration(
+                frontCoverArt: frontCoverArt,
+                headshot: nil,
+                profileName: title,
+                ethnicity: nil,
+                gender: nil,
+                memoryThemes: themes,
+                artStyle: artStyle,
+                customStyle: nil
+            )
+            if backCoverArt == nil {
+                print("⚠️ [CoverFlow] regenerateCoverDesign back cover returned nil bookId=\(record.bookVersionId.prefix(28))…")
+            }
+        } catch {
+            print("⚠️ [CoverFlow] regenerateCoverDesign BACK_FAILED bookId=\(record.bookVersionId.prefix(28))… — \(error.localizedDescription)")
+        }
 
         let pdfData: Data?
         if record.pageWidth > record.pageHeight {
-            pdfData = BookCoverRenderer.renderPDF(
+            pdfData = BookCoverRenderer.renderLuluPDF(
                 frontCoverArt: frontCoverArt,
                 backCoverArt: backCoverArt,
                 profileName: title,
@@ -1808,13 +1975,35 @@ extension FirestoreSyncService {
         }
     }
     
-    /// Queue a memory sync with profile info
+    /// Queue a memory sync with profile info. Wrapped in a background task (mirrors `queueBookSync`) so an
+    /// in-flight sync gets a grace period if the app is backgrounded mid-upload. On failure (e.g. offline),
+    /// registers a pending-retry record so `retryPendingSyncs` resumes it next time the app becomes active —
+    /// otherwise an offline save never reaches Firestore until an unrelated flow happens to re-sync it.
     func queueMemorySyncWithProfile(_ entry: MemoryEntry, profile: Profile) {
-        Task {
+        Task { @MainActor in
+            var backgroundTaskID = UIBackgroundTaskIdentifier.invalid
+            backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "MemoirAI.MemorySync") {
+                if backgroundTaskID != .invalid {
+                    UIApplication.shared.endBackgroundTask(backgroundTaskID)
+                    backgroundTaskID = .invalid
+                }
+            }
+            defer {
+                if backgroundTaskID != .invalid {
+                    UIApplication.shared.endBackgroundTask(backgroundTaskID)
+                    backgroundTaskID = .invalid
+                }
+            }
             // Sync profile to user document first
             await syncProfile(profile)
             // Then sync memory with profile name
-            await syncMemory(entry, profileName: profile.name)
+            let synced = await syncMemory(entry, profileName: profile.name)
+            guard let memoryId = entry.id?.uuidString else { return }
+            if synced {
+                clearPendingMemorySync(memoryId: memoryId)
+            } else {
+                registerPendingMemorySyncForProfile(memoryId: memoryId, profileId: profile.id)
+            }
         }
     }
     
@@ -1915,6 +2104,73 @@ extension FirestoreSyncService {
         return path
     }
 
+    /// Jobs older than this are ignored for auto-resume / banner so stale `failed` rows from old deployments do not route the app forever.
+    static let storybookCloudJobMaxActiveAge: TimeInterval = 7 * 24 * 60 * 60
+
+    /// Returns whether a job document's `createdAt` is recent enough to treat as "active" for routing and UI.
+    static func isStorybookJobRecentForActiveUI(createdAt: Any?, referenceNow: Date = Date()) -> Bool {
+        guard let ts = createdAt as? Timestamp else { return false }
+        let created = ts.dateValue()
+        let age = referenceNow.timeIntervalSince(created)
+        if age < 0 { return true }
+        return age <= storybookCloudJobMaxActiveAge
+    }
+
+    /// Rows must be newest-first (Firestore `order(by: "createdAt", descending: true)`).
+    static func pickActiveStorybookCloudJob(
+        profileId: UUID,
+        rowsNewestFirst: [(documentID: String, data: [String: Any])],
+        referenceNow: Date = Date()
+    ) -> ActiveStorybookCloudJob? {
+        let pid = profileId.uuidString.lowercased()
+        var filtered: [(id: String, d: [String: Any], st: String)] = []
+        for row in rowsNewestFirst {
+            let d = row.data
+            guard Self.isStorybookJobRecentForActiveUI(createdAt: d["createdAt"], referenceNow: referenceNow) else { continue }
+            let p = String(describing: d["profileId"] ?? "").lowercased()
+            guard p == pid else { continue }
+            let st = String(describing: d["status"] ?? "")
+            if st == "dismissedFailed" { continue }
+            filtered.append((row.documentID, d, st))
+        }
+        let supersedeNewer = Set(["queued", "ranking", "running", "aiComplete", "complete"])
+        let inFlight = Set(["queued", "ranking", "running", "aiComplete"])
+        for i in filtered.indices {
+            let st = filtered[i].st
+            if inFlight.contains(st) {
+                return Self.makeActiveStorybookCloudJob(documentId: filtered[i].id, data: filtered[i].d)
+            }
+            if st == "failed" {
+                var hasNewerSuperseding = false
+                for j in filtered.indices where j < i {
+                    if supersedeNewer.contains(filtered[j].st) {
+                        hasNewerSuperseding = true
+                        break
+                    }
+                }
+                if !hasNewerSuperseding {
+                    return Self.makeActiveStorybookCloudJob(documentId: filtered[i].id, data: filtered[i].d)
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func makeActiveStorybookCloudJob(documentId: String, data: [String: Any]) -> ActiveStorybookCloudJob {
+        let prog = data["progress"] as? [String: Any] ?? [:]
+        let completed = (prog["completedMemoryCount"] as? NSNumber)?.intValue ?? (prog["completedMemoryCount"] as? Int) ?? 0
+        let total = (prog["totalMemories"] as? NSNumber)?.intValue ?? (prog["totalMemories"] as? Int) ?? 0
+        let cur = String(describing: prog["currentStatus"] ?? "")
+        let st = String(describing: data["status"] ?? "")
+        return ActiveStorybookCloudJob(
+            jobId: documentId,
+            status: st,
+            progressCompleted: completed,
+            progressTotal: total,
+            currentStatus: cur
+        )
+    }
+
     /// Latest storybook cloud job for this profile that still needs app attention (including `aiComplete` awaiting finalize).
     func fetchLatestActiveStorybookJob(profileId: UUID) async throws -> ActiveStorybookCloudJob? {
         guard let uid = Auth.auth().currentUser?.uid else { return nil }
@@ -1922,27 +2178,8 @@ extension FirestoreSyncService {
             .order(by: "createdAt", descending: true)
             .limit(to: 25)
             .getDocuments()
-        let active = Set(["queued", "ranking", "running", "aiComplete"])
-        let pid = profileId.uuidString.lowercased()
-        for doc in snap.documents {
-            let d = doc.data()
-            let p = String(describing: d["profileId"] ?? "").lowercased()
-            guard p == pid else { continue }
-            let st = String(describing: d["status"] ?? "")
-            guard active.contains(st) else { continue }
-            let prog = d["progress"] as? [String: Any] ?? [:]
-            let completed = (prog["completedMemoryCount"] as? NSNumber)?.intValue ?? (prog["completedMemoryCount"] as? Int) ?? 0
-            let total = (prog["totalMemories"] as? NSNumber)?.intValue ?? (prog["totalMemories"] as? Int) ?? 0
-            let cur = String(describing: prog["currentStatus"] ?? "")
-            return ActiveStorybookCloudJob(
-                jobId: doc.documentID,
-                status: st,
-                progressCompleted: completed,
-                progressTotal: total,
-                currentStatus: cur
-            )
-        }
-        return nil
+        let rows = snap.documents.map { ($0.documentID, $0.data()) }
+        return Self.pickActiveStorybookCloudJob(profileId: profileId, rowsNewestFirst: rows)
     }
 
     func writeStorybookCloudJob(jobId: String, data: [String: Any]) async throws {

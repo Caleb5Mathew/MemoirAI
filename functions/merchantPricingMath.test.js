@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("assert");
-const { computeBookBaseCentsFromLuluLineMake } = require("./merchantPricingMath");
+const { computeBookBaseCentsFromLuluLineMake, sumCartLineShippingCents } = require("./merchantPricingMath");
 
 // Thin book: Lulu make $10 → with 30% margin = $13; floor $29.99 wins
 {
@@ -53,6 +53,30 @@ const { computeBookBaseCentsFromLuluLineMake } = require("./merchantPricingMath"
   });
   assert.strictEqual(r.bookBaseCents, 6500);
   assert.strictEqual(r.pricingFloorApplied, false);
+}
+
+// sumCartLineShippingCents: 2-book cart, each line ships as its own package ($6.50 + $8.20 = $14.70)
+{
+  const total = sumCartLineShippingCents([650, 820]);
+  assert.strictEqual(total, 1470);
+}
+
+// sumCartLineShippingCents: single line — sum equals that line's own quote
+{
+  const total = sumCartLineShippingCents([999]);
+  assert.strictEqual(total, 999);
+}
+
+// sumCartLineShippingCents: empty/no lines -> 0
+{
+  assert.strictEqual(sumCartLineShippingCents([]), 0);
+  assert.strictEqual(sumCartLineShippingCents(undefined), 0);
+}
+
+// sumCartLineShippingCents: ignores negative/non-finite noise defensively (never produces a negative charge)
+{
+  const total = sumCartLineShippingCents([500, -50, NaN, 300]);
+  assert.strictEqual(total, 800);
 }
 
 console.log("merchantPricingMath.test.js: OK");

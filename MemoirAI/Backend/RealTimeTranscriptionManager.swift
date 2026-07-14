@@ -13,24 +13,57 @@ final class RealTimeTranscriptionManager: ObservableObject {
     private var audioEngine: AVAudioEngine?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    
+
+    private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
+
     private init() {
-        // Simplified initialization without complex audio session management
+        // Defensively tear down our own audio engine on system interruptions /
+        // route changes even if a caller forgets to. Recording views still own
+        // pausing their `AVAudioRecorder` and any resume UI via their own
+        // `AudioSessionInterruptionObserver` — this is a safety net for the
+        // engine this class manages internally, not a substitute for that.
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.handleInterruption(note)
+        }
+
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.handleRouteChange(note)
+        }
     }
-    
+
     deinit {
         stopTranscription()
+        if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
+        if let routeChangeObserver { NotificationCenter.default.removeObserver(routeChangeObserver) }
     }
-    
-    // MARK: - Route Change Handling
-    
-    private func handleRouteChange() {
-        // Simplified route change handling
-        if isTranscribing {
-            print("🔄 Route change detected - restarting transcription")
-            stopTranscription()
-            startTranscription()
-        }
+
+    // MARK: - Interruption / Route Change Handling
+
+    private func handleInterruption(_ note: Notification) {
+        guard isTranscribing,
+              let info = note.userInfo,
+              let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              AVAudioSession.InterruptionType(rawValue: typeValue) == .began else { return }
+        print("🔄 Audio interrupted - pausing real-time transcription engine")
+        pauseTranscription()
+    }
+
+    private func handleRouteChange(_ note: Notification) {
+        guard isTranscribing,
+              let info = note.userInfo,
+              let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              AVAudioSession.RouteChangeReason(rawValue: reasonValue) == .oldDeviceUnavailable else { return }
+        print("🔄 Route change (device unavailable) - pausing real-time transcription engine")
+        pauseTranscription()
     }
     
     // MARK: - Transcription Control

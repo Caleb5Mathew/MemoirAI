@@ -11,6 +11,8 @@ import Foundation
 import Testing
 @testable import MemoirAI
 
+/// Both tests read/write `UserDefaults.standard` under the same key as production; run serially to avoid parallel-test races.
+@Suite(.serialized)
 struct BookVersionPersistOrderingTests {
     private static let key = "memoirai_pending_syncs"
 

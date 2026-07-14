@@ -2,9 +2,9 @@ import SwiftUI
 
 struct MemoryEnhancementIntroView: View {
     let onStartVoice: () -> Void
-    let onEditManually: () -> Void
+    let onEnhanceByTyping: () -> Void
     let onClose: () -> Void
-    /// Guided enhancement requires OpenAI; when false, primary CTA is manual entry.
+    /// Guided enhancement (voice or typing) requires OpenAI; both buttons disable when false.
     let voiceGuideAvailable: Bool
 
     private var accent: Color { Color(red: 0.88, green: 0.52, blue: 0.28) }
@@ -56,7 +56,7 @@ struct MemoryEnhancementIntroView: View {
                     .padding(.horizontal, 8)
 
                     if !voiceGuideAvailable {
-                        Text("Guided enhancement needs an OpenAI key in Info.plist. You can still add characters manually.")
+                        Text("Guided enhancement needs an OpenAI key in Info.plist. Add one to enable voice or typing enhancement.")
                             .font(.footnote)
                             .foregroundStyle(.orange)
                             .multilineTextAlignment(.center)
@@ -86,19 +86,26 @@ struct MemoryEnhancementIntroView: View {
                     .accessibilityIdentifier("enhancementIntroVoiceButton")
 
                     Button {
-                        onEditManually()
+                        onEnhanceByTyping()
                     } label: {
-                        Text("Edit characters manually")
-                            .fontWeight(.medium)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .foregroundStyle(header)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(header.opacity(0.35), lineWidth: 1.5)
-                            )
+                        HStack {
+                            Image(systemName: "keyboard")
+                            Text("Enhance by Typing")
+                                .fontWeight(.semibold)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundStyle(voiceGuideAvailable ? header : Color.gray)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(
+                                    (voiceGuideAvailable ? header : Color.gray).opacity(0.35),
+                                    lineWidth: 1.5
+                                )
+                        )
                     }
-                    .accessibilityIdentifier("enhancementIntroManualButton")
+                    .disabled(!voiceGuideAvailable)
+                    .accessibilityIdentifier("enhancementIntroTypingButton")
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 36)

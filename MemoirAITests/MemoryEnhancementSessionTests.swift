@@ -133,4 +133,155 @@ struct MemoryEnhancementSessionTests {
         #expect(details.characters[0].hairAndFeatures.contains("gray"))
         #expect(details.characters[0].clothes.contains("cardigan"))
     }
+
+    // MARK: - Scene gap scorer
+
+    private func person(
+        _ label: String,
+        ethnicity: String? = nil,
+        hair: String? = nil
+    ) -> ScenePerson {
+        ScenePerson(
+            label: label,
+            isNarrator: false,
+            age: nil,
+            gender: nil,
+            ethnicity: ethnicity,
+            hairAndFeatures: hair,
+            clothes: nil,
+            relationshipToNarrator: nil
+        )
+    }
+
+    @Test func sceneGapScorer_namedPeopleMissingEthnicity_shouldNotExtractAtTurn0() {
+        let spec = SceneSpec(
+            hasPeople: true,
+            people: [person("Bob"), person("Sam")],
+            setting: "park",
+            era: nil,
+            action: "playing catch",
+            mood: "happy",
+            motif: nil,
+            eraAppearsRelevant: false
+        )
+        let gaps = SceneGapScorer.score(spec, turnsCompleted: 0)
+        #expect(gaps.contains { $0.field == .ethnicity })
+        #expect(SceneGapScorer.shouldExtract(gaps: gaps, turnsCompleted: 0) == false)
+    }
+
+    @Test func sceneGapScorer_fullySpecified_shouldExtractAtTurn0() {
+        let spec = SceneSpec(
+            hasPeople: true,
+            people: [
+                person("Bob", ethnicity: "Mexican American", hair: "short curly hair")
+            ],
+            setting: "kitchen",
+            era: nil,
+            action: "baking cookies",
+            mood: "warm",
+            motif: nil,
+            eraAppearsRelevant: false
+        )
+        let gaps = SceneGapScorer.score(spec, turnsCompleted: 0)
+        #expect(SceneGapScorer.shouldExtract(gaps: gaps, turnsCompleted: 0) == true)
+    }
+
+    @Test func sceneGapScorer_sceneryOnly_shouldExtractWhenSettingAndActionPresent() {
+        let spec = SceneSpec(
+            hasPeople: false,
+            people: [],
+            setting: "old barn at sunset",
+            era: nil,
+            action: "swallows nesting in the rafters",
+            mood: "quiet",
+            motif: nil,
+            eraAppearsRelevant: false
+        )
+        let gaps = SceneGapScorer.score(spec, turnsCompleted: 0)
+        #expect(SceneGapScorer.shouldExtract(gaps: gaps, turnsCompleted: 0) == true)
+    }
+
+    @Test func sceneGapScorer_turnCapForcesExtractEvenWithStrongGaps() {
+        let spec = SceneSpec(
+            hasPeople: true,
+            people: [person("Lee")],
+            setting: "school",
+            era: nil,
+            action: "walking home",
+            mood: nil,
+            motif: nil,
+            eraAppearsRelevant: false
+        )
+        let gaps = SceneGapScorer.score(spec, turnsCompleted: 0)
+        #expect(gaps.contains { $0.field == .ethnicity })
+        #expect(SceneGapScorer.shouldExtract(gaps: gaps, turnsCompleted: MemoryEnhancementSessionRules.maxSessionTurns) == true)
+    }
+
+    @Test func sceneGapScorer_strongGapsStopBlockingAfterTurn3() {
+        let spec = SceneSpec(
+            hasPeople: true,
+            people: [person("Alex")],
+            setting: "café",
+            era: nil,
+            action: "talking",
+            mood: nil,
+            motif: nil,
+            eraAppearsRelevant: false
+        )
+        let gaps = SceneGapScorer.score(spec, turnsCompleted: 0)
+        #expect(SceneGapScorer.shouldExtract(gaps: gaps, turnsCompleted: 0) == false)
+        #expect(SceneGapScorer.shouldExtract(gaps: gaps, turnsCompleted: 3) == true)
+    }
+
+    @Test func sceneGapScorer_sortedGaps_mustHaveBeforeEthnicity() {
+        let spec = SceneSpec(
+            hasPeople: true,
+            people: [person("Pat")],
+            setting: "",
+            era: nil,
+            action: "",
+            mood: nil,
+            motif: nil,
+            eraAppearsRelevant: false
+        )
+        let sorted = SceneGapScorer.sortedGaps(SceneGapScorer.score(spec, turnsCompleted: 0))
+        #expect(sorted.first?.field == .setting || sorted.first?.field == .action)
+    }
+
+    @Test func characterCardNormalization_rewritesNarratorAliases() {
+        var a = CharacterDetails.Character()
+        a.name = "I"
+        a.relationshipToNarrator = "memoir narrator"
+        var details = CharacterDetails(characters: [a])
+        details.normalizeCardDisplayNames(profileDisplayName: "Caleb", relationshipStyleProfileName: false)
+        #expect(details.characters[0].name == "Caleb")
+    }
+
+    @Test func characterCardNormalization_motherPlusWifeDisambiguates() {
+        var a = CharacterDetails.Character()
+        a.name = "Mother"
+        a.relationshipToNarrator = "wife"
+        var details = CharacterDetails(characters: [a])
+        details.normalizeCardDisplayNames(profileDisplayName: "Alex", relationshipStyleProfileName: false)
+        #expect(details.characters[0].name.contains("Mother"))
+        #expect(details.characters[0].name.lowercased().contains("narrator's wife"))
+    }
+
+    @Test func characterCardNormalization_memoirNarratorRelRewritesMomToProfileName() {
+        var a = CharacterDetails.Character()
+        a.name = "Mom"
+        a.relationshipToNarrator = "memoir narrator"
+        var details = CharacterDetails(characters: [a])
+        details.normalizeCardDisplayNames(profileDisplayName: "Pat", relationshipStyleProfileName: false)
+        #expect(details.characters[0].name == "Pat")
+    }
+
+    @Test func characterCardNormalization_memoirNarratorRelRewritesMomToTheMemoirNarrator() {
+        var a = CharacterDetails.Character()
+        a.name = "Mom"
+        a.relationshipToNarrator = "memoir narrator"
+        var details = CharacterDetails(characters: [a])
+        details.normalizeCardDisplayNames(profileDisplayName: "Grandparent", relationshipStyleProfileName: true)
+        #expect(details.characters[0].name == "the memoir narrator")
+    }
 }

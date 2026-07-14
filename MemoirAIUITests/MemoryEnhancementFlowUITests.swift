@@ -4,7 +4,8 @@
 //
 //  Smoke placeholder: full flow requires a memory in "Enhance" state and stable navigation.
 //  Unit tests cover session rules + JSON mapping. Accessibility IDs on intro:
-//  `enhancementIntroVoiceButton`, `enhancementIntroManualButton`.
+//  `enhancementIntroVoiceButton`, `enhancementIntroTypingButton`. The typing session
+//  exposes `enhancementTypingAnswerField` and `enhancementTypingSubmitButton`.
 //
 
 import XCTest

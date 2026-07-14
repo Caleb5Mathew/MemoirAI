@@ -2,6 +2,34 @@
   "functions": {
     "source": "functions"
   },
+  "auth": {
+    "providers": {
+      "emailPassword": true,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "MemoirAI",
+        "supportEmail": "caleb5mathew@gmail.com",
+        "authorizedRedirectUris": [
+          "https://memoirai-7db06.web.app",
+          "https://memoirai-7db06.firebaseapp.com"
+        ]
+      }
+    }
+  },
+  "hosting": {
+    "public": "public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "headers": [
+      {
+        "source": "/ops/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      }
+    ],
+    "rewrites": [
+      { "source": "/ops", "destination": "/ops/index.html" }
+    ]
+  },
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"

@@ -45,6 +45,12 @@ service cloud.firestore {
         allow read, write: if isOwner(userId);
       }
 
+      // Server-only AI usage quota counters (aiProxy.js checkAndIncrementQuota).
+      // Never client-writable — a client could otherwise reset/inflate its own quota.
+      match /aiUsage/{usageId} {
+        allow read, write: if false;
+      }
+
       match /bookVersions/{bookVersionId} {
         allow read: if isOwner(userId);
         allow create: if isOwner(userId);
@@ -74,13 +80,37 @@ service cloud.firestore {
     }
 
     // Global developer telemetry aggregates across all users.
-    // Dashboard reads from these docs; image/chat/upload operations increment them.
+    // Dashboard reads from these docs; DevCostTelemetryService (iOS) increments them client-side
+    // via merge-set with FieldValue.increment on a fixed field set — writes are scoped to that
+    // known schema so an authenticated client can't inject unrelated top-level fields into a
+    // doc shared across every user. This does not bound the *values* an authenticated client can
+    // increment by (Firestore rules only see the post-increment result) — the real fix is moving
+    // these writes server-side; tracked as a follow-up, not implemented here.
     match /globalApiTelemetry/{dayKey} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null
+        && request.resource.data.keys().hasOnly([
+          "dayKey", "dateStart", "totalRequests", "successfulRequests", "failedRequests",
+          "totalDurationMs", "totalPromptCharacters", "totalInputTokens", "totalOutputTokens",
+          "totalInputImages", "totalOutputImages", "totalUploadedBytes",
+          "estimatedCostLow", "estimatedCostBase", "estimatedCostHigh", "confidenceWeightedSum",
+          "providerCounts", "providerCostBase", "modelCounts", "modelCostBase",
+          "lastUpdated", "lastUserId"
+        ]);
+      allow delete: if false;
     }
 
     match /globalApiTelemetryTotals/{docId} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null
+        && request.resource.data.keys().hasOnly([
+          "totalRequests", "successfulRequests", "failedRequests",
+          "estimatedCostLow", "estimatedCostBase", "estimatedCostHigh",
+          "providerCounts", "providerCostBase", "modelCounts", "modelCostBase",
+          "totalOutputImages", "totalInputImages", "totalUploadedBytes",
+          "lastUpdated", "lastUserId"
+        ]);
+      allow delete: if false;
     }
   }
 }

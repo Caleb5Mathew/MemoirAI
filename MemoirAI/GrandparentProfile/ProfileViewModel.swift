@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import CoreData
+import CryptoKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -90,16 +91,75 @@ class ProfileViewModel: ObservableObject {
 
     func updateSelectedProfile(with newProfile: Profile) {
         guard profiles.indices.contains(selectedProfileIndex) else { return }
+        let old = profiles[selectedProfileIndex]
         profiles[selectedProfileIndex] = newProfile
         saveProfiles()
         syncProfileToCloudKit(newProfile)
+        if Self.shouldInvalidateFaceLikeness(old: old, new: newProfile) {
+            Task { await recomputeFaceDescriptionIfNeeded(for: newProfile.id) }
+        }
     }
 
     func updateProfile(_ updatedProfile: Profile) {
         guard let index = profiles.firstIndex(where: { $0.id == updatedProfile.id }) else { return }
+        let old = profiles[index]
         profiles[index] = updatedProfile
         saveProfiles()
         syncProfileToCloudKit(updatedProfile)
+        if Self.shouldInvalidateFaceLikeness(old: old, new: updatedProfile) {
+            Task { await recomputeFaceDescriptionIfNeeded(for: updatedProfile.id) }
+        }
+    }
+
+    private static func shouldInvalidateFaceLikeness(old: Profile, new: Profile) -> Bool {
+        old.photoData != new.photoData || old.ethnicity != new.ethnicity || old.gender != new.gender
+    }
+
+    /// Recomputes OpenAI vision likeness text when headshot or ethnicity/gender inputs change.
+    func recomputeFaceDescriptionIfNeeded(for profileId: UUID) async {
+        guard let idx = profiles.firstIndex(where: { $0.id == profileId }) else { return }
+        var p = profiles[idx]
+
+        guard let jpeg = p.photoData, !jpeg.isEmpty else {
+            if p.faceDescription != nil || p.faceDescriptionPhotoHash != nil {
+                p.faceDescription = nil
+                p.faceDescriptionPhotoHash = nil
+                profiles[idx] = p
+                saveProfiles()
+                syncProfileToCloudKit(p)
+            }
+            return
+        }
+
+        let fp = Self.faceLikenessCacheFingerprint(jpeg: jpeg, ethnicity: p.ethnicity, gender: p.gender)
+        if p.faceDescriptionPhotoHash == fp, let existing = p.faceDescription, !existing.isEmpty {
+            return
+        }
+
+        let ctx = ImageContext()
+        do {
+            let desc = try await ctx.faceDescriptor(
+                fileID: "profile-local",
+                jpegData: jpeg,
+                race: p.ethnicity,
+                gender: p.gender
+            )
+            p.faceDescription = desc
+            p.faceDescriptionPhotoHash = fp
+            profiles[idx] = p
+            saveProfiles()
+            syncProfileToCloudKit(p)
+            print("✅ Profile face description updated")
+        } catch {
+            print("⚠️ Face description failed:", error.localizedDescription)
+        }
+    }
+
+    private static func faceLikenessCacheFingerprint(jpeg: Data, ethnicity: String?, gender: String?) -> String {
+        var payload = jpeg
+        let meta = "|eth:\(ethnicity ?? "")|gen:\(gender ?? "")|"
+        if let m = meta.data(using: .utf8) { payload.append(m) }
+        return SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
     }
 
     func updateName(for profile: Profile, to newName: String) {
@@ -112,6 +172,8 @@ class ProfileViewModel: ObservableObject {
         guard profiles.indices.contains(selectedProfileIndex) else { return }
         let profileId = profiles[selectedProfileIndex].id
         profiles[selectedProfileIndex].photoData = nil
+        profiles[selectedProfileIndex].faceDescription = nil
+        profiles[selectedProfileIndex].faceDescriptionPhotoHash = nil
         saveProfiles()
         // Clear the separate iCloud KV photo key so it can't resurrect on restore
         let photoKey = "memoir_profile_\(profileId.uuidString)_photo"
@@ -302,7 +364,10 @@ class ProfileViewModel: ObservableObject {
             photoData: photoData,
             birthdate: birthdate,
             ethnicity: ethnicity,
-            gender: gender
+            gender: gender,
+            childNames: [],
+            faceDescription: nil,
+            faceDescriptionPhotoHash: nil
         )
     }
 }

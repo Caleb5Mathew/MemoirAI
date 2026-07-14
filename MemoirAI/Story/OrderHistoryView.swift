@@ -90,6 +90,9 @@ struct OrderRowView: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                 Spacer()
+                if let pill = order.specialStatusPill {
+                    specialPill(pill)
+                }
                 statusBadge
             }
             if let addr = order.shippingAddress {
@@ -128,6 +131,18 @@ struct OrderRowView: View {
         }
     }
 
+    /// Renders a refund/dispute/hold pill using the same capsule styling as `statusBadge`.
+    func specialPill(_ pill: (text: String, color: Color)) -> some View {
+        Text(pill.text)
+            .font(.caption2)
+            .fontWeight(.semibold)
+            .foregroundColor(pill.color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(pill.color.opacity(0.15))
+            .clipShape(Capsule())
+    }
+
     func formatPrice(cents: Int, currency: String) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
@@ -142,6 +157,7 @@ struct OrderDetailView: View {
     let order: OrderRecord
     @Environment(\.dismiss) private var dismiss
     @State private var copiedOrderId = false
+    @State private var showSupportCopiedAlert = false
 
     var body: some View {
         NavigationView {
@@ -177,8 +193,18 @@ struct OrderDetailView: View {
                     if let createdAt = order.createdAt {
                         detailRow(label: "Order placed", value: createdAt.formatted(date: .long, time: .shortened))
                     }
+
+                    contactSupportSection
                 }
                 .padding(20)
+            }
+            .refreshable {
+                do {
+                    try await OrderService.shared.syncOrderFromLulu(orderId: order.orderId)
+                } catch {
+                    // Quiet failure by design: the live Firestore listener keeps showing cached state.
+                    print("⚠️ syncOrderFromLulu failed for \(order.orderId): \(error.localizedDescription)")
+                }
             }
             .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("Order Details")
@@ -188,16 +214,50 @@ struct OrderDetailView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .alert("Email Copied", isPresented: $showSupportCopiedAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("We couldn't open Mail, so we copied \(SupportContact.email) to your clipboard.")
+            }
         }
     }
 
     private var statusBannerSection: some View {
         let rowView = OrderRowView(order: order)
-        return HStack {
-            Spacer()
-            rowView.statusBadge
-                .scaleEffect(1.2)
-            Spacer()
+        return VStack(spacing: 8) {
+            HStack {
+                Spacer()
+                rowView.statusBadge
+                    .scaleEffect(1.2)
+                Spacer()
+            }
+            if let pill = order.specialStatusPill {
+                HStack {
+                    Spacer()
+                    rowView.specialPill(pill)
+                    Spacer()
+                }
+            }
+        }
+        .padding()
+        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var contactSupportSection: some View {
+        Button {
+            SupportContact.contact(subject: "Order #\(order.orderId)") {
+                showSupportCopiedAlert = true
+            }
+        } label: {
+            HStack {
+                Image(systemName: "envelope.fill")
+                Text("Contact Support")
+                Spacer()
+                Image(systemName: "arrow.up.right")
+            }
+            .font(.subheadline)
+            .foregroundColor(.blue)
         }
         .padding()
         .background(Color(UIColor.secondarySystemGroupedBackground))

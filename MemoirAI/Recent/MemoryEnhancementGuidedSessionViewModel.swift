@@ -11,6 +11,8 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
     @Published var errorMessage: String?
     /// When set, guided flow should transition to review/save.
     @Published var extractionResult: CharacterDetails?
+    /// Human-readable gap hint for the guided UI (e.g. “Background or heritage for Sam”).
+    @Published var rubricTierCaption: String = ""
 
     private let memoryText: String
     private let memoryTitle: String?
@@ -18,15 +20,21 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
     private let service: MemoryEnhancementService
     private let onFinished: (CharacterDetails) -> Void
     private let onPartialSave: ((CharacterDetails) async -> Void)?
+    /// Used only when normalizing narrator placeholder names on extracted cards.
+    private let profileDisplayName: String?
+    private let relationshipStyleProfileName: Bool
     private var didFinishExtraction = false
     /// After a successful partial persist, skip duplicate saves until `turns.count` changes.
     private var lastPartialSavedTurnCount: Int = -1
     /// True when state was loaded from `EnhancementSessionDraft` (skip first-question bootstrap).
     private let loadedFromDraft: Bool
+    private var promptContext = MemoryEnhancementPromptContext(tierStart: 1, characterFocus: [], skipPeopleTiers: false)
 
     init(
         memory: MemoryEntry,
         service: MemoryEnhancementService,
+        profileDisplayName: String? = nil,
+        relationshipStyleProfileName: Bool = false,
         onFinished: @escaping (CharacterDetails) -> Void,
         onPartialSave: ((CharacterDetails) async -> Void)? = nil
     ) {
@@ -34,12 +42,17 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
         self.memoryTitle = memory.prompt?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.memoryId = memory.id
         self.service = service
+        self.profileDisplayName = profileDisplayName
+        self.relationshipStyleProfileName = relationshipStyleProfileName
         self.onFinished = onFinished
         self.onPartialSave = onPartialSave
 
         if let id = memory.id, let draft = EnhancementSessionDraft.load(memoryId: id) {
             self.turns = draft.turns
             self.currentQuestion = draft.currentQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let pc = draft.promptContext {
+                self.promptContext = pc
+            }
             self.loadedFromDraft = true
         } else {
             self.currentQuestion = ""
@@ -50,13 +63,61 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
     /// Loads the first tailored question or repairs an inconsistent draft (e.g. missing `currentQuestion`).
     func bootstrapIfNeeded() async {
         if loadedFromDraft {
+            defaultProgressCaption()
             if currentQuestion.isEmpty, !turns.isEmpty {
                 await recoverNextQuestionAfterIncompleteDraft()
             }
             return
         }
         guard currentQuestion.isEmpty else { return }
-        await loadFirstQuestion()
+        await runPreflightAndFirstQuestion()
+    }
+
+    private func applyGapCaption(_ reason: String?) {
+        if let r = reason?.trimmingCharacters(in: .whitespacesAndNewlines), !r.isEmpty {
+            rubricTierCaption = r
+        }
+    }
+
+    private func defaultProgressCaption() {
+        if rubricTierCaption.isEmpty {
+            rubricTierCaption = promptContext.skipPeopleTiers
+                ? "Scene-focused enhancement"
+                : "Filling in illustration details"
+        }
+    }
+
+    private func runPreflightAndFirstQuestion() async {
+        isBootstrapping = true
+        errorMessage = nil
+        defer { isBootstrapping = false }
+        do {
+            let pre = try await service.runPreflight(memoryTitle: memoryTitle, memoryText: memoryText)
+            if pre.mode.lowercased() == "skip" {
+                try await runExtraction()
+                return
+            }
+            promptContext = MemoryEnhancementPromptContext(
+                tierStart: min(4, max(1, pre.tier_start)),
+                characterFocus: Array(pre.character_focus.prefix(3)),
+                skipPeopleTiers: pre.skip_people_tiers
+            )
+            try await loadFirstQuestionBody()
+        } catch {
+            promptContext = MemoryEnhancementPromptContext(
+                tierStart: 1,
+                characterFocus: Array(CharacterCanonHelper.capitalizedNameCandidates(in: memoryText).prefix(3)),
+                skipPeopleTiers: !CharacterCanonHelper.likelyPeoplePresent(in: memoryText)
+            )
+            defaultProgressCaption()
+            try? await loadFirstQuestionBody()
+            if currentQuestion.isEmpty {
+                errorMessage = "We couldn’t prepare your first question. Check your connection and try again."
+                currentQuestion = "Take a moment to picture this memory—where were you, and who was with you when it mattered most?"
+                persistDraft()
+            }
+            print("runPreflightAndFirstQuestion: \(error)")
+        }
     }
 
     /// True after a full guided completion (extract + success flow), not after partial saves.
@@ -84,14 +145,14 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
     func persistDraft() {
         guard let memoryId else { return }
         guard !currentQuestion.isEmpty || !turns.isEmpty else { return }
-        EnhancementSessionDraft(turns: turns, currentQuestion: currentQuestion).save(memoryId: memoryId)
+        EnhancementSessionDraft(turns: turns, currentQuestion: currentQuestion, promptContext: promptContext).save(memoryId: memoryId)
     }
 
     /// Append a transcribed/typed answer and advance the interview state machine.
     func submitAnswer(_ answer: String) async {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            errorMessage = "We didn’t catch enough speech—try recording again."
+            errorMessage = "Add a bit more detail before submitting."
             return
         }
         turns.append(MemoryEnhancementTurn(question: currentQuestion, answer: trimmed))
@@ -115,9 +176,12 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
 
         do {
             let analysis = try await service.analyzeTurn(
+                memoryTitle: memoryTitle,
                 memoryText: memoryText,
-                turns: turns
+                turns: turns,
+                context: promptContext
             )
+            applyGapCaption(analysis.reason)
             let action = MemoryEnhancementSessionRules.resolveNextAction(
                 analysis: analysis,
                 totalTurnsCompleted: turns.count
@@ -153,23 +217,15 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
         }
     }
 
-    private func loadFirstQuestion() async {
-        isBootstrapping = true
-        errorMessage = nil
-        defer { isBootstrapping = false }
-        do {
-            let q = try await service.generateFirstQuestion(
-                memoryTitle: memoryTitle,
-                memoryText: memoryText
-            )
-            currentQuestion = q
-            persistDraft()
-        } catch {
-            errorMessage = "We couldn’t prepare your first question. Check your connection and try again."
-            currentQuestion = "Who was there with you in this memory?"
-            persistDraft()
-            print("loadFirstQuestion: \(error)")
-        }
+    private func loadFirstQuestionBody() async throws {
+        let bundle = try await service.generateFirstQuestion(
+            memoryTitle: memoryTitle,
+            memoryText: memoryText,
+            context: promptContext
+        )
+        currentQuestion = bundle.question
+        rubricTierCaption = bundle.caption
+        persistDraft()
     }
 
     private func recoverNextQuestionAfterIncompleteDraft() async {
@@ -182,9 +238,12 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
                 return
             }
             let analysis = try await service.analyzeTurn(
+                memoryTitle: memoryTitle,
                 memoryText: memoryText,
-                turns: turns
+                turns: turns,
+                context: promptContext
             )
+            applyGapCaption(analysis.reason)
             let action = MemoryEnhancementSessionRules.resolveNextAction(
                 analysis: analysis,
                 totalTurnsCompleted: turns.count
@@ -206,8 +265,11 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
 
     private func extractDetails() async throws -> CharacterDetails {
         try await service.extractStructuredDetails(
+            memoryTitle: memoryTitle,
             memoryText: memoryText,
-            turns: turns
+            turns: turns,
+            profileDisplayName: profileDisplayName,
+            relationshipStyleProfileName: relationshipStyleProfileName
         )
     }
 

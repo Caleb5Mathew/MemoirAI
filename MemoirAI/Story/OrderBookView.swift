@@ -9,6 +9,7 @@ import SwiftUI
 import SafariServices
 import MapKit
 import FirebaseAuth
+import AuthenticationServices
 
 @MainActor
 private final class LocalAddressAutocomplete: NSObject, ObservableObject, @preconcurrency MKLocalSearchCompleterDelegate {
@@ -66,6 +67,10 @@ struct OrderBookView: View {
     @State private var showStripeCheckout = false
     @State private var checkoutURL: URL?
     @State private var lastCheckoutAttempt: Date?
+    /// Shown after a successful Stripe return instead of silently dismissing (see `.orderComplete`).
+    @State private var showOrderConfirmation = false
+    /// Session-only dismissal for the anonymous-account purchase-protection nudge on the review step.
+    @State private var accountLinkBannerDismissed = false
     /// Server `book{N}` id for fast checkout resume (`createCartCheckoutSessionFast`).
     @State private var fastCheckoutInstanceId: String?
     /// Dev-only diagnistics for Firebase callable failures (see `OrderService.debugCallableErrorFootnote`).
@@ -254,6 +259,12 @@ struct OrderBookView: View {
                     }
                 }
             }
+            .fullScreenCover(isPresented: $showOrderConfirmation) {
+                OrderConfirmationView {
+                    showOrderConfirmation = false
+                    dismiss()
+                }
+            }
         }
     }
 
@@ -318,7 +329,7 @@ struct OrderBookView: View {
                 checkoutURL = nil
                 fastCheckoutInstanceId = nil
                 orderCart.clear()
-                dismiss()
+                showOrderConfirmation = true
             }
             .onReceive(NotificationCenter.default.publisher(for: .orderCancelled)) { _ in
                 showStripeCheckout = false
@@ -433,7 +444,113 @@ struct OrderBookView: View {
         case .cart:
             cartSummarySection
         case .review:
-            pricingEstimateSection
+            VStack(alignment: .leading, spacing: 14) {
+                if showAccountLinkBanner {
+                    accountLinkNudgeBanner
+                }
+                pricingEstimateSection
+            }
+        }
+    }
+
+    private var isAnonymousUser: Bool {
+        Auth.auth().currentUser?.isAnonymous == true
+    }
+
+    private var showAccountLinkBanner: Bool {
+        isAnonymousUser && !accountLinkBannerDismissed
+    }
+
+    /// Non-blocking nudge so an anonymous-auth purchase isn't lost if the device is lost. Reuses the
+    /// exact Apple/Google linking mechanism from `MainTabView.bookBackupBanner` — no new auth flow.
+    private var accountLinkNudgeBanner: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "icloud.and.arrow.up")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Protect your purchase")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Back up your account so your order history is never lost.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button {
+                    accountLinkBannerDismissed = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.secondary.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 10) {
+                SignInWithAppleButton(.signIn) { request in
+                    request.nonce = AuthenticationService.shared.prepareAppleSignIn()
+                    request.requestedScopes = [.fullName, .email]
+                } onCompletion: { result in
+                    switch result {
+                    case .success(let authorization):
+                        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else { return }
+                        Task { await linkAppleAccountFromReview(credential: credential) }
+                    case .failure(let error):
+                        print("❌ Apple sign-in failed (order review nudge): \(error.localizedDescription)")
+                    }
+                }
+                .signInWithAppleButtonStyle(.black)
+                .frame(height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                Button(action: linkGoogleAccountFromReview) {
+                    HStack(spacing: 6) {
+                        ZStack {
+                            Circle().fill(Color.white).frame(width: 18, height: 18)
+                            Text("G").font(.system(size: 10, weight: .bold)).foregroundColor(.blue)
+                        }
+                        Text("Google")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 40)
+                    .background(Color.white)
+                    .foregroundColor(Color.black.opacity(0.75))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.black.opacity(0.12), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(cardStroke, lineWidth: 1)
+        )
+    }
+
+    private func linkAppleAccountFromReview(credential: ASAuthorizationAppleIDCredential) async {
+        do {
+            try await AuthenticationService.shared.linkAppleAccount(credential: credential)
+        } catch {
+            print("❌ Link Apple failed (order review nudge): \(error.localizedDescription)")
+        }
+    }
+
+    private func linkGoogleAccountFromReview() {
+        Task {
+            do {
+                try await AuthenticationService.shared.linkGoogleAccount()
+            } catch {
+                print("❌ Link Google failed (order review nudge): \(error.localizedDescription)")
+            }
         }
     }
 
@@ -587,10 +704,7 @@ struct OrderBookView: View {
     }
 
     private var displayBookTitle: String {
-        if let t = book.printTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
-            return t
-        }
-        return book.pages.first?.title ?? "Story"
+        book.bookCatalogDisplayTitle
     }
 
     /// Remote URLs to try for the order card thumbnail (cover, then page art / renders).
@@ -913,7 +1027,7 @@ struct OrderBookView: View {
         let urls = cartThumbnailImageURLs(for: item)
         if let pdfURL {
             let layout: BookCoverFlatLayoutKind = item.isLandscape
-                ? .kidsBook
+                ? .kidsBook(pageCount: max(1, item.snapshotPageCount))
                 : .portraitCasewrap(pageCount: item.snapshotPageCount)
             RemotePDFThumbnailView(
                 url: pdfURL,
@@ -1437,7 +1551,7 @@ struct OrderBookView: View {
     private var shippingSpeedFooter: some View {
         if isFormValid {
             if hasLiveShippingMethodEstimates {
-                Text("Estimates and indicative prices come from Lulu for your full cart. The Review step shows the live total (books + combined shipping) for your selection.")
+                Text("Estimates and indicative prices come from Lulu for your full cart. The Review step shows the live total (books + shipping — each book ships in its own package) for your selection.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else if !isEstimating {
@@ -1534,6 +1648,9 @@ struct OrderBookView: View {
     }
 
     private func optionAvailability(_ option: PrintProductOption, pageCount: Int) -> (available: Bool, reason: String?) {
+        if option.id == "kids_coil_bound" {
+            return (false, "Coil binding is temporarily unavailable while we finalize cover templates for Lulu.")
+        }
         if pageCount < option.minPages {
             return (false, "Add \(option.minPages - pageCount) more page(s) to unlock this format.")
         }

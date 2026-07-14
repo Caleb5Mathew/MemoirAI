@@ -424,8 +424,6 @@ struct ProfileEditView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private static let developerAccessPassword = "Apologist123!"
-
     private var profileEditDevModeSheet: some View {
         NavigationStack {
             Group {
@@ -482,7 +480,7 @@ struct ProfileEditView: View {
                             .foregroundColor(result == .success ? .green : .red)
                         }
                         Button {
-                            if devPassword == Self.developerAccessPassword {
+                            if RCSubscriptionManager.verifyDeveloperPassword(devPassword) {
                                 subscriptionManager.enablePersistentDevMode()
                                 withAnimation { devUnlockResult = .success }
                                 devPassword = ""
@@ -544,7 +542,10 @@ struct ProfileEditView: View {
             ethnicity: ethnicity.isEmpty ? nil : ethnicity,
             gender: gender.isEmpty ? nil : gender,
             createdAt: profile.createdAt,
-            updatedAt: Date()
+            updatedAt: Date(),
+            childNames: profile.childNames,
+            faceDescription: profile.faceDescription,
+            faceDescriptionPhotoHash: profile.faceDescriptionPhotoHash
         )
 
         profileVM.updateProfile(updatedProfile)

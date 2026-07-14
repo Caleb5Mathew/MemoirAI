@@ -173,11 +173,16 @@ struct BookCoverRenderer {
         fontPreset: CoverFontPreset,
         useNativeFrontTitleOverlay: Bool = false
     ) -> UIImage? {
-        let width = CGFloat(BookCoverTemplate.totalWidthPx)
+        // Spine scales with page count (Lulu-style table); total flat width grows beyond the legacy 0.25" spine for thick books.
+        let spineInches = pageCount > 0
+            ? spineWidthInches(forPageCount: pageCount)
+            : BookCoverTemplate.spineWidthInches
+        let totalWidthInches = BookCoverTemplate.totalWidthInches - BookCoverTemplate.spineWidthInches + spineInches
+        let width = CGFloat(totalWidthInches * BookCoverTemplate.dpi)
         let height = CGFloat(BookCoverTemplate.totalHeightPx)
         let wrap = CGFloat(BookCoverTemplate.wrapPx)
         let backW = CGFloat(BookCoverTemplate.backCoverWidthPx)
-        let spineW = CGFloat(BookCoverTemplate.spineWidthPx)
+        let spineW = CGFloat(spineInches * BookCoverTemplate.dpi)
         let frontW = CGFloat(BookCoverTemplate.frontCoverWidthPx)
 
         let format = UIGraphicsImageRendererFormat()
@@ -492,7 +497,11 @@ struct BookCoverRenderer {
             useNativeFrontTitleOverlay: useNativeFrontTitleOverlay
         ) else { return nil }
 
-        let widthPt = BookCoverTemplate.totalWidthInches * 72
+        let spineInches = pageCount > 0
+            ? spineWidthInches(forPageCount: pageCount)
+            : BookCoverTemplate.spineWidthInches
+        let totalWidthInches = BookCoverTemplate.totalWidthInches - BookCoverTemplate.spineWidthInches + spineInches
+        let widthPt = totalWidthInches * 72
         let heightPt = BookCoverTemplate.totalHeightInches * 72
         let bounds = CGRect(x: 0, y: 0, width: widthPt, height: heightPt)
 
@@ -506,6 +515,7 @@ struct BookCoverRenderer {
     /// Generate PDF for Lulu casewrap (0.75" wrap, 0.125" bleed, spine from page count).
     static func renderLuluPDF(
         frontCoverArt: UIImage,
+        backCoverArt: UIImage? = nil,
         profileName: String,
         pageCount: Int,
         frontTitle: String?,
@@ -533,6 +543,14 @@ struct BookCoverRenderer {
             cgContext.fill(CGRect(x: 0, y: 0, width: width, height: height))
 
             let spineX = wrap + faceW
+            let backPanel = CGRect(x: wrap, y: wrap, width: faceW - wrap, height: height - 2 * wrap)
+
+            if let backCoverArt {
+                let backArtRect = CGRect(x: 0, y: 0, width: wrap + faceW, height: height)
+                backCoverArt.draw(in: backArtRect)
+                drawBackCoverLegibilityOverlay(in: backPanel, context: cgContext)
+            }
+
             cgContext.setFillColor(spineColor.cgColor)
             cgContext.fill(CGRect(x: spineX, y: 0, width: spinePx, height: height))
 
@@ -540,7 +558,6 @@ struct BookCoverRenderer {
             let frontRect = CGRect(x: frontX, y: 0, width: faceW + wrap, height: height)
             frontCoverArt.draw(in: frontRect)
 
-            let backPanel = CGRect(x: wrap, y: wrap, width: faceW - wrap, height: height - 2 * wrap)
             drawBackCoverPanel(in: backPanel, pitch: backCoverPitch, fontPreset: fontPreset, context: cgContext)
 
             if useNativeFrontTitleOverlay,
@@ -638,8 +655,8 @@ struct BookCoverRenderer {
 
 /// Which print template produced the uploaded `cover.pdf` — must match `FirestoreSyncService.syncBook` paths.
 enum BookCoverFlatLayoutKind: Equatable {
-    /// Kids landscape: fixed `BookCoverTemplate` (24×10.25").
-    case kidsBook
+    /// Kids landscape: `BookCoverTemplate` total width (24" baseline) with spine width from page count.
+    case kidsBook(pageCount: Int)
     /// Portrait casewrap: `PortraitLuluCoverTemplate` with spine from page count.
     case portraitCasewrap(pageCount: Int)
 }
@@ -672,11 +689,14 @@ extension BookCoverRenderer {
     /// Horizontal thirds of the flat cover: back | spine | front (includes outer wrap regions).
     static func flatPanelRects(for layout: BookCoverFlatLayoutKind) -> BookCoverFlatPanelRects {
         switch layout {
-        case .kidsBook:
-            let totalW = BookCoverTemplate.totalWidthInches
+        case .kidsBook(let pageCount):
+            let spineWInches = pageCount > 0
+                ? spineWidthInches(forPageCount: pageCount)
+                : BookCoverTemplate.spineWidthInches
+            let totalW = BookCoverTemplate.totalWidthInches - BookCoverTemplate.spineWidthInches + spineWInches
             let wrap = BookCoverTemplate.wrapInches
             let backW = BookCoverTemplate.backCoverWidthInches
-            let spineW = BookCoverTemplate.spineWidthInches
+            let spineW = spineWInches
             let xAfterBack = wrap + backW
             let xAfterSpine = xAfterBack + spineW
             let back = CGRect(x: 0, y: 0, width: xAfterBack / totalW, height: 1)

@@ -57,7 +57,7 @@ struct RecentMemoriesView: View {
                     
                     if entries.isEmpty {
                         Spacer()
-                        
+
                         // Enhanced empty state with gradient
                         VStack(spacing: 24) {
                             ZStack {
@@ -73,17 +73,17 @@ struct RecentMemoriesView: View {
                                         )
                                     )
                                     .frame(width: 120, height: 120)
-                                
+
                                 Image(systemName: "book.closed.fill")
                                     .font(.system(size: 56, weight: .light))
                                     .foregroundColor(terracotta.opacity(0.6))
                             }
-                            
+
                             VStack(spacing: 12) {
                                 Text("No memories yet")
                                     .font(.system(size: 28, weight: .bold, design: .serif))
                                     .foregroundColor(textPrimary)
-                                
+
                                 Text("Start recording or writing your stories.\nThey'll appear here.")
                                     .font(.system(size: 17, weight: .regular))
                                     .foregroundColor(textSecondary)
@@ -92,8 +92,7 @@ struct RecentMemoriesView: View {
                             }
                         }
                         .padding(.horizontal, 40)
-                        
-                        Spacer()
+
                         Spacer()
                     } else {
                         // Enhanced list of memories
@@ -118,37 +117,16 @@ struct RecentMemoriesView: View {
                                         }
                                     }
                                 }
-                                
-                                // Create New Memory Button
-                                Button(action: {
-                                    showCreateMemory = true
-                                }) {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "plus")
-                                            .font(.system(size: 18, weight: .bold))
-                                        Text("Create new memory")
-                                            .font(.system(size: 18, weight: .bold, design: .serif))
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 16)
-                                    .foregroundColor(terracotta)
-                                    .background(
-                                        Color(red: 1.0, green: 0.95, blue: 0.88)
-                                    )
-                                    .cornerRadius(20)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 20)
-                                            .stroke(style: StrokeStyle(lineWidth: 2, dash: [6]))
-                                            .foregroundColor(terracotta)
-                                    )
-                                }
-                                .padding(.horizontal, 4)
                             }
                             .padding(.horizontal, 20)
                             .padding(.top, 8)
-                            .padding(.bottom, 24)
+                            .padding(.bottom, 8)
                         }
                     }
+
+                    createNewMemoryButton
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 24)
                 }
                 .navigationBarHidden(true)
                 .navigationDestination(isPresented: $showCreateMemory) {
@@ -281,12 +259,41 @@ struct RecentMemoriesView: View {
         }
         .frame(height: 50)
     }
+
+    private var createNewMemoryButton: some View {
+        Button(action: {
+            showCreateMemory = true
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus")
+                    .font(.system(size: 18, weight: .bold))
+                Text("Create new memory")
+                    .font(.system(size: 18, weight: .bold, design: .serif))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .foregroundColor(terracotta)
+            .background(
+                Color(red: 1.0, green: 0.95, blue: 0.88)
+            )
+            .cornerRadius(20)
+            .overlay(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(style: StrokeStyle(lineWidth: 2, dash: [6]))
+                    .foregroundColor(terracotta)
+            )
+        }
+    }
     
     // MARK: - Data Operations
     private func isEnhanceCandidate(_ memory: MemoryEntry) -> Bool {
         let hasText = !(memory.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         let hasCharacterDetails = memory.parsedCharacterDetails?.characters.isEmpty == false
-        return hasText && !hasCharacterDetails
+        let hasPendingDraft: Bool = {
+            guard let id = memory.id, let draft = EnhancementSessionDraft.load(memoryId: id) else { return false }
+            return !draft.currentQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }()
+        return hasText && (!hasCharacterDetails || hasPendingDraft)
     }
 
     private func fetchEntries(for profileID: UUID) {
@@ -307,12 +314,7 @@ struct RecentMemoriesView: View {
     
     // MARK: - Title Generation for Existing Memories
     private func generateTitlesForUntitledMemories() {
-        guard let apiKey = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String else {
-            print("⚠️ Cannot generate titles: API key not found")
-            return
-        }
-        
-        let titleService = MemoryTitleService(apiKey: apiKey)
+        let titleService = MemoryTitleService()
         let bgContext = PersistenceController.shared.container.newBackgroundContext()
         
         for entry in entries {
@@ -345,9 +347,13 @@ struct RecentMemoriesView: View {
     }
 
     private func delete(_ entry: MemoryEntry) {
+        let memoryId = entry.id
         context.delete(entry)
         try? context.save()
         fetchEntries(for: profileVM.selectedProfile.id)
+        if let id = memoryId {
+            Task { await FirestoreSyncService.shared.deleteMemory(memoryId: id) }
+        }
     }
     
     // MARK: - Permission Management
@@ -377,10 +383,11 @@ struct CardColors {
 
 // MARK: - Enhanced Memory Card
 struct MemoryCard: View {
-    let entry: MemoryEntry
+    @ObservedObject var entry: MemoryEntry
     let colors: CardColors
     @Binding var selectedMemoryID: UUID?
     @EnvironmentObject private var profileVM: ProfileViewModel
+    @StateObject private var transcriptionManager = BatchTranscriptionManager.shared
     @State private var showCharacterDetails = false
     @State private var showEnhancementCoordinator = false
     @State private var isPressed = false
@@ -445,15 +452,34 @@ struct MemoryCard: View {
     private var hasText: Bool {
         entry.text != nil && !(entry.text?.isEmpty ?? true)
     }
+
+    /// True while this specific memory's audio is actively being transcribed
+    /// (either by the record flow that created it or a batch retry).
+    private var isTranscribingNow: Bool {
+        guard entry.hasAudio, let id = entry.id else { return false }
+        return transcriptionManager.isInFlight(id)
+    }
     
     // Check if memory has character details
     private var hasCharacterDetails: Bool {
         entry.parsedCharacterDetails?.characters.isEmpty == false
     }
-    
+
+    /// Guided flow draft still has a question waiting for an answer (user exited mid-session).
+    private var hasPendingDraftQuestion: Bool {
+        guard let memoryId = entry.id else { return false }
+        guard let draft = EnhancementSessionDraft.load(memoryId: memoryId) else { return false }
+        return !draft.currentQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Green "Enhanced" state: has saved character cards and no unanswered pending question in draft.
+    private var shouldShowEnhancedState: Bool {
+        hasCharacterDetails && !hasPendingDraftQuestion
+    }
+
     // Check if memory should show Enhance button
     private var shouldShowEnhanceButton: Bool {
-        hasText && !hasCharacterDetails
+        hasText && !shouldShowEnhancedState
     }
     
     var body: some View {
@@ -560,7 +586,7 @@ struct MemoryCard: View {
                                 )
                             }
                             .buttonStyle(PlainButtonStyle())
-                        } else if hasCharacterDetails {
+                        } else if shouldShowEnhancedState {
                             Button(action: { 
                                 showCharacterDetails = true 
                             }) {
@@ -623,14 +649,31 @@ struct MemoryCard: View {
                         .padding(.top, 16)
                         .padding(.bottom, 20)
                 } else {
-                    // Audio-only memory placeholder
+                    // No transcript yet — distinguish "actively transcribing" from
+                    // "queued for automatic retry" so grandparents aren't left
+                    // wondering whether anything is happening.
                     HStack(spacing: 10) {
-                        Image(systemName: "waveform.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(colors.terracotta.opacity(0.7))
-                        Text("Audio recording")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(colors.textSecondary)
+                        if isTranscribingNow {
+                            ProgressView()
+                                .scaleEffect(0.75)
+                            Text("Transcribing…")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(colors.textSecondary)
+                        } else if entry.hasAudio {
+                            Image(systemName: "waveform.circle.fill")
+                                .font(.system(size: 18))
+                                .foregroundColor(colors.terracotta.opacity(0.7))
+                            Text("Audio saved — transcript coming soon. We'll retry automatically.")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(colors.textSecondary)
+                        } else {
+                            Image(systemName: "waveform.circle.fill")
+                                .font(.system(size: 18))
+                                .foregroundColor(colors.terracotta.opacity(0.7))
+                            Text("Audio recording")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(colors.textSecondary)
+                        }
                     }
                     .padding(.horizontal, 22)
                     .padding(.top, 16)
@@ -656,7 +699,7 @@ struct MemoryCard: View {
             .cornerRadius(20)
             .overlay(
                 AnimatedMemoryBorder(
-                    colors: hasCharacterDetails ? [
+                    colors: shouldShowEnhancedState ? [
                         Color(red: 0.1, green: 0.4, blue: 0.2),   // Dark green
                         Color(red: 0.15, green: 0.55, blue: 0.25), // Medium green (matching Enhanced badge)
                         Color(red: 0.2, green: 0.65, blue: 0.35),  // Lighter green

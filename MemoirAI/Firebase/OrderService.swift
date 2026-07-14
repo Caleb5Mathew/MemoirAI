@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseFunctions
@@ -360,6 +361,12 @@ struct OrderRecord: Identifiable {
     let luluStatusHistory: [[String: Any]]
     let updatedAt: Date?
     let createdAt: Date?
+    /// "refunded" | "partially_refunded" — set by the Stripe webhook; absent on most docs.
+    let refundStatus: String?
+    /// "disputed" — set by the Stripe webhook when a chargeback is opened; absent on most docs.
+    let disputeStatus: String?
+    /// True when the Stripe webhook has paused fulfillment (e.g. pending dispute review).
+    let fulfillmentHold: Bool
 
     var statusDisplay: String {
         switch status {
@@ -373,6 +380,24 @@ struct OrderRecord: Identifiable {
         case OrderStatus.testSimulated.rawValue: return "Test Order"
         default: return status
         }
+    }
+
+    /// Highest-priority account/payment issue to surface as a pill, independent of `statusDisplay`.
+    /// Priority: dispute > refund > fulfillment hold, since a dispute is the most urgent.
+    var specialStatusPill: (text: String, color: Color)? {
+        if disputeStatus == "disputed" {
+            return ("Payment Disputed", .red)
+        }
+        if refundStatus == "refunded" {
+            return ("Refunded", .gray)
+        }
+        if refundStatus == "partially_refunded" {
+            return ("Partially Refunded", .orange)
+        }
+        if fulfillmentHold {
+            return ("On Hold", .orange)
+        }
+        return nil
     }
 }
 
@@ -913,7 +938,10 @@ final class OrderService {
                         stripeSessionId: d["stripeSessionId"] as? String,
                         luluStatusHistory: d["luluStatusHistory"] as? [[String: Any]] ?? [],
                         updatedAt: (d["updatedAt"] as? Timestamp)?.dateValue(),
-                        createdAt: createdAt
+                        createdAt: createdAt,
+                        refundStatus: d["refundStatus"] as? String,
+                        disputeStatus: d["disputeStatus"] as? String,
+                        fulfillmentHold: d["fulfillmentHold"] as? Bool ?? false
                     )
                 }
                 // Stamp hasPaidOrder on each book version document
@@ -923,6 +951,17 @@ final class OrderService {
                 }
                 completion(orders)
             }
+    }
+
+    /// Asks the server to pull the latest status from Lulu for a single order (used by pull-to-refresh).
+    /// The order document is updated in place by the Cloud Function; the live `ordersListener` picks up
+    /// any change, so this call intentionally has no return value to consume.
+    func syncOrderFromLulu(orderId: String) async throws {
+        guard let userId = Auth.auth().currentUser?.uid else {
+            throw OrderError.notAuthenticated
+        }
+        let callable = Functions.functions().httpsCallable("syncOrderFromLulu")
+        _ = try await callable.call(["orderId": orderId, "userId": userId])
     }
 
     static func markOrdersSeen() {

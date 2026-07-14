@@ -63,7 +63,10 @@ private func makeBookRecordForTests(
         totalPngBytes: nil,
         pdfBytes: nil,
         source: "story_generation",
-        pages: pages
+        pages: pages,
+        bookDisplayName: nil,
+        userHandle: nil,
+        bookSeq: nil
     )
 }
 

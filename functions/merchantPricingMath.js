@@ -44,7 +44,26 @@ function computeBookBaseCentsFromLuluLineMake({
   return { bookBaseCents, pricingFloorApplied, dynamicLineCents, floorLineCents };
 }
 
+/**
+ * Cart shipping total in cents: the SUM of each cart line's own Lulu shipping quote.
+ *
+ * Each cart line is fulfilled as its own separate Lulu print job, i.e. its own shipped package —
+ * so the merchant-facing shipping charge must be the sum of every line's individual shipping quote,
+ * not one combined "ships together in one box" quote (which undercharges whenever a cart has more
+ * than one line, since Lulu bills per-package shipping for the actual multi-job fulfillment).
+ *
+ * @param {number[]} lineShippingCentsList - Per-line Lulu shipping quote in cents (one per cart line)
+ * @returns {number} Sum in cents, never negative
+ */
+function sumCartLineShippingCents(lineShippingCentsList) {
+  return (lineShippingCentsList || []).reduce((total, cents) => {
+    const n = Number(cents);
+    return total + (Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
+  }, 0);
+}
+
 module.exports = {
   clampPrintQuantityForPricing,
-  computeBookBaseCentsFromLuluLineMake
+  computeBookBaseCentsFromLuluLineMake,
+  sumCartLineShippingCents
 };

@@ -57,8 +57,11 @@ iOSInjectionProject/
 # API Keys & Secrets
 .env
 secrets.plist
+secrets.*.plist
 Config.plist
 APIKeys.plist
+AppAPIKeys.swift
+GoogleService-Info-*.plist
 
 # Temporary files
 *.tmp
@@ -88,3 +91,5 @@ recordings/
 
 # Generated files
 *.generated.swift 
+# Firebase deploy cache
+.firebase/

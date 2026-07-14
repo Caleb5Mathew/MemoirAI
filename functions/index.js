@@ -1,17 +1,21 @@
 const admin = require("firebase-admin");
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const { PDFDocument } = require("pdf-lib");
 const crypto = require("crypto");
 const Stripe = require("stripe");
-const { computeBookBaseCentsFromLuluLineMake } = require("./merchantPricingMath");
+const { computeBookBaseCentsFromLuluLineMake, sumCartLineShippingCents } = require("./merchantPricingMath");
 const {
   mustAbortPdfPackagingForMissingCoverUrl,
   nextCoverPreconditionAttemptMeta,
   COVER_PRECONDITION_EXHAUSTED_STATUS
 } = require("./bookVersionPdfGuards");
+const { ensureBookVersionArtifactUrls } = require("./storageArtifactUrls");
+const naming = require("./naming");
+const { createOrderMirrorHandler } = require("./purchasedBooks");
+const { opsAlertSmtpUrl, sendOpsAlert } = require("./opsAlerts");
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -54,6 +58,88 @@ function jsonError(res, code, message) {
   res.status(code).json({ status: "failed", message });
 }
 
+/** Restricts HTTPS callables to ops/support (set `ADMIN_EMAILS` env comma-separated, or Auth custom claim `admin: true`). */
+function assertMemoirAdmin(request) {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Must be signed in");
+  }
+  const emails = String(process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const email = String(request.auth.token.email || "").toLowerCase();
+  if (emails.length && email && emails.includes(email)) {
+    return;
+  }
+  if (request.auth.token.admin === true) {
+    return;
+  }
+  throw new HttpsError("permission-denied", "Admin only");
+}
+
+/** When false (default), paid orders wait for manual Print via ops UI / fulfillOrder. Set AUTO_FULFILL_PAID_ORDERS=true to restore immediate Lulu submit. */
+function isAutoFulfillPaidOrdersEnabled() {
+  return String(process.env.AUTO_FULFILL_PAID_ORDERS || "").trim().toLowerCase() === "true";
+}
+
+/** When false (default), callables accept requests without an App Check token. Set ENFORCE_APP_CHECK=true once the iOS App Check SDK has shipped. */
+function isAppCheckEnforced() {
+  return String(process.env.ENFORCE_APP_CHECK || "").trim().toLowerCase() === "true";
+}
+
+function firestoreTimestampToIso(value) {
+  if (!value) return null;
+  if (typeof value.toDate === "function") {
+    return value.toDate().toISOString();
+  }
+  if (value._seconds != null) {
+    return new Date(value._seconds * 1000).toISOString();
+  }
+  return null;
+}
+
+/** Shape an order doc for the ops print queue (adminListPrintOrders). */
+function orderRecordForOpsQueue(orderId, userId, data) {
+  const d = data && typeof data === "object" ? data : {};
+  const pricing = d.pricing && typeof d.pricing === "object" ? d.pricing : {};
+  const ship = d.shippingAddress && typeof d.shippingAddress === "object" ? d.shippingAddress : {};
+  const totalCents = pricing.totalCents != null ? pricing.totalCents : d.lineTotalCents;
+  return {
+    orderId: d.orderId || orderId,
+    userId,
+    status: d.status || null,
+    isTestOrder: Boolean(d.isTestOrder),
+    refundStatus: d.refundStatus || null,
+    disputeStatus: d.disputeStatus || null,
+    fulfillmentHold: Boolean(d.fulfillmentHold),
+    needsPrintAction: !d.fulfillmentHold && !d.luluPrintJobId &&
+      (d.status === "paid" || d.status === "lulu_failed" ||
+        (d.status === "pending_fulfillment" && !d.luluPrintJobId)),
+    customerEmail: d.customerEmail || null,
+    printTitle: d.printTitle || null,
+    bookDisplayName: d.bookDisplayName || null,
+    productTitle: d.productTitle || null,
+    bookVersionId: d.bookVersionId || null,
+    quantity: d.quantity != null ? d.quantity : 1,
+    shippingLevel: d.shippingLevel || null,
+    shippingAddress: ship,
+    coverURL: d.coverURL || null,
+    pdfURL: d.pdfURL || null,
+    coverPdfStoragePath: d.coverPdfStoragePath || null,
+    interiorPdfStoragePath: d.interiorPdfStoragePath || null,
+    totalCents,
+    currency: pricing.currency || "usd",
+    stripePaymentIntentId: d.stripePaymentIntentId || null,
+    stripeSessionId: d.stripeSessionId || null,
+    luluPrintJobId: d.luluPrintJobId || null,
+    luluError: d.luluError || null,
+    luluTrackingUrl: d.luluTrackingUrl || null,
+    luluTotalCostInclTax: d.luluTotalCostInclTax != null ? d.luluTotalCostInclTax : null,
+    createdAt: firestoreTimestampToIso(d.createdAt),
+    updatedAt: firestoreTimestampToIso(d.updatedAt)
+  };
+}
+
 function getStripeApiKey() {
   const raw = String(stripeSecretKey.value() || "");
   const trimmed = raw.trim();
@@ -65,6 +151,21 @@ function getStripeApiKey() {
   }
   if (/[\r\n]/.test(trimmed)) {
     throw new Error("Stripe secret key contains newline characters");
+  }
+  return trimmed;
+}
+
+function getStripeWebhookSecret() {
+  const raw = String(stripeWebhookSecret.value() || "");
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error("Stripe webhook secret is empty");
+  }
+  if (raw !== trimmed) {
+    console.warn("STRIPE_WEBHOOK_SECRET had surrounding whitespace; trimmed before signature verification.");
+  }
+  if (/[\r\n]/.test(trimmed)) {
+    throw new Error("Stripe webhook secret contains newline characters after trim");
   }
   return trimmed;
 }
@@ -123,22 +224,6 @@ async function createStripeCheckoutSessionWithRetry(stripe, payload, logLabel, i
     }
   }
   throw lastError || new Error("Stripe session create failed");
-}
-
-async function withTimeout(promise, timeoutMs, label) {
-  let timer = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
-      })
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
 }
 
 /** Fast checkout (quote + session split). Default on; set FAST_CHECKOUT_ENABLED=false to disable server-side. */
@@ -301,7 +386,7 @@ async function buildCartCheckoutResolved(userId, items, shippingAddress, shippin
   const allWarnings = [];
   let suggestedAddress = null;
   let booksSubtotalCents = 0;
-  let summedLineShippingFallbackCents = 0;
+  const lineShippingCentsList = [];
   let firstResolvedLine = null;
   let firstLineQuantity = 1;
 
@@ -354,7 +439,7 @@ async function buildCartCheckoutResolved(userId, items, shippingAddress, shippin
 
     const lineBook = resolved.pricing.bookBaseCents;
     const lineShip = resolved.pricing.shippingCents;
-    summedLineShippingFallbackCents += lineShip;
+    lineShippingCentsList.push(lineShip);
     booksSubtotalCents += lineBook;
     const unitBook = quantity > 0 ? Math.round(lineBook / quantity) : lineBook;
     const unitCents = quantity > 0 ? Math.round(lineBook / quantity) : lineBook;
@@ -384,6 +469,10 @@ async function buildCartCheckoutResolved(userId, items, shippingAddress, shippin
       unitShippingCents: 0,
       coverStoragePath: resolved.coverStoragePath,
       pdfStoragePath: resolved.pdfStoragePath,
+      coverURL: resolved.coverURL || null,
+      pdfURL: resolved.pdfURL || null,
+      bookDisplayName: versionRecord.bookDisplayName || null,
+      userHandle: versionRecord.userHandle || null,
       pageCount: resolved.inputs.pageCount,
       productTitle: resolved.inputs.selectedOption.title,
       dimensionsLabel: resolved.dimensionsLabel
@@ -402,37 +491,21 @@ async function buildCartCheckoutResolved(userId, items, shippingAddress, shippin
     });
   }
 
-  let orderShippingCents = 0;
-  if (cartLineItemsForWholeOrderShip.length > 0) {
-    try {
-      const normAddr = normalizeShippingForLuluCalc(shippingAddress);
-      const { costResult: wholeOrderCost } = await withTimeout(
-        calculateLuluMultiLineCostWithRetry({
-          lineItems: cartLineItemsForWholeOrderShip,
-          shippingAddress: normAddr,
-          shippingLevel,
-          logLabel: `${logPrefix}:wholeOrderShip`
-        }),
-        15000,
-        "wholeOrderShip"
-      );
-      orderShippingCents = extractLuluShippingCents(wholeOrderCost);
-    } catch (err) {
-      console.warn(
-        `${logPrefix} wholeOrder ship failed; fallback to summed per-line shipping:`,
-        String(err.message || err)
-      );
-      orderShippingCents = summedLineShippingFallbackCents;
-    }
-  }
+  // Each cart line is fulfilled as its own separate Lulu print job (= its own shipped package),
+  // so the merchant-facing shipping charge is the SUM of every line's own Lulu shipping quote
+  // (already computed per line above, via the same calculateLuluCostWithRetry call used for
+  // book pricing) — not one combined "ships together" quote, which would undercharge whenever
+  // the cart has more than one line.
+  const summedLineShippingCents = sumCartLineShippingCents(lineShippingCentsList);
+  const orderShippingCents = summedLineShippingCents;
 
   if (orderShippingCents > 0) {
     stripeLineItems.push({
       price_data: {
         currency: "usd",
         product_data: {
-          name: "Shipping (Lulu estimate)",
-          description: `Combined shipment · ${shippingLevel || "MAIL"}`
+          name: "Shipping",
+          description: `${cartLineItemsForWholeOrderShip.length} package(s) · ${shippingLevel || "MAIL"}`
         },
         unit_amount: orderShippingCents
       },
@@ -448,7 +521,7 @@ async function buildCartCheckoutResolved(userId, items, shippingAddress, shippin
     cartLineItemsForShippingOptions: cartLineItemsForWholeOrderShip,
     booksSubtotalCents,
     orderShippingCents,
-    summedLineShippingFallbackCents,
+    summedLineShippingCents,
     totalCents,
     allWarnings,
     suggestedAddress,
@@ -761,6 +834,31 @@ async function getLuluAccessToken(forcePreferredEnvironment = null) {
   }
 }
 
+/** POST /cover-dimensions/ — expected flat cover width/height for a POD package + page count. */
+async function luluPostCoverDimensions(accessToken, luluBaseUrl, podPackageId, interiorPageCount) {
+  const res = await fetch(`${luluBaseUrl}/cover-dimensions/`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      pod_package_id: String(podPackageId || "").trim(),
+      interior_page_count: Math.max(1, parseInt(interiorPageCount, 10) || 1),
+      unit: "inch"
+    })
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Lulu cover-dimensions failed: ${res.status} ${String(text).slice(0, 400)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    throw new Error(`Lulu cover-dimensions invalid JSON: ${String(text).slice(0, 200)}`);
+  }
+}
+
 function clampPrintQuantity(q) {
   const n = parseInt(q, 10);
   if (!Number.isFinite(n)) {
@@ -968,89 +1066,6 @@ async function luluCalculateCost(accessToken, luluBaseUrl, podPackageId, pageCou
   return res.json();
 }
 
-/**
- * One Lulu cost calculation for the entire cart (all line_items). Shipping matches a single combined shipment.
- */
-async function luluCalculateMultiLineCost(accessToken, luluBaseUrl, lineItems, shippingAddress, shippingLevel) {
-  const items = (lineItems || [])
-    .map((li) => ({
-      pod_package_id: String(li.podPackageId || "").trim(),
-      page_count: Math.max(1, parseInt(li.pageCount, 10) || 1),
-      quantity: clampPrintQuantity(li.quantity)
-    }))
-    .filter((li) => li.pod_package_id.length > 0);
-  if (items.length === 0) {
-    throw new Error("Lulu multi-line cost: no line items");
-  }
-  const res = await fetch(`${luluBaseUrl}/print-job-cost-calculations/`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${accessToken}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      line_items: items,
-      shipping_address: {
-        street1: shippingAddress.street1 || "",
-        city: shippingAddress.city || "",
-        state_code: shippingAddress.stateCode || "",
-        country_code: shippingAddress.countryCode || "US",
-        postcode: shippingAddress.postcode || "",
-        phone_number: shippingAddress.phone || "0000000000"
-      },
-      shipping_level: shippingLevel || "MAIL"
-    })
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    let compact = text;
-    try {
-      const parsed = JSON.parse(text);
-      const firstIssue = Array.isArray(parsed?.line_item_errors) ? parsed.line_item_errors[0] : null;
-      compact = JSON.stringify({
-        message: parsed.message || parsed.detail || null,
-        code: parsed.code || parsed.error || null,
-        firstIssue: firstIssue || null
-      });
-    } catch (_) {
-      compact = String(text).slice(0, 400);
-    }
-    console.warn(`luluCalculateMultiLineCost failed status=${res.status} snippet=${compact}`);
-    throw new Error(`Lulu cost calculation failed: ${res.status} ${compact}`);
-  }
-  return res.json();
-}
-
-async function calculateLuluMultiLineCostWithRetry({ lineItems, shippingAddress, shippingLevel, logLabel }) {
-  let auth = await getLuluAccessToken();
-  console.log(`${logLabel} Lulu multi-line auth env=${auth.environment} items=${(lineItems || []).length}`);
-  try {
-    const costResult = await luluCalculateMultiLineCost(
-      auth.accessToken,
-      auth.luluBaseUrl,
-      lineItems,
-      shippingAddress,
-      shippingLevel
-    );
-    return { costResult, environment: auth.environment };
-  } catch (costErr) {
-    if (!isLuluCostAuthLikeError(costErr)) {
-      throw costErr;
-    }
-    const retryEnv = oppositeLuluEnvironment(auth.environment);
-    console.warn(`${logLabel} Lulu multi-line auth-like failure; retry env=${retryEnv}`);
-    auth = await getLuluAccessToken(retryEnv);
-    const costResult = await luluCalculateMultiLineCost(
-      auth.accessToken,
-      auth.luluBaseUrl,
-      lineItems,
-      shippingAddress,
-      shippingLevel
-    );
-    return { costResult, environment: auth.environment };
-  }
-}
-
 async function calculateLuluCostWithRetry({ podPackageId, pageCount, shippingAddress, shippingLevel, logLabel, quantity = 1 }) {
   let auth = await getLuluAccessToken();
   console.log(`${logLabel} Lulu auth environment=${auth.environment}`);
@@ -1135,6 +1150,12 @@ function optionsForBook(isLandscape, pricing) {
 }
 
 function optionAvailability(option, pageCount) {
+  if (option.optionId === "kids_coil_bound") {
+    return {
+      available: false,
+      reason: "Coil binding is temporarily unavailable while we finalize cover templates for Lulu."
+    };
+  }
   if (pageCount < option.minPages) {
     return {
       available: false,
@@ -1162,7 +1183,15 @@ async function getBookVersionOrderInputs(userId, bookVersionId, requestedOptionI
   if (!snapshot.exists) {
     throw new HttpsError("not-found", "Book not found");
   }
-  const record = snapshot.data() || {};
+  let record = snapshot.data() || {};
+  try {
+    const ensured = await ensureBookVersionArtifactUrls(db, bucket, userId, bookVersionId);
+    if (ensured) {
+      record = ensured;
+    }
+  } catch (e) {
+    console.warn("getBookVersionOrderInputs: ensureBookVersionArtifactUrls failed", userId, bookVersionId, e);
+  }
   if (record.renderStatus !== "rendered" || !record.pdfURL || !record.coverURL) {
     throw new HttpsError("failed-precondition", "Book PDF is not ready for printing yet");
   }
@@ -1476,6 +1505,8 @@ async function pricingForCartLine(userId, bookVersionId, productOptionId, shippi
     suggestedAddress,
     pdfStoragePath: record.pdfStoragePath,
     coverStoragePath: record.coverStoragePath,
+    pdfURL: record.pdfURL || null,
+    coverURL: record.coverURL || null,
     dimensionsLabel: inputs.isLandscape ? "11x8.5\"" : "8.5x11\""
   };
 }
@@ -1649,8 +1680,11 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
   if (orderData.isTestOrder) {
     return { submitted: false, skipped: true, reason: "test_order" };
   }
-  if (orderData.status !== "paid") {
-    return { submitted: false, skipped: true, reason: `status_${orderData.status}` };
+  const status = orderData.status;
+  const retriable = status === "paid" || status === "lulu_failed" ||
+    (status === "pending_fulfillment" && !orderData.luluPrintJobId);
+  if (!retriable) {
+    return { submitted: false, skipped: true, reason: `status_${status}` };
   }
   if (orderData.luluPrintJobId) {
     return { submitted: false, skipped: true, reason: "already_submitted", luluPrintJobId: orderData.luluPrintJobId };
@@ -1660,6 +1694,71 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
   const interiorStoragePath = orderData.interiorPdfStoragePath;
   if (!coverStoragePath || !interiorStoragePath) {
     throw new Error("Order missing PDF storage paths");
+  }
+
+  const [coverExists, interiorExists] = await Promise.all([
+    bucket.file(coverStoragePath).exists(),
+    bucket.file(interiorStoragePath).exists()
+  ]);
+  if (!coverExists[0]) {
+    throw new Error("Cover PDF missing from Storage");
+  }
+  if (!interiorExists[0]) {
+    throw new Error("Interior PDF missing from Storage");
+  }
+
+  const bookSnap = await db.collection("users").doc(userId)
+    .collection("bookVersions").doc(orderData.bookVersionId).get();
+  const bookRecord = bookSnap.exists ? bookSnap.data() : {};
+  if (bookRecord.renderStatus !== "rendered") {
+    throw new Error(`bookVersion renderStatus=${bookRecord.renderStatus || "missing"}, expected rendered`);
+  }
+
+  let podPackageId = orderData.selectedPodPackageId || null;
+  if (!podPackageId) {
+    const inputs = await getBookVersionOrderInputs(
+      userId,
+      orderData.bookVersionId,
+      orderData.selectedProductOptionId || null
+    );
+    podPackageId = inputs.podPackageId;
+  }
+
+  const pageCount = bookRecord.pageCount || bookRecord.pages?.length || 0;
+  let luluAuthForSubmit = null;
+  if (podPackageId && pageCount > 0) {
+    try {
+      luluAuthForSubmit = await getLuluAccessToken();
+      const dims = await luluPostCoverDimensions(
+        luluAuthForSubmit.accessToken,
+        luluAuthForSubmit.luluBaseUrl,
+        podPackageId,
+        pageCount
+      );
+      const expW = parseFloat(dims.width);
+      const expH = parseFloat(dims.height);
+      if (Number.isFinite(expW) && Number.isFinite(expH)) {
+        const [coverBuf] = await bucket.file(coverStoragePath).download();
+        const coverPdf = await PDFDocument.load(coverBuf);
+        const page0 = coverPdf.getPage(0);
+        const { width: wPt, height: hPt } = page0.getSize();
+        const wIn = wPt / 72;
+        const hIn = hPt / 72;
+        const tol = 0.0625;
+        if (Math.abs(wIn - expW) > tol || Math.abs(hIn - expH) > tol) {
+          throw new Error(
+            `cover_dimensions_mismatch pod=${podPackageId} pages=${pageCount} ` +
+              `expected=${expW.toFixed(4)}x${expH.toFixed(4)}in actual=${wIn.toFixed(4)}x${hIn.toFixed(4)}in`
+          );
+        }
+      }
+    } catch (dimErr) {
+      const msg = String(dimErr?.message || dimErr);
+      if (msg.includes("cover_dimensions_mismatch")) {
+        throw dimErr;
+      }
+      console.warn(`submitPaidOrderToLulu: cover dimension check skipped order=${orderId}: ${msg}`);
+    }
   }
 
   await orderRef.update({
@@ -1673,23 +1772,10 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
       getSignedUrl(interiorStoragePath)
     ]);
 
-    const bookSnap = await db.collection("users").doc(userId)
-      .collection("bookVersions").doc(orderData.bookVersionId).get();
-    const bookRecord = bookSnap.exists ? bookSnap.data() : {};
     const firstPageTitle = bookRecord.pages?.[0]?.title || "Story";
     const printTitleRaw = bookRecord.printTitle != null ? String(bookRecord.printTitle).trim() : "";
     const chosenTitle = printTitleRaw || firstPageTitle;
     const bookTitle = chosenTitle ? `${chosenTitle} (Story)` : "MemoirAI Story";
-
-    let podPackageId = orderData.selectedPodPackageId || null;
-    if (!podPackageId) {
-      const inputs = await getBookVersionOrderInputs(
-        userId,
-        orderData.bookVersionId,
-        orderData.selectedProductOptionId || null
-      );
-      podPackageId = inputs.podPackageId;
-    }
 
     const shippingAddress = orderData.shippingAddress || {};
     const printQty = Math.min(99, Math.max(1, parseInt(orderData.quantity, 10) || 1));
@@ -1697,10 +1783,10 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
       line_items: [
         {
           title: bookTitle,
-          cover_url: coverSignedUrl,
-          interior_url: interiorSignedUrl,
+          cover: { source_url: coverSignedUrl },
+          interior: { source_url: interiorSignedUrl },
           pod_package_id: podPackageId,
-          page_count: bookRecord.pageCount || bookRecord.pages?.length || 0,
+          page_count: pageCount,
           quantity: printQty
         }
       ],
@@ -1718,9 +1804,9 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
       external_id: orderId
     };
 
-    const { accessToken, luluBaseUrl, environment } = await getLuluAccessToken();
-    console.log(`submitPaidOrderToLulu source=${source} order=${orderId} env=${environment}`);
-    const luluJob = await luluCreatePrintJob(accessToken, luluBaseUrl, payload);
+    const auth = luluAuthForSubmit || await getLuluAccessToken();
+    console.log(`submitPaidOrderToLulu source=${source} order=${orderId} env=${auth.environment}`);
+    const luluJob = await luluCreatePrintJob(auth.accessToken, auth.luluBaseUrl, payload);
     const luluJobId = luluJob.id || luluJob.external_id;
     const luluRawStatus = String(luluJob.status || luluJob.state || "CREATED");
     const mappedStatus = mapLuluStatusToOrderStatus(luluRawStatus);
@@ -1750,24 +1836,90 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
       luluRawStatus
     };
   } catch (err) {
+    const luluError = String(err?.message || err || "Unknown Lulu submit error");
     await orderRef.update({
       status: "lulu_failed",
-      luluError: String(err?.message || err || "Unknown Lulu submit error"),
+      luluError,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
+    sendOpsAlert(
+      `Order fulfillment FAILED — ${orderId}`,
+      `Order ${orderId} (user ${userId}, source=${source}) failed to submit to Lulu:\n${luluError}\n\n` +
+        "Ops: https://memoirai-7db06.web.app/ops"
+    ).catch(() => {});
     throw err;
   }
 }
 
-async function getSignedUrl(storagePath, expiresInSeconds = 604800) {
+// GCS V4 signed URLs cannot exceed 7 days (604800s). Use 23h to avoid clock-skew rejections.
+const GCS_MAX_SIGNED_URL_TTL_SEC = 82800;
+
+async function getSignedUrl(storagePath, expiresInSeconds = GCS_MAX_SIGNED_URL_TTL_SEC) {
+  const ttl = Math.min(
+    Math.max(60, Math.floor(Number(expiresInSeconds) || GCS_MAX_SIGNED_URL_TTL_SEC)),
+    GCS_MAX_SIGNED_URL_TTL_SEC
+  );
   const file = bucket.file(storagePath);
   const [url] = await file.getSignedUrl({
     version: "v4",
     action: "read",
-    expires: Date.now() + expiresInSeconds * 1000
+    expires: Date.now() + ttl * 1000
   });
   return url;
 }
+
+/** Admin: stream a PDF (interior or cover) for an order. GET ?orderId=&userId=&type=interior|cover */
+exports.adminGetOrderPdf = onRequest({ timeoutSeconds: 60, memory: "512MiB" }, async (req, res) => {
+  const allowedOrigins = ["https://memoirai-7db06.web.app", "https://memoirai-7db06.firebaseapp.com"];
+  const origin = req.headers.origin || "";
+  res.set("Access-Control-Allow-Origin", allowedOrigins.includes(origin) ? origin : allowedOrigins[0]);
+  res.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+  if (req.method === "OPTIONS") { res.status(204).send(""); return; }
+
+  let decoded;
+  try {
+    decoded = await verifyUser(req);
+  } catch (_) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const isAdmin = (() => {
+    const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+    if (adminEmails.length && adminEmails.includes((decoded.email || "").toLowerCase())) return true;
+    return decoded.admin === true;
+  })();
+  if (!isAdmin) { res.status(403).json({ error: "Forbidden" }); return; }
+
+  const { orderId, userId, type } = req.query;
+  if (!orderId || !userId || !["interior", "cover"].includes(type)) {
+    res.status(400).json({ error: "orderId, userId, and type (interior|cover) are required" });
+    return;
+  }
+
+  const orderSnap = await db.collection("users").doc(userId).collection("orders").doc(orderId).get();
+  if (!orderSnap.exists) { res.status(404).json({ error: "Order not found" }); return; }
+  const orderData = orderSnap.data() || {};
+
+  const storagePath = type === "cover"
+    ? orderData.coverPdfStoragePath
+    : orderData.interiorPdfStoragePath;
+
+  if (!storagePath) {
+    res.status(404).json({ error: `No ${type} PDF storage path on order` });
+    return;
+  }
+
+  const file = bucket.file(storagePath);
+  const [exists] = await file.exists();
+  if (!exists) { res.status(404).json({ error: `${type} PDF not found in storage` }); return; }
+
+  const filename = type === "cover" ? "cover.pdf" : "interior.pdf";
+  res.set("Content-Type", "application/pdf");
+  res.set("Content-Disposition", `attachment; filename="${filename}"`);
+  file.createReadStream().pipe(res);
+});
 
 exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB" }, async (req, res) => {
   if (req.method !== "POST") {
@@ -1957,7 +2109,8 @@ exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB"
 exports.estimateCheckoutPricing = onCall(
   {
     timeoutSeconds: 60,
-    secrets: [luluClientKey, luluClientSecret]
+    secrets: [luluClientKey, luluClientSecret],
+    enforceAppCheck: isAppCheckEnforced()
   },
   async (request) => {
     if (!request.auth) {
@@ -2072,7 +2225,8 @@ exports.estimateCheckoutPricing = onCall(
 exports.estimateCartCheckoutPricing = onCall(
   {
     timeoutSeconds: 120,
-    secrets: [luluClientKey, luluClientSecret]
+    secrets: [luluClientKey, luluClientSecret],
+    enforceAppCheck: isAppCheckEnforced()
   },
   async (request) => {
     if (!request.auth) {
@@ -2194,33 +2348,11 @@ exports.estimateCartCheckoutPricing = onCall(
     }
 
     const booksSubtotalCents = lines.reduce((s, l) => s + l.lineBookBaseCents, 0);
-    const summedLineShippingCents = lines.reduce((s, l) => s + l.lineShippingCents, 0);
-    let orderShippingCents = 0;
-    if (cartLineItemsForShippingOptions.length > 0) {
-      try {
-        const normAddr = normalizeShippingForLuluCalc(shippingAddress);
-        const { costResult: wholeOrderCost } = await calculateLuluMultiLineCostWithRetry({
-          lineItems: cartLineItemsForShippingOptions,
-          shippingAddress: normAddr,
-          shippingLevel,
-          logLabel: "estimateCartCheckoutPricing:wholeOrderShip"
-        });
-        orderShippingCents = extractLuluShippingCents(wholeOrderCost);
-        const shipSnip =
-          wholeOrderCost?.shipping_cost && typeof wholeOrderCost.shipping_cost === "object"
-            ? JSON.stringify(wholeOrderCost.shipping_cost).slice(0, 280)
-            : String(wholeOrderCost?.shipping_cost_incl_tax ?? "");
-        console.log(
-          `estimateCartCheckoutPricing wholeOrder orderShippingCents=${orderShippingCents} ` +
-          `summedLineShip=${summedLineShippingCents} shipping_snip=${shipSnip}`
-        );
-      } catch (err) {
-        console.warn("estimateCartCheckoutPricing wholeOrder ship failed; using summed line shipping:", String(err.message || err));
-        orderShippingCents = summedLineShippingCents;
-      }
-    } else {
-      orderShippingCents = summedLineShippingCents;
-    }
+    // Each cart line ships as its own separate Lulu print job/package, so the estimate must be the
+    // SUM of each line's own Lulu shipping quote (already computed per line above) — see the matching
+    // comment in buildCartCheckoutResolved for why a single combined-shipment quote undercharges.
+    const summedLineShippingCents = sumCartLineShippingCents(lines.map((l) => l.lineShippingCents));
+    const orderShippingCents = summedLineShippingCents;
 
     const adjustedLines = lines.map((l) => {
       const unitTot = l.quantity > 0 ? Math.round(l.lineBookBaseCents / l.quantity) : l.lineBookBaseCents;
@@ -2259,7 +2391,8 @@ exports.estimateCartCheckoutPricing = onCall(
 exports.prepareCartCheckoutQuote = onCall(
   {
     timeoutSeconds: 120,
-    secrets: [luluClientKey, luluClientSecret]
+    secrets: [luluClientKey, luluClientSecret],
+    enforceAppCheck: isAppCheckEnforced()
   },
   async (request) => {
     const startMs = Date.now();
@@ -2413,7 +2546,8 @@ exports.prepareCartCheckoutQuote = onCall(
 exports.createCartCheckoutSessionFast = onCall(
   {
     timeoutSeconds: 60,
-    secrets: [stripeSecretKey, luluClientKey, luluClientSecret]
+    secrets: [stripeSecretKey, luluClientKey, luluClientSecret],
+    enforceAppCheck: isAppCheckEnforced()
   },
   async (request) => {
     const startMs = Date.now();
@@ -2901,7 +3035,8 @@ exports.resolveAddressPlace = onCall(
 exports.createCheckoutSession = onCall(
   {
     timeoutSeconds: 60,
-    secrets: [stripeSecretKey, luluClientKey, luluClientSecret]
+    secrets: [stripeSecretKey, luluClientKey, luluClientSecret],
+    enforceAppCheck: isAppCheckEnforced()
   },
   async (request) => {
     if (!request.auth) {
@@ -3053,7 +3188,8 @@ exports.createCheckoutSession = onCall(
 exports.createCartCheckoutSession = onCall(
   {
     timeoutSeconds: 120,
-    secrets: [stripeSecretKey, luluClientKey, luluClientSecret]
+    secrets: [stripeSecretKey, luluClientKey, luluClientSecret],
+    enforceAppCheck: isAppCheckEnforced()
   },
   async (request) => {
     const startMs = Date.now();
@@ -3261,11 +3397,324 @@ exports.createCartCheckoutSession = onCall(
   }
 );
 
+/**
+ * Builds the ops alert subject/body for a newly paid cart checkout (webhook direct commit, or
+ * reconciliation cron heal — both call `commitPaidCartCheckoutFromStripeSession`, so both share this).
+ * @param {object} pend - pendingCartCheckouts doc data (items, shippingAddress, totalCents)
+ * @param {string[]} orderIds
+ * @returns {{ subject: string, body: string }}
+ */
+function buildPaidOrderAlertText(pend, orderIds) {
+  const items = Array.isArray(pend.items) ? pend.items : [];
+  const bookCount = items.reduce((n, it) => n + (parseInt(it?.quantity, 10) || 1), 0);
+  const totalCents = Number(pend.totalCents) || 0;
+  const totalStr = (totalCents / 100).toFixed(2);
+  const productSummary = items
+    .map((it) => `${it?.printTitle || it?.productTitle || it?.bookVersionId || "book"} x${it?.quantity || 1}`)
+    .join(", ");
+  const addr = pend.shippingAddress || {};
+  const cityState = [addr.city, addr.stateCode].filter(Boolean).join(", ");
+  const subject = `New paid order — ${bookCount} book(s), $${totalStr}`;
+  const body = [
+    `Order ids: ${orderIds.join(", ") || "n/a"}`,
+    `Products: ${productSummary || "n/a"}`,
+    `Ship to: ${cityState || "n/a"}`,
+    "",
+    "Ops: https://memoirai-7db06.web.app/ops"
+  ].join("\n");
+  return { subject, body };
+}
+
+/**
+ * Writes paid cart orders + paidBookCheckouts + checkoutAttempts + bookVersions for a completed session.
+ * Order doc ids are deterministic (`ord_${sessionId}_L{idx}`) so concurrent webhook + reconciler commits are idempotent.
+ *
+ * @param {FirebaseFirestore.DocumentReference} pendRef
+ * @param {import("stripe").Stripe.Checkout.Session} session
+ * @param {{ isStripeTestMode?: boolean }} [opts]
+ * @returns {Promise<{ ok: boolean, orderIds?: string[], reason?: string }>}
+ */
+async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = {}) {
+  const pendSnap = await pendRef.get();
+  if (!pendSnap.exists) {
+    return { ok: false, reason: "missing_pending" };
+  }
+  const pend = pendSnap.data() || {};
+  if (pend.status === "paid") {
+    return { ok: false, reason: "already_paid_pending_doc" };
+  }
+
+  const userIdFromMeta = pendRef.parent.parent.id;
+  const cartOrderGroupId = pendRef.id;
+
+  // Scope to this user's orders only — avoids a COLLECTION_GROUP index on `orders.stripeSessionId`
+  // (collection-group queries fail until that index exists, which blocked webhook + reconciler heals).
+  const dupSnap = await db
+    .collection("users")
+    .doc(userIdFromMeta)
+    .collection("orders")
+    .where("stripeSessionId", "==", session.id)
+    .limit(8)
+    .get();
+  if (!dupSnap.empty) {
+    await pendRef.set(
+      {
+        status: "paid",
+        paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        stripeSessionId: session.id,
+        reconcileNote: "aligned_pending_with_existing_orders"
+      },
+      { merge: true }
+    );
+    return { ok: false, reason: "orders_already_exist" };
+  }
+
+  const isStripeTestMode = opts.isStripeTestMode != null ? opts.isStripeTestMode : session.livemode === false;
+  const paidTotal = session.amount_total;
+  const expectedTotal = pend.totalCents || 0;
+  if (paidTotal !== expectedTotal) {
+    console.warn(`Cart amount mismatch session=${paidTotal} expected=${expectedTotal} group=${cartOrderGroupId}`);
+  }
+
+  const shippingAddress = pend.shippingAddress || {};
+  const shippingLevel = pend.shippingLevel || "MAIL";
+
+  const batch = db.batch();
+  const createdOrderIds = [];
+  const sessionIdSan = String(session.id || "").replace(/\//g, "_");
+  for (let lineIdx = 0; lineIdx < (pend.items || []).length; lineIdx += 1) {
+    const item = pend.items[lineIdx];
+    const orderId = `ord_${sessionIdSan}_L${lineIdx}`;
+    createdOrderIds.push(orderId);
+    const qty = item.quantity || 1;
+    const lineTotal = Number.isFinite(Number(item.lineTotalCents))
+      ? Math.round(Number(item.lineTotalCents))
+      : (item.unitCents || 0) * qty;
+    const unit = qty > 0 ? Math.round(lineTotal / qty) : (item.unitCents || 0);
+    batch.set(db.collection("users").doc(userIdFromMeta).collection("orders").doc(orderId), {
+      orderId,
+      cartOrderGroupId,
+      bookVersionId: item.bookVersionId,
+      userId: userIdFromMeta,
+      stripeSessionId: session.id,
+      stripePaymentIntentId: session.payment_intent || null,
+      luluPrintJobId: null,
+      status: "paid",
+      luluError: null,
+      isTestOrder: isStripeTestMode,
+      customerEmail: session.customer_details?.email || session.customer_email || null,
+      shippingAddress,
+      shippingLevel,
+      selectedProductOptionId: item.productOptionId || null,
+      selectedPodPackageId: item.selectedPodPackageId || null,
+      quantity: qty,
+      unitCents: unit,
+      lineTotalCents: lineTotal,
+      pricing: {
+        totalCents: lineTotal,
+        currency: "usd"
+      },
+      printTitle: item.printTitle || null,
+      productTitle: item.productTitle || null,
+      bookDisplayName: item.bookDisplayName || null,
+      userHandle: item.userHandle || null,
+      coverPdfStoragePath: item.coverStoragePath,
+      interiorPdfStoragePath: item.pdfStoragePath,
+      coverURL: item.coverURL || null,
+      pdfURL: item.pdfURL || null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      luluTrackingUrl: null,
+      luluStatusHistory: []
+    });
+  }
+
+  batch.update(pendRef, {
+    status: "paid",
+    paidAt: admin.firestore.FieldValue.serverTimestamp(),
+    stripeSessionId: session.id
+  });
+
+  const paidCheckoutRef = db
+    .collection("users")
+    .doc(userIdFromMeta)
+    .collection("paidBookCheckouts")
+    .doc(cartOrderGroupId);
+  batch.set(paidCheckoutRef, {
+    userId: userIdFromMeta,
+    cartOrderGroupId,
+    checkoutKind: "cart",
+    stripeSessionId: session.id,
+    stripePaymentIntentId: session.payment_intent || null,
+    currency: session.currency || "usd",
+    amountTotal: paidTotal != null ? paidTotal : null,
+    isTestOrder: isStripeTestMode,
+    quoteId: pend.quoteId || null,
+    idempotencyKey: pend.idempotencyKey || null,
+    checkoutPath: pend.checkoutPath || null,
+    items: pend.items || [],
+    shippingAddress,
+    shippingLevel,
+    booksSubtotalCents: pend.booksSubtotalCents != null ? pend.booksSubtotalCents : null,
+    orderShippingCents: pend.orderShippingCents != null ? pend.orderShippingCents : null,
+    totalCents: pend.totalCents != null ? pend.totalCents : null,
+    customerEmail: session.customer_details?.email || session.customer_email || null,
+    orderIds: createdOrderIds,
+    paidAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  const rawGroup = String(cartOrderGroupId || "").trim();
+  const attemptMergeId =
+    (pend.checkoutAttemptDocId && String(pend.checkoutAttemptDocId).trim()) ||
+    (/^book\d+$/.test(rawGroup) ? rawGroup : null) ||
+    (pend.idempotencyKey && String(pend.idempotencyKey).trim()) ||
+    null;
+  if (attemptMergeId) {
+    const attemptRef = db.collection("users").doc(userIdFromMeta).collection("checkoutAttempts").doc(attemptMergeId);
+    batch.set(
+      attemptRef,
+      {
+        paymentStatus: "paid",
+        paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        stripePaymentIntentId: session.payment_intent || null,
+        orderIds: createdOrderIds
+      },
+      { merge: true }
+    );
+  }
+
+  const paidAtBookVersions = admin.firestore.FieldValue.serverTimestamp();
+  for (let lineIdx = 0; lineIdx < (pend.items || []).length; lineIdx += 1) {
+    const item = pend.items[lineIdx];
+    const bid = item && item.bookVersionId ? String(item.bookVersionId).trim() : "";
+    if (!bid) continue;
+    const bvMerge = {
+      hasPaidOrder: true,
+      paidAt: paidAtBookVersions,
+      lastPaidStripeSessionId: session.id
+    };
+    if (item.pdfStoragePath) {
+      bvMerge.pdfStoragePath = item.pdfStoragePath;
+    }
+    if (item.coverStoragePath) {
+      bvMerge.coverStoragePath = item.coverStoragePath;
+    }
+    if (item.pdfURL) {
+      bvMerge.pdfURL = item.pdfURL;
+    }
+    if (item.coverURL) {
+      bvMerge.coverURL = item.coverURL;
+    }
+    batch.set(
+      db.collection("users").doc(userIdFromMeta).collection("bookVersions").doc(bid),
+      bvMerge,
+      { merge: true }
+    );
+  }
+
+  await batch.commit();
+  return { ok: true, orderIds: createdOrderIds };
+}
+
+/**
+ * Flags order doc(s) for a Stripe `charge.refunded` / `charge.dispute.created` event.
+ * Never mutates the fulfillment `status` state machine — only sets refundStatus/disputeStatus/
+ * fulfillmentHold + timestamps + the event id, so ops can see it without a printed order being
+ * silently mis-tracked. Idempotent per Stripe event id (checked per order doc).
+ *
+ * Order docs (both cart-line and single-book, see commitPaidCartCheckoutFromStripeSession and the
+ * single-book webhook branch above) always store `stripePaymentIntentId` at write time, and
+ * charge.refunded's Charge object / charge.dispute.created's Dispute object both expose
+ * `payment_intent` directly, so no Stripe API round-trip is needed to map charge -> order.
+ *
+ * @param {import("stripe").Stripe.Event} event
+ * @returns {Promise<{ handled: boolean, reason?: string, ordersFlagged?: number }>}
+ */
+async function handleStripeRefundOrDisputeWebhookEvent(event) {
+  const obj = event.data.object;
+  const paymentIntentId =
+    typeof obj.payment_intent === "string"
+      ? obj.payment_intent
+      : (obj.payment_intent && obj.payment_intent.id) || null;
+  if (!paymentIntentId) {
+    console.warn(`stripeWebhook: ${event.type} missing payment_intent`, event.id);
+    return { handled: false, reason: "missing_payment_intent" };
+  }
+
+  // Single-equality collection-group query, same proven pattern as luluWebhook's order lookup —
+  // Firestore's automatic single-field indexes cover this without a manual composite index.
+  const ordersSnap = await db
+    .collectionGroup("orders")
+    .where("stripePaymentIntentId", "==", paymentIntentId)
+    .limit(50)
+    .get();
+  if (ordersSnap.empty) {
+    console.warn(`stripeWebhook: ${event.type} no orders found for payment_intent ${paymentIntentId}`, event.id);
+    return { handled: false, reason: "no_matching_orders" };
+  }
+
+  const isRefund = event.type === "charge.refunded";
+  let flagUpdates;
+  if (isRefund) {
+    const amountRefunded = Number(obj.amount_refunded || 0);
+    const amountCaptured = Number(obj.amount_captured != null ? obj.amount_captured : obj.amount || 0);
+    const isFullRefund = obj.refunded === true || (amountCaptured > 0 && amountRefunded >= amountCaptured);
+    flagUpdates = {
+      refundStatus: isFullRefund ? "refunded" : "partially_refunded",
+      refundedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastRefundEventId: event.id,
+      lastRefundAmountCents: amountRefunded
+    };
+  } else {
+    flagUpdates = {
+      disputeStatus: "disputed",
+      disputedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastDisputeEventId: event.id
+    };
+  }
+
+  const batch = db.batch();
+  let updated = 0;
+  const flaggedOrderIds = [];
+  for (const doc of ordersSnap.docs) {
+    const data = doc.data() || {};
+    const alreadyProcessed = isRefund
+      ? data.lastRefundEventId === event.id
+      : data.lastDisputeEventId === event.id;
+    if (alreadyProcessed) {
+      continue;
+    }
+    const updates = { ...flagUpdates, updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    if (!data.luluPrintJobId) {
+      // Not yet submitted to Lulu — block ops from printing a refunded/disputed order.
+      updates.fulfillmentHold = true;
+    }
+    batch.update(doc.ref, updates);
+    updated += 1;
+    flaggedOrderIds.push(data.orderId || doc.id);
+  }
+  if (updated > 0) {
+    await batch.commit();
+    const kind = isRefund ? "Refund" : "Dispute";
+    sendOpsAlert(
+      `Refund/dispute — ${flaggedOrderIds.join(", ")}`,
+      `${kind} event ${event.id} for payment_intent ${paymentIntentId}.\n` +
+        `Order(s) flagged: ${flaggedOrderIds.join(", ")}\n\n` +
+        "Ops: https://memoirai-7db06.web.app/ops"
+    ).catch(() => {});
+  }
+  console.log(
+    `stripeWebhook: ${event.type} flagged ${updated}/${ordersSnap.size} order(s) for payment_intent ${paymentIntentId}`,
+    event.id
+  );
+  return { handled: true, ordersFlagged: updated };
+}
+
 exports.stripeWebhook = onRequest(
   {
     timeoutSeconds: 60,
     consumeRawBody: true,
-    secrets: [stripeSecretKey, stripeWebhookSecret, luluClientKey, luluClientSecret]
+    secrets: [stripeSecretKey, stripeWebhookSecret, luluClientKey, luluClientSecret, opsAlertSmtpUrl]
   },
   async (req, res) => {
     if (req.method !== "POST") {
@@ -3283,11 +3732,22 @@ exports.stripeWebhook = onRequest(
       event = Stripe.webhooks.constructEvent(
         rawBody,
         sig,
-        stripeWebhookSecret.value()
+        getStripeWebhookSecret()
       );
     } catch (err) {
       console.error("Stripe webhook signature verification failed:", err.message);
       return jsonError(res, 400, "Invalid signature");
+    }
+
+    if (event.type === "charge.refunded" || event.type === "charge.dispute.created") {
+      try {
+        const result = await handleStripeRefundOrDisputeWebhookEvent(event);
+        return res.status(200).json({ received: true, ...result });
+      } catch (err) {
+        // Idempotent via lastRefundEventId/lastDisputeEventId, so it's safe to let Stripe retry on 5xx.
+        console.error("stripeWebhook: refund/dispute handling error", event.type, event.id, err?.message || err);
+        return jsonError(res, 500, "Refund/dispute handling failed");
+      }
     }
 
     if (event.type !== "checkout.session.completed") {
@@ -3312,115 +3772,31 @@ exports.stripeWebhook = onRequest(
         return res.status(200).json({ received: true, duplicate: true, cart: true });
       }
 
-      const paidTotal = session.amount_total;
-      const expectedTotal = pend.totalCents || 0;
-      if (paidTotal !== expectedTotal) {
-        console.warn(`Cart amount mismatch session=${paidTotal} expected=${expectedTotal} group=${cartOrderGroupId}`);
-      }
-
-      const shippingAddress = pend.shippingAddress || {};
-      const shippingLevel = pend.shippingLevel || "MAIL";
-      const isStripeTestMode = event.livemode === false;
-
-      const batch = db.batch();
-      const createdOrderIds = [];
-      for (let lineIdx = 0; lineIdx < (pend.items || []).length; lineIdx += 1) {
-        const item = pend.items[lineIdx];
-        const orderId = `ord_${Date.now()}_${lineIdx}_${crypto.randomBytes(4).toString("hex")}`;
-        createdOrderIds.push(orderId);
-        const qty = item.quantity || 1;
-        const lineTotal = Number.isFinite(Number(item.lineTotalCents))
-          ? Math.round(Number(item.lineTotalCents))
-          : (item.unitCents || 0) * qty;
-        const unit = qty > 0 ? Math.round(lineTotal / qty) : (item.unitCents || 0);
-        batch.set(db.collection("users").doc(userIdFromMeta).collection("orders").doc(orderId), {
-          orderId,
-          cartOrderGroupId,
-          bookVersionId: item.bookVersionId,
-          userId: userIdFromMeta,
-          stripeSessionId: session.id,
-          stripePaymentIntentId: session.payment_intent || null,
-          luluPrintJobId: null,
-          status: "paid",
-          luluError: null,
-          isTestOrder: isStripeTestMode,
-          customerEmail: session.customer_details?.email || session.customer_email || null,
-          shippingAddress,
-          shippingLevel,
-          selectedProductOptionId: item.productOptionId || null,
-          selectedPodPackageId: item.selectedPodPackageId || null,
-          quantity: qty,
-          unitCents: unit,
-          lineTotalCents: lineTotal,
-          pricing: {
-            totalCents: lineTotal,
-            currency: "usd"
-          },
-          coverPdfStoragePath: item.coverStoragePath,
-          interiorPdfStoragePath: item.pdfStoragePath,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          luluTrackingUrl: null,
-          luluStatusHistory: []
-        });
-      }
-      batch.update(pendRef, {
-        status: "paid",
-        paidAt: admin.firestore.FieldValue.serverTimestamp(),
-        stripeSessionId: session.id
+      const commitResult = await commitPaidCartCheckoutFromStripeSession(pendRef, session, {
+        isStripeTestMode: event.livemode === false
       });
-
-      const paidCheckoutRef = db
-        .collection("users")
-        .doc(userIdFromMeta)
-        .collection("paidBookCheckouts")
-        .doc(cartOrderGroupId);
-      batch.set(paidCheckoutRef, {
-        userId: userIdFromMeta,
-        cartOrderGroupId,
-        checkoutKind: "cart",
-        stripeSessionId: session.id,
-        stripePaymentIntentId: session.payment_intent || null,
-        currency: session.currency || "usd",
-        amountTotal: paidTotal != null ? paidTotal : null,
-        isTestOrder: isStripeTestMode,
-        quoteId: pend.quoteId || null,
-        idempotencyKey: pend.idempotencyKey || null,
-        checkoutPath: pend.checkoutPath || null,
-        items: pend.items || [],
-        shippingAddress,
-        shippingLevel,
-        booksSubtotalCents: pend.booksSubtotalCents != null ? pend.booksSubtotalCents : null,
-        orderShippingCents: pend.orderShippingCents != null ? pend.orderShippingCents : null,
-        totalCents: pend.totalCents != null ? pend.totalCents : null,
-        customerEmail: session.customer_details?.email || session.customer_email || null,
-        orderIds: createdOrderIds,
-        paidAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-
-      const rawGroup = String(cartOrderGroupId || "").trim();
-      const attemptMergeId =
-        (pend.checkoutAttemptDocId && String(pend.checkoutAttemptDocId).trim()) ||
-        (/^book\d+$/.test(rawGroup) ? rawGroup : null) ||
-        (pend.idempotencyKey && String(pend.idempotencyKey).trim()) ||
-        null;
-      if (attemptMergeId) {
-        const attemptRef = db.collection("users").doc(userIdFromMeta).collection("checkoutAttempts").doc(attemptMergeId);
-        batch.set(
-          attemptRef,
-          {
-            paymentStatus: "paid",
-            paidAt: admin.firestore.FieldValue.serverTimestamp(),
-            stripePaymentIntentId: session.payment_intent || null,
-            orderIds: createdOrderIds
-          },
-          { merge: true }
-        );
+      if (!commitResult.ok) {
+        if (commitResult.reason === "already_paid_pending_doc") {
+          console.log(`Duplicate cart webhook for ${cartOrderGroupId}, skipping`);
+          return res.status(200).json({ received: true, duplicate: true, cart: true });
+        }
+        if (commitResult.reason === "orders_already_exist") {
+          return res.status(200).json({ received: true, duplicate: true, cart: true, healed: true });
+        }
+        if (commitResult.reason === "missing_pending") {
+          console.error("Stripe webhook: pending cart missing", cartOrderGroupId);
+          return jsonError(res, 400, "Missing pending checkout");
+        }
+        return jsonError(res, 500, "Cart checkout commit failed");
       }
 
-      await batch.commit();
-      console.log(`Cart paid: orders=${createdOrderIds.length} group=${cartOrderGroupId}`);
-      return res.status(200).json({ received: true, cart: true, orderIds: createdOrderIds });
+      {
+        const { subject, body } = buildPaidOrderAlertText(pend, commitResult.orderIds);
+        sendOpsAlert(subject, body).catch(() => {});
+      }
+
+      console.log(`Cart paid: orders=${commitResult.orderIds.length} group=${cartOrderGroupId}`);
+      return res.status(200).json({ received: true, cart: true, orderIds: commitResult.orderIds });
     }
 
     const {
@@ -3445,7 +3821,10 @@ exports.stripeWebhook = onRequest(
       return jsonError(res, 400, "Invalid shipping address");
     }
 
-    const existingSnap = await db.collectionGroup("orders")
+    const existingSnap = await db
+      .collection("users")
+      .doc(userId)
+      .collection("orders")
       .where("stripeSessionId", "==", session.id)
       .limit(1)
       .get();
@@ -3461,10 +3840,13 @@ exports.stripeWebhook = onRequest(
 
     let profileIdSingle = null;
     let printTitleSingle = null;
+    let bvUrls = {};
     try {
+      await ensureBookVersionArtifactUrls(db, bucket, userId, bookVersionId);
       const bvSnap = await db.collection("users").doc(userId).collection("bookVersions").doc(bookVersionId).get();
       if (bvSnap.exists) {
         const rec = bvSnap.data() || {};
+        bvUrls = rec;
         profileIdSingle = rec.profileId != null ? String(rec.profileId) : null;
         printTitleSingle = printTitleFromBookVersionRecord(rec);
       }
@@ -3494,8 +3876,14 @@ exports.stripeWebhook = onRequest(
         totalCents: lineTotalCentsSingle,
         currency: "usd"
       },
+      printTitle: printTitleSingle,
+      productTitle: null,
+      bookDisplayName: bvUrls.bookDisplayName || null,
+      userHandle: bvUrls.userHandle || null,
       coverPdfStoragePath: coverStoragePath,
       interiorPdfStoragePath: pdfStoragePath,
+      coverURL: bvUrls.coverURL || null,
+      pdfURL: bvUrls.pdfURL || null,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       luluTrackingUrl: null,
@@ -3529,7 +3917,11 @@ exports.stripeWebhook = onRequest(
           unitCents: lineTotalCentsSingle,
           lineTotalCents: lineTotalCentsSingle,
           coverStoragePath,
-          pdfStoragePath
+          pdfStoragePath,
+          coverURL: bvUrls.coverURL || null,
+          pdfURL: bvUrls.pdfURL || null,
+          bookDisplayName: bvUrls.bookDisplayName || null,
+          userHandle: bvUrls.userHandle || null
         }
       ],
       shippingAddress,
@@ -3541,6 +3933,19 @@ exports.stripeWebhook = onRequest(
       orderIds: [orderId],
       paidAt: admin.firestore.FieldValue.serverTimestamp()
     });
+    batchSingle.set(
+      db.collection("users").doc(userId).collection("bookVersions").doc(bookVersionId),
+      {
+        hasPaidOrder: true,
+        paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastPaidStripeSessionId: session.id,
+        pdfStoragePath,
+        coverStoragePath,
+        pdfURL: bvUrls.pdfURL || null,
+        coverURL: bvUrls.coverURL || null
+      },
+      { merge: true }
+    );
     await batchSingle.commit();
 
     console.log(`Order ${orderId} saved as 'paid'. Awaiting manual fulfillment.`);
@@ -3552,12 +3957,10 @@ exports.stripeWebhook = onRequest(
 exports.fulfillOrder = onCall(
   {
     timeoutSeconds: 120,
-    secrets: [luluClientKey, luluClientSecret]
+    secrets: [luluClientKey, luluClientSecret, opsAlertSmtpUrl]
   },
   async (request) => {
-    if (!request.auth) {
-      throw new HttpsError("unauthenticated", "Must be signed in");
-    }
+    assertMemoirAdmin(request);
     const { orderId, userId: targetUserId } = request.data || {};
     if (!orderId || !targetUserId) {
       throw new HttpsError("invalid-argument", "orderId and userId are required");
@@ -3569,11 +3972,23 @@ exports.fulfillOrder = onCall(
       throw new HttpsError("not-found", "Order not found");
     }
     const order = orderSnap.data();
-    if (order.status !== "paid") {
-      throw new HttpsError("failed-precondition", `Order status is '${order.status}', expected 'paid'`);
+    const st = order.status;
+    const retriable = st === "paid" || st === "lulu_failed" ||
+      (st === "pending_fulfillment" && !order.luluPrintJobId);
+    if (!retriable) {
+      throw new HttpsError(
+        "failed-precondition",
+        `Order status is '${st}', expected paid, lulu_failed, or pending_fulfillment without a Lulu job`
+      );
     }
     if (order.isTestOrder) {
       throw new HttpsError("failed-precondition", "Cannot fulfill a test order");
+    }
+    if (order.fulfillmentHold) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Order is on hold due to a refund or dispute. Resolve before printing."
+      );
     }
 
     let result;
@@ -3598,7 +4013,7 @@ exports.autoFulfillPaidOrder = onDocumentCreated(
   {
     document: "users/{userId}/orders/{orderId}",
     timeoutSeconds: 120,
-    secrets: [luluClientKey, luluClientSecret]
+    secrets: [luluClientKey, luluClientSecret, opsAlertSmtpUrl]
   },
   async (event) => {
     const data = event.data?.data();
@@ -3608,7 +4023,13 @@ exports.autoFulfillPaidOrder = onDocumentCreated(
     if (!data || !orderRef || !userId || !orderId) {
       return;
     }
-    if (data.status !== "paid" || data.isTestOrder || data.luluPrintJobId) {
+    if (data.status !== "paid" || data.isTestOrder || data.luluPrintJobId || data.fulfillmentHold) {
+      return;
+    }
+    if (!isAutoFulfillPaidOrdersEnabled()) {
+      console.log(
+        `autoFulfillPaidOrder skipped order=${orderId} (AUTO_FULFILL_PAID_ORDERS is not true; use ops Print queue)`
+      );
       return;
     }
     try {
@@ -3746,7 +4167,7 @@ exports.reconcilePendingCartCheckouts = onSchedule(
   {
     schedule: "every 15 minutes",
     timeZone: "Etc/UTC",
-    secrets: [stripeSecretKey],
+    secrets: [stripeSecretKey, opsAlertSmtpUrl],
     timeoutSeconds: 300,
     memory: "256MiB"
   },
@@ -3791,15 +4212,48 @@ exports.reconcilePendingCartCheckouts = onSchedule(
           updates.status = "checkout_expired";
           updates.reconcileNote = "stripe_session_expired";
         } else if (session.status === "complete" && session.payment_status === "paid" && data.status !== "paid") {
-          console.warn(
-            JSON.stringify({
-              msg: "reconcilePendingCartCheckouts:paid_but_pending_doc",
-              path: doc.ref.path,
-              cartOrderGroupId: data.cartOrderGroupId || null,
-              stripeSessionId: sid
-            })
-          );
-          updates.reconcileNote = "stripe_paid_pending_firestore_mismatch";
+          try {
+            const heal = await commitPaidCartCheckoutFromStripeSession(doc.ref, session, {
+              isStripeTestMode: session.livemode === false
+            });
+            if (heal.ok) {
+              updates.reconcileNote = "healed_by_reconcilePendingCartCheckouts";
+              const { subject, body } = buildPaidOrderAlertText(data, heal.orderIds || []);
+              sendOpsAlert(subject, body).catch(() => {});
+              console.warn(
+                JSON.stringify({
+                  msg: "reconcilePendingCartCheckouts:healed_paid_pending",
+                  path: doc.ref.path,
+                  cartOrderGroupId: data.cartOrderGroupId || null,
+                  stripeSessionId: sid,
+                  orderIds: heal.orderIds || []
+                })
+              );
+            } else if (heal.reason === "already_paid_pending_doc" || heal.reason === "orders_already_exist") {
+              updates.reconcileNote = heal.reason;
+            } else {
+              console.warn(
+                JSON.stringify({
+                  msg: "reconcilePendingCartCheckouts:paid_but_pending_doc",
+                  path: doc.ref.path,
+                  cartOrderGroupId: data.cartOrderGroupId || null,
+                  stripeSessionId: sid,
+                  healReason: heal.reason || null
+                })
+              );
+              updates.reconcileNote = "stripe_paid_pending_firestore_mismatch";
+            }
+          } catch (healErr) {
+            console.warn(
+              JSON.stringify({
+                msg: "reconcilePendingCartCheckouts:heal_failed",
+                path: doc.ref.path,
+                stripeSessionId: sid,
+                error: String(healErr?.message || healErr)
+              })
+            );
+            updates.reconcileNote = "stripe_paid_heal_exception";
+          }
         }
         await doc.ref.set(updates, { merge: true });
         processed += 1;
@@ -3826,5 +4280,378 @@ exports.reconcilePendingCartCheckouts = onSchedule(
   }
 );
 
+/** Admin ops: all print orders + queue subset + dashboard stats. See public/ops and OPS_PRINT_QUEUE.md. */
+exports.adminListPrintOrders = onCall({ timeoutSeconds: 120 }, async (request) => {
+  assertMemoirAdmin(request);
+  const lim = Math.min(250, Math.max(1, parseInt(request.data?.limit, 10) || 200));
+  const usersSnap = await db.collection("users").get();
+  const all = [];
+  for (const userDoc of usersSnap.docs) {
+    const ordersSnap = await userDoc.ref.collection("orders").get();
+    for (const orderDoc of ordersSnap.docs) {
+      const data = orderDoc.data() || {};
+      if (data.isTestOrder) continue;
+      all.push(orderRecordForOpsQueue(orderDoc.id, userDoc.id, data));
+    }
+  }
+  const sortByCreated = (a, b) => {
+    const ta = a.createdAt || "";
+    const tb = b.createdAt || "";
+    return tb.localeCompare(ta);
+  };
+  all.sort(sortByCreated);
+  const pending = all.filter((o) => o.needsPrintAction);
+  let totalRevenueCents = 0;
+  let totalProfitCents = 0;
+  const statusCounts = {};
+  for (const o of all) {
+    const st = o.status || "unknown";
+    statusCounts[st] = (statusCounts[st] || 0) + 1;
+    if (typeof o.totalCents === "number") {
+      totalRevenueCents += o.totalCents;
+    }
+    if (typeof o.totalCents === "number" && o.luluTotalCostInclTax != null) {
+      const luluCents = Math.round(parseFloat(o.luluTotalCostInclTax) * 100);
+      if (!isNaN(luluCents)) {
+        totalProfitCents += o.totalCents - luluCents;
+      }
+    }
+  }
+  const slice = (arr) => arr.slice(0, lim);
+  return {
+    autoFulfillEnabled: isAutoFulfillPaidOrdersEnabled(),
+    userCount: usersSnap.size,
+    stats: {
+      totalOrders: all.length,
+      needsPrint: pending.length,
+      totalRevenueCents,
+      totalProfitCents,
+      statusCounts
+    },
+    all: slice(all),
+    allCount: all.length,
+    pending: slice(pending),
+    pendingCount: pending.length
+  };
+});
+
+/** Admin: refresh order status from Lulu API (same as syncOrderFromLulu, admin-only). */
+exports.adminSyncOrderFromLulu = onCall(
+  {
+    timeoutSeconds: 60,
+    secrets: [luluClientKey, luluClientSecret]
+  },
+  async (request) => {
+    assertMemoirAdmin(request);
+    const { orderId, userId: targetUserId } = request.data || {};
+    if (!orderId || !targetUserId) {
+      throw new HttpsError("invalid-argument", "orderId and userId are required");
+    }
+    const orderRef = db.collection("users").doc(targetUserId).collection("orders").doc(orderId);
+    const snap = await orderRef.get();
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Order not found");
+    }
+    const orderData = snap.data() || {};
+    if (!orderData.luluPrintJobId) {
+      throw new HttpsError("failed-precondition", "Order has no luluPrintJobId yet");
+    }
+    try {
+      const result = await syncOrderStatusFromLulu({ orderRef, orderData });
+      return { ok: true, ...result };
+    } catch (err) {
+      throw new HttpsError("internal", String(err?.message || err || "Lulu sync failed"));
+    }
+  }
+);
+
+/** Admin/support: list `bookVersions` for a user (callable). Requires `ADMIN_EMAILS` or Auth claim `admin`. */
+exports.adminListUserBooks = onCall({ timeoutSeconds: 60 }, async (request) => {
+  assertMemoirAdmin(request);
+  const targetUid = String(request.data?.userId || "").trim();
+  if (!targetUid) {
+    throw new HttpsError("invalid-argument", "userId is required");
+  }
+  const lim = Math.min(100, Math.max(1, parseInt(request.data?.limit, 10) || 50));
+  const snap = await db.collection("users").doc(targetUid).collection("bookVersions").limit(lim).get();
+  const books = snap.docs.map((d) => {
+    const data = d.data() || {};
+    return {
+      bookVersionId: d.id,
+      profileId: data.profileId != null ? String(data.profileId) : null,
+      printTitle: data.printTitle != null ? String(data.printTitle) : null,
+      bookDisplayName: data.bookDisplayName != null ? String(data.bookDisplayName) : null,
+      userHandle: data.userHandle != null ? String(data.userHandle) : null,
+      bookSeq: data.bookSeq != null ? data.bookSeq : null,
+      displayHandle: data.displayHandle != null ? String(data.displayHandle) : null,
+      bookNumber: data.bookNumber != null ? data.bookNumber : null,
+      pageCount: data.pageCount != null ? data.pageCount : null,
+      renderStatus: data.renderStatus != null ? String(data.renderStatus) : null,
+      hasPaidOrder: data.hasPaidOrder === true,
+      paidAt: data.paidAt || null,
+      pdfURL: data.pdfURL != null ? String(data.pdfURL) : null,
+      coverURL: data.coverURL != null ? String(data.coverURL) : null,
+      createdAt: data.createdAt || null
+    };
+  });
+  return { books, count: books.length };
+});
+
+/** Admin: verify PDFs for an order before submitting to Lulu (callable). */
+exports.adminVerifyOrderPdfs = onCall(
+  {
+    timeoutSeconds: 120,
+    memory: "1GiB",
+    secrets: [luluClientKey, luluClientSecret]
+  },
+  async (request) => {
+    assertMemoirAdmin(request);
+    const { orderId, userId: targetUserId } = request.data || {};
+    if (!orderId || !targetUserId) {
+      throw new HttpsError("invalid-argument", "orderId and userId are required");
+    }
+
+    const orderRef = db.collection("users").doc(targetUserId).collection("orders").doc(orderId);
+    const orderSnap = await orderRef.get();
+    if (!orderSnap.exists) {
+      throw new HttpsError("not-found", "Order not found");
+    }
+    const orderData = orderSnap.data() || {};
+
+    const coverStoragePath = orderData.coverPdfStoragePath;
+    const interiorStoragePath = orderData.interiorPdfStoragePath;
+    if (!coverStoragePath || !interiorStoragePath) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Order is missing PDF storage paths. The book may not have been rendered yet."
+      );
+    }
+
+    // Use the Firebase Storage download URLs already on the order — no signed URLs needed for preview.
+    // Signed URLs are only required by Lulu (generated at submit time in fulfillOrder).
+    const coverDownloadUrl = orderData.coverURL || null;
+    const interiorDownloadUrl = orderData.pdfURL || null;
+
+    // podPackageId and pageCount match the logic in submitPaidOrderToLulu
+    let podPackageId = orderData.selectedPodPackageId || null;
+    if (!podPackageId) {
+      try {
+        const inputs = await getBookVersionOrderInputs(
+          targetUserId,
+          orderData.bookVersionId,
+          orderData.selectedProductOptionId || null
+        );
+        podPackageId = inputs.podPackageId || null;
+      } catch (_) { /* non-fatal — will surface as missing below */ }
+    }
+
+    // pageCount lives on the bookVersion doc, not the order
+    let pageCount = null;
+    if (orderData.bookVersionId) {
+      try {
+        const bvSnap = await db.collection("users").doc(targetUserId)
+          .collection("bookVersions").doc(orderData.bookVersionId).get();
+        const bv = bvSnap.exists ? bvSnap.data() : {};
+        pageCount = bv.pageCount || bv.pages?.length || null;
+      } catch (_) { /* non-fatal */ }
+    }
+
+    // Check file existence and sizes from GCS metadata (direct bucket access, no signing)
+    const [coverExistsArr, interiorExistsArr] = await Promise.all([
+      bucket.file(coverStoragePath).exists(),
+      bucket.file(interiorStoragePath).exists()
+    ]);
+    const coverExists = coverExistsArr[0];
+    const interiorExists = interiorExistsArr[0];
+
+    let interiorFileSizeBytes = null;
+    let coverFileSizeBytes = null;
+    try {
+      const metaResults = await Promise.all([
+        interiorExists ? bucket.file(interiorStoragePath).getMetadata() : Promise.resolve([null]),
+        coverExists ? bucket.file(coverStoragePath).getMetadata() : Promise.resolve([null])
+      ]);
+      interiorFileSizeBytes = metaResults[0][0]?.size ? parseInt(metaResults[0][0].size, 10) : null;
+      coverFileSizeBytes = metaResults[1][0]?.size ? parseInt(metaResults[1][0].size, 10) : null;
+    } catch (_) { /* non-fatal */ }
+
+    // Interior page count comes from the bookVersion doc — no need to download the 40MB interior PDF
+    const interiorPageCount = pageCount;
+
+    // Fetch Lulu auth once, then run dimension check + cost estimate in parallel
+    let coverDimensionCheck = null;
+    let luluCostEstimate = null;
+
+    if (!podPackageId || !pageCount) {
+      coverDimensionCheck = {
+        pass: false,
+        error: "Order is missing podPackageId or pageCount — cannot check cover dimensions"
+      };
+    } else if (!coverExists) {
+      coverDimensionCheck = { pass: false, error: "Cover PDF does not exist in storage" };
+    } else {
+      try {
+        // Download cover PDF once and run Lulu API calls in parallel
+        const [luluAuth, [coverBuf]] = await Promise.all([
+          getLuluAccessToken(),
+          bucket.file(coverStoragePath).download()
+        ]);
+
+        const [dims, costResult] = await Promise.all([
+          luluPostCoverDimensions(luluAuth.accessToken, luluAuth.luluBaseUrl, podPackageId, pageCount),
+          luluCalculateCost(
+            luluAuth.accessToken,
+            luluAuth.luluBaseUrl,
+            podPackageId,
+            pageCount,
+            orderData.shippingAddress || {},
+            orderData.shippingLevel || "MAIL",
+            Math.min(99, Math.max(1, parseInt(orderData.quantity, 10) || 1))
+          ).catch((e) => ({ _error: String(e?.message || e) }))
+        ]);
+
+        // Cover dimension check
+        const expW = parseFloat(dims.width);
+        const expH = parseFloat(dims.height);
+        const coverPdf = await PDFDocument.load(coverBuf);
+        const page0 = coverPdf.getPage(0);
+        const { width: wPt, height: hPt } = page0.getSize();
+        const wIn = wPt / 72;
+        const hIn = hPt / 72;
+        const tol = 0.0625;
+        const pass = Math.abs(wIn - expW) <= tol && Math.abs(hIn - expH) <= tol;
+        coverDimensionCheck = {
+          expectedWidth: +expW.toFixed(4),
+          expectedHeight: +expH.toFixed(4),
+          actualWidth: +wIn.toFixed(4),
+          actualHeight: +hIn.toFixed(4),
+          toleranceIn: tol,
+          pass,
+          luluEnvironment: luluAuth.environment
+        };
+
+        // Cost estimate — use existing extraction helpers since shipping_cost/line_item_cost are nested objects
+        if (costResult._error) {
+          luluCostEstimate = { error: costResult._error };
+        } else {
+          const shippingCents = extractLuluShippingCents(costResult);
+          const lineItemCents = extractLuluLineItemMakeCents(costResult);
+          luluCostEstimate = {
+            totalCostInclTax: costResult.total_cost_incl_tax || null,
+            shippingCostDollars: shippingCents > 0 ? (shippingCents / 100).toFixed(2) : null,
+            lineItemCostDollars: lineItemCents > 0 ? (lineItemCents / 100).toFixed(2) : null,
+            currency: costResult.currency || "USD",
+            luluEnvironment: luluAuth.environment
+          };
+        }
+      } catch (err) {
+        coverDimensionCheck = { pass: false, error: String(err?.message || err) };
+      }
+    }
+
+    // Customer paid to MemoirAI — totalCents lives at pricing.totalCents or root lineTotalCents
+    const pricing = (orderData.pricing && typeof orderData.pricing === "object") ? orderData.pricing : {};
+    const customerPaidCents = (pricing.totalCents != null) ? pricing.totalCents
+      : (orderData.lineTotalCents != null) ? orderData.lineTotalCents
+      : (orderData.totalCents != null) ? orderData.totalCents
+      : null;
+    const customerCurrency = pricing.currency || orderData.currency || "usd";
+
+    return {
+      coverExists,
+      interiorExists,
+      coverDownloadUrl,
+      interiorDownloadUrl,
+      coverFileSizeBytes,
+      interiorFileSizeBytes,
+      podPackageId,
+      pageCount,
+      interiorPageCount,
+      coverDimensionCheck,
+      luluCostEstimate,
+      customerPaidCents,
+      customerCurrency,
+      orderStatus: orderData.status
+    };
+  }
+);
+
+// ── User / book / memory display naming + purchasedBooks mirror (Firestore v2) ──
+exports.onUserDocumentBootstrapHandle = onDocumentCreated(
+  { document: "users/{userId}" },
+  async (event) => {
+    const uid = event.params.userId;
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data() || {};
+    if (data.userHandle) return;
+    try {
+      await naming.ensureUserHandleAllocated(db, uid);
+    } catch (e) {
+      console.error("onUserDocumentBootstrapHandle failed", uid, String(e?.message || e));
+    }
+  }
+);
+
+exports.onBookVersionDisplayNaming = onDocumentCreated(
+  { document: "users/{userId}/bookVersions/{bookVersionId}" },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data() || {};
+    if (data.bookDisplayName) return;
+    const userId = event.params.userId;
+    try {
+      const handle = await naming.resolveUserHandleForNaming(db, userId);
+      const seq = await naming.allocateGlobalCounter(db, "globalBooks");
+      const bookDisplayName = naming.bookDisplayNameFor(handle, seq);
+      await snap.ref.set(
+        {
+          bookDisplayName,
+          bookSeq: seq,
+          userHandle: handle
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error("onBookVersionDisplayNaming failed", userId, String(e?.message || e));
+    }
+  }
+);
+
+exports.onMemoryDisplayNaming = onDocumentCreated(
+  { document: "users/{userId}/memories/{memoryId}" },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data() || {};
+    if (data.memoryDisplayName) return;
+    const userId = event.params.userId;
+    try {
+      const handle = await naming.resolveUserHandleForNaming(db, userId);
+      const seq = await naming.allocateGlobalCounter(db, "globalMemories");
+      const memoryDisplayName = naming.memoryDisplayNameFor(handle, seq);
+      await snap.ref.set(
+        {
+          memoryDisplayName,
+          memorySeq: seq,
+          userHandle: handle
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error("onMemoryDisplayNaming failed", userId, String(e?.message || e));
+    }
+  }
+);
+
+exports.onOrderMirrorPurchasedBooks = onDocumentWritten(
+  { document: "users/{userId}/orders/{orderId}" },
+  createOrderMirrorHandler(db, bucket)
+);
+
 // Storybook cloud AI generation (Firestore-triggered; secrets OPENAI_API_KEY + GEMINI_API_KEY)
 Object.assign(exports, require("./storybookWorker"));
+
+// Server-side AI proxy callables (onCall; secrets OPENAI_API_KEY + GEMINI_API_KEY) — client never holds provider keys.
+Object.assign(exports, require("./aiProxy"));

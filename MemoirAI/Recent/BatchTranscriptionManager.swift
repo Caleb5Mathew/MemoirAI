@@ -17,6 +17,12 @@ final class BatchTranscriptionManager: ObservableObject {
     @Published var processed: Int = 0
     @Published var isRunning: Bool = false
 
+    /// IDs of memories currently being transcribed right now (by this manager or
+    /// any of the recording surfaces that kick off a transcription directly).
+    /// Views observe this to show "Transcribing…" instead of a generic
+    /// "coming soon" placeholder.
+    @Published private(set) var inFlightMemoryIDs: Set<UUID> = []
+
     static let shared = BatchTranscriptionManager()
 
     private let context: NSManagedObjectContext
@@ -27,6 +33,19 @@ final class BatchTranscriptionManager: ObservableObject {
     /// True if at least one memory still needs transcription.
     var hasUntranscribed: Bool { untranscribedCount > 0 }
     var untranscribedCount: Int { fetchUntranscribed().count }
+
+    /// Mark a memory as actively being transcribed right now. Safe to call from any thread.
+    func markInFlight(_ id: UUID) {
+        DispatchQueue.main.async { self.inFlightMemoryIDs.insert(id) }
+    }
+
+    /// Clear the in-flight marker for a memory (transcription finished, succeeded or failed). Safe to call from any thread.
+    func markComplete(_ id: UUID) {
+        DispatchQueue.main.async { self.inFlightMemoryIDs.remove(id) }
+    }
+
+    /// True if this memory currently has a transcription request in flight.
+    func isInFlight(_ id: UUID) -> Bool { inFlightMemoryIDs.contains(id) }
 
     /// Start transcribing everything that still needs transcription.
     /// Runs serially; calls `completion` on the main queue when finished.
@@ -82,6 +101,10 @@ final class BatchTranscriptionManager: ObservableObject {
             return
         }
 
+        if let entryID = memory.id {
+            markInFlight(entryID)
+        }
+
         SpeechTranscriber.shared.transcribe(url: url) { [weak self] result in
             guard let self else { return }
             switch result {
@@ -92,7 +115,12 @@ final class BatchTranscriptionManager: ObservableObject {
                 NotificationCenter.default.post(name: .memorySaved, object: nil)
                 print("✅ Enhanced transcription completed for memory: \(text.prefix(50))...")
             case .failure(let error):
+                // Leave memory.text untouched so `needsTranscription` still matches
+                // this entry and a future batch run retries it.
                 print("❌ Enhanced batch transcription error for memory \(memory.id?.uuidString ?? "?"):", error)
+            }
+            if let entryID = memory.id {
+                self.markComplete(entryID)
             }
             DispatchQueue.main.async {
                 self.processed += 1

@@ -24,14 +24,14 @@ struct BookVersionCoverCacheTests {
         let u2 = URL(string: "https://a.example/second?token=2")!
         let k1 = CoverPDFThumbnailService.cacheKey(
             url: u1,
-            layout: .kidsBook,
+            layout: .kidsBook(pageCount: 24),
             panel: .front,
             cacheRevision: "art:1",
             cacheIdentity: "users/u/b/cover.pdf"
         )
         let k2 = CoverPDFThumbnailService.cacheKey(
             url: u2,
-            layout: .kidsBook,
+            layout: .kidsBook(pageCount: 24),
             panel: .front,
             cacheRevision: "art:1",
             cacheIdentity: "users/u/b/cover.pdf"
@@ -71,6 +71,9 @@ private func makeRecord(coverArtRevision: Int?, syncedAt: Date?, coverStoragePat
         totalPngBytes: nil,
         pdfBytes: nil,
         source: BookVersionSource.storyGeneration.rawValue,
-        pages: []
+        pages: [],
+        bookDisplayName: nil,
+        userHandle: nil,
+        bookSeq: nil
     )
 }

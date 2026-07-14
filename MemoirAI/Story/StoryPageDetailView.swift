@@ -614,7 +614,7 @@ struct StoryPageDetailView: View {
                 RemotePDFThumbnailView(
                     url: pdfURL,
                     targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
-                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook,
+                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook(pageCount: max(1, vm.pageItems.count)),
                     panel: .front,
                     cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
                     cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""
@@ -632,7 +632,7 @@ struct StoryPageDetailView: View {
                 RemotePDFThumbnailView(
                     url: pdfURL,
                     targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
-                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook,
+                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook(pageCount: max(1, vm.pageItems.count)),
                     panel: .back,
                     cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
                     cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""

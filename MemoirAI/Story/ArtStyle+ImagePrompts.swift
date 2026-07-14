@@ -1,6 +1,35 @@
 import Foundation
 
 extension ArtStyle {
+    /// Canonical key for Firestore / Cloud Functions (`kidsBook`, `realistic`, …). UI continues to use `rawValue` display strings.
+    var firestoreKey: String {
+        switch self {
+        case .kidsBook: return "kidsBook"
+        case .realistic: return "realistic"
+        case .comic: return "comic"
+        case .custom: return "custom"
+        }
+    }
+
+    /// Resolves `ArtStyle` from persisted display `rawValue`, camelCase keys from Firestore, or legacy variants.
+    static func resolvedFromStored(_ value: String) -> ArtStyle {
+        let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let a = ArtStyle(rawValue: v) { return a }
+        let lower = v.lowercased()
+        switch lower {
+        case "kidsbook", "kids book", "kid's book": return .kidsBook
+        case "realistic", "real": return .realistic
+        case "comic", "comic book": return .comic
+        case "custom": return .custom
+        default:
+            if lower.hasPrefix("kid") { return .kidsBook }
+            if lower.hasPrefix("real") { return .realistic }
+            if lower.hasPrefix("comic") { return .comic }
+            print("⚠️ ArtStyle: unrecognized stored value '\(value)' — defaulting to kidsBook")
+            return .kidsBook
+        }
+    }
+
     /// Shared long-form style text for memory illustrations and print cover/back-cover art so prompts stay in sync.
     /// - Parameter customText: User phrase when `self == .custom`; ignored for other cases except empty fallback for custom.
     func memoryIllustrationStyleDescription(customText: String?) -> String {
