@@ -2,10 +2,16 @@ import Foundation
 
 /// OpenAI-backed analysis + extraction for guided memory enhancement.
 actor MemoryEnhancementService {
-    init() {}
+    /// Profile-known narrator facts, seeded into every parsed scene spec so the interview
+    /// never asks for information the user already gave during profile setup.
+    private let narratorFacts: NarratorProfileFacts?
 
-    static func fromMainBundle() -> MemoryEnhancementService? {
-        MemoryEnhancementService()
+    init(narratorFacts: NarratorProfileFacts? = nil) {
+        self.narratorFacts = narratorFacts
+    }
+
+    static func fromMainBundle(narratorFacts: NarratorProfileFacts? = nil) -> MemoryEnhancementService? {
+        MemoryEnhancementService(narratorFacts: narratorFacts)
     }
 
     /// Preflight: parse the scene, score illustration gaps, skip Q&A only when nothing important is missing.
@@ -195,7 +201,8 @@ actor MemoryEnhancementService {
         Interview Q&A (may be empty):
         \(qa.isEmpty ? "(none)" : String(qa.prefix(4000)))
         """
-        return try await postJSONDecoding(system: system, user: user, maxTokens: 1200, temperature: 0.1)
+        let spec: SceneSpec = try await postJSONDecoding(system: system, user: user, maxTokens: 1200, temperature: 0.1)
+        return spec.seedingNarratorFacts(narratorFacts)
     }
 
     private func generateGapTargetedQuestion(

@@ -47,7 +47,7 @@ struct MemoryEnhancementIntroView: View {
                         .foregroundStyle(header)
 
                     Text(
-                        "Answer a few short questions—by voice or typing—so we can fill in who was there and what they looked like. " +
+                        "Answer a few short questions, by voice or typing, so we can fill in who was there and what they looked like. " +
                         "That helps illustrated pages match your story without typing every field."
                     )
                     .font(.system(size: 16))

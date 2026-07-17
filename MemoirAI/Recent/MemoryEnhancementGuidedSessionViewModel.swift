@@ -113,7 +113,7 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
             try? await loadFirstQuestionBody()
             if currentQuestion.isEmpty {
                 errorMessage = "We couldn’t prepare your first question. Check your connection and try again."
-                currentQuestion = "Take a moment to picture this memory—where were you, and who was with you when it mattered most?"
+                currentQuestion = "Take a moment to picture this memory. Where were you, and who was with you when it mattered most?"
                 persistDraft()
             }
             print("runPreflightAndFirstQuestion: \(error)")

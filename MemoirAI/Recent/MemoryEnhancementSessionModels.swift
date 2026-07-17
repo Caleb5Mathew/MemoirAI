@@ -259,6 +259,47 @@ enum SceneGapPriority: Int, Codable, Comparable {
     }
 }
 
+/// What the app already knows about the narrator from their profile. Seeded into every parsed
+/// scene spec so the interview never asks the user for facts they entered during profile setup.
+struct NarratorProfileFacts: Equatable {
+    var gender: String?
+    var ethnicity: String?
+    var hairAndFeatures: String?
+
+    static func from(profile: Profile) -> NarratorProfileFacts {
+        NarratorProfileFacts(
+            gender: profile.gender,
+            ethnicity: profile.ethnicity,
+            hairAndFeatures: profile.faceDescription
+        )
+    }
+
+    var isEmpty: Bool {
+        [gender, ethnicity, hairAndFeatures]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .allSatisfy(\.isEmpty)
+    }
+}
+
+extension SceneSpec {
+    /// Fills the narrator's blank fields from profile facts. Extracted values win — the memory's
+    /// own text stays authoritative; the profile only covers what extraction left empty.
+    func seedingNarratorFacts(_ facts: NarratorProfileFacts?) -> SceneSpec {
+        guard let facts, !facts.isEmpty else { return self }
+        var copy = self
+        for i in copy.people.indices where copy.people[i].isNarrator {
+            if Self.isBlankValue(copy.people[i].gender) { copy.people[i].gender = facts.gender }
+            if Self.isBlankValue(copy.people[i].ethnicity) { copy.people[i].ethnicity = facts.ethnicity }
+            if Self.isBlankValue(copy.people[i].hairAndFeatures) { copy.people[i].hairAndFeatures = facts.hairAndFeatures }
+        }
+        return copy
+    }
+
+    private static func isBlankValue(_ s: String?) -> Bool {
+        (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
 struct SceneGap: Equatable, Codable {
     enum Field: String, Codable {
         case identifyPeople

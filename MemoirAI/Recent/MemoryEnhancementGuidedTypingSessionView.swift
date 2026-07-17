@@ -245,7 +245,7 @@ struct MemoryEnhancementGuidedTypingSessionView: View {
                     .buttonStyle(.plain)
                 }
             } else if !memory.hasAudio {
-                Text("No transcription yet — answer the questions below to add details.")
+                Text("No transcription yet. Answer the questions below to add details.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -314,7 +314,7 @@ struct MemoryEnhancementGuidedTypingSessionView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(textSecondary.opacity(0.75))
             }
-            Text("Usually 2–3 short answers · up to \(MemoryEnhancementSessionRules.maxSessionTurns)")
+            Text("Usually 2 to 3 short answers · up to \(MemoryEnhancementSessionRules.maxSessionTurns)")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(textSecondary.opacity(0.85))
         }

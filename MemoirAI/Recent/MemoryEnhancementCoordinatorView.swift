@@ -27,6 +27,11 @@ struct MemoryEnhancementCoordinatorView: View {
         MemoryEnhancementService.fromMainBundle() != nil
     }
 
+    /// The interview must not re-ask what the profile already knows about the narrator.
+    private var narratorFacts: NarratorProfileFacts {
+        NarratorProfileFacts.from(profile: profileVM.selectedProfile)
+    }
+
     var body: some View {
         Group {
             switch route {
@@ -42,7 +47,7 @@ struct MemoryEnhancementCoordinatorView: View {
                     voiceGuideAvailable: voiceAvailable
                 )
             case .guided:
-                if let service = MemoryEnhancementService.fromMainBundle() {
+                if let service = MemoryEnhancementService.fromMainBundle(narratorFacts: narratorFacts) {
                     MemoryEnhancementGuidedSessionView(
                         memory: memory,
                         service: service,
@@ -77,7 +82,7 @@ struct MemoryEnhancementCoordinatorView: View {
                         }
                 }
             case .guidedTyping:
-                if let service = MemoryEnhancementService.fromMainBundle() {
+                if let service = MemoryEnhancementService.fromMainBundle(narratorFacts: narratorFacts) {
                     MemoryEnhancementGuidedTypingSessionView(
                         memory: memory,
                         service: service,

@@ -190,7 +190,7 @@ struct MemoryEnhancementGuidedSessionView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(textSecondary.opacity(0.75))
             }
-            Text("Usually 2–3 short answers · up to \(MemoryEnhancementSessionRules.maxSessionTurns)")
+            Text("Usually 2 to 3 short answers · up to \(MemoryEnhancementSessionRules.maxSessionTurns)")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(textSecondary.opacity(0.85))
         }
@@ -230,7 +230,7 @@ struct MemoryEnhancementGuidedSessionView: View {
                     .buttonStyle(.plain)
                 }
             } else if !memory.hasAudio {
-                Text("No transcription yet — use the recording below to add details.")
+                Text("No transcription yet. Use the recording below to add details.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -433,7 +433,7 @@ struct MemoryEnhancementGuidedSessionView: View {
                         showReviewSheet = false
                         discardPendingRecording()
                     } label: {
-                        Text("Re-record")
+                        Text("Record Again")
                             .font(.system(size: 16, weight: .semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)

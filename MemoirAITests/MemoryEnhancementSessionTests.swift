@@ -8,6 +8,99 @@ import Testing
 
 struct MemoryEnhancementSessionTests {
 
+    // MARK: - Narrator profile-fact seeding
+
+    private func makePerson(
+        label: String,
+        isNarrator: Bool,
+        ethnicity: String? = nil,
+        hairAndFeatures: String? = nil
+    ) -> ScenePerson {
+        ScenePerson(
+            label: label,
+            isNarrator: isNarrator,
+            age: nil,
+            gender: nil,
+            ethnicity: ethnicity,
+            hairAndFeatures: hairAndFeatures,
+            clothes: nil,
+            relationshipToNarrator: nil
+        )
+    }
+
+    @Test func narratorFactsSeeding_fillsOnlyNarratorBlanks() {
+        let spec = SceneSpec(
+            hasPeople: true,
+            people: [
+                makePerson(label: "Martha", isNarrator: true),
+                makePerson(label: "Sam", isNarrator: false)
+            ],
+            setting: "kitchen",
+            era: nil,
+            action: "baking",
+            mood: nil,
+            motif: nil
+        )
+        let facts = NarratorProfileFacts(gender: "Female", ethnicity: "Irish", hairAndFeatures: "curly gray hair")
+        let seeded = spec.seedingNarratorFacts(facts)
+        #expect(seeded.people[0].ethnicity == "Irish")
+        #expect(seeded.people[0].gender == "Female")
+        #expect(seeded.people[0].hairAndFeatures == "curly gray hair")
+        #expect(seeded.people[1].ethnicity == nil)
+        #expect(seeded.people[1].hairAndFeatures == nil)
+    }
+
+    @Test func narratorFactsSeeding_neverOverwritesExtractedValues() {
+        let spec = SceneSpec(
+            hasPeople: true,
+            people: [makePerson(label: "Martha", isNarrator: true, ethnicity: "Italian", hairAndFeatures: "short bob")],
+            setting: nil,
+            era: nil,
+            action: nil,
+            mood: nil,
+            motif: nil
+        )
+        let facts = NarratorProfileFacts(gender: nil, ethnicity: "Irish", hairAndFeatures: "curly gray hair")
+        let seeded = spec.seedingNarratorFacts(facts)
+        #expect(seeded.people[0].ethnicity == "Italian")
+        #expect(seeded.people[0].hairAndFeatures == "short bob")
+    }
+
+    @Test func narratorFactsSeeding_removesNarratorEthnicityGapFromScorer() {
+        let spec = SceneSpec(
+            hasPeople: true,
+            people: [makePerson(label: "Martha", isNarrator: true)],
+            setting: "kitchen",
+            era: nil,
+            action: "baking",
+            mood: "joyful",
+            motif: nil
+        )
+        let facts = NarratorProfileFacts(gender: "Female", ethnicity: "Irish", hairAndFeatures: "curly gray hair")
+
+        let gapsBefore = SceneGapScorer.score(spec, turnsCompleted: 0, memoryText: "Baking bread.")
+        #expect(gapsBefore.contains { $0.field == .ethnicity && $0.personLabel == "Martha" })
+
+        let gapsAfter = SceneGapScorer.score(spec.seedingNarratorFacts(facts), turnsCompleted: 0, memoryText: "Baking bread.")
+        #expect(!gapsAfter.contains { $0.field == .ethnicity && $0.personLabel == "Martha" })
+        #expect(!gapsAfter.contains { $0.field == .hair && $0.personLabel == "Martha" })
+    }
+
+    @Test func narratorFactsSeeding_noOpWhenFactsEmpty() {
+        let spec = SceneSpec(
+            hasPeople: true,
+            people: [makePerson(label: "Martha", isNarrator: true)],
+            setting: nil,
+            era: nil,
+            action: nil,
+            mood: nil,
+            motif: nil
+        )
+        let empty = NarratorProfileFacts(gender: "  ", ethnicity: "", hairAndFeatures: nil)
+        #expect(spec.seedingNarratorFacts(empty) == spec)
+        #expect(spec.seedingNarratorFacts(nil) == spec)
+    }
+
     @Test func sessionRules_askNextWhenValid() {
         let analysis = MemoryEnhancementTurnAnalysis(
             next_step: .askNext,
