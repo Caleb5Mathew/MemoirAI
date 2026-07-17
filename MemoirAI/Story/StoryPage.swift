@@ -6,15 +6,11 @@ import RevenueCat
 import RevenueCatUI
 import CoreData
 
-// MARK: - Temporary storybook headshot
-/// Set to `false` to use the profile photo again. Image: `Assets.xcassets/StorybookTempHeadshot`.
+// MARK: - Storybook headshot
+/// The user's home-page profile photo is the default generation headshot; the
+/// setup sheet still lets them replace it per run.
 private enum StorybookHeadshotOverride {
-    static let useBundledTemporaryHeadshot = true
-
     static func resolvedHeadshot(profilePhotoData: Data?) -> UIImage? {
-        if useBundledTemporaryHeadshot, let temp = UIImage(named: "StorybookTempHeadshot") {
-            return temp
-        }
         guard let data = profilePhotoData, let image = UIImage(data: data) else { return nil }
         return image
     }
@@ -200,11 +196,6 @@ struct StoryPage: View {
     @State private var coverArtEditRevisionText = ""
     @State private var showCoverPDFMissingAlert = false
     
-    // Progress simulation
-    @State private var fakeProgress: Double = 0
-    @State private var realProgress: Double = 0
-    @State private var cancellableTimer: AnyCancellable?
-    
     // NEW: Download and regenerate functionality
     @State private var showDownloadSuccess = false
     @State private var showRegenerateConfirmation = false
@@ -245,40 +236,6 @@ struct StoryPage: View {
     @State private var pendingTutorialBonusGeneration: Bool = false
     
     @Environment(\.managedObjectContext) private var context
-    
-    // ETA tracking
-    @State private var totalEstimatedSeconds: Int = 0
-    @State private var generationStart: Date? = nil
-    @State private var etaTick: Int = 0
-    @State private var etaTimer: AnyCancellable?
-    
-    private var displayProgress: Double {
-        if realProgress > 0.05 && realProgress > fakeProgress {
-            return realProgress
-        }
-        return max(fakeProgress, realProgress)
-    }
-    
-    // Human-readable remaining time string with dynamic adjustment
-    private var etaString: String {
-        guard vm.isLoading, let start = generationStart else { return "" }
-        let elapsed = Int(Date().timeIntervalSince(start))
-        
-        // If we have real progress > 10%, calculate ETA based on actual speed
-        if realProgress > 0.1 {
-            let estimatedTotal = Int(Double(elapsed) / realProgress)
-            let remaining = max(0, estimatedTotal - elapsed)
-            let mins = remaining / 60
-            let secs = remaining % 60
-            return "About \(mins)m \(secs)s remaining"
-        } else {
-            // Use initial estimate
-            let remaining = max(0, totalEstimatedSeconds - elapsed)
-            let mins = remaining / 60
-            let secs = remaining % 60
-            return "Estimated time: \(mins)m \(secs)s remaining"
-        }
-    }
     
     // NEW: Subscription check - exactly like MemoirView
     private var isSubscribed: Bool {
@@ -385,26 +342,20 @@ struct StoryPage: View {
     @ViewBuilder
     private func makeLoadingView() -> some View {
         VStack(spacing: 12) {
-            if displayProgress >= 1.0 || vm.isFinalizingAssets {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: localColors.terracotta))
-                Text("Finalizing…")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundColor(localColors.terracotta)
-            } else {
-                ProgressView(value: displayProgress)
-                    .progressViewStyle(
-                        LinearProgressViewStyle(tint: localColors.terracotta)
-                    )
-                    .frame(height: 6)
-                    .padding(.horizontal, 40)
-                    .animation(.linear(duration: 0.1), value: displayProgress)
+            // One continuous bar for the whole pipeline — cloud illustration AND on-device
+            // finalizing — so it never switches to an indeterminate spinner and appears stuck.
+            ProgressView(value: vm.overallProgress)
+                .progressViewStyle(
+                    LinearProgressViewStyle(tint: localColors.terracotta)
+                )
+                .frame(height: 6)
+                .padding(.horizontal, 40)
+                .animation(.linear(duration: 0.3), value: vm.overallProgress)
 
-                Text("\(Int(displayProgress * 100))%")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundColor(localColors.defaultGray)
-            }
-            
+            Text("\(Int(vm.overallProgress * 100))%")
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundColor(localColors.defaultGray)
+
             // Show current status and memory being processed
             if !vm.currentStatus.isEmpty {
                 Text(vm.currentStatus)
@@ -414,13 +365,13 @@ struct StoryPage: View {
                     .padding(.horizontal, 20)
             }
 
-            if !etaString.isEmpty, displayProgress < 1.0, !vm.isFinalizingAssets {
-                Text(etaString)
+            if !vm.etaDisplayText.isEmpty {
+                Text(vm.etaDisplayText)
                     .font(.caption)
                     .foregroundColor(.gray)
             }
 
-            Text("Generating in the cloud — you can close the app and come back. We’ll keep working on your storybook.")
+            Text("Generating in the cloud. You can close the app and come back, and we’ll keep working on your storybook.")
                 .font(.caption2)
                 .foregroundColor(.gray.opacity(0.8))
         }
@@ -429,11 +380,21 @@ struct StoryPage: View {
     @ViewBuilder
     private func makeFinalizingAssetsView() -> some View {
         VStack(spacing: 12) {
-            ProgressView()
-                .progressViewStyle(CircularProgressViewStyle(tint: localColors.terracotta))
-            Text("Finalizing cover and print assets...")
+            ProgressView(value: vm.overallProgress)
+                .progressViewStyle(
+                    LinearProgressViewStyle(tint: localColors.terracotta)
+                )
+                .frame(height: 6)
+                .padding(.horizontal, 40)
+                .animation(.linear(duration: 0.3), value: vm.overallProgress)
+            Text("Finalizing cover and print assets…")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(localColors.terracotta)
+            if !vm.etaDisplayText.isEmpty {
+                Text(vm.etaDisplayText)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
             Text("Your book will appear once the final AI cover is fully ready.")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -718,11 +679,7 @@ struct StoryPage: View {
         // Don't clear vm.pageItems - let persistence handle this
         vm.errorMessage = nil
         currentPageIndex = 0
-        fakeProgress = 0
-        realProgress = 0
         vm.progress = 0
-        cancellableTimer?.cancel()
-        etaTimer?.cancel()
         vm.isLoading = false
         // Don't reset hasRequestedGeneration - let it persist
     }
@@ -788,34 +745,7 @@ struct StoryPage: View {
         resetGenerationState()
         hasRequestedGeneration = true
         vm.isLoading = true
-        
-        // Estimate – Nano Banana (Gemini) is faster than DALL-E
-        // Estimate ~8s per image for Nano Banana, ~15s for LLM processing per memory
-        // Total: ~23s per memory (includes scene extraction, title/character extraction, and image generation)
-        totalEstimatedSeconds = pagesExpected * 23
-        generationStart = Date()
-        etaTimer?.cancel()
-        etaTimer = Timer.publish(every: 1, on: .main, in: .common)
-            .autoconnect()
-            .sink { _ in etaTick += 1 } // ticks every second to refresh UI
-        
-        // Fake progress provides immediate feedback while real progress loads
-        // Set to 15% to show activity without over-promising
-        let fakeIncrementPerTick = 0.0025
-        let targetFakeProgress = 0.15
-        
-        cancellableTimer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect().sink { _ in
-            if fakeProgress < targetFakeProgress && !Task.isCancelled {
-                fakeProgress += fakeIncrementPerTick
-                if fakeProgress >= targetFakeProgress {
-                    fakeProgress = targetFakeProgress
-                    cancellableTimer?.cancel()
-                }
-            } else {
-                cancellableTimer?.cancel()
-            }
-        }
-        
+
         let currentProfileID = profileVM.selectedProfile.id
         let finalPageCount = pagesExpected // Pass the adjusted page count
         let wasSubscribed = isSubscribed // Capture subscription state before async
@@ -829,8 +759,6 @@ struct StoryPage: View {
                 overridePageCount: finalPageCount,
                 profileEthnicity: profileVM.selectedProfile.ethnicity
             )
-
-            cancellableTimer?.cancel()
 
             // Cloud generation: `generateStorybook` returns immediately after
             // kicking off the Firestore job — actual completion happens later
@@ -860,14 +788,8 @@ struct StoryPage: View {
                         tutorialCoordinator.completeTutorial(profileID: currentProfileID)
                     }
                 }
-                self.realProgress = 1.0
-                self.fakeProgress = 1.0
-                etaTimer?.cancel()
             } else {
                 print("StoryPage: Cloud generation finished without illustrations. Error: \(vm.errorMessage ?? "N/A").")
-                self.realProgress = 0.0
-                self.fakeProgress = 0.0
-                etaTimer?.cancel()
                 // Note: We don't consume free preview images on failure
             }
             self.pendingTutorialBonusGeneration = false
@@ -922,7 +844,6 @@ struct StoryPage: View {
             showSubscriptionTooltip: $showSubscriptionTooltip,
             actualPreviewWidth: $actualPreviewWidth,
             actualPreviewHeight: $actualPreviewHeight,
-            realProgress: $realProgress,
             showPageDetail: $showPageDetail,
             detailPageIndex: $detailPageIndex,
             detailStartsInEditMode: $detailStartsInEditMode,
@@ -1439,13 +1360,13 @@ struct StoryPage: View {
         if record.pdfURL == nil {
             return (
                 "Interior PDF Still Preparing",
-                "Your book’s printable interior is not ready yet. Tap Retry to trigger another check — this usually finishes within a couple of minutes."
+                "Your book’s printable interior is not ready yet. Tap Retry to trigger another check. This usually finishes within a couple of minutes."
             )
         }
         if record.coverURL == nil {
             return (
                 "Cover Still Preparing",
-                "Your cover file is still being prepared for print. Tap Retry in a moment — if this persists, open the book from the gallery and try Order again."
+                "Your cover file is still being prepared for print. Tap Retry in a moment. If this persists, open the book from the gallery and try Order again."
             )
         }
         return (
@@ -2603,7 +2524,6 @@ extension View {
         showSubscriptionTooltip: Binding<Bool>,
         actualPreviewWidth: Binding<CGFloat>,
         actualPreviewHeight: Binding<CGFloat>,
-        realProgress: Binding<Double>,
         showPageDetail: Binding<Bool>,
         detailPageIndex: Binding<Int>,
         detailStartsInEditMode: Binding<Bool>,
@@ -2653,7 +2573,6 @@ extension View {
             headshotImage: headshotImage,
             hasRequestedGeneration: hasRequestedGeneration,
             updateIncompleteCount: updateIncompleteCount,
-            realProgress: realProgress,
             storybookScreenEntry: storybookScreenEntry
         )
         
@@ -2830,12 +2749,16 @@ extension View {
         headshotImage: Binding<UIImage?>,
         hasRequestedGeneration: Binding<Bool>,
         updateIncompleteCount: @escaping () -> Void,
-        realProgress: Binding<Double>,
         storybookScreenEntry: StorybookScreenEntry
     ) -> some View {
         self
             .onAppear {
                 print("🧭 StoryPage lifecycle onAppear; profile=\(profileVM.selectedProfile.id.uuidString), hasGenerated=\(vm.hasGeneratedStorybook), hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count), entry=\(storybookScreenEntry)")
+                StorybookSeenTracker.shared.setStoryPageVisible(true)
+                StorybookSeenTracker.shared.consumePendingRouteAsSeen()
+                if let bookId = vm.currentBookVersionRecord?.bookVersionId {
+                    StorybookSeenTracker.shared.markCompletedSeen(jobId: bookId)
+                }
                 Task { @MainActor in
                     let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
                         profileID: profileVM.selectedProfile.id,
@@ -2875,6 +2798,14 @@ extension View {
             }
             .onDisappear {
                 print("🧭 StoryPage lifecycle onDisappear; hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count)")
+                StorybookSeenTracker.shared.setStoryPageVisible(false)
+            }
+            .onChange(of: vm.currentBookVersionRecord?.bookVersionId) { _, newBookId in
+                // Displaying a finished book (job id == book version id) counts as seeing it,
+                // so the launch auto-route stops force-opening it.
+                if let newBookId {
+                    StorybookSeenTracker.shared.markCompletedSeen(jobId: newBookId)
+                }
             }
             .onChange(of: profileVM.selectedProfile.id) { _, newProfileID in
                 print("🧭 StoryPage profile changed to \(newProfileID.uuidString); reloading storybook")
@@ -2904,10 +2835,6 @@ extension View {
                     vm.syncFaceDescriptionFromProfile(profileVM.selectedProfile)
                     updateIncompleteCount()
                 }
-            }
-            .onChange(of: vm.progress) { _, newProgress in
-                // Sync realProgress with vm.progress for accurate progress bar
-                realProgress.wrappedValue = newProgress
             }
             .onChange(of: vm.isLoading) { _, _ in }
             .onChange(of: headshotImage.wrappedValue) { _, newShot in

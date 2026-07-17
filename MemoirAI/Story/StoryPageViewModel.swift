@@ -155,6 +155,13 @@ class StoryPageViewModel: ObservableObject {
     @Published var currentMemoryIndex: Int = 0
     @Published var totalMemories: Int = 0
     @Published var currentStatus: String = ""
+
+    /// Whole-pipeline progress (kickoff → cloud generation → finalize), monotonic 0...1.
+    @Published var overallProgress: Double = 0
+    /// Human-readable remaining-time estimate; empty when unknown or done.
+    @Published var etaDisplayText: String = ""
+    private var progressEstimator: StorybookProgressEstimator?
+    private var progressTickTimer: Timer?
     
     // Image editing state
     @Published var editingImageIndex: Int? = nil
@@ -1767,7 +1774,7 @@ class StoryPageViewModel: ObservableObject {
         guard !rebuilt.isEmpty else {
             print("⚠️ Cloud book version \(record.bookVersionId) had no reconstructable pages")
             if isDeferredGalleryApply, stillValidForGallery(), !record.pages.isEmpty {
-                errorMessage = "This book couldn’t be opened — its saved pages don’t match what we expect. Try another book or contact support if this keeps happening."
+                errorMessage = "This book couldn’t be opened. Its saved pages don’t match what we expect. Try another book or contact support if this keeps happening."
             }
             return false
         }
@@ -4263,6 +4270,51 @@ class StoryPageViewModel: ObservableObject {
         return false
     }
 
+    // MARK: - Generation progress tracking
+
+    private func startProgressTracking(pageCountHint: Int) {
+        progressEstimator = StorybookProgressEstimator(pageCountHint: pageCountHint)
+        overallProgress = 0
+        etaDisplayText = ""
+        progressTickTimer?.invalidate()
+        progressTickTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.publishProgressSnapshot()
+            }
+        }
+    }
+
+    private func publishProgressSnapshot() {
+        guard progressEstimator != nil else { return }
+        guard let snap = progressEstimator?.snapshot() else { return }
+        overallProgress = snap.progress
+        if let eta = snap.etaSeconds, snap.progress < 1.0 {
+            etaDisplayText = StorybookProgressEstimator.etaDisplayString(seconds: eta)
+        } else {
+            etaDisplayText = ""
+        }
+    }
+
+    /// - Parameter succeeded: a finished run pins the bar to 100% and feeds its observed
+    ///   timings back into the calibration used for the next run's estimates.
+    private func stopProgressTracking(succeeded: Bool) {
+        progressTickTimer?.invalidate()
+        progressTickTimer = nil
+        if succeeded {
+            progressEstimator?.noteDone()
+            if let observed = progressEstimator?.observedTimingsForCalibration() {
+                StorybookProgressEstimator.Calibration.record(
+                    observedPerMemory: observed.perMemory,
+                    observedRanking: observed.ranking,
+                    observedFinalize: observed.finalize
+                )
+            }
+            overallProgress = 1.0
+        }
+        etaDisplayText = ""
+        progressEstimator = nil
+    }
+
     // MARK: - Cloud storybook generation (Firestore job + worker)
 
     private func stopStorybookCloudJobListener() {
@@ -4389,14 +4441,25 @@ class StoryPageViewModel: ObservableObject {
             currentMemoryIndex = min(completed, total)
             progress = Double(completed) / Double(total)
         }
-        if let cs = prog["currentStatus"] as? String, !cs.isEmpty {
+        progressEstimator?.noteStatus(
+            status,
+            completed: completed,
+            total: total,
+            runningStartedAt: (data["runningStartedAt"] as? Timestamp)?.dateValue()
+        )
+        publishProgressSnapshot()
+        // The raw server string is only trustworthy mid-run; once the worker hands off
+        // (`aiComplete`), the remaining work happens on-device, so old server copy like
+        // "open app to finalize" must never surface in-app.
+        if status == "aiComplete" || status == "complete" {
+            currentStatus = "Finalizing your book…"
+        } else if let cs = prog["currentStatus"] as? String, !cs.isEmpty {
             currentStatus = cs
         } else {
             switch status {
             case "queued": currentStatus = "Queued for cloud generation…"
             case "ranking": currentStatus = "Selecting best memories…"
             case "running": currentStatus = "Generating illustrations in the cloud…"
-            case "aiComplete": currentStatus = "Finalizing your book…"
             case "failed": currentStatus = "Generation failed"
             default: break
             }
@@ -4414,6 +4477,7 @@ class StoryPageViewModel: ObservableObject {
                 errorMessage = baseError
             }
             stopStorybookCloudJobListener()
+            stopProgressTracking(succeeded: false)
             isLoading = false
             isFinalizingAssets = false
             return
@@ -4512,6 +4576,8 @@ class StoryPageViewModel: ObservableObject {
         do {
             currentStatus = "Finalizing your book…"
             isFinalizingAssets = true
+            progressEstimator?.noteFinalizeStep(.rebuildPages)
+            publishProgressSnapshot()
             let cloudPitch = jobData["backCoverPitch"] as? String
             try await rebuildPageItemsFromCloudJobData(jobData, profileID: profileID)
             guard !pageItems.isEmpty else {
@@ -4546,9 +4612,13 @@ class StoryPageViewModel: ObservableObject {
             } else {
                 StorybookGenLog.verboseLine("Cloud.backCoverPitch=<empty>")
             }
+            progressEstimator?.noteFinalizeStep(.persist)
+            publishProgressSnapshot()
             await preparePrintPackagingBeforePersist(existingBackCoverPitchFromCloud: cloudPitch)
             persistStorybook(for: profileID, reservedCreatedAt: reservedCreatedAt, reservedBookVersionId: jobId)
             currentStatus = "Finalizing cover and print assets…"
+            progressEstimator?.noteFinalizeStep(.coverAndPrint)
+            publishProgressSnapshot()
             if let bookVersionId = lastSyncedBookVersionId {
                 let readinessTimeout = Self.canonicalReadinessBudgetSeconds(pageCount: pageItems.count)
                 let ready = await waitForCanonicalBookReadiness(bookVersionId: bookVersionId, timeoutSeconds: readinessTimeout)
@@ -4557,6 +4627,8 @@ class StoryPageViewModel: ObservableObject {
                 }
             }
             if let bookId = lastSyncedBookVersionId {
+                progressEstimator?.noteFinalizeStep(.installBook)
+                publishProgressSnapshot()
                 let pollBudget = Self.canonicalReadinessBudgetSeconds(pageCount: pageItems.count)
                 await installFreshBookVersionRecordAfterGeneration(bookVersionId: bookId, pollBudgetSeconds: pollBudget)
             }
@@ -4565,12 +4637,17 @@ class StoryPageViewModel: ObservableObject {
             }
             try await FirestoreSyncService.shared.markStorybookJobComplete(jobId: jobId)
             stopStorybookCloudJobListener()
+            stopProgressTracking(succeeded: true)
+            // The user watched this generation finish — don't force-route them back to it
+            // on the next app open.
+            StorybookSeenTracker.shared.markCompletedSeen(jobId: jobId)
             if thisRun == storybookGenerationCounter {
                 GenerationProgressMarker.clear(for: profileID)
             }
         } catch {
             errorMessage = error.localizedDescription
             cloudStorybookFinalizeStarted = false
+            stopProgressTracking(succeeded: false)
         }
         isFinalizingAssets = false
         isLoading = false
@@ -4725,7 +4802,7 @@ class StoryPageViewModel: ObservableObject {
 
         startStorybookCloudJobListener(jobId: reservedBookId, profileID: profileID, thisRun: thisRun)
         StorybookGenLog.line("Listener started for storybookJobs/\(reservedBookId.prefix(24))… — progress updates will follow from Firestore.")
-        currentStatus = "Generating in the cloud — you can close the app and come back."
+        currentStatus = "Generating in the cloud. You can close the app and come back."
     }
 
     /// Resume an in-flight cloud job (cold launch / auto-route).
@@ -4753,6 +4830,10 @@ class StoryPageViewModel: ObservableObject {
         requiresVisualReadyGate = true
         isVisualBookReady = false
         errorMessage = nil
+        let pageCountHint = (snap?.data()?["pageCountTarget"] as? NSNumber)?.intValue
+            ?? (snap?.data()?["pageCountTarget"] as? Int)
+            ?? 10
+        startProgressTracking(pageCountHint: pageCountHint)
         let thisRun = storybookGenerationCounter
         startStorybookCloudJobListener(jobId: jobId, profileID: profileID, thisRun: thisRun)
         if let data = snap?.data() {
@@ -4780,6 +4861,7 @@ class StoryPageViewModel: ObservableObject {
         isVisualBookReady = false
         errorMessage = nil
         progress = 0
+        startProgressTracking(pageCountHint: overridePageCount ?? 10)
         print("[StorybookLoad] generateStorybook START profile=\(id.uuidString.prefix(8)) — clearing in-memory book")
         pageItems.removeAll()
         precomposedIllustrationMemoryIDs = []
@@ -4821,12 +4903,14 @@ class StoryPageViewModel: ObservableObject {
             isVisualBookReady = false
             isFinalizingAssets = false
             stopStorybookCloudJobListener()
+            stopProgressTracking(succeeded: false)
             print("[StorybookLoad] generateStorybook cancelled (new run or Task.cancel)")
         } catch {
             if thisRun == storybookGenerationCounter {
                 GenerationProgressMarker.clear(for: id)
             }
             stopStorybookCloudJobListener()
+            stopProgressTracking(succeeded: false)
             if let nsError = error as? NSError, nsError.code == 429 {
                 errorMessage = "Too many requests to OpenAI. Please wait a few minutes and try again."
                 print("StoryPageViewModel ERROR: Rate limited (429)")

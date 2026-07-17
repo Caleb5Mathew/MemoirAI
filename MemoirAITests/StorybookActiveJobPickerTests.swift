@@ -61,4 +61,41 @@ struct StorybookActiveJobPickerTests {
         let j = FirestoreSyncService.pickActiveStorybookCloudJob(profileId: profileId, rowsNewestFirst: rows, referenceNow: ref)
         #expect(j?.jobId == "running")
     }
+
+    // MARK: - pickLatestCompletedStorybookCloudJob
+
+    @Test func pickCompleted_returnsNewestComplete() {
+        let profileId = UUID()
+        let ref = Date()
+        let rows: [(String, [String: Any])] = [
+            ("failedNew", ["createdAt": Timestamp(date: ref.addingTimeInterval(-30)), "profileId": profileId.uuidString, "status": "failed", "progress": [:]]),
+            ("doneNew", ["createdAt": Timestamp(date: ref.addingTimeInterval(-60)), "profileId": profileId.uuidString, "status": "complete", "progress": [:]]),
+            ("doneOld", ["createdAt": Timestamp(date: ref.addingTimeInterval(-600)), "profileId": profileId.uuidString, "status": "complete", "progress": [:]])
+        ]
+        let j = FirestoreSyncService.pickLatestCompletedStorybookCloudJob(profileId: profileId, rowsNewestFirst: rows, referenceNow: ref)
+        #expect(j?.jobId == "doneNew")
+        #expect(j?.status == "complete")
+    }
+
+    @Test func pickCompleted_ignoresOtherProfilesAndStaleJobs() {
+        let profileId = UUID()
+        let ref = Date()
+        let stale = Timestamp(date: ref.addingTimeInterval(-8 * 24 * 60 * 60))
+        let rows: [(String, [String: Any])] = [
+            ("otherProfile", ["createdAt": Timestamp(date: ref.addingTimeInterval(-30)), "profileId": UUID().uuidString, "status": "complete", "progress": [:]]),
+            ("staleComplete", ["createdAt": stale, "profileId": profileId.uuidString, "status": "complete", "progress": [:]])
+        ]
+        let j = FirestoreSyncService.pickLatestCompletedStorybookCloudJob(profileId: profileId, rowsNewestFirst: rows, referenceNow: ref)
+        #expect(j == nil)
+    }
+
+    @Test func pickCompleted_returnsNilWhenNoCompleteJobs() {
+        let profileId = UUID()
+        let ref = Date()
+        let rows: [(String, [String: Any])] = [
+            ("running", ["createdAt": Timestamp(date: ref.addingTimeInterval(-30)), "profileId": profileId.uuidString, "status": "running", "progress": [:]])
+        ]
+        let j = FirestoreSyncService.pickLatestCompletedStorybookCloudJob(profileId: profileId, rowsNewestFirst: rows, referenceNow: ref)
+        #expect(j == nil)
+    }
 }

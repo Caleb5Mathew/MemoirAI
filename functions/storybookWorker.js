@@ -213,6 +213,7 @@ exports.processStorybookJob = onDocumentCreated(
     try {
       await ref.update({
         status: "ranking",
+        rankingStartedAt: admin.firestore.FieldValue.serverTimestamp(),
         lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
@@ -380,6 +381,7 @@ exports.processStorybookJob = onDocumentCreated(
       await ref.update({
         status: "running",
         orderedMemoryIds,
+        runningStartedAt: admin.firestore.FieldValue.serverTimestamp(),
         progress: {
           totalMemories: ordered.length,
           completedMemoryCount: 0,
@@ -832,7 +834,7 @@ exports.processStorybookJob = onDocumentCreated(
         status: "aiComplete",
         backCoverPitch: pitch,
         protagonistCanonCard,
-        "progress.currentStatus": "AI complete — open app to finalize",
+        "progress.currentStatus": "Illustrations ready. Finishing your book…",
         lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });

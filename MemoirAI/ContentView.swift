@@ -66,7 +66,7 @@ struct ContentView: View {
                         Task { await routeToActiveCloudStorybookIfNeeded() }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .navigateToCloudStorybookGeneration)) { _ in
-                        Task { await routeToActiveCloudStorybookIfNeeded() }
+                        Task { await routeToActiveCloudStorybookIfNeeded(force: true) }
                     }
                     .navigationDestination(for: StorybookRootRoute.self) { _ in
                         StoryPage()
@@ -96,8 +96,13 @@ struct ContentView: View {
                     syncStorybookJobObserverBinding()
                     Task { await routeToActiveCloudStorybookIfNeeded() }
                 }
-                .onChange(of: authService.isSignedIn) { _, _ in
+                .onChange(of: authService.isSignedIn) { _, isSignedIn in
                     syncStorybookJobObserverBinding()
+                    // Cold launch: the .task routing attempt runs before Firebase Auth restores
+                    // the session and bails on the isSignedIn guard — retry once auth is back.
+                    if isSignedIn {
+                        Task { await routeToActiveCloudStorybookIfNeeded() }
+                    }
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
@@ -298,18 +303,31 @@ struct ContentView: View {
         }
     }
 
-    /// Aggressive auto-resume: if a cloud storybook job is in progress, reset navigation to root and open `StoryPage`.
-    private func routeToActiveCloudStorybookIfNeeded() async {
+    /// Aggressive auto-resume: if a cloud storybook job is in progress — or finished while the
+    /// user was away and they haven't seen the result — reset navigation to root and open `StoryPage`.
+    /// Seen-gating makes this fire at most once per generation per app-open; `force` (banner tap)
+    /// bypasses the gating but still no-ops when `StoryPage` is already on screen.
+    private func routeToActiveCloudStorybookIfNeeded(force: Bool = false) async {
         guard authService.isSignedIn else { return }
-        guard (try? await FirestoreSyncService.shared.fetchLatestActiveStorybookJob(profileId: profileVM.selectedProfile.id)) != nil else {
+        guard let job = await fetchRoutableStorybookJobWithRetry(profileId: profileVM.selectedProfile.id) else {
             return
         }
         await MainActor.run {
+            let tracker = StorybookSeenTracker.shared
+            if tracker.isStoryPageVisible { return }
+            if !force {
+                if job.status == "complete" {
+                    guard !tracker.hasSeenCompleted(jobId: job.jobId) else { return }
+                } else {
+                    guard !tracker.hasSeenThisForeground(jobId: job.jobId) else { return }
+                }
+            }
             if let t = lastDeepLinkAt, Date().timeIntervalSince(t) < 3, nav.selectedMemoryID != nil {
                 print("[QRDeepLink] routeToActive skipped — recent deep link at \(t) (preserving memory navigation)")
                 return
             }
-            print("[QRDeepLink] routeToActive applying — active storybook job")
+            print("[QRDeepLink] routeToActive applying — storybook job \(job.jobId.prefix(24))… status=\(job.status)")
+            tracker.notePendingRoute(jobId: job.jobId, isComplete: job.status == "complete")
             programmaticNavigationReset = true
             nav.clear()
             path = NavigationPath()
@@ -318,6 +336,25 @@ struct ContentView: View {
                 programmaticNavigationReset = false
             }
         }
+    }
+
+    /// Cold launch can race Firestore's connection; a transient fetch error must not be
+    /// mistaken for "no job to resume" (that is exactly the bug that stranded users on Home).
+    private func fetchRoutableStorybookJobWithRetry(
+        profileId: UUID,
+        attempts: Int = 3
+    ) async -> FirestoreSyncService.ActiveStorybookCloudJob? {
+        for attempt in 1...attempts {
+            do {
+                return try await FirestoreSyncService.shared.fetchLatestRoutableStorybookJob(profileId: profileId)
+            } catch {
+                print("⚠️ routeToActive fetch attempt \(attempt)/\(attempts) failed: \(error.localizedDescription)")
+                if attempt < attempts {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                }
+            }
+        }
+        return nil
     }
 
     private func syncStorybookJobObserverBinding() {

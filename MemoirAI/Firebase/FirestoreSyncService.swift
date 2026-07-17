@@ -2156,6 +2156,25 @@ extension FirestoreSyncService {
         return nil
     }
 
+    /// Newest recent `complete` job for this profile — used to route the user once to a book
+    /// that finished while the app was closed. Rows must be newest-first.
+    static func pickLatestCompletedStorybookCloudJob(
+        profileId: UUID,
+        rowsNewestFirst: [(documentID: String, data: [String: Any])],
+        referenceNow: Date = Date()
+    ) -> ActiveStorybookCloudJob? {
+        let pid = profileId.uuidString.lowercased()
+        for row in rowsNewestFirst {
+            let d = row.data
+            guard Self.isStorybookJobRecentForActiveUI(createdAt: d["createdAt"], referenceNow: referenceNow) else { continue }
+            guard String(describing: d["profileId"] ?? "").lowercased() == pid else { continue }
+            if String(describing: d["status"] ?? "") == "complete" {
+                return Self.makeActiveStorybookCloudJob(documentId: row.documentID, data: d)
+            }
+        }
+        return nil
+    }
+
     private static func makeActiveStorybookCloudJob(documentId: String, data: [String: Any]) -> ActiveStorybookCloudJob {
         let prog = data["progress"] as? [String: Any] ?? [:]
         let completed = (prog["completedMemoryCount"] as? NSNumber)?.intValue ?? (prog["completedMemoryCount"] as? Int) ?? 0
@@ -2180,6 +2199,21 @@ extension FirestoreSyncService {
             .getDocuments()
         let rows = snap.documents.map { ($0.documentID, $0.data()) }
         return Self.pickActiveStorybookCloudJob(profileId: profileId, rowsNewestFirst: rows)
+    }
+
+    /// Job the launch auto-route should bring the user to: an in-flight job if one exists,
+    /// otherwise the newest recently-completed job (caller decides whether it was already seen).
+    func fetchLatestRoutableStorybookJob(profileId: UUID) async throws -> ActiveStorybookCloudJob? {
+        guard let uid = Auth.auth().currentUser?.uid else { return nil }
+        let snap = try await db.collection("users").document(uid).collection("storybookJobs")
+            .order(by: "createdAt", descending: true)
+            .limit(to: 25)
+            .getDocuments()
+        let rows = snap.documents.map { ($0.documentID, $0.data()) }
+        if let active = Self.pickActiveStorybookCloudJob(profileId: profileId, rowsNewestFirst: rows) {
+            return active
+        }
+        return Self.pickLatestCompletedStorybookCloudJob(profileId: profileId, rowsNewestFirst: rows)
     }
 
     func writeStorybookCloudJob(jobId: String, data: [String: Any]) async throws {

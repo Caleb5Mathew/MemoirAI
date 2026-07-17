@@ -26,8 +26,8 @@ struct GlobalStorybookProgressBanner: View {
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.primary)
                                     .multilineTextAlignment(.leading)
-                                if !job.currentStatus.isEmpty {
-                                    Text(job.currentStatus)
+                                if let subtitle = bannerSubtitle(for: job) {
+                                    Text(subtitle)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(2)
@@ -96,19 +96,28 @@ struct GlobalStorybookProgressBanner: View {
         }
     }
 
+    /// Server `currentStatus` copy is written for mid-run states; after `aiComplete` the rest
+    /// of the work is on-device, so stale server copy ("open app to finalize") is replaced.
+    private func bannerSubtitle(for job: FirestoreSyncService.ActiveStorybookCloudJob) -> String? {
+        if job.status == "aiComplete" {
+            return nil
+        }
+        return job.currentStatus.isEmpty ? nil : job.currentStatus
+    }
+
     private func bannerTitle(for job: FirestoreSyncService.ActiveStorybookCloudJob) -> String {
         switch job.status {
         case "queued", "ranking":
             return "Preparing your storybook…"
         case "running":
             let m = max(job.progressTotal, 1)
-            return "Generating your storybook — \(job.progressCompleted) of \(m) memories"
+            return "Generating your storybook: \(job.progressCompleted) of \(m) memories"
         case "aiComplete":
-            return "Almost done — tap to finish your book"
+            return "Almost done. Tap to finish your book"
         case "failed":
-            return "Generation hit a snag — tap to retry"
+            return "Generation hit a snag. Tap to retry"
         default:
-            return "Storybook in progress — tap to open"
+            return "Storybook in progress. Tap to open"
         }
     }
 
