@@ -208,9 +208,9 @@ let allChaptersLegacyKnownPrompts: [Chapter] = [
         MemoryPrompt(text: "What was the biggest lesson you learned from your work experiences?", x: 0.60, y: 0.30)
     ]),
     Chapter(number: 3, title: "Love", prompts: [
-        MemoryPrompt(text: "Think of someone you have loved deeply—what first drew you to them?", x: 0.22, y: 0.76),
+        MemoryPrompt(text: "Think of someone you have loved deeply. What first drew you to them?", x: 0.22, y: 0.76),
         MemoryPrompt(text: "Describe a simple moment with someone you love that still warms your heart.", x: 0.44, y: 0.60),
-        MemoryPrompt(text: "What has love—romantic or otherwise—taught you about yourself?", x: 0.65, y: 0.44),
+        MemoryPrompt(text: "What has love, romantic or otherwise, taught you about yourself?", x: 0.65, y: 0.44),
         MemoryPrompt(text: "How do you show care to the people who matter most to you today?", x: 0.48, y: 0.28)
     ]),
     Chapter(number: 4, title: "Parenthood", prompts: [
@@ -226,7 +226,7 @@ let allChaptersLegacyKnownPrompts: [Chapter] = [
         MemoryPrompt(text: "What advice would you offer yourself when you were a kid?", x: 0.52, y: 0.28)
     ]),
     Chapter(number: 6, title: "Faith", prompts: [
-        MemoryPrompt(text: "What role—if any—have faith or personal beliefs played in your life?", x: 0.25, y: 0.80),
+        MemoryPrompt(text: "What role, if any, have faith or personal beliefs played in your life?", x: 0.25, y: 0.80),
         MemoryPrompt(text: "Describe a time you felt supported by something bigger than yourself.", x: 0.46, y: 0.60),
         MemoryPrompt(text: "Have you ever struggled with doubt? What helped you move forward?", x: 0.70, y: 0.43),
         MemoryPrompt(text: "Which practice, text, or idea gives you peace?", x: 0.56, y: 0.28)
@@ -844,7 +844,7 @@ let allRelationshipChapters: [Chapter] = [
     Chapter(number: 1, title: "First Glimpse", prompts: [
         MemoryPrompt(text: "Where were you the first time you saw them? What were they doing?", x: 0.5, y: 0.5),
         MemoryPrompt(text: "What was the first real conversation you remember having with them? Where were you?", x: 0.5, y: 0.5),
-        MemoryPrompt(text: "Was there a moment early on — a look, something they said, something small — that stuck with you?", x: 0.5, y: 0.5),
+        MemoryPrompt(text: "Was there a moment early on that stuck with you, like a look or something small they said?", x: 0.5, y: 0.5),
         MemoryPrompt(text: "What was one of the first things that made you want to keep spending time with them?", x: 0.5, y: 0.5)
     ]),
     Chapter(number: 2, title: "Falling", prompts: [
@@ -856,11 +856,11 @@ let allRelationshipChapters: [Chapter] = [
     Chapter(number: 3, title: "Choosing Each Other", prompts: [
         MemoryPrompt(text: "When did it stop feeling like you were figuring it out and start feeling like a real thing?", x: 0.5, y: 0.5),
         MemoryPrompt(text: "Tell me about a time they showed up for you in a way you didn't expect.", x: 0.5, y: 0.5),
-        MemoryPrompt(text: "Was there a day — a trip, a long drive, just the two of you somewhere — that you still think about?", x: 0.5, y: 0.5),
+        MemoryPrompt(text: "Was there a day you still think about, like a trip or a long drive, just the two of you somewhere?", x: 0.5, y: 0.5),
         MemoryPrompt(text: "When did you know you wanted this to last? Where were you?", x: 0.5, y: 0.5)
     ]),
     Chapter(number: 4, title: "Your Places", prompts: [
-        MemoryPrompt(text: "Is there a place that feels like the two of you — somewhere you keep ending up, or that just feels like yours?", x: 0.5, y: 0.5),
+        MemoryPrompt(text: "Is there a place that feels like the two of you, somewhere you keep ending up, or that just feels like yours?", x: 0.5, y: 0.5),
         MemoryPrompt(text: "What's a meal, a drink, or a food thing that's become part of your relationship? Tell me about a time you had it together.", x: 0.5, y: 0.5),
         MemoryPrompt(text: "What's the first place you remember feeling at home with them, even if it wasn't your home?", x: 0.5, y: 0.5),
         MemoryPrompt(text: "Tell me about a slow afternoon or evening together that you'd want to go back to. Where were you, what were you doing?", x: 0.5, y: 0.5)
@@ -885,8 +885,8 @@ let allRelationshipChapters: [Chapter] = [
     ]),
     Chapter(number: 8, title: "Seeing Them Clearly", prompts: [
         MemoryPrompt(text: "Tell me about a time you watched them do something and thought, that's exactly who they are.", x: 0.5, y: 0.5),
-        MemoryPrompt(text: "What's something they did that genuinely surprised you — in a good way?", x: 0.5, y: 0.5),
-        MemoryPrompt(text: "Have you ever watched them with people they love — friends, family, a stranger even — and just felt proud?", x: 0.5, y: 0.5),
+        MemoryPrompt(text: "What's something they did that genuinely surprised you, in a good way?", x: 0.5, y: 0.5),
+        MemoryPrompt(text: "Have you ever watched them with people they love, friends or family or even a stranger, and just felt proud?", x: 0.5, y: 0.5),
         MemoryPrompt(text: "Tell me about a moment where you saw them at their best. Where were you, what were they doing?", x: 0.5, y: 0.5)
     ]),
     Chapter(number: 9, title: "Who You're Becoming", prompts: [
@@ -897,7 +897,7 @@ let allRelationshipChapters: [Chapter] = [
     ]),
     Chapter(number: 10, title: "One Memory to Keep", prompts: [
         MemoryPrompt(text: "If you had to pick one moment from your relationship to keep forever, what would it be?", x: 0.5, y: 0.5),
-        MemoryPrompt(text: "Is there a photo — one you actually have or one you wish existed — that captures the two of you?", x: 0.5, y: 0.5),
+        MemoryPrompt(text: "Is there a photo, one you actually have or one you wish existed, that captures the two of you?", x: 0.5, y: 0.5),
         MemoryPrompt(text: "What's something about your relationship you'd want the people who love you to know?", x: 0.5, y: 0.5),
         MemoryPrompt(text: "If you had to choose one scene that captures what you two are to each other, what would it be?", x: 0.5, y: 0.5)
     ])

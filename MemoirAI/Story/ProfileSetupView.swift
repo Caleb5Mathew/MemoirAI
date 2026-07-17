@@ -2,7 +2,7 @@
 //  ProfileSetupView.swift
 //  MemoirAI
 //
-//  Now supports in-place cropping of the selected head-shot, optional race/ethnicity, and gender.
+//  Now supports in-place cropping of the selected headshot, optional race/ethnicity, and gender.
 //
 
 import SwiftUI
@@ -31,7 +31,7 @@ fileprivate enum GenderOption: String, CaseIterable, Identifiable {
 }
 
 
-/// Bottom sheet for head-shot source: always shows camera + library; camera tap shows an alert when unavailable (e.g. Simulator).
+/// Bottom sheet for headshot source: always shows camera + library; camera tap shows an alert when unavailable (e.g. Simulator).
 private struct HeadshotPhotoSourceSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -183,10 +183,10 @@ struct ProfileSetupView: View {
                                         )
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("Head-shot photo")
-                                .accessibilityHint("Tap to replace your head-shot with a new photo")
+                                .accessibilityLabel("Headshot photo")
+                                .accessibilityHint("Tap to replace your headshot with a new photo")
                                 
-                                Text("Tap your photo to upload or change your head-shot")
+                                Text("Tap your photo to upload or change your headshot")
                                     .font(.caption)
                                     .fontWeight(.medium)
                                     .multilineTextAlignment(.center)
@@ -209,7 +209,7 @@ struct ProfileSetupView: View {
                                         Image(systemName: "person.crop.square")
                                             .font(.system(size: 80))
                                             .foregroundColor(LocalColors.defaultGray.opacity(0.6))
-                                        Text("Add Head-shot")
+                                        Text("Add Headshot")
                                             .font(.headline.weight(.semibold))
                                             .foregroundColor(.black)
                                         Text("Tap to choose from camera or library")
@@ -226,8 +226,8 @@ struct ProfileSetupView: View {
                                     )
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("Add head-shot")
-                                .accessibilityHint("Tap to take or choose a head-shot photo")
+                                .accessibilityLabel("Add headshot")
+                                .accessibilityHint("Tap to take or choose a headshot photo")
                             }
                         }
                     }
@@ -285,7 +285,7 @@ struct ProfileSetupView: View {
                     
                     // ── Explanation text ────────────────────────
                     Text("""
-                        A head-shot helps lock the appearance.
+                        A headshot helps lock the appearance.
                         Providing race/ethnicity and gender helps the AI create a more faithful and respectful portrait.
                         """)
                         .font(.caption)

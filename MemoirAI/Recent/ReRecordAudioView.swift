@@ -321,18 +321,18 @@ struct ReRecordAudioView: View {
         interruptionObserver.onInterruptionBegan = {
             guard isRecording, !isPaused else { return }
             pauseRecording()
-            interruptionBannerMessage = "Recording paused — audio was interrupted"
+            interruptionBannerMessage = "Recording paused. Audio was interrupted"
         }
         interruptionObserver.onInterruptionEnded = { _ in
             // Do not auto-resume: keep the existing paused UI and Resume button
             // so the user makes the call themselves.
             guard isPaused else { return }
-            interruptionBannerMessage = "Recording paused — tap Resume to continue"
+            interruptionBannerMessage = "Recording paused. Tap Resume to continue"
         }
         interruptionObserver.onRouteChangeDeviceUnavailable = {
             guard isRecording, !isPaused else { return }
             pauseRecording()
-            interruptionBannerMessage = "Recording paused — audio device disconnected"
+            interruptionBannerMessage = "Recording paused. Audio device disconnected"
         }
         interruptionObserver.onAppBackgrounded = {
             guard isRecording, !isPaused else { return }

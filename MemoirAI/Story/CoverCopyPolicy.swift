@@ -49,11 +49,11 @@ struct CoverCopyPolicy {
     func interiorTitlePageBlurb() -> String {
         switch artStyle {
         case .kidsBook:
-            return "A storybook made from real memories — filled with heart, wonder, and you."
+            return "A storybook made from real memories, filled with heart, wonder, and you."
         case .realistic:
-            return "A personal memoir drawn from real stories — honest, warm, and worth keeping."
+            return "A personal memoir drawn from real stories, honest, warm, and worth keeping."
         case .comic:
-            return "A bold, colorful tale straight from your memories — ready for an epic read."
+            return "A bold, colorful tale straight from your memories, ready for an epic read."
         case .custom:
             return "A one-of-a-kind story crafted from your memories."
         }
@@ -67,11 +67,11 @@ struct CoverCopyPolicy {
         case .kidsBook:
             return "\(safeTitle) is a gentle storybook celebration of family, curiosity, and the little moments that matter most. Open the pages and share it again and again."
         case .realistic:
-            return "\(safeTitle) preserves a life in vivid scenes and heartfelt words — a keepsake to revisit and pass down."
+            return "\(safeTitle) preserves a life in vivid scenes and heartfelt words, a keepsake to revisit and pass down."
         case .comic:
-            return "\(safeTitle) brings your memories to life with energy and heart — a fun, unforgettable gift edition."
+            return "\(safeTitle) brings your memories to life with energy and heart, a fun and unforgettable gift edition."
         case .custom:
-            return "\(safeTitle) turns your memories into a beautiful keepsake — personal, lasting, and full of meaning."
+            return "\(safeTitle) turns your memories into a beautiful keepsake, personal, lasting, and full of meaning."
         }
     }
 

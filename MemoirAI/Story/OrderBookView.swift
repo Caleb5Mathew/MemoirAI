@@ -164,7 +164,7 @@ struct OrderBookView: View {
                 PrintProductOption(
                     id: "kids_coil_bound",
                     title: "Coil Bound",
-                    subtitle: "Best for short books and activity-style flipping",
+                    subtitle: "Best for short books and playful flipping",
                     minPages: 2,
                     maxPages: 470,
                     podPackageId: "1100X0850FCSTDCO080CW444MXX"
@@ -630,7 +630,7 @@ struct OrderBookView: View {
                 } else {
                     Image(systemName: "creditcard.fill")
                     if let ce = cartEstimate {
-                        Text("Checkout — \(formatMoney(cents: ce.estimatedTotalCents))")
+                        Text("Checkout · \(formatMoney(cents: ce.estimatedTotalCents))")
                     } else {
                         Text("Checkout")
                     }
@@ -674,7 +674,7 @@ struct OrderBookView: View {
             if !selectedProductIsEligible {
                 return "Pick an available print format, then set quantity."
             }
-            return "Choose a valid quantity (1–99)."
+            return "Choose a valid quantity (1 to 99)."
         case .shipping:
             return isFormValid ? nil : "Complete all required shipping fields to continue."
         case .cart:
@@ -1304,7 +1304,7 @@ struct OrderBookView: View {
             if minDays == maxDays {
                 return "\(minDays) business day\(minDays == 1 ? "" : "s")"
             }
-            return "\(minDays)–\(maxDays) business days"
+            return "\(minDays) to \(maxDays) business days"
         }
         if let minDateRaw = method.estimatedArrivalMinDate,
            let maxDateRaw = method.estimatedArrivalMaxDate,
@@ -1532,7 +1532,7 @@ struct OrderBookView: View {
             Text("Shipping speed")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(mutedTextColor)
-            Text("Choose after your address is complete — options refresh with Lulu delivery windows and indicative rates.")
+            Text("Choose after your address is complete. Options refresh with Lulu delivery windows and indicative rates.")
                 .font(.caption)
                 .foregroundColor(mutedTextColor)
         }
@@ -1551,7 +1551,7 @@ struct OrderBookView: View {
     private var shippingSpeedFooter: some View {
         if isFormValid {
             if hasLiveShippingMethodEstimates {
-                Text("Estimates and indicative prices come from Lulu for your full cart. The Review step shows the live total (books + shipping — each book ships in its own package) for your selection.")
+                Text("Estimates and indicative prices come from Lulu for your full cart. The Review step shows the live total for your selection, including books and shipping. Each book ships in its own package.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else if !isEstimating {

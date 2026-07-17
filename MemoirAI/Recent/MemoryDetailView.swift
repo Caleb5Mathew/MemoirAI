@@ -380,7 +380,7 @@ struct MemoryDetailView: View {
                 VStack(spacing: 4) {
                     Image(systemName: "mic.badge.plus")
                         .font(.system(size: 22, weight: .semibold))
-                    Text("Re-record")
+                    Text("Record Again")
                         .font(.system(size: 11, weight: .semibold, design: .serif))
                         .multilineTextAlignment(.center)
                 }
@@ -413,7 +413,7 @@ struct MemoryDetailView: View {
 
                 VStack(spacing: 12) {
                     Button(action: confirmClearAudioAndOpenRecorder) {
-                        Text("Clear and Re-record")
+                        Text("Clear and Record Again")
                             .font(.system(size: 17, weight: .semibold, design: .serif))
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
@@ -493,7 +493,7 @@ struct MemoryDetailView: View {
                 Image(systemName: "waveform.circle.fill")
                     .font(.system(size: 18))
                     .foregroundColor(terracotta.opacity(0.7))
-                Text("Audio saved — transcript coming soon. We'll retry automatically.")
+                Text("Audio saved. Transcript coming soon, we'll retry automatically.")
                     .font(.system(size: 15, weight: .medium, design: .serif))
                     .foregroundColor(textSecondary)
             }

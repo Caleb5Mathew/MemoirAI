@@ -244,7 +244,7 @@ struct OnboardingFlow: View {
             VStack(spacing: 24) {
                 // Title and subtitle
                 VStack(spacing: 12) {
-                    Text("Just speak — we'll capture")
+                    Text("Just speak and we'll capture")
                         .font(.customSerifFallback(size: 28))
                         .fontWeight(.bold)
                         .foregroundColor(colors.white)
@@ -409,7 +409,7 @@ struct OnboardingFlow: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
                     
-                    Text("AI turns recordings into a beautiful book — print or digital.")
+                    Text("AI turns recordings into a beautiful book, in print or digital.")
                         .font(.body)
                         .foregroundColor(colors.white.opacity(0.9))
                         .multilineTextAlignment(.center)
@@ -488,7 +488,7 @@ struct OnboardingFlow: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
                     
-                    Text("Share video-books with your family and keep the legacy alive.")
+                    Text("Share video books with your family and keep the legacy alive.")
                         .font(.body)
                         .foregroundColor(colors.white.opacity(0.9))
                         .multilineTextAlignment(.center)
@@ -656,7 +656,7 @@ struct OnboardingFlow: View {
             }
             .padding(.horizontal, 32)
             
-            Text("We'll never spam you—just gentle nudges to help you build your legacy.")
+            Text("We'll never spam you. Just gentle nudges to help you build your legacy.")
                 .font(.body)
                 .multilineTextAlignment(.center)
                 .foregroundColor(colors.deepGreen.opacity(0.7))
@@ -739,11 +739,11 @@ struct OnboardingFlow: View {
     }
 
     private var screen5Subtitle: String {
-        guard let userType = userType else { return "You've lived an incredible story. Let's start capturing it—one voice note at a time." }
+        guard let userType = userType else { return "You've lived an incredible story. Let's start capturing it, one voice note at a time." }
         if userType == .gift {
-            return "This isn't just another gift—it's a way to preserve a voice, a personality, a legacy. Start capturing their story today."
+            return "This isn't just another gift. It's a way to preserve a voice, a personality, a legacy. Start capturing their story today."
         } else {
-            return "You've lived an incredible story. Let's start capturing it—one voice note at a time."
+            return "You've lived an incredible story. Let's start capturing it, one voice note at a time."
         }
     }
 

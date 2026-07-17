@@ -637,7 +637,7 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
 
-            Text("When enabled, Gemini receives an additional style image reference. Use this for more consistent kids-book styling across pages.")
+            Text("When enabled, Gemini receives an additional style image reference. Use this for more consistent storybook styling across pages.")
                 .font(.system(size: 12))
                 .foregroundColor(.gray)
 

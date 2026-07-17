@@ -663,7 +663,7 @@ struct MemoryCard: View {
                             Image(systemName: "waveform.circle.fill")
                                 .font(.system(size: 18))
                                 .foregroundColor(colors.terracotta.opacity(0.7))
-                            Text("Audio saved — transcript coming soon. We'll retry automatically.")
+                            Text("Audio saved. Transcript coming soon, we'll retry automatically.")
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(colors.textSecondary)
                         } else {

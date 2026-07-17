@@ -183,7 +183,7 @@ struct TutorialCoachMarkLayer: View {
     private func title(for step: TutorialStep) -> String {
         switch step {
         case .homeIntro:
-            return "Welcome — quick tour"
+            return "Welcome to the quick tour"
         case .homeContinueMemoir:
             return "Your chapters"
         case .memoirPickChapter:

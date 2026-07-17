@@ -18,7 +18,7 @@ struct DevDashboardView: View {
                     } label: {
                         actionCard(
                             title: "Estimated Costs",
-                            subtitle: "Telemetry-based spend, confidence band, and filters",
+                            subtitle: "Spend from telemetry, confidence band, and filters",
                             systemImage: "chart.pie.fill"
                         )
                     }
@@ -89,7 +89,7 @@ struct DevDashboardView: View {
             Text("Cost Intelligence")
                 .font(.system(size: 30, weight: .bold, design: .rounded))
                 .foregroundColor(DevDashboardPalette.primaryText)
-            Text("Track API usage and financial signals across all users with developer-only controls.")
+            Text("Track API usage and financial signals across all users with developer controls.")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(DevDashboardPalette.secondaryText)
 

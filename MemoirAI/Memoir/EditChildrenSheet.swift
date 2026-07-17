@@ -170,7 +170,7 @@ struct EditChildrenSheet: View {
     }
 
     private var footerNote: some View {
-        Text("Per-child questions are asked once for each name. Questions about your own life are shared across all children.")
+        Text("Questions about each child are asked once for each name. Questions about your own life are shared across all children.")
             .font(.system(size: 13))
             .fontWeight(.light)
             .foregroundColor(.black.opacity(0.55))

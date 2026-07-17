@@ -370,7 +370,7 @@ struct OrderRecord: Identifiable {
 
     var statusDisplay: String {
         switch status {
-        case OrderStatus.paid.rawValue: return "Paid — Processing"
+        case OrderStatus.paid.rawValue: return "Paid and Processing"
         case OrderStatus.pendingFulfillment.rawValue: return "Pending Fulfillment"
         case OrderStatus.submittedToPrinter.rawValue: return "Sent to Printer"
         case OrderStatus.printing.rawValue: return "Printing"

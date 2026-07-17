@@ -154,7 +154,7 @@ struct HomepageView: View {
                                 .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
                                 .multilineTextAlignment(.center)
 
-                            Text("Capture your stories for future generations — no typing, just talking.")
+                            Text("Capture your stories for future generations. No typing, just talking.")
                                 .font(.subheadline)
                                 .foregroundColor(Color.black.opacity(0.7))
                                 .multilineTextAlignment(.center)
@@ -255,11 +255,11 @@ struct HomepageView: View {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Your Book")
-                                        .font(.footnote)
+                                        .font(.subheadline)
                                         .fontWeight(.bold)
                                         .foregroundColor(.black)
                                     Text("Generate your life story here!")
-                                        .font(.subheadline)
+                                        .font(.footnote)
                                         .foregroundColor(.black.opacity(0.7))
                                 }
                                 Spacer()
@@ -305,7 +305,9 @@ struct HomepageView: View {
                         )
                         .accessibilityIdentifier("tutorialYourBook")
 
-                        Spacer(minLength: 36)
+                        // Clears the floating tab bar so the last card is fully visible
+                        // and tappable when scrolled to the bottom.
+                        Spacer(minLength: 110)
                     }
                     .padding(.top, 24)
                 }

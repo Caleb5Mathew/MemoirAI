@@ -364,7 +364,7 @@ struct BookCoverRenderer {
     private static func drawBackCoverPanel(in panelRect: CGRect, pitch: String, fontPreset: CoverFontPreset, context: CGContext) {
         let pitchTrim = pitch.trimmingCharacters(in: .whitespacesAndNewlines)
         let bodySource = pitchTrim.isEmpty
-            ? "A personal keepsake created from real memories — thoughtfully laid out and ready to print."
+            ? "A personal keepsake created from real memories, thoughtfully laid out and ready to print."
             : pitchTrim
 
         let imprintAreaH = px(20) + px(18)

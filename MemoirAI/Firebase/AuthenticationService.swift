@@ -594,7 +594,7 @@ final class AuthenticationService: ObservableObject {
             case .weakPassword:
                 return "Password must be at least 8 characters."
             case .emailAlreadyInUse:
-                return "That email already has an account — sign in instead."
+                return "That email already has an account. Sign in instead."
             case .wrongPassword:
                 return "Incorrect email or password."
             case .userNotFound:

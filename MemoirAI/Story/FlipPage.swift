@@ -109,7 +109,7 @@ extension FlipPage {
         """, imageName: "preview4"),
         
         FlipPage(type: .text, title: "Dad's Workshop Wisdom", text: """
-        The day we raised the walls was magical. What had been pieces became structure. "This is the moment," Dad said, stepping back to admire our work, "when a project becomes real. Remember this feeling—it's what keeps you going through the hard parts."
+        The day we raised the walls was magical. What had been pieces became structure. "This is the moment," Dad said, stepping back to admire our work, "when a project becomes real. Remember this feeling. It's what keeps you going through the hard parts."
         
         I remember the afternoon we hung the rope ladder. I was frustrated; it kept twisting, refusing to hang straight. Dad watched me struggle, then quietly said, "Sometimes the harder you try to control something, the more it resists. Let it find its own balance." The ladder straightened as soon as I stopped fighting it.
         
@@ -126,7 +126,7 @@ extension FlipPage {
         FlipPage(type: .text, title: "The Courage to Begin Again", text: """
         They say courage isn't the absence of fear—it's moving forward despite it. When my great-grandparents boarded the ship in Naples with their three young children, they had twenty American dollars, six words of English between them, and fear so thick you could taste it. They also had something stronger: hope.
         
-        "Papa kept the ship ticket in his breast pocket," Grandma would tell us, "right next to his heart, for the entire voyage. He said it wasn't just paper—it was our family's future."
+        "Papa kept the ship ticket in his breast pocket," Grandma would tell us, "right next to his heart, for the entire voyage. He said it wasn't just paper, it was our family's future."
         
         The crossing took sixteen days. Sixteen days in steerage, where the air was thick with the smell of unwashed bodies, sickness, and dreams. Great-grandma would sing the old lullabies to keep the children calm, her voice competing with the groaning of the ship and the crying of a hundred other children. "Every song," she'd later say, "was a bridge between the world we left and the world we were sailing toward."
         
@@ -179,7 +179,7 @@ extension FlipPage {
         
         When we moved to the house with the big backyard, Mom's garden exploded into being. She spent that first spring studying the sun patterns, testing the soil, planning with the intensity of a general preparing for battle. But this wasn't war—it was love, expressed in careful rows and tender cultivation.
         
-        I was five when she gave me my own small plot. "This is yours," she said solemnly. "What you plant, how you tend it, what you harvest—all yours." I planted everything too close together, watered too much, and cried when half my plants died. Mom knelt beside me in the mud. "Even master gardeners kill plants," she said. "The difference is they learn why."
+        I was five when she gave me my own small plot. "This is yours," she said solemnly. "What you plant, how you tend it, what you harvest, all yours." I planted everything too close together, watered too much, and cried when half my plants died. Mom knelt beside me in the mud. "Even master gardeners kill plants," she said. "The difference is they learn why."
         
         Each season brought its rituals. Spring was for planning and planting, the whole family gathered around the kitchen table with seed catalogs and graph paper. Mom would tell us about each variety—this tomato from seeds her mother brought from Italy, these beans from a neighbor who'd moved away, that squash from seeds saved for thirty years.
         

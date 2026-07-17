@@ -27,12 +27,12 @@ extension MockBookPage {
         MockBookPage(type: .photo, content: "Three generations gathering in Grandma's kitchen, where recipes and stories were passed down with love.", imageName: "family_kitchen"),
         
         // Story 2: Dad's Workshop
-        MockBookPage(type: .text, content: "In Dad's workshop, among the sawdust and tools, I learned that building things takes patience—just like building a life.", imageName: nil),
+        MockBookPage(type: .text, content: "In Dad's workshop, among the sawdust and tools, I learned that building things takes patience, just like building a life.", imageName: nil),
         MockBookPage(type: .mixed, content: "The treehouse we built together still stands, a testament to lessons learned with calloused hands and full hearts.", imageName: "workshop_moment"),
         
         // Story 3: Immigration Journey
         MockBookPage(type: .text, content: "They arrived with twenty dollars and infinite hope, seeing America not as it was, but as it could be.", imageName: nil),
-        MockBookPage(type: .photo, content: "From Ellis Island to the American Dream—our family's courage written in every sacrifice.", imageName: "family_heritage"),
+        MockBookPage(type: .photo, content: "From Ellis Island to the American Dream, our family's courage written in every sacrifice.", imageName: "family_heritage"),
         
         // Story 4: Mom's Garden
         MockBookPage(type: .mixed, content: "In Mom's garden, we learned that love grows when tended daily, season after season.", imageName: "garden_wisdom")
