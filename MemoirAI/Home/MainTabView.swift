@@ -72,6 +72,9 @@ struct MainTabView: View {
                     tutorialCoordinator.runMigrationIfNeeded(profileID: profileVM.selectedProfile.id)
                     tutorialCoordinator.refreshAvailability(profileID: profileVM.selectedProfile.id)
                 }
+                .onChange(of: selectedTab) { _, _ in
+                    Haptics.selection()
+                }
                 .onChange(of: profileVM.selectedProfile.id) { _, newID in
                     tutorialCoordinator.registerActiveProfile(newID)
                     tutorialCoordinator.refreshAvailability(profileID: newID)

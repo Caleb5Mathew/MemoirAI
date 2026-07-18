@@ -66,10 +66,6 @@ struct RecordingView: View {
     let overlayBlack = Color.black.opacity(0.4)
     let accent = Color(red: 0.10, green: 0.22, blue: 0.14)
 
-    // Haptic feedback generators
-    private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-    private let selectionFeedback = UISelectionFeedbackGenerator()
-
     // Grid layout for up to 8 images (4 columns)
     private var columns: [GridItem] {
         Array(repeating: .init(.flexible(), spacing: 8), count: 4)
@@ -449,10 +445,9 @@ struct RecordingView: View {
     func triggerHaptic(_ type: HapticType) {
         switch type {
         case .impact(let style):
-            let generator = UIImpactFeedbackGenerator(style: style)
-            generator.impactOccurred()
+            Haptics.impact(style)
         case .selection:
-            selectionFeedback.selectionChanged()
+            Haptics.selection()
         }
     }
 
@@ -618,6 +613,7 @@ struct RecordingView: View {
     }
 
     func pauseRecording() {
+        Haptics.selection()
         audioRecorder?.pause()
         isPaused = true
         recordingTimer?.invalidate()
@@ -627,6 +623,7 @@ struct RecordingView: View {
     }
 
     func resumeRecording() {
+        Haptics.selection()
         audioRecorder?.record()
         isPaused = false
         interruptionBannerMessage = nil

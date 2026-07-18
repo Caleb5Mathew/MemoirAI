@@ -34,6 +34,7 @@ struct OrderConfirmationView: View {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 64))
                     .foregroundColor(terracotta)
+                    .onAppear { Haptics.success() }
 
                 VStack(spacing: 10) {
                     Text("Your book is on its way to the printer!")

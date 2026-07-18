@@ -722,6 +722,7 @@ struct RecordMemoryView: View {
             audioRecorder?.isMeteringEnabled = true
             audioRecorder?.prepareToRecord()
             audioRecorder?.record()
+            Haptics.tap()
             audioURL = fileURL
             isRecording = true
             isPaused = false
@@ -741,6 +742,7 @@ struct RecordMemoryView: View {
     }
     
     func pauseRecording() {
+        Haptics.selection()
         audioRecorder?.pause()
         isPaused = true
         recordingTimer?.invalidate() // Pause the timer
@@ -753,6 +755,7 @@ struct RecordMemoryView: View {
     }
 
     func resumeRecording() {
+        Haptics.selection()
         audioRecorder?.record()
         isPaused = false
         interruptionBannerMessage = nil
