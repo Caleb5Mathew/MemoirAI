@@ -18,9 +18,9 @@ struct SharedMemoryFlowView: View {
             switch status {
             case nil:
                 ProgressView("Checking access…")
-            case .owner, .granted:
+            case .some(.owner), .some(.granted):
                 SharedMemoryView(route: route)
-            case .pending, .denied, .none:
+            case .some(.pending), .some(.denied), .some(.none):
                 RequestAccessView(route: route, initialStatus: status ?? .none)
             }
         }

@@ -4670,6 +4670,35 @@ exports.onMemoryIndexCleanup = onDocumentDeleted(
   }
 );
 
+// Family and friends: push the owner when someone requests access to their memories.
+// Best-effort — a missing/stale token just means they see the in-app banner instead.
+exports.onAccessRequestNotifyOwner = onDocumentCreated(
+  { document: "users/{ownerId}/accessRequests/{requesterId}" },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const { ownerId } = event.params;
+    try {
+      const ownerDoc = await db.collection("users").doc(ownerId).get();
+      const token = String(ownerDoc.data()?.fcmToken || "").trim();
+      if (!token) return;
+      const requesterName = String(snap.data()?.requesterDisplayName || "Someone").slice(0, 80);
+      await admin.messaging().send({
+        token,
+        notification: {
+          title: "Memoir access request",
+          body: `${requesterName} asked to hear your memories. Open Memoir to approve.`
+        },
+        apns: {
+          payload: { aps: { sound: "default", badge: 1 } }
+        }
+      });
+    } catch (e) {
+      console.error("onAccessRequestNotifyOwner failed", ownerId, String(e?.message || e));
+    }
+  }
+);
+
 exports.onOrderMirrorPurchasedBooks = onDocumentWritten(
   { document: "users/{userId}/orders/{orderId}" },
   createOrderMirrorHandler(db, bucket)

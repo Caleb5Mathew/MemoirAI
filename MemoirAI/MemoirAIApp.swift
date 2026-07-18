@@ -8,7 +8,9 @@ import RevenueCat
 import Mixpanel
 import FBSDKCoreKit            // ← 1. add import
 import FirebaseCore
+import FirebaseMessaging
 import GoogleSignIn
+import UserNotifications
 
 // MARK: - UIKit delegate wrapper
 final class FBAppDelegate: NSObject, UIApplicationDelegate {
@@ -20,6 +22,13 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
 
         // Initialize Firebase FIRST
         FirebaseConfig.shared.configure()
+
+        // Remote push (FCM): family access requests notify the memoir owner.
+        // Registration is silent; the user-facing permission prompt stays where it
+        // already lives (NotificationManager during onboarding).
+        Messaging.messaging().delegate = self
+        UNUserNotificationCenter.current().delegate = self
+        application.registerForRemoteNotifications()
 
         // 2. Boot the Facebook SDK
         ApplicationDelegate.shared.application(
@@ -33,6 +42,20 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
 
         print("✅ FBSDK version:", Settings.shared.sdkVersion)
         return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        Messaging.messaging().apnsToken = deviceToken
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        print("[Push] remote notification registration failed: \(error.localizedDescription)")
     }
 
     // Needed only if you use FB Login / App Links / Google Sign-In
@@ -77,6 +100,24 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
         }
         if GIDSignIn.sharedInstance.handle(url) { return true }
         return ApplicationDelegate.shared.application(app, open: url, options: options)
+    }
+}
+
+extension FBAppDelegate: MessagingDelegate {
+    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+        PushTokenService.shared.updateToken(fcmToken)
+    }
+}
+
+extension FBAppDelegate: UNUserNotificationCenterDelegate {
+    /// Show pushes as banners while the app is foregrounded (access requests are
+    /// actionable immediately via the Home banner).
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound, .badge])
     }
 }
 
