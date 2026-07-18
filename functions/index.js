@@ -1,6 +1,6 @@
 const admin = require("firebase-admin");
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
-const { onDocumentCreated, onDocumentWritten } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentWritten, onDocumentDeleted } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const { PDFDocument } = require("pdf-lib");
@@ -4625,8 +4625,22 @@ exports.onMemoryDisplayNaming = onDocumentCreated(
     const snap = event.data;
     if (!snap) return;
     const data = snap.data() || {};
-    if (data.memoryDisplayName) return;
     const userId = event.params.userId;
+    const memoryId = event.params.memoryId;
+    // memoryIndex powers QR scans from other people's phones: memoryId -> ownerId.
+    // Kept here (not a second trigger) to save an invocation per memory.
+    try {
+      await db.collection("memoryIndex").doc(memoryId).set(
+        {
+          ownerId: userId,
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error("memoryIndex upsert failed", userId, memoryId, String(e?.message || e));
+    }
+    if (data.memoryDisplayName) return;
     try {
       const handle = await naming.resolveUserHandleForNaming(db, userId);
       const seq = await naming.allocateGlobalCounter(db, "globalMemories");
@@ -4641,6 +4655,17 @@ exports.onMemoryDisplayNaming = onDocumentCreated(
       );
     } catch (e) {
       console.error("onMemoryDisplayNaming failed", userId, String(e?.message || e));
+    }
+  }
+);
+
+exports.onMemoryIndexCleanup = onDocumentDeleted(
+  { document: "users/{userId}/memories/{memoryId}" },
+  async (event) => {
+    try {
+      await db.collection("memoryIndex").doc(event.params.memoryId).delete();
+    } catch (e) {
+      console.error("memoryIndex cleanup failed", event.params.memoryId, String(e?.message || e));
     }
   }
 );
