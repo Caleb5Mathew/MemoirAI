@@ -909,7 +909,7 @@ class StoryPageViewModel: ObservableObject {
                     title: title,
                     subtitle: nil,
                     textContent: nil,
-                    url: "memoirai://memory/\(memoryID.uuidString)",
+                    url: MemoryLinks.universalLink(memoryID: memoryID).absoluteString,
                     pageIndex: index,
                     totalPages: nil
                 )
@@ -921,7 +921,7 @@ class StoryPageViewModel: ObservableObject {
                     title: title,
                     subtitle: subtitle,
                     textContent: body,
-                    url: "memoirai://memory/\(memoryID.uuidString)",
+                    url: MemoryLinks.universalLink(memoryID: memoryID).absoluteString,
                     pageIndex: pIdx,
                     totalPages: total
                 )

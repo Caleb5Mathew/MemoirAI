@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Memoir — a memory was shared with you</title>
+  <meta name="description" content="Someone shared a recorded memory with you. Open it in the Memoir app.">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: Georgia, "Times New Roman", serif;
+      background: #f7efe0;
+      color: #2e2a24;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #fdfaf2;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 20px;
+      max-width: 420px;
+      width: 100%;
+      padding: 48px 32px;
+      text-align: center;
+    }
+    .mark {
+      width: 64px;
+      height: 64px;
+      border-radius: 16px;
+      background: #332e26;
+      color: #f7efe0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 30px;
+      margin-bottom: 24px;
+    }
+    h1 { font-size: 26px; font-weight: 700; line-height: 1.25; margin-bottom: 12px; }
+    p  { font-size: 16px; line-height: 1.55; color: #5c5346; margin-bottom: 28px; }
+    .button {
+      display: block;
+      text-decoration: none;
+      border-radius: 999px;
+      padding: 15px 24px;
+      font-size: 16px;
+      margin-bottom: 12px;
+    }
+    .primary { background: #332e26; color: #f7efe0; }
+    .secondary { background: transparent; color: #332e26; border: 1px solid rgba(0, 0, 0, 0.25); }
+    .footnote { font-size: 13px; color: #8a8072; margin-top: 20px; margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark">M</div>
+    <h1>A memory was shared with you</h1>
+    <p>Someone recorded this memory in Memoir, an app that turns real life stories into keepsake books you can hear in their own voice.</p>
+    <a class="button primary" href="https://apps.apple.com/us/app/memoir-record-your-life-story/id6746061021">Get Memoir on the App Store</a>
+    <a class="button secondary" id="open-app" href="#">Open in the app</a>
+    <p class="footnote">Already have Memoir? Opening this link on your phone takes you straight to the memory.</p>
+  </main>
+  <script>
+    // Universal links open the app automatically when installed; this button is the
+    // manual fallback using the custom scheme for older installs.
+    (function () {
+      var match = window.location.pathname.match(/\/memory\/([0-9a-fA-F-]{36})/);
+      var target = match ? "memoirai://memory/" + match[1] : "memoirai://";
+      document.getElementById("open-app").setAttribute("href", target);
+    })();
+  </script>
+</body>
+</html>

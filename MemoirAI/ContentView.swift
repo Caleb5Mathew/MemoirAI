@@ -57,6 +57,9 @@ struct ContentView: View {
                     .onReceive(nav.$selectedMemoryID.compactMap { $0 }.removeDuplicates()) { id in
                         path.append(id)
                     }
+                    .onReceive(nav.$sharedMemoryRoute.compactMap { $0 }.removeDuplicates()) { route in
+                        path.append(route)
+                    }
                     .onChange(of: path) { oldPath, newPath in
                         guard newPath.isEmpty, !oldPath.isEmpty else { return }
                         if programmaticNavigationReset { return }
@@ -82,6 +85,10 @@ struct ContentView: View {
                         } else {
                             Text("Memory not found").font(.headline)
                         }
+                    }
+                    .navigationDestination(for: SharedMemoryRoute.self) { route in
+                        SharedMemoryFlowView(route: route)
+                            .onDisappear { nav.clear() }
                     }
                 }
                 .overlay(alignment: .top) {
@@ -181,46 +188,31 @@ struct ContentView: View {
     
     // MARK: - Deep Link Handling
     
-    /// Handles incoming URLs from QR code scans
-    /// Expected format: memoirai://memory/{UUID}
+    /// Handles incoming URLs from QR code scans.
+    /// Accepts `memoirai://memory/{UUID}` (legacy printed books) and
+    /// `https://memoirai-7db06.web.app/memory/{UUID}` (universal links in new books).
     private func handleDeepLink(_ url: URL, source: String) {
         print("[QRDeepLink] received url=\(url.absoluteString) source=\(source)")
-        print("🔗 Deep link received: \(url.absoluteString)")
-        
-        // Parse the URL
-        guard url.scheme == "memoirai" else {
-            print("[QRDeepLink] reject scheme=\(url.scheme ?? "none") source=\(source)")
-            print("❌ Invalid URL scheme: \(url.scheme ?? "none")")
+
+        guard MemoryLinks.looksLikeMemoryLink(url) else {
+            // Not a memory link (Google/Facebook auth callbacks etc.) — not ours to handle.
+            print("[QRDeepLink] ignore non-memory url source=\(source)")
             return
         }
-        
-        guard url.host == "memory" else {
-            print("[QRDeepLink] reject host=\(url.host ?? "none") source=\(source)")
-            print("❌ Invalid URL host: \(url.host ?? "none")")
-            return
-        }
-        
-        // Extract UUID from path (format: /UUID)
-        let idSegment = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let memoryID = UUID(uuidString: idSegment) else {
-            print("[QRDeepLink] reject invalidUUID segment=\(idSegment) source=\(source)")
-            print("❌ Invalid UUID in path: \(idSegment)")
+        guard let memoryID = MemoryLinks.parseMemoryDeepLink(url) else {
+            print("[QRDeepLink] reject invalidUUID url=\(url.absoluteString) source=\(source)")
             deepLinkErrorMessage = "Invalid memory link format."
             showDeepLinkError = true
             return
         }
 
         lastDeepLinkAt = Date()
-        
         print("✅ Parsed memory ID: \(memoryID.uuidString)")
-        
+
         // Check if onboarding is complete
         let done = localCompleted || iCloudManager.hasCompletedOnboarding
-        
+
         if done {
-            // User has completed onboarding - navigate immediately
-            print("🔗 Navigating to memory: \(memoryID.uuidString)")
-            
             // Verify memory exists before navigating
             let entry = PersistenceController.shared.entry(id: memoryID)
             let found = entry != nil
@@ -229,18 +221,42 @@ struct ContentView: View {
                 print("[QRDeepLink] navWillPush=true source=\(source)")
                 nav.showMemoryDetail(id: memoryID)
             } else {
-                print("[QRDeepLink] memory not in store — showing alert source=\(source)")
-                print("❌ Memory not found: \(memoryID.uuidString)")
-                deepLinkErrorMessage = "This memory could not be found. It may belong to a different account or may have been deleted."
-                showDeepLinkError = true
+                // Not in the local store: could be someone else's memory (shared scan) or an
+                // own memory that has not hydrated yet. Resolve the owner and route.
+                print("[QRDeepLink] memory not in store — resolving owner source=\(source)")
+                Task { await routeNonLocalMemory(memoryID: memoryID, source: source) }
             }
         } else {
             // User hasn't completed onboarding - queue the deep link
-            print("⏳ Onboarding incomplete - queuing deep link: \(memoryID.uuidString)")
             print("[QRDeepLink] queued pending onboarding memoryID=\(memoryID.uuidString) source=\(source)")
             pendingDeepLinkID = memoryID
             deepLinkErrorMessage = "Please complete the setup to view this memory."
             showDeepLinkError = true
+        }
+    }
+
+    /// A scanned memory that is not in the local store: resolve its owner via the
+    /// server-maintained memoryIndex and push the shared memory flow, which handles
+    /// both "mine but not hydrated" and "someone else's, request access."
+    private func routeNonLocalMemory(memoryID: UUID, source: String) async {
+        do {
+            guard let ownerId = try await SharedAccessService.shared.resolveOwner(memoryId: memoryID) else {
+                print("[QRDeepLink] owner not resolved memoryID=\(memoryID.uuidString) source=\(source)")
+                await MainActor.run {
+                    deepLinkErrorMessage = "This memory could not be found. It may have been deleted."
+                    showDeepLinkError = true
+                }
+                return
+            }
+            await MainActor.run {
+                nav.showSharedMemory(ownerId: ownerId, memoryId: memoryID)
+            }
+        } catch {
+            print("[QRDeepLink] owner resolution failed: \(error.localizedDescription) source=\(source)")
+            await MainActor.run {
+                deepLinkErrorMessage = "Could not load this memory. Check your connection and try again."
+                showDeepLinkError = true
+            }
         }
     }
     

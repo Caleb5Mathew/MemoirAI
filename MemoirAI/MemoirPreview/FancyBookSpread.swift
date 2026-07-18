@@ -25,7 +25,7 @@ struct FancyBookSpread: View {
 
     private var qrCodeImage: UIImage? {
         guard let id = memory.id else { return nil }
-        let url = "memoirai://memory/\(id.uuidString)"
+        let url = MemoryLinks.universalLink(memoryID: id).absoluteString
         return UIImage.memoirQRCode(from: url, size: 120)
     }
 

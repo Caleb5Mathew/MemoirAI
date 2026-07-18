@@ -24,10 +24,18 @@
         "headers": [
           { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
         ]
+      },
+      {
+        "source": "/.well-known/apple-app-site-association",
+        "headers": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Cache-Control", "value": "max-age=3600" }
+        ]
       }
     ],
     "rewrites": [
-      { "source": "/ops", "destination": "/ops/index.html" }
+      { "source": "/ops", "destination": "/ops/index.html" },
+      { "source": "/memory/**", "destination": "/memory/index.html" }
     ]
   },
   "firestore": {
