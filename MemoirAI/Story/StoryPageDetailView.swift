@@ -163,7 +163,8 @@ struct StoryPageDetailView: View {
             }
         }
         .onAppear {
-            currentPageIndex = min(max(0, initialPageIndex), vm.pageItems.count - 1)
+            let lastIndex = max(0, vm.pageItems.count - 1)
+            currentPageIndex = min(max(0, initialPageIndex), lastIndex)
             syncEditedFieldsFromCurrentPage()
             if startEditingOnAppear {
                 if case .illustration = currentItem {
@@ -644,8 +645,7 @@ struct StoryPageDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else {
                 MemoirCoverBackPage(
-                    heading: title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? (title ?? "About this Memoir") : "About this Memoir",
-                    bodyText: text,
+                    subtitle: subtitle,
                     frameWidth: frameWidth,
                     frameHeight: frameHeight
                 )

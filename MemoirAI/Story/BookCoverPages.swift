@@ -56,8 +56,9 @@ struct MemoirCoverFrontPage: View {
 }
 
 struct MemoirCoverBackPage: View {
-    let heading: String
-    let bodyText: String
+    /// Subject's display name from the closing page's `subtitle`; nil for books
+    /// persisted before the credit line existed.
+    let subtitle: String?
     let frameWidth: CGFloat
     let frameHeight: CGFloat
 
@@ -65,7 +66,13 @@ struct MemoirCoverBackPage: View {
     private let panel = Color(red: 0.99, green: 0.98, blue: 0.955)
     private let headingColor = Color(red: 0.20, green: 0.18, blue: 0.15)
     private let bodyColor = Color(red: 0.36, green: 0.33, blue: 0.29)
-    private let brandColor = Color(red: 0.50, green: 0.45, blue: 0.40)
+
+    private var subjectName: String {
+        let t = (subtitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? "this storyteller" : t
+    }
+
+    private var badgeSide: CGFloat { frameHeight * 0.09 }
 
     var body: some View {
         ZStack {
@@ -79,35 +86,69 @@ struct MemoirCoverBackPage: View {
                 )
                 .padding(frameWidth * 0.065)
 
-            VStack(alignment: .leading, spacing: 0) {
-                Text(heading)
-                    .font(.system(size: frameHeight * 0.052, weight: .bold, design: .serif))
-                    .foregroundColor(headingColor)
-                    .padding(.top, frameHeight * 0.12)
-                    .padding(.horizontal, frameWidth * 0.11)
-
-                Text(bodyText)
-                    .font(.system(size: frameHeight * 0.034, weight: .regular, design: .serif))
-                    .foregroundColor(bodyColor)
-                    .lineSpacing(frameHeight * 0.01)
-                    .multilineTextAlignment(.leading)
-                    // Slightly more air under the heading so the block reads balanced vs top inset.
-                    .padding(.top, frameHeight * 0.072)
-                    .padding(.horizontal, frameWidth * 0.11)
-
+            VStack(spacing: frameHeight * 0.04) {
                 Spacer()
 
-                HStack {
-                    Spacer()
-                    Text("Made with MemoirAI  •  memoirai.app")
-                        .font(.system(size: frameHeight * 0.018, weight: .semibold))
-                        .foregroundColor(brandColor)
-                        .padding(.trailing, frameWidth * 0.1)
-                        .padding(.bottom, frameHeight * 0.06)
+                Text("This book was a life memoir of\n\(subjectName)")
+                    .font(.system(size: frameHeight * 0.042, weight: .semibold, design: .serif))
+                    .foregroundColor(bodyColor)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(frameHeight * 0.012)
+                    .padding(.horizontal, frameWidth * 0.12)
+
+                HStack(spacing: frameWidth * 0.02) {
+                    Text("produced by")
+                        .font(.system(size: frameHeight * 0.03, weight: .medium, design: .serif))
+                        .foregroundColor(bodyColor)
+                    MemoirLogoMark(side: badgeSide)
+                    Text("Memoir")
+                        .font(.system(size: frameHeight * 0.036, weight: .bold, design: .serif))
+                        .foregroundColor(headingColor)
                 }
+
+                Image(uiImage: QRCodeCache.image(for: MemoirAppLinks.appLinkURL.absoluteString, size: badgeSide * 6))
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: badgeSide, height: badgeSide)
+                    .padding(frameHeight * 0.012)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: badgeSide * 0.18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: badgeSide * 0.18, style: .continuous)
+                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    )
+
+                Spacer()
             }
         }
         .frame(width: frameWidth, height: frameHeight)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+/// The Memoir logo mark for in-content use. Renders the dedicated asset when it
+/// exists; falls back to a styled monogram until the artwork lands.
+struct MemoirLogoMark: View {
+    let side: CGFloat
+
+    var body: some View {
+        if let logo = UIImage(named: "MemoirLogoMark") {
+            Image(uiImage: logo)
+                .resizable()
+                .scaledToFit()
+                .frame(width: side, height: side)
+                .clipShape(RoundedRectangle(cornerRadius: side * 0.22, style: .continuous))
+        } else {
+            RoundedRectangle(cornerRadius: side * 0.22, style: .continuous)
+                .fill(Color(red: 0.20, green: 0.18, blue: 0.15))
+                .frame(width: side, height: side)
+                .overlay(
+                    Image(systemName: "book.closed.fill")
+                        .resizable()
+                        .scaledToFit()
+                        .padding(side * 0.24)
+                        .foregroundColor(Color(red: 0.955, green: 0.925, blue: 0.875))
+                )
+        }
     }
 }

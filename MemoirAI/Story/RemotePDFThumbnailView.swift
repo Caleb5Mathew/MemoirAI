@@ -52,6 +52,14 @@ enum CoverPDFThumbnailService {
         return "\(primary)|\(panelKey)|\(layoutKey)\(revSuffix)"
     }
 
+    /// Key for the raw PDF bytes: identity + revision only, shared across panels/layouts.
+    static func rawBytesCacheKey(url: URL, cacheRevision: String, cacheIdentity: String) -> String {
+        let trimmedId = cacheIdentity.trimmingCharacters(in: .whitespacesAndNewlines)
+        let primary = trimmedId.isEmpty ? url.absoluteString : trimmedId
+        let revSuffix = cacheRevision.isEmpty ? "" : "|rev:\(cacheRevision)"
+        return "\(primary)\(revSuffix)"
+    }
+
     static func cachedImage(
         url: URL,
         layout: BookCoverFlatLayoutKind,
@@ -92,6 +100,7 @@ enum CoverPDFThumbnailService {
         let trimmed = cacheIdentity.trimmingCharacters(in: .whitespacesAndNewlines)
         let pathForFreshURL = trimmed.isEmpty ? nil : trimmed
 
+        let rawKey = rawBytesCacheKey(url: url, cacheRevision: cacheRevision, cacheIdentity: cacheIdentity)
         return await CoverPDFThumbnailInflight.shared.deduped(key: key) {
             await Self.downloadRenderAndStore(
                 initialURL: url,
@@ -99,6 +108,7 @@ enum CoverPDFThumbnailService {
                 panel: panel,
                 targetSize: targetSize,
                 cacheKey: key,
+                rawBytesKey: rawKey,
                 storagePathForFreshURL: pathForFreshURL
             )
         }
@@ -130,15 +140,22 @@ enum CoverPDFThumbnailService {
         panel: BookCoverFlatPanel,
         targetSize: CGSize,
         cacheKey: String,
+        rawBytesKey: String,
         storagePathForFreshURL: String?
     ) async -> UIImage? {
-        var result = await downloadPDFBytes(from: initialURL)
-        if !pdfPayloadLooksValid(result), let path = storagePathForFreshURL,
-           let fresh = try? await StorageService.shared.freshDownloadURL(forStoragePath: path) {
-            result = await downloadPDFBytes(from: fresh)
+        let data: Data
+        if let cachedBytes = PDFRawBytesCache.shared.data(forKey: rawBytesKey) {
+            data = cachedBytes
+        } else {
+            var result = await downloadPDFBytes(from: initialURL)
+            if !pdfPayloadLooksValid(result), let path = storagePathForFreshURL,
+               let fresh = try? await StorageService.shared.freshDownloadURL(forStoragePath: path) {
+                result = await downloadPDFBytes(from: fresh)
+            }
+            guard pdfPayloadLooksValid(result), let downloaded = result.data else { return nil }
+            PDFRawBytesCache.shared.store(data: downloaded, forKey: rawBytesKey)
+            data = downloaded
         }
-
-        guard pdfPayloadLooksValid(result), let data = result.data else { return nil }
 
         let thumb: UIImage? = await Task.detached(priority: .userInitiated) {
             guard let pdf = PDFDocument(data: data), let page = pdf.page(at: 0) else { return nil }
@@ -267,6 +284,26 @@ struct RemotePDFThumbnailView<Placeholder: View>: View {
             loadFailed = true
             print("[CoverThumb] load FAIL panel=\(panelLabel)")
         }
+    }
+}
+
+/// In-memory cache of raw cover-PDF bytes, keyed by storage identity + revision only
+/// (no panel/layout), so front and back panel renders share one download. NSCache is
+/// thread-safe and evicts under memory pressure; bytes are cheap to re-download.
+final class PDFRawBytesCache {
+    static let shared = PDFRawBytesCache()
+    private let cache = NSCache<NSString, NSData>()
+
+    func data(forKey key: String) -> Data? {
+        cache.object(forKey: key as NSString) as Data?
+    }
+
+    func store(data: Data, forKey key: String) {
+        cache.setObject(data as NSData, forKey: key as NSString, cost: data.count)
+    }
+
+    func removeAll() {
+        cache.removeAllObjects()
     }
 }
 

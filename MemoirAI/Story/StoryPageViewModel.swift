@@ -117,9 +117,20 @@ class StoryPageViewModel: ObservableObject {
         let notes: [String]
     }
 
-    enum PageItem {
+    enum PageItem: Identifiable {
         case illustration(image: UIImage, memoryID: UUID, title: String?)
         case textPage(index: Int, total: Int, body: String, title: String?, subtitle: String?, memoryID: UUID)
+
+        /// Content-stable identity: survives array reordering and wholesale rebuilds,
+        /// so SwiftUI tracks pages by what they are rather than where they sit.
+        var id: String {
+            switch self {
+            case .illustration(_, let memoryID, _):
+                return "illustration:\(memoryID.uuidString)"
+            case .textPage(let index, _, _, _, _, let memoryID):
+                return "text:\(memoryID.uuidString):\(index)"
+            }
+        }
     }
 
     @Published var isLoading      : Bool = false
@@ -131,6 +142,13 @@ class StoryPageViewModel: ObservableObject {
     /// Firestore listener for `users/{uid}/storybookJobs/{jobId}` (cloud AI generation).
     private var storybookCloudJobListener: ListenerRegistration?
     private var cloudStorybookFinalizeStarted = false
+    /// Monotonic ticket for page rebuilds: a rebuild only publishes `pageItems` if it is
+    /// still the newest one when it finishes, so overlapping snapshot events can't apply
+    /// a stale (smaller) page set after a fresher one.
+    private var pageRebuildTicket: UInt64 = 0
+    /// Completed-memory count of the last published rebuild; snapshots that don't change
+    /// it (status-text-only updates) skip the rebuild to avoid churning the live TabView.
+    private var lastRebuiltCompletedCount: Int? = nil
     /// True while saving, rendering page images, and waiting for canonical PDF after generation reached 100%.
     @Published var isFinalizingAssets: Bool = false
     @Published var errorMessage   : String?
@@ -738,13 +756,9 @@ class StoryPageViewModel: ObservableObject {
                         )
                     )
                 } else if memoryID == BookInteriorAnchor.closingPageMemoryId {
-                    let heading = title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                        ? (title ?? "About this Memoir")
-                        : "About this Memoir"
                     view = AnyView(
                         MemoirCoverBackPage(
-                            heading: heading,
-                            bodyText: body,
+                            subtitle: subtitle,
                             frameWidth: bookWidth,
                             frameHeight: bookHeight
                         )
@@ -1082,7 +1096,7 @@ class StoryPageViewModel: ObservableObject {
             total: 1,
             body: closingPitch,
             title: "About this book",
-            subtitle: nil,
+            subtitle: policy.subjectDisplayName(),
             memoryID: BookInteriorAnchor.closingPageMemoryId
         )
         pageItems.insert(opening, at: 0)
@@ -4364,6 +4378,8 @@ class StoryPageViewModel: ObservableObject {
     }
 
     private func rebuildPageItemsFromCloudJobData(_ data: [String: Any], profileID: UUID) async throws {
+        pageRebuildTicket &+= 1
+        let ticket = pageRebuildTicket
         let ordered = (data["orderedMemoryIds"] as? [String]) ?? []
         let results = (data["memoryResults"] as? [String: [String: Any]]) ?? [:]
         let skippedStrings = (data["skippedMemoryIds"] as? [String]) ?? []
@@ -4372,7 +4388,6 @@ class StoryPageViewModel: ObservableObject {
             guard let u = UUID(uuidString: s) else { continue }
             skipped.append(SkippedStoryImageMemory(id: u, memoryLabel: "Memory", detail: "Skipped during cloud generation."))
         }
-        skippedMemoriesDuringGeneration = skipped
 
         let isKids = currentArtStyle == .kidsBook
         let exportHeight: CGFloat = isKids ? 612 : 792
@@ -4409,12 +4424,17 @@ class StoryPageViewModel: ObservableObject {
             newPages.append(contentsOf: textPages)
             newPages.append(.illustration(image: img, memoryID: mid, title: illustrationBarTitle))
         }
+        // A newer rebuild started while this one was downloading images — drop this
+        // result instead of stomping the fresher page set.
+        guard ticket == pageRebuildTicket else { return }
+        skippedMemoriesDuringGeneration = skipped
         pageItems = newPages
     }
 
     private func startStorybookCloudJobListener(jobId: String, profileID: UUID, thisRun: UInt64) {
         stopStorybookCloudJobListener()
         cloudStorybookFinalizeStarted = false
+        lastRebuiltCompletedCount = nil
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let ref = Firestore.firestore()
             .collection("users").document(uid)
@@ -4484,7 +4504,11 @@ class StoryPageViewModel: ObservableObject {
         }
 
         if status == "running" || status == "ranking" || status == "queued" {
-            try? await rebuildPageItemsFromCloudJobData(data, profileID: profileID)
+            if lastRebuiltCompletedCount != completed || pageItems.isEmpty {
+                if (try? await rebuildPageItemsFromCloudJobData(data, profileID: profileID)) != nil {
+                    lastRebuiltCompletedCount = completed
+                }
+            }
             hasGeneratedStorybook = !pageItems.isEmpty
             return
         }
@@ -5004,7 +5028,6 @@ class StoryPageViewModel: ObservableObject {
         let cacheId = record.coverStoragePath ?? ""
         print("[CoverFlow] prefetch START book=\(record.bookVersionId.prefix(20))… layout=\(String(describing: layout)) revPrefix=\(String(revision.prefix(24)))…")
         Task {
-            // Warm only the front panel on open; back loads lazily when the user reaches the closing page.
             let frontThumb = await CoverPDFThumbnailService.loadAndCache(
                 url: coverURL,
                 layout: layout,
@@ -5013,7 +5036,20 @@ class StoryPageViewModel: ObservableObject {
                 cacheRevision: revision,
                 cacheIdentity: cacheId
             )
-            print("[CoverFlow] prefetch END frontOK=\(frontThumb != nil) (back panel lazy)")
+            print("[CoverFlow] prefetch END frontOK=\(frontThumb != nil)")
+            // Warm the back panel after the front so reaching the closing page is instant.
+            // The front download populated PDFRawBytesCache, so this is parse+raster only.
+            Task(priority: .utility) {
+                let backThumb = await CoverPDFThumbnailService.loadAndCache(
+                    url: coverURL,
+                    layout: layout,
+                    panel: .back,
+                    targetSize: CGSize(width: 1200, height: 900),
+                    cacheRevision: revision,
+                    cacheIdentity: cacheId
+                )
+                print("[CoverFlow] prefetch BACK panel warmed=\(backThumb != nil)")
+            }
         }
     }
 
@@ -5664,20 +5700,7 @@ extension UIImage {
         return out
     }
     static func memoirQRCode(from text: String, size: CGFloat = 300) -> UIImage {
-        let ctx = CIContext()
-        let f   = CIFilter.qrCodeGenerator()
-        guard let messageData = text.data(using: String.Encoding.utf8) else {
-            return UIImage()
-        }
-        f.message = messageData
-        guard let ci = f.outputImage else { return UIImage() }
-        let scaleX = size / ci.extent.size.width
-        let scaleY = size / ci.extent.size.height
-        let scaled = ci.transformed(by: .init(scaleX: scaleX, y: scaleY))
-        if let cg = ctx.createCGImage(scaled, from: scaled.extent) {
-            return UIImage(cgImage: cg)
-        }
-        return UIImage()
+        QRCodeCache.image(for: text, size: size)
     }
 }
 
