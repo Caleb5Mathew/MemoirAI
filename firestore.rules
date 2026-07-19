@@ -5,6 +5,14 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == userId;
     }
 
+    // Family and friends shared access: an unrevoked grant doc under the owner
+    // unlocks read access to that owner's memories for the requesting user.
+    function hasApprovedGrant(ownerId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(request.auth.uid)).data.revoked != true;
+    }
+
     function renderedBookFieldsUnchanged() {
       return request.resource.data.pageWidth == resource.data.pageWidth
         && request.resource.data.pageHeight == resource.data.pageHeight
@@ -29,7 +37,31 @@ service cloud.firestore {
       allow read, write: if isOwner(userId);
 
       match /memories/{memoryId} {
-        allow read, write: if isOwner(userId);
+        allow read: if isOwner(userId) || hasApprovedGrant(userId);
+        allow write: if isOwner(userId);
+      }
+
+      // Family and friends: requesters create their own request doc (doc id = their
+      // uid, so one request per person); only the owner resolves it.
+      match /accessRequests/{requesterId} {
+        allow read: if isOwner(userId) || (request.auth != null && request.auth.uid == requesterId);
+        allow create: if request.auth != null
+          && request.auth.uid == requesterId
+          && request.auth.uid != userId
+          && request.resource.data.status == "pending"
+          && request.resource.data.requesterDisplayName is string
+          && request.resource.data.requesterDisplayName.size() > 0
+          && request.resource.data.requesterDisplayName.size() <= 80;
+        allow update: if isOwner(userId)
+          && request.resource.data.status in ["approved", "denied"];
+        allow delete: if false;
+      }
+
+      // Grants are owner-written only (approve/revoke); the requester may read their own.
+      match /accessGrants/{requesterId} {
+        allow read: if isOwner(userId) || (request.auth != null && request.auth.uid == requesterId);
+        allow create, update: if isOwner(userId);
+        allow delete: if false;
       }
 
       match /books/{bookId} {
@@ -75,6 +107,13 @@ service cloud.firestore {
     }
 
     match /config/pricing {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // memoryId → ownerId lookup for scanned QR codes. Server-maintained (Cloud
+    // Function trigger + backfill script); contains no memory content.
+    match /memoryIndex/{memoryId} {
       allow read: if request.auth != null;
       allow write: if false;
     }

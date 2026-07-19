@@ -105,7 +105,7 @@ struct QRWatermark: View {
                 Spacer()
                 // Frosted background for visibility on any image (black, white, etc.)
                 Image(uiImage: StoryPageViewModel.qrCode(
-                    from: "memoirai://memory/\(memoryID.uuidString)",
+                    from: MemoryLinks.universalLink(memoryID: memoryID).absoluteString,
                     size: qrSide
                 ))
                 .interpolation(.none)

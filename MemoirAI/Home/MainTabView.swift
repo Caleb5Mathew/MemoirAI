@@ -11,6 +11,8 @@ struct MainTabView: View {
     @AppStorage(MemoirPersistenceUserDefaults.suggestAccountLinkAfterBook) private var suggestBookBackup = false
     @State private var bookBackupBannerDismissed = false
     @State private var showEmailBackupSheet = false
+    @State private var pendingAccessRequestCount = 0
+    @State private var showAccessRequests = false
 
     private var showBookBackupNudge: Bool {
         suggestBookBackup && authService.isAnonymous && !bookBackupBannerDismissed
@@ -84,17 +86,70 @@ struct MainTabView: View {
                     selectedTab = 0
                 }
                 .overlay(alignment: .top) {
-                    if showBookBackupNudge {
-                        bookBackupBanner
-                            .padding(.horizontal, 16)
-                            .padding(.top, 8)
+                    VStack(spacing: 8) {
+                        if showBookBackupNudge {
+                            bookBackupBanner
+                        }
+                        if pendingAccessRequestCount > 0 {
+                            accessRequestsBanner
+                        }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                }
+                .sheet(isPresented: $showAccessRequests, onDismiss: {
+                    Task { await refreshPendingAccessRequestCount() }
+                }) {
+                    NavigationStack {
+                        PendingRequestsView()
+                    }
+                }
+                .task {
+                    await refreshPendingAccessRequestCount()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    Task { await refreshPendingAccessRequestCount() }
                 }
             }
         }
         .navigationBarHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         // (Onboarding overlay removed – handled globally)
+    }
+
+    private var accessRequestsBanner: some View {
+        let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
+        return Button {
+            showAccessRequests = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(terracotta)
+                Text(pendingAccessRequestCount == 1
+                     ? "Someone asked to hear your memories"
+                     : "\(pendingAccessRequestCount) people asked to hear your memories")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.primary)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.secondary)
+            }
+            .padding(14)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.black.opacity(0.06), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func refreshPendingAccessRequestCount() async {
+        guard authService.isSignedIn else {
+            pendingAccessRequestCount = 0
+            return
+        }
+        let requests = (try? await SharedAccessService.shared.fetchPendingRequests()) ?? []
+        pendingAccessRequestCount = requests.count
     }
 
     private var bookBackupBanner: some View {

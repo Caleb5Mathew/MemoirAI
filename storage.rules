@@ -15,6 +15,16 @@ service firebase.storage {
       allow read, write, delete: if isOwner(userId);
     }
 
+    // Family and friends: an unrevoked grant unlocks streaming the owner's memory audio.
+    // Must precede the catch-all so this read rule wins for audio files.
+    match /users/{userId}/audio/{audioFile} {
+      allow read: if isOwner(userId)
+        || (request.auth != null
+            && firestore.exists(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid))
+            && firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.revoked != true);
+      allow write, delete: if isOwner(userId);
+    }
+
     // Backward-compatibility paths for older uploads.
     match /users/{userId}/{allPaths=**} {
       allow read, write, delete: if isOwner(userId);

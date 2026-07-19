@@ -30,7 +30,7 @@ class EditorPage: ObservableObject, Identifiable {
 
     var qrUIImage: UIImage? {
         guard let id = memory?.id else { return nil }
-        return UIImage.memoirQRCode(from: "memoirai://memory/\(id.uuidString)", size: 120)
+        return UIImage.memoirQRCode(from: MemoryLinks.universalLink(memoryID: id).absoluteString, size: 120)
     }
 
     static func pages(from memories: [MemoryEntry], context: NSManagedObjectContext) -> [EditorPage] {

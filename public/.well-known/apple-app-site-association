@@ -1,0 +1,10 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appID": "SNG8SZK5TY.com.Buildr.MemoirAI",
+        "paths": ["/memory/*"]
+      }
+    ]
+  }
+}
