@@ -162,6 +162,7 @@ struct MemoirAIApp: App {
                 .preferredColorScheme(.light)
                 .onAppear {
                     GenerationProgressMarker.clearStaleOnLaunchIfNeeded()
+                    Haptics.warmUp()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                     PermissionManager.shared.handleAppDidBecomeActive()

@@ -70,6 +70,11 @@ struct GlobalStorybookProgressBanner: View {
                 dismissedSignature = nil
             }
         }
+        .onChange(of: observer.activeJob?.status) { oldStatus, newStatus in
+            if newStatus == "aiComplete" && oldStatus != "aiComplete" {
+                Haptics.success()
+            }
+        }
     }
 
     private func dismissSignature(for job: FirestoreSyncService.ActiveStorybookCloudJob) -> String {
