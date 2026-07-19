@@ -16,7 +16,6 @@ struct HomepageView: View {
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
     @Environment(\.managedObjectContext) private var context
-    @Environment(\.scenePhase) private var scenePhase
 
     // MARK: – State
     @State private var selectedTab = 0
@@ -29,23 +28,6 @@ struct HomepageView: View {
     @State private var isShowingPhotoPicker = false
     @State private var photoSelection: PhotosPickerItem? = nil
     @State private var selectedPhotoData: IdentifiableData? = nil
-
-    @State private var disableCameraWiggle: Bool = {
-        let localValue = UserDefaults.standard.bool(forKey: HomepageView.cameraWiggleDisabledKey)
-        if !localValue {
-            // Try iCloud backup
-            NSUbiquitousKeyValueStore.default.synchronize()
-            let cloudValue = NSUbiquitousKeyValueStore.default.bool(forKey: "memoir_\(HomepageView.cameraWiggleDisabledKey)")
-            if cloudValue {
-                UserDefaults.standard.set(true, forKey: HomepageView.cameraWiggleDisabledKey)
-                return true
-            }
-        }
-        return localValue
-    }()
-    private static let cameraWiggleDisabledKey = "cameraWiggleDisabledKey_v1"
-    /// Set after the app has entered the background at least once (user “closed” the app).
-    private static let hasBackgroundedOnceKey = "profileSwitchWiggleHasBackgroundedOnce_v1"
 
     @State private var showingAddProfile = false
     @State private var showProfileEdit = false
@@ -134,18 +116,9 @@ struct HomepageView: View {
                     VStack(spacing: 24) {
                         // Profile Photo + Title
                         ProfilePhotoView(
-                            viewModel: profileVM,
-                            disableWiggle: $disableCameraWiggle
+                            viewModel: profileVM
                         ) {
                             showProfileSwitcher = true
-                            if !disableCameraWiggle {
-                                disableCameraWiggle = true
-                                UserDefaults.standard.set(true, forKey: HomepageView.cameraWiggleDisabledKey)
-                                
-                                // Backup to iCloud for persistence
-                                NSUbiquitousKeyValueStore.default.set(true, forKey: "memoir_\(HomepageView.cameraWiggleDisabledKey)")
-                                NSUbiquitousKeyValueStore.default.synchronize()
-                            }
                         }
 
                         VStack(spacing: 10) {
@@ -318,19 +291,7 @@ struct HomepageView: View {
                 resetDailyPromptIfNeeded()
                 checkAndRecoverOrphanedMemories()
                 fetchEntries()
-                
-                if !disableCameraWiggle,
-                   UserDefaults.standard.bool(forKey: HomepageView.hasBackgroundedOnceKey) {
-                    disableCameraWiggle = true
-                    UserDefaults.standard.set(true, forKey: HomepageView.cameraWiggleDisabledKey)
-                    NSUbiquitousKeyValueStore.default.set(true, forKey: "memoir_\(HomepageView.cameraWiggleDisabledKey)")
-                    NSUbiquitousKeyValueStore.default.synchronize()
-                }
-            }
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .background {
-                    UserDefaults.standard.set(true, forKey: HomepageView.hasBackgroundedOnceKey)
-                }
+
             }
             .onDisappear {
                 tutorialCoordinator.clearAnchor(.homeContinueMemoir)
