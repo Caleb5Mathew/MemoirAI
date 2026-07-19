@@ -620,9 +620,13 @@ exports.processStorybookJob = onDocumentCreated(
           // imageLimit caps concurrent Gemini image calls; isImageCall enables
           // the longer backoff + more retries tuned for 429 RESOURCE_EXHAUSTED.
           const imageBuf = await imageLimit(() =>
-            withRetries(() => ai.generateIllustrationBuffer(geminiApiKey, assembled, geminiSize, refs), {
-              isImageCall: true
-            })
+            withRetries(
+              () =>
+                ai.generateIllustrationBufferGuarded(geminiApiKey, assembled, geminiSize, refs, (event, details) =>
+                  logJob(event, { memoryId: entry.id, ...details })
+                ),
+              { isImageCall: true }
+            )
           );
           if (!imageBuf || !imageBuf.length) {
             // Defensive: generateIllustrationBuffer should now always throw on

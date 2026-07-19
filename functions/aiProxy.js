@@ -10,7 +10,7 @@ const admin = require("firebase-admin");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const {
-  generateIllustrationBuffer,
+  generateIllustrationBufferGuarded,
   editImageWithGemini,
   uploadPngWithDownloadURL,
   buildCoverIllustrationPrompt,
@@ -410,7 +410,9 @@ exports.aiGenerateCoverArt = onCall(
 
     let imageBuf;
     try {
-      imageBuf = await generateIllustrationBuffer(apiKey, prompt, "5:4", refs);
+      imageBuf = await generateIllustrationBufferGuarded(apiKey, prompt, "5:4", refs, (event, details) =>
+        console.log(event, { uid, kind, ...details })
+      );
     } catch (e) {
       console.error("aiGenerateCoverArt generation failed", { uid, kind, message: String(e?.message || e) });
       throw new HttpsError("internal", "Cover art generation failed. Please try again.");

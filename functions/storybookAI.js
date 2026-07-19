@@ -1410,7 +1410,7 @@ function assembleFinalPrompt(
     "- If two or more named characters have empty appearance fields on the roster, you MUST still render them as clearly different people (different face shape, hair length/color/texture, build, posture, clothing). Never duplicate the headshot subject's face or signature outfit onto unrelated named characters."
   );
   parts.push(
-    "- No embedded reference: do NOT paste, composite, frame, or place any attached reference image (especially the headshot) anywhere inside the artwork — no corner thumbnail, no polaroid, no photo on a desk/wall, no avatar overlay, no inset portrait. Reference images are inputs only; they must never appear as visible elements of the scene unless the MEMORY CONTEXT explicitly describes a photograph being held or hung."
+    "- No embedded reference: reference images are out-of-frame inputs only, per the REFERENCE IMAGES rules above."
   );
   parts.push("");
 
@@ -1701,17 +1701,22 @@ async function generateIllustrationBuffer(geminiApiKey, prompt, size, referenceI
   }
 
   const aspectRatio = aspectRatioFromSize(size);
-  const parts = [];
+  const imageParts = [];
   for (const buf of referenceImageBuffers || []) {
     if (!buf || !buf.length) continue;
-    parts.push({
+    imageParts.push({
       inline_data: {
         mime_type: "image/jpeg",
         data: Buffer.isBuffer(buf) ? buf.toString("base64") : Buffer.from(buf).toString("base64")
       }
     });
   }
-  parts.push({ text: promptForGeneration });
+  // Experiment flag: prompt text before reference images may reduce the model echoing
+  // an attached reference into the output. Default off; compare leak-rate logs first.
+  const textFirst = process.env.STORYBOOK_PARTS_TEXT_FIRST === "true";
+  const parts = textFirst
+    ? [{ text: promptForGeneration }, ...imageParts]
+    : [...imageParts, { text: promptForGeneration }];
 
   const body = {
     contents: [{ parts }],
@@ -1740,6 +1745,111 @@ async function generateIllustrationBuffer(geminiApiKey, prompt, size, referenceI
   }
 
   return extractImageBufferFromGeminiResponse(data, "Gemini returned no image");
+}
+
+/**
+ * Parse the leak detector's model response into a boolean. Exported separately so the
+ * parsing rules are unit-testable without a network call. Fails open (false) on
+ * anything malformed.
+ */
+function parseLeakDetectorResponse(data) {
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) return false;
+  const raw = String(text).trim();
+  try {
+    const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, ""));
+    if (typeof parsed?.hasEmbeddedPhoto === "boolean") return parsed.hasEmbeddedPhoto;
+  } catch {
+    // fall through to token check
+  }
+  const lower = raw.toLowerCase();
+  if (lower.startsWith("yes")) return true;
+  if (lower.startsWith("no")) return false;
+  return false;
+}
+
+/**
+ * Best-effort check for the known Gemini failure mode where an attached reference
+ * headshot is echoed into the artwork as a pasted photo / inset portrait, despite the
+ * prompt forbidding it. Never throws; any error means "no leak detected" so the page
+ * is never failed by its own guard.
+ */
+async function detectReferenceLeak(geminiApiKey, imageBuf) {
+  try {
+    if (!imageBuf || !imageBuf.length) return false;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TEXT_MODEL}:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
+    const question =
+      'You are inspecting one storybook illustration. Does it contain an embedded photographic element that reads as a separate photo pasted onto the artwork — an inset portrait, corner thumbnail, polaroid, avatar bubble, picture-in-picture, or framed headshot that does not belong to the painted scene? A photo the scene itself depicts (someone holding or hanging a photograph) does not count. Answer ONLY with JSON: {"hasEmbeddedPhoto": true} or {"hasEmbeddedPhoto": false}';
+    const body = {
+      contents: [
+        {
+          parts: [
+            {
+              inline_data: {
+                mime_type: "image/png",
+                data: Buffer.isBuffer(imageBuf) ? imageBuf.toString("base64") : Buffer.from(imageBuf).toString("base64")
+              }
+            },
+            { text: question }
+          ]
+        }
+      ],
+      generationConfig: { temperature: 0, maxOutputTokens: 64, responseMimeType: "application/json" }
+    };
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return false;
+    return parseLeakDetectorResponse(data);
+  } catch {
+    return false;
+  }
+}
+
+const LEAK_RETRY_CLAUSE =
+  "CRITICAL RETRY: the previous render illegally embedded the attached reference photo as a visible inset/thumbnail inside the scene. This attempt must render ONLY the described scene as one seamless illustration with no embedded reference anywhere.";
+
+/**
+ * `generateIllustrationBuffer` plus a post-generation reference-leak check. On a
+ * detected leak, regenerates exactly once with a corrective clause (keeping the same
+ * reference images — identity fidelity matters for the pages that are fine) and
+ * returns the retry result regardless of its own verdict. `log` is an optional
+ * (event, details) callback for structured logging; it must not throw.
+ */
+async function generateIllustrationBufferGuarded(geminiApiKey, prompt, size, referenceImageBuffers, log) {
+  const emit = (event, details) => {
+    try {
+      if (log) log(event, details);
+    } catch {
+      // logging must never break generation
+    }
+  };
+  const first = await generateIllustrationBuffer(geminiApiKey, prompt, size, referenceImageBuffers);
+  const hasRefs = Array.isArray(referenceImageBuffers) && referenceImageBuffers.some((b) => b && b.length);
+  if (!hasRefs) return first;
+
+  const leaked = await detectReferenceLeak(geminiApiKey, first);
+  if (!leaked) return first;
+
+  emit("storybook.leakDetected", { promptLen: prompt.length, size });
+  try {
+    const retry = await generateIllustrationBuffer(
+      geminiApiKey,
+      `${prompt}\n\n${LEAK_RETRY_CLAUSE}`,
+      size,
+      referenceImageBuffers
+    );
+    emit("storybook.leakRetryResult", { ok: true, bytes: retry.length });
+    return retry;
+  } catch (e) {
+    // The corrective attempt failing must not lose the page — ship the first render.
+    emit("storybook.leakRetryResult", { ok: false, message: String(e?.message || e) });
+    return first;
+  }
 }
 
 /**
@@ -2187,6 +2297,7 @@ Extract title and featuring list.`;
     buildCharacterList,
     assembleFinalPrompt,
     generateIllustrationBuffer,
+    generateIllustrationBufferGuarded,
     generateBackCoverPitch: (p) => generateBackCoverPitch(geminiApiKey, p),
     loadStyleReferencePng,
     artStyleMemoryIllustrationStyleDescription,
@@ -2210,6 +2321,9 @@ module.exports = {
   buildCharacterList,
   assembleFinalPrompt,
   generateIllustrationBuffer,
+  generateIllustrationBufferGuarded,
+  detectReferenceLeak,
+  parseLeakDetectorResponse,
   editImageWithGemini,
   uploadPngWithDownloadURL,
   buildCoverIllustrationPrompt,
