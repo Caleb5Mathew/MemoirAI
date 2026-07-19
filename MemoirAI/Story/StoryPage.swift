@@ -121,6 +121,15 @@ struct QRWatermark: View {
     }
 }
 
+// MARK: - Page Detail Presentation
+/// Identifiable payload for `.fullScreenCover(item:)` so the detail view always
+/// receives the tapped page index (a Bool-driven cover can capture stale state).
+struct PageDetailRequest: Identifiable {
+    let id = UUID()
+    let pageIndex: Int
+    let startInEditMode: Bool
+}
+
 // Enhanced font system with distinct styles
 extension Font {
     static func storyPageSerifFont(size: CGFloat) -> Font {
@@ -187,9 +196,7 @@ struct StoryPage: View {
     @State private var showGallery = false
     @State private var selectedImageForFullScreen: UIImage? = nil
     @State private var hasRequestedGeneration = false
-    @State private var showPageDetail = false
-    @State private var detailPageIndex = 0
-    @State private var detailStartsInEditMode = false
+    @State private var pageDetailRequest: PageDetailRequest? = nil
     @State private var showCoverEditor = false
     @State private var showCoverArtEditSheet = false
     @State private var coverArtEditPanel: BookCoverFlatPanel = .front
@@ -503,13 +510,13 @@ struct StoryPage: View {
         printSpec: BookPrintSpec
     ) -> some View {
         TabView(selection: $currentPageIndex) {
-            ForEach(vm.pageItems.indices, id: \.self) { idx in
+            ForEach(Array(vm.pageItems.enumerated()), id: \.element.id) { idx, item in
                 let renderScale = min(
                     contentWidth / max(printSpec.widthPt, 1),
                     contentHeight / max(printSpec.heightPt, 1)
                 )
                 pageView(
-                    for: vm.pageItems[idx],
+                    for: item,
                     at: idx,
                     frameWidth: printSpec.widthPt,
                     frameHeight: printSpec.heightPt
@@ -519,9 +526,7 @@ struct StoryPage: View {
                 .frame(width: contentWidth, height: contentHeight)
                 .tag(idx)
                 .onTapGesture {
-                    detailPageIndex = idx
-                    detailStartsInEditMode = false
-                    showPageDetail = true
+                    pageDetailRequest = PageDetailRequest(pageIndex: idx, startInEditMode: false)
                 }
             }
         }
@@ -844,9 +849,7 @@ struct StoryPage: View {
             showSubscriptionTooltip: $showSubscriptionTooltip,
             actualPreviewWidth: $actualPreviewWidth,
             actualPreviewHeight: $actualPreviewHeight,
-            showPageDetail: $showPageDetail,
-            detailPageIndex: $detailPageIndex,
-            detailStartsInEditMode: $detailStartsInEditMode,
+            pageDetailRequest: $pageDetailRequest,
             showCoverEditor: $showCoverEditor,
             storybookScreenEntry: storybookScreenEntry
         )
@@ -1402,14 +1405,8 @@ struct StoryPage: View {
         }
 
         switch vm.pageItems[currentPageIndex] {
-        case .illustration:
-            detailPageIndex = currentPageIndex
-            detailStartsInEditMode = true
-            showPageDetail = true
-        case .textPage:
-            detailPageIndex = currentPageIndex
-            detailStartsInEditMode = true
-            showPageDetail = true
+        case .illustration, .textPage:
+            pageDetailRequest = PageDetailRequest(pageIndex: currentPageIndex, startInEditMode: true)
         }
     }
     
@@ -1800,8 +1797,7 @@ extension StoryPage {
         )
 
         let fallbackBackCover = MemoirCoverBackPage(
-            heading: title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? (title ?? "About this Memoir") : "About this Memoir",
-            bodyText: text,
+            subtitle: subtitle,
             frameWidth: frameWidth,
             frameHeight: frameHeight
         )
@@ -2524,9 +2520,7 @@ extension View {
         showSubscriptionTooltip: Binding<Bool>,
         actualPreviewWidth: Binding<CGFloat>,
         actualPreviewHeight: Binding<CGFloat>,
-        showPageDetail: Binding<Bool>,
-        detailPageIndex: Binding<Int>,
-        detailStartsInEditMode: Binding<Bool>,
+        pageDetailRequest: Binding<PageDetailRequest?>,
         showCoverEditor: Binding<Bool>,
         storybookScreenEntry: StorybookScreenEntry
     ) -> some View {
@@ -2551,9 +2545,7 @@ extension View {
             localColors: localColors,
             onProfileSetupDismissed: onProfileSetupDismissed,
             hasRequestedGeneration: hasRequestedGeneration,
-            showPageDetail: showPageDetail,
-            detailPageIndex: detailPageIndex,
-            detailStartsInEditMode: detailStartsInEditMode,
+            pageDetailRequest: pageDetailRequest,
             showCoverEditor: showCoverEditor
         )
 
@@ -2603,9 +2595,7 @@ extension View {
         localColors: StoryPageLocalColors,
         onProfileSetupDismissed: @escaping () -> Void,
         hasRequestedGeneration: Binding<Bool>,
-        showPageDetail: Binding<Bool>,
-        detailPageIndex: Binding<Int>,
-        detailStartsInEditMode: Binding<Bool>,
+        pageDetailRequest: Binding<PageDetailRequest?>,
         showCoverEditor: Binding<Bool>
     ) -> some View {
         self
@@ -2689,15 +2679,15 @@ extension View {
             .fullScreenCover(isPresented: showPaywall) {
                 makePaywallFallback()
             }
-            .fullScreenCover(isPresented: showPageDetail) {
+            .fullScreenCover(item: pageDetailRequest) { request in
                 StoryPageDetailView(
-                    initialPageIndex: detailPageIndex.wrappedValue,
+                    initialPageIndex: request.pageIndex,
                     vm: vm,
                     artStyle: vm.currentArtStyle,
                     printSpec: vm.currentPrintSpec,
-                    startEditingOnAppear: detailStartsInEditMode.wrappedValue,
+                    startEditingOnAppear: request.startInEditMode,
                     onRequestImageEdit: {
-                        showPageDetail.wrappedValue = false
+                        pageDetailRequest.wrappedValue = nil
                         editingImageIndex.wrappedValue = $0
                         showImageEditSheet.wrappedValue = true
                     }

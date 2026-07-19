@@ -13,6 +13,13 @@ enum BookInteriorAnchor {
     static let closingPageMemoryId = UUID(uuidString: "B00BCAFE-FEED-4000-8000-000000000002")!
 }
 
+/// Destination for the closing page QR code. Becomes a universal link domain
+/// (App Store redirect when the app is not installed); keep every call site on
+/// this constant so that swap is one line.
+enum MemoirAppLinks {
+    static let appLinkURL = URL(string: "https://memoirai.app")!
+}
+
 /// Serialized on `PersistableStorybook` / Firestore — maps to `BookCoverRenderer` fonts.
 enum CoverFontPreset: String, Codable, CaseIterable {
     case kidsSerif
@@ -34,6 +41,11 @@ struct CoverCopyPolicy {
     /// Default cover / print title before user edits.
     func defaultBookTitle() -> String {
         "\(shortName)'s Memoir"
+    }
+
+    /// Subject's display name for the closing page credit line.
+    func subjectDisplayName() -> String {
+        shortName
     }
 
     func coverFontPreset() -> CoverFontPreset {
