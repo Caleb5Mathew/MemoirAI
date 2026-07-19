@@ -6,20 +6,16 @@ import PhotosUI
 
 struct ProfilePhotoView: View {
     @ObservedObject var viewModel: ProfileViewModel
-    @Binding var disableWiggle: Bool
     var onSwitchProfileTapped: () -> Void
 
     @State private var isShowingRenameAlert = false
     @State private var newName: String = ""
-    @State private var animateOffset = false
-    @State private var wiggleTimer = Timer.publish(every: 0.6, on: .main, in: .common).autoconnect()
     @StateObject private var subscriptionManager = RCSubscriptionManager.shared
 
     @State private var showingLibraryPicker = false
     @State private var showingCamera = false
 
-    private let fullAmplitude: CGFloat = 40
-    private var amplitude: CGFloat { fullAmplitude / 3 }
+    private let switchButtonInset: CGFloat = 40
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -37,17 +33,7 @@ struct ProfilePhotoView: View {
                     .shadow(radius: 4)
                     .overlay(Circle().stroke(Color.white, lineWidth: 2))
             }
-            .offset(
-                x: disableWiggle
-                    ? -fullAmplitude
-                    : (-fullAmplitude + (animateOffset ? amplitude : -amplitude)),
-                y: 0
-            )
-            .onReceive(wiggleTimer) { _ in
-                guard !disableWiggle else { return }
-                animateOffset.toggle()
-            }
-            .animation(.easeInOut(duration: 0.3), value: animateOffset)
+            .offset(x: -switchButtonInset, y: 0)
 
             if viewModel.profiles.count > 1 && subscriptionManager.hasActiveSubscription {
                 VStack {
@@ -281,8 +267,7 @@ struct CameraPickerView: UIViewControllerRepresentable {
 struct ProfilePhotoView_Previews: PreviewProvider {
     static var previews: some View {
         ProfilePhotoView(
-            viewModel: ProfileViewModel(),
-            disableWiggle: .constant(false)
+            viewModel: ProfileViewModel()
         ) {}
         .padding()
         .previewLayout(.sizeThatFits)
