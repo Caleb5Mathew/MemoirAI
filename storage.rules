@@ -5,6 +5,12 @@ service firebase.storage {
       return request.auth != null && request.auth.uid == userId;
     }
 
+    function isDeletedAudio(userId, audioFile) {
+      return firestore.exists(
+        /databases/(default)/documents/users/$(userId)/memoryAudioTombstones/$(audioFile)
+      );
+    }
+
     // Canonical hybrid artifacts: PNG pages + packaged PDF per book version.
     match /users/{userId}/bookVersions/{bookVersionId}/pages/{pageFile} {
       allow read, write, delete: if isOwner(userId)
@@ -18,11 +24,13 @@ service firebase.storage {
     // Family and friends: an unrevoked grant unlocks streaming the owner's memory audio.
     // Must precede the catch-all so this read rule wins for audio files.
     match /users/{userId}/audio/{audioFile} {
-      allow read: if isOwner(userId)
+      allow read: if !isDeletedAudio(userId, audioFile)
+        && (isOwner(userId)
         || (request.auth != null
             && firestore.exists(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid))
-            && firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.revoked != true);
+            && firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.revoked != true));
       allow create, update: if isOwner(userId)
+        && !isDeletedAudio(userId, audioFile)
         && (
           (audioFile.matches('[0-9A-Fa-f-]{36}\\.m4a')
             && request.resource.contentType == 'audio/mp4'

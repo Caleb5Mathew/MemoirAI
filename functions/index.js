@@ -16,6 +16,7 @@ const { ensureBookVersionArtifactUrls } = require("./storageArtifactUrls");
 const naming = require("./naming");
 const { createOrderMirrorHandler } = require("./purchasedBooks");
 const { opsAlertSmtpUrl, sendOpsAlert } = require("./opsAlerts");
+const { createMemoryDeletionCleanupHandler } = require("./memoryDeletionCleanup");
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -4627,32 +4628,38 @@ exports.onMemoryDisplayNaming = onDocumentCreated(
     const data = snap.data() || {};
     const userId = event.params.userId;
     const memoryId = event.params.memoryId;
-    // memoryIndex powers QR scans from other people's phones: memoryId -> ownerId.
-    // Kept here (not a second trigger) to save an invocation per memory.
     try {
-      await db.collection("memoryIndex").doc(memoryId).set(
-        {
-          ownerId: userId,
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
-        },
-        { merge: true }
-      );
-    } catch (e) {
-      console.error("memoryIndex upsert failed", userId, memoryId, String(e?.message || e));
-    }
-    if (data.memoryDisplayName) return;
-    try {
-      const handle = await naming.resolveUserHandleForNaming(db, userId);
-      const seq = await naming.allocateGlobalCounter(db, "globalMemories");
-      const memoryDisplayName = naming.memoryDisplayNameFor(handle, seq);
-      await snap.ref.set(
-        {
-          memoryDisplayName,
+      let namingFields = null;
+      if (!data.memoryDisplayName) {
+        const handle = await naming.resolveUserHandleForNaming(db, userId);
+        const seq = await naming.allocateGlobalCounter(db, "globalMemories");
+        namingFields = {
+          memoryDisplayName: naming.memoryDisplayNameFor(handle, seq),
           memorySeq: seq,
           userHandle: handle
-        },
-        { merge: true }
-      );
+        };
+      }
+
+      const tombstoneRef = db.collection("users").doc(userId)
+        .collection("memoryTombstones").doc(memoryId);
+      const memoryIndexRef = db.collection("memoryIndex").doc(memoryId);
+      await db.runTransaction(async (transaction) => {
+        const [tombstone, currentMemory] = await Promise.all([
+          transaction.get(tombstoneRef),
+          transaction.get(snap.ref)
+        ]);
+        if (tombstone.exists || !currentMemory.exists) {
+          transaction.delete(memoryIndexRef);
+          return;
+        }
+        transaction.set(memoryIndexRef, {
+          ownerId: userId,
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        if (namingFields && !currentMemory.data()?.memoryDisplayName) {
+          transaction.set(snap.ref, namingFields, { merge: true });
+        }
+      });
     } catch (e) {
       console.error("onMemoryDisplayNaming failed", userId, String(e?.message || e));
     }
@@ -4660,14 +4667,12 @@ exports.onMemoryDisplayNaming = onDocumentCreated(
 );
 
 exports.onMemoryIndexCleanup = onDocumentDeleted(
-  { document: "users/{userId}/memories/{memoryId}" },
-  async (event) => {
-    try {
-      await db.collection("memoryIndex").doc(event.params.memoryId).delete();
-    } catch (e) {
-      console.error("memoryIndex cleanup failed", event.params.memoryId, String(e?.message || e));
-    }
-  }
+  { document: "users/{userId}/memories/{memoryId}", retry: true },
+  createMemoryDeletionCleanupHandler({
+    db,
+    bucket,
+    serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
+  })
 );
 
 // Family and friends: push the owner when someone requests access to their memories.

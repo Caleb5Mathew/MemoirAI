@@ -15,6 +15,7 @@ import Testing
 @Suite(.serialized)
 struct BookVersionPersistOrderingTests {
     private static let key = "memoirai_pending_syncs"
+    private static let deletionKey = "memoirai_pending_memory_deletions"
 
     private struct PendingRow: Codable {
         let bookId: String
@@ -26,6 +27,14 @@ struct BookVersionPersistOrderingTests {
         let profileId: String
         let queuedAt: Date
         var renderRetryCount: Int
+    }
+
+    private struct PendingDeletionRow: Codable {
+        let memoryId: String
+        let profileId: String?
+        let firebaseUserId: String
+        let queuedAt: Date
+        var retryCount: Int
     }
 
     @Test func registerPendingBookSync_persistsBeforeReturning() throws {
@@ -77,5 +86,79 @@ struct BookVersionPersistOrderingTests {
         rows = try JSONDecoder().decode([PendingRowFull].self, from: data)
         let row = try #require(rows.first { $0.bookId == book })
         #expect(row.renderRetryCount == 4)
+    }
+
+    @MainActor
+    @Test func pendingMemoryDeletion_persistsByUserAndCanBeCancelled() throws {
+        let defaults = UserDefaults.standard
+        let before = defaults.data(forKey: Self.deletionKey)
+        defer {
+            if let before {
+                defaults.set(before, forKey: Self.deletionKey)
+            } else {
+                defaults.removeObject(forKey: Self.deletionKey)
+            }
+        }
+        defaults.removeObject(forKey: Self.deletionKey)
+        let memoryId = UUID()
+        let profileId = UUID()
+        let userId = "deletion-test-user"
+
+        FirestoreSyncService.shared.registerPendingMemoryDeletion(
+            memoryId: memoryId,
+            profileId: profileId,
+            firebaseUserId: userId
+        )
+        let data = try #require(defaults.data(forKey: Self.deletionKey))
+        let rows = try JSONDecoder().decode([PendingDeletionRow].self, from: data)
+        let row = try #require(rows.first)
+        #expect(row.memoryId == memoryId.uuidString)
+        #expect(row.profileId == profileId.uuidString)
+        #expect(row.firebaseUserId == userId)
+
+        FirestoreSyncService.shared.cancelPendingMemoryDeletion(
+            memoryId: memoryId,
+            firebaseUserId: userId
+        )
+        let clearedData = try #require(defaults.data(forKey: Self.deletionKey))
+        #expect(try JSONDecoder().decode([PendingDeletionRow].self, from: clearedData).isEmpty)
+    }
+}
+
+private actor SequencerEventLog {
+    private var events: [String] = []
+
+    func append(_ event: String) {
+        events.append(event)
+    }
+
+    func snapshot() -> [String] {
+        events
+    }
+}
+
+struct MemoryOperationSequencerTests {
+    @Test func sameMemoryOperationsRunInFIFOOrder() async {
+        let sequencer = MemoryOperationSequencer()
+        let log = SequencerEventLog()
+
+        let first = Task {
+            await sequencer.run(key: "user:memory") {
+                await log.append("first-start")
+                try? await Task.sleep(for: .milliseconds(50))
+                await log.append("first-end")
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(5))
+        let second = Task {
+            await sequencer.run(key: "user:memory") {
+                await log.append("second-start")
+                await log.append("second-end")
+            }
+        }
+
+        await first.value
+        await second.value
+        #expect(await log.snapshot() == ["first-start", "first-end", "second-start", "second-end"])
     }
 }

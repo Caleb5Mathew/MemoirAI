@@ -5,8 +5,14 @@
  */
 
 const crypto = require("crypto");
+const fsPromises = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
+const { execFile } = require("node:child_process");
+const { promisify } = require("node:util");
 const OpenAI = require("openai");
 const { toFile } = require("openai");
+const ffprobePath = require("@ffprobe-installer/ffprobe").path;
 const admin = require("firebase-admin");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
@@ -25,9 +31,9 @@ function firestore() {
   return admin.firestore();
 }
 
-/** When false (default), callables accept requests without an App Check token. Set ENFORCE_APP_CHECK=true once the iOS App Check SDK has shipped. */
-function isAppCheckEnforced() {
-  return String(process.env.ENFORCE_APP_CHECK || "").trim().toLowerCase() === "true";
+/** Returns true only when the named rollout flag explicitly enables App Check. */
+function isAppCheckEnforced(environmentVariable = "ENFORCE_APP_CHECK") {
+  return String(process.env[environmentVariable] || "").trim().toLowerCase() === "true";
 }
 
 const CHAT_DAILY_LIMIT = 200;
@@ -54,12 +60,21 @@ const EDIT_IMAGE_MODELS = new Set(["gemini-3-pro-image-preview", "gemini-2.5-fla
 const DEFAULT_EDIT_MODEL = "gemini-3-pro-image-preview";
 const MAX_EDIT_INSTRUCTION_CHARS = 4000;
 const MAX_INPUT_IMAGE_DECODED_BYTES = 20 * 1024 * 1024;
-const TRANSCRIPTION_DAILY_LIMIT = 100;
+const TRANSCRIPTION_DAILY_LIMIT = 10;
+const TRANSCRIPTION_USER_DAILY_AUDIO_BYTES = 100 * 1024 * 1024;
+const TRANSCRIPTION_USER_DAILY_DURATION_SECONDS = 3 * 60 * 60;
+const TRANSCRIPTION_GLOBAL_DAILY_LIMIT = 100;
+const TRANSCRIPTION_GLOBAL_DAILY_AUDIO_BYTES = 400_000_000;
+const TRANSCRIPTION_GLOBAL_DAILY_DURATION_SECONDS = 18 * 60 * 60;
 const MAX_TRANSCRIPTION_AUDIO_BYTES = 25 * 1024 * 1024;
+const MAX_TRANSCRIPTION_DURATION_SECONDS = 60 * 60;
 const MAX_TRANSCRIPTION_GLOSSARY_TERMS = 40;
 const MAX_TRANSCRIPTION_GLOSSARY_TERM_CHARS = 80;
-const MAX_TRANSCRIPTION_TEXT_CHARS = 500000;
+const MAX_TRANSCRIPTION_TEXT_BYTES = 750 * 1024;
 const TRANSCRIPTION_LEASE_MILLIS = 6 * 60 * 1000;
+const TRANSCRIPTION_USER_ATTEMPTS_PER_MINUTE = 6;
+const TRANSCRIPTION_GLOBAL_ATTEMPTS_PER_MINUTE = 30;
+const execFileAsync = promisify(execFile);
 
 function transcriptionPrompt() {
   return "This is a personal memoir recording. Preserve names and wording exactly as spoken.";
@@ -98,6 +113,131 @@ function validateTranscriptionAudio(audio) {
   if (audio.length > MAX_TRANSCRIPTION_AUDIO_BYTES) {
     throw new HttpsError("failed-precondition", "Recording is too large to transcribe.");
   }
+}
+
+function findMP4Box(buffer, start, end, targetType) {
+  let offset = start;
+  while (offset + 8 <= end) {
+    let size = buffer.readUInt32BE(offset);
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    let headerSize = 8;
+    if (size === 1) {
+      if (offset + 16 > end) return null;
+      const largeSize = buffer.readBigUInt64BE(offset + 8);
+      if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+      size = Number(largeSize);
+      headerSize = 16;
+    } else if (size === 0) {
+      size = end - offset;
+    }
+    if (size < headerSize || offset + size > end) return null;
+    const contentStart = offset + headerSize;
+    const boxEnd = offset + size;
+    if (type === targetType) return { contentStart, boxEnd };
+    if (type === "moov" || type === "trak" || type === "mdia") {
+      const nested = findMP4Box(buffer, contentStart, boxEnd, targetType);
+      if (nested) return nested;
+    }
+    offset = boxEnd;
+  }
+  return null;
+}
+
+function m4aDurationSeconds(audio) {
+  if (!Buffer.isBuffer(audio) || audio.length < 8) return null;
+  const mvhd = findMP4Box(audio, 0, audio.length, "mvhd");
+  if (!mvhd || mvhd.contentStart + 20 > mvhd.boxEnd) return null;
+  const version = audio.readUInt8(mvhd.contentStart);
+  let timescale;
+  let duration;
+  if (version === 0) {
+    timescale = audio.readUInt32BE(mvhd.contentStart + 12);
+    duration = audio.readUInt32BE(mvhd.contentStart + 16);
+  } else if (version === 1 && mvhd.contentStart + 32 <= mvhd.boxEnd) {
+    timescale = audio.readUInt32BE(mvhd.contentStart + 20);
+    const rawDuration = audio.readBigUInt64BE(mvhd.contentStart + 24);
+    if (rawDuration > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    duration = Number(rawDuration);
+  } else {
+    return null;
+  }
+  if (!timescale || !Number.isFinite(duration)) return null;
+  const seconds = duration / timescale;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+function validateTranscriptionDuration(audio) {
+  const duration = m4aDurationSeconds(audio);
+  if (duration === null) {
+    throw new HttpsError("failed-precondition", "Recording format is unsupported. Please record it again.");
+  }
+  if (duration > MAX_TRANSCRIPTION_DURATION_SECONDS) {
+    throw new HttpsError("failed-precondition", "Recording is longer than 60 minutes. Please record a shorter version.");
+  }
+  return duration;
+}
+
+async function probeTranscriptionAudio(audio) {
+  const temporaryPath = path.join(os.tmpdir(), `memoirai-transcription-${crypto.randomUUID()}.m4a`);
+  await fsPromises.writeFile(temporaryPath, audio, { flag: "wx", mode: 0o600 });
+  try {
+    const { stdout } = await execFileAsync(ffprobePath, [
+      "-v", "error",
+      "-select_streams", "a:0",
+      "-count_frames",
+      "-show_entries", "stream=codec_name,profile,sample_rate,channels,nb_read_frames",
+      "-of", "json",
+      temporaryPath
+    ], { timeout: 30_000, maxBuffer: 1024 * 1024 });
+    return JSON.parse(stdout)?.streams?.[0] || null;
+  } finally {
+    await fsPromises.unlink(temporaryPath).catch((error) => {
+      console.error("transcription temporary audio cleanup failed", String(error?.message || error));
+    });
+  }
+}
+
+function frameCountDurationSeconds(probe) {
+  const codecName = String(probe?.codec_name || "");
+  const profile = String(probe?.profile || "");
+  const sampleRate = Number(probe?.sample_rate);
+  const channels = Number(probe?.channels);
+  const frameCount = Number(probe?.nb_read_frames);
+  if (
+    codecName !== "aac" || profile !== "LC" ||
+    !Number.isSafeInteger(sampleRate) || sampleRate < 8_000 || sampleRate > 192_000 ||
+    !Number.isSafeInteger(channels) || channels < 1 || channels > 2 ||
+    !Number.isSafeInteger(frameCount) || frameCount <= 0
+  ) {
+    return null;
+  }
+  const duration = (frameCount * 1024) / sampleRate;
+  return Number.isFinite(duration) && duration > 0 ? duration : null;
+}
+
+async function validateProbedTranscriptionDuration(audio, probeAudio = probeTranscriptionAudio) {
+  const containerDuration = validateTranscriptionDuration(audio);
+  let probe;
+  try {
+    probe = await probeAudio(audio);
+  } catch (error) {
+    console.error("transcription audio probe failed", String(error?.message || error));
+    throw new HttpsError("failed-precondition", "Recording format is unsupported. Please record it again.");
+  }
+
+  const duration = frameCountDurationSeconds(probe);
+  if (duration === null) {
+    throw new HttpsError("failed-precondition", "Recording format is unsupported. Please record it again.");
+  }
+  if (duration > MAX_TRANSCRIPTION_DURATION_SECONDS) {
+    throw new HttpsError("failed-precondition", "Recording is longer than 60 minutes. Please record a shorter version.");
+  }
+
+  const durationTolerance = Math.max(2, duration * 0.02);
+  if (Math.abs(containerDuration - duration) > durationTolerance) {
+    throw new HttpsError("failed-precondition", "Recording metadata is inconsistent. Please record it again.");
+  }
+  return duration;
 }
 
 function validateTranscriptionMetadata(metadata) {
@@ -178,6 +318,148 @@ async function checkAndIncrementQuota(uid, bucket, dailyLimit) {
       },
       { merge: true }
     );
+  });
+}
+
+function transcriptionBudgetDecision(userUsage, globalUsage, audioBytes, audioDurationSeconds) {
+  const bytes = Number(audioBytes);
+  if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes > MAX_TRANSCRIPTION_AUDIO_BYTES) {
+    return { allowed: false, reason: "invalid-audio-size" };
+  }
+  const durationSeconds = Math.ceil(Number(audioDurationSeconds));
+  if (!Number.isSafeInteger(durationSeconds) || durationSeconds <= 0 || durationSeconds > MAX_TRANSCRIPTION_DURATION_SECONDS) {
+    return { allowed: false, reason: "invalid-audio-duration" };
+  }
+  const userCount = Math.max(0, Number(userUsage?.count) || 0);
+  const userBytes = Math.max(0, Number(userUsage?.audioBytes) || 0);
+  const userDurationSeconds = Math.max(0, Number(userUsage?.audioDurationSeconds) || 0);
+  const globalCount = Math.max(0, Number(globalUsage?.count) || 0);
+  const globalBytes = Math.max(0, Number(globalUsage?.audioBytes) || 0);
+  const globalDurationSeconds = Math.max(0, Number(globalUsage?.audioDurationSeconds) || 0);
+
+  if (userCount >= TRANSCRIPTION_DAILY_LIMIT) return { allowed: false, reason: "user-request-limit" };
+  if (userBytes + bytes > TRANSCRIPTION_USER_DAILY_AUDIO_BYTES) return { allowed: false, reason: "user-audio-limit" };
+  if (userDurationSeconds + durationSeconds > TRANSCRIPTION_USER_DAILY_DURATION_SECONDS) {
+    return { allowed: false, reason: "user-duration-limit" };
+  }
+  if (globalCount >= TRANSCRIPTION_GLOBAL_DAILY_LIMIT) return { allowed: false, reason: "global-request-limit" };
+  if (globalBytes + bytes > TRANSCRIPTION_GLOBAL_DAILY_AUDIO_BYTES) return { allowed: false, reason: "global-audio-limit" };
+  if (globalDurationSeconds + durationSeconds > TRANSCRIPTION_GLOBAL_DAILY_DURATION_SECONDS) {
+    return { allowed: false, reason: "global-duration-limit" };
+  }
+
+  return {
+    allowed: true,
+    userCount: userCount + 1,
+    userAudioBytes: userBytes + bytes,
+    userAudioDurationSeconds: userDurationSeconds + durationSeconds,
+    globalCount: globalCount + 1,
+    globalAudioBytes: globalBytes + bytes,
+    globalAudioDurationSeconds: globalDurationSeconds + durationSeconds
+  };
+}
+
+async function checkAndIncrementTranscriptionBudget(uid, audioBytes, audioDurationSeconds) {
+  const dayKey = new Date().toISOString().slice(0, 10);
+  const userRef = firestore().collection("users").doc(uid).collection("aiUsage").doc(`transcription_${dayKey}`);
+  const globalRef = firestore().collection("globalAIUsage").doc(`transcription_${dayKey}`);
+
+  await firestore().runTransaction(async (transaction) => {
+    const [userSnapshot, globalSnapshot] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(globalRef)
+    ]);
+    const decision = transcriptionBudgetDecision(
+      userSnapshot.exists ? userSnapshot.data() : {},
+      globalSnapshot.exists ? globalSnapshot.data() : {},
+      audioBytes,
+      audioDurationSeconds
+    );
+    if (!decision.allowed) {
+      const globalLimit = decision.reason.startsWith("global-");
+      throw new HttpsError(
+        "resource-exhausted",
+        globalLimit
+          ? "Transcription capacity is reached for today. Please try again tomorrow."
+          : "Your transcription limit is reached for today. Please try again tomorrow."
+      );
+    }
+
+    const updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    transaction.set(userRef, {
+      bucket: "transcription",
+      count: decision.userCount,
+      audioBytes: decision.userAudioBytes,
+      audioDurationSeconds: decision.userAudioDurationSeconds,
+      updatedAt
+    }, { merge: true });
+    transaction.set(globalRef, {
+      bucket: "transcription",
+      count: decision.globalCount,
+      audioBytes: decision.globalAudioBytes,
+      audioDurationSeconds: decision.globalAudioDurationSeconds,
+      updatedAt
+    }, { merge: true });
+  });
+}
+
+function transcriptionAttemptBucket(nowMillis) {
+  const date = new Date(nowMillis);
+  if (!Number.isFinite(date.getTime())) return null;
+  return date.toISOString().slice(0, 16).replace(/[-:T]/g, "");
+}
+
+function transcriptionAttemptDecision(userCount, globalCount) {
+  const normalizedUserCount = Math.max(0, Number(userCount) || 0);
+  const normalizedGlobalCount = Math.max(0, Number(globalCount) || 0);
+  if (normalizedUserCount >= TRANSCRIPTION_USER_ATTEMPTS_PER_MINUTE) {
+    return { allowed: false, reason: "user-attempt-limit" };
+  }
+  if (normalizedGlobalCount >= TRANSCRIPTION_GLOBAL_ATTEMPTS_PER_MINUTE) {
+    return { allowed: false, reason: "global-attempt-limit" };
+  }
+  return {
+    allowed: true,
+    userCount: normalizedUserCount + 1,
+    globalCount: normalizedGlobalCount + 1
+  };
+}
+
+async function checkAndIncrementTranscriptionAttempts(uid, nowMillis = Date.now(), database = firestore()) {
+  const minuteKey = transcriptionAttemptBucket(nowMillis);
+  if (!minuteKey) throw new HttpsError("internal", "Could not initialize transcription rate limiting.");
+  const userRef = database.collection("users").doc(uid)
+    .collection("aiUsage").doc(`transcriptionAttempts_${minuteKey}`);
+  const globalRef = database.collection("globalAIUsage").doc(`transcriptionAttempts_${minuteKey}`);
+
+  await database.runTransaction(async (transaction) => {
+    const [userSnapshot, globalSnapshot] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(globalRef)
+    ]);
+    const decision = transcriptionAttemptDecision(
+      userSnapshot.exists ? userSnapshot.data()?.count : 0,
+      globalSnapshot.exists ? globalSnapshot.data()?.count : 0
+    );
+    if (!decision.allowed) {
+      throw new HttpsError(
+        "resource-exhausted",
+        decision.reason === "global-attempt-limit"
+          ? "Transcription is busy. Please wait a minute and try again."
+          : "Too many transcription attempts. Please wait a minute and try again."
+      );
+    }
+    const updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    transaction.set(userRef, {
+      bucket: "transcriptionAttempts",
+      count: decision.userCount,
+      updatedAt
+    }, { merge: true });
+    transaction.set(globalRef, {
+      bucket: "transcriptionAttempts",
+      count: decision.globalCount,
+      updatedAt
+    }, { merge: true });
   });
 }
 
@@ -446,12 +728,15 @@ exports.transcribeMemoryAudio = onCall(
     secrets: [openaiSecret],
     timeoutSeconds: 300,
     memory: "1GiB",
+    concurrency: 4,
+    maxInstances: 5,
     region: "us-central1",
-    enforceAppCheck: isAppCheckEnforced()
+    enforceAppCheck: isAppCheckEnforced("ENFORCE_TRANSCRIPTION_APP_CHECK")
   },
   async (request) => {
     const uid = requireAuth(request);
     const { memoryId, language, glossary } = validateTranscriptionRequest(request.data || {});
+    await checkAndIncrementTranscriptionAttempts(uid);
     const memoryRef = firestore().collection("users").doc(uid).collection("memories").doc(memoryId);
     const snapshot = await memoryRef.get();
     if (!snapshot.exists) throw new HttpsError("not-found", "Memory not found.");
@@ -485,6 +770,7 @@ exports.transcribeMemoryAudio = onCall(
       throw new HttpsError("failed-precondition", "Recording upload is not ready. Please try again.");
     }
     validateTranscriptionAudio(audio);
+    const audioDurationSeconds = await validateProbedTranscriptionDuration(audio);
     const audioSHA256 = crypto.createHash("sha256").update(audio).digest("hex");
     const jobId = crypto.randomUUID();
     const nowMillis = Date.now();
@@ -520,7 +806,7 @@ exports.transcribeMemoryAudio = onCall(
     }
 
     try {
-      await checkAndIncrementQuota(uid, "transcription", TRANSCRIPTION_DAILY_LIMIT);
+      await checkAndIncrementTranscriptionBudget(uid, audioInfo.size, audioDurationSeconds);
       const openai = new OpenAI({ apiKey, timeout: 240000, maxRetries: 1 });
       const file = await toFile(audio, `${memoryId}.m4a`, { type: "audio/mp4" });
       const response = await openai.audio.transcriptions.create(
@@ -528,7 +814,7 @@ exports.transcribeMemoryAudio = onCall(
       );
       const text = String(response.text || "").trim();
       if (!text) throw new HttpsError("failed-precondition", "No speech was detected in this recording.");
-      if (text.length > MAX_TRANSCRIPTION_TEXT_CHARS) {
+      if (Buffer.byteLength(text, "utf8") > MAX_TRANSCRIPTION_TEXT_BYTES) {
         throw new HttpsError("resource-exhausted", "Transcription is too long to save.");
       }
 
@@ -758,10 +1044,18 @@ Object.defineProperty(exports, "_test", {
     transcriptionPrompt,
     validateTranscriptionRequest,
     validateTranscriptionAudio,
+    m4aDurationSeconds,
+    validateTranscriptionDuration,
+    frameCountDurationSeconds,
+    validateProbedTranscriptionDuration,
     validateTranscriptionMetadata,
     buildTranscriptionAPIRequest,
     buildTranscriptionUpdate,
     transcriptionLeaseDecision,
-    normalizedTranscriptionVersion
+    normalizedTranscriptionVersion,
+    transcriptionBudgetDecision,
+    transcriptionAttemptBucket,
+    transcriptionAttemptDecision,
+    checkAndIncrementTranscriptionAttempts
   }
 });

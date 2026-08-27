@@ -6,15 +6,17 @@
   },
   "main": "index.js",
   "scripts": {
-    "test": "npm run test:merchant-pricing && npm run test:transcription",
+    "test": "npm run test:merchant-pricing && npm run test:transcription && npm run test:memory-deletion",
     "test:merchant-pricing": "node merchantPricingMath.test.js",
     "test:transcription": "node transcriptionValidation.test.js",
+    "test:memory-deletion": "node memoryDeletionCleanup.test.js",
     "check-style-sync": "node scripts/check-style-sync.js"
   },
   "dependencies": {
+    "@ffprobe-installer/ffprobe": "^2.1.2",
     "@google/generative-ai": "^0.21.0",
     "firebase-admin": "^13.10.0",
-    "firebase-functions": "^7.0.5",
+    "firebase-functions": "^7.3.2",
     "nodemailer": "^9.0.3",
     "openai": "^4.77.0",
     "p-limit": "^3.1.0",

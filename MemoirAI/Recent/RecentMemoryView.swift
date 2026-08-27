@@ -347,12 +347,49 @@ struct RecentMemoriesView: View {
     }
 
     private func delete(_ entry: MemoryEntry) {
-        let memoryId = entry.id
+        guard let memoryId = entry.id else { return }
+        let profileId = entry.profileID
+        let firebaseUserId = entry.firebaseUserId ?? MemoryUserScope.currentFirebaseUserId
+        let localAudioURL = entry.audioFileURL.flatMap(URL.init(string:))
+
+        FirestoreSyncService.shared.registerPendingMemoryDeletion(
+            memoryId: memoryId,
+            profileId: profileId,
+            firebaseUserId: firebaseUserId
+        )
         context.delete(entry)
-        try? context.save()
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            FirestoreSyncService.shared.cancelPendingMemoryDeletion(
+                memoryId: memoryId,
+                firebaseUserId: firebaseUserId
+            )
+            print("❌ Failed to delete local memory: \(error.localizedDescription)")
+            return
+        }
+
+        EnhancementSessionDraft.clear(memoryId: memoryId)
+        UserDefaults.standard.removeObject(forKey: "characterDetails_\(memoryId.uuidString)")
+        if let localAudioURL, localAudioURL.isFileURL,
+           let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+           localAudioURL.standardizedFileURL.path.hasPrefix(documentsURL.standardizedFileURL.path + "/") {
+            do {
+                try FileManager.default.removeItem(at: localAudioURL)
+            } catch {
+                if (error as NSError).code != NSFileNoSuchFileError {
+                    print("⚠️ Failed to remove local memory audio: \(error.localizedDescription)")
+                }
+            }
+        }
         fetchEntries(for: profileVM.selectedProfile.id)
-        if let id = memoryId {
-            Task { await FirestoreSyncService.shared.deleteMemory(memoryId: id) }
+        Task {
+            await FirestoreSyncService.shared.deleteMemory(
+                memoryId: memoryId,
+                profileId: profileId,
+                firebaseUserId: firebaseUserId
+            )
         }
     }
     

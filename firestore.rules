@@ -38,7 +38,27 @@ service cloud.firestore {
 
       match /memories/{memoryId} {
         allow read: if isOwner(userId) || hasApprovedGrant(userId);
-        allow write: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && !exists(/databases/$(database)/documents/users/$(userId)/memoryTombstones/$(memoryId));
+        allow delete: if isOwner(userId);
+      }
+
+      // Permanent deletion markers block stale app instances from recreating a
+      // deleted memory or uploading its old audio again.
+      match /memoryTombstones/{memoryId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && request.resource.data.schemaVersion == 1
+          && request.resource.data.keys().hasOnly(["deletedAt", "schemaVersion", "profileId"]);
+        allow delete: if false;
+      }
+
+      match /memoryAudioTombstones/{audioFile} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && request.resource.data.schemaVersion == 1
+          && request.resource.data.keys().hasOnly(["deletedAt", "schemaVersion"]);
+        allow delete: if false;
       }
 
       // Family and friends: requesters create their own request doc (doc id = their
@@ -150,6 +170,11 @@ service cloud.firestore {
           "lastUpdated", "lastUserId"
         ]);
       allow delete: if false;
+    }
+
+    // Server-only global AI budget breaker counters.
+    match /globalAIUsage/{usageId} {
+      allow read, write: if false;
     }
   }
 }

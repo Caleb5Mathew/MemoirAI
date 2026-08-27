@@ -6,7 +6,7 @@
 import SwiftUI
 import RevenueCat
 import Mixpanel
-import FBSDKCoreKit            // ← 1. add import
+import FBSDKCoreKit
 import FirebaseCore
 import FirebaseMessaging
 import GoogleSignIn
@@ -30,15 +30,13 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
         UNUserNotificationCenter.current().delegate = self
         application.registerForRemoteNotifications()
 
-        // 2. Boot the Facebook SDK
         ApplicationDelegate.shared.application(
             application,
             didFinishLaunchingWithOptions: launchOptions
         )
 
-        // 3. Initialize Facebook tracking (will be updated by ATT helper)
+        // ATT controls whether Facebook may use advertising identifiers.
         Settings.shared.isAutoLogAppEventsEnabled = true
-        // Note: isAdvertiserTrackingEnabled now managed by ATTHelper
 
         print("✅ FBSDK version:", Settings.shared.sdkVersion)
         return true
@@ -144,11 +142,9 @@ struct MemoirAIApp: App {
     
     let persistenceController = PersistenceController.shared
 
-    // 4. Tell SwiftUI to install the delegate
     @UIApplicationDelegateAdaptor(FBAppDelegate.self) var fbDelegate
 
     init() {
-        //  ❇️  Always give RevenueCat a stable user-ID so Meta gets `app_user_id`
         let rcUserDefaultsKey = "memoirai_rc_user_id"
         let uuid = UserDefaults.standard.string(forKey: rcUserDefaultsKey) ?? {
             let newID = UUID().uuidString
@@ -156,24 +152,19 @@ struct MemoirAIApp: App {
             return newID
         }()
 
-        // Configure RevenueCat FIRST – before any subscription manager access
+        #if DEBUG
         Purchases.logLevel = .debug
+        #else
+        Purchases.logLevel = .warn
+        #endif
         if let apiKey = Bundle.main.object(forInfoDictionaryKey: "RevenueCatAPIKey") as? String,
            !apiKey.isEmpty {
             Purchases.configure(withAPIKey: apiKey, appUserID: uuid)
-            print("✅ RevenueCat configured with API key: \(apiKey) • userID: \(uuid)")
+            print("RevenueCat configured")
 
-            // Restore receipt-backed entitlements, then refresh RCSubscriptionManager so UI gates update
-            // (RCManager’s own init Task may race; this sequence runs on the main actor after configure).
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 guard Purchases.isConfigured else { return }
-                do {
-                    _ = try await Purchases.shared.restorePurchases()
-                    print("✅ RevenueCat restorePurchases completed on launch")
-                } catch {
-                    print("⚠️ RevenueCat restorePurchases on launch failed: \(error.localizedDescription)")
-                }
                 await RCSubscriptionManager.shared.refreshCustomerInfo()
             }
         } else {

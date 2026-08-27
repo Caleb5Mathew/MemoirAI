@@ -25,6 +25,8 @@ struct ReRecordAudioView: View {
     @State private var recordingTime: TimeInterval = 0
     @State private var recordingTimer: Timer?
     @State private var isSaving = false
+    @State private var didSaveRecording = false
+    @State private var showCloudTranscriptionDisclosure = false
 
     // Interruption / backgrounding — set when the system (not the user) paused
     // an in-progress recording, so the UI can explain why.
@@ -36,7 +38,7 @@ struct ReRecordAudioView: View {
     private let backgroundColor = Color(red: 0.98, green: 0.96, blue: 0.89)
 
     private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-    private let maxRecordingDuration: TimeInterval = 60 * 60
+    private let maxRecordingDuration = RecordingDurationPolicy.maximumRecordingDuration
 
     var body: some View {
         NavigationStack {
@@ -166,18 +168,31 @@ struct ReRecordAudioView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
-                        cleanupSession()
+                        clearRecording()
                         dismiss()
                     }
+                    .disabled(isSaving)
                 }
             }
         }
         .onAppear {
-            checkMicrophonePermission()
             configureInterruptionObserver()
         }
         .onDisappear {
-            cleanupSession()
+            if didSaveRecording {
+                cleanupSession()
+            } else {
+                clearRecording()
+            }
+        }
+        .alert("Private Cloud Transcription", isPresented: $showCloudTranscriptionDisclosure) {
+            Button("Not Now", role: .cancel) { }
+            Button("Continue") {
+                CloudTranscriptionDisclosure.accept()
+                startRecording()
+            }
+        } message: {
+            Text("Saved recordings are uploaded to your private MemoirAI account and sent to OpenAI to create a transcript. You can delete the recording and transcript at any time.")
         }
     }
 
@@ -195,18 +210,13 @@ struct ReRecordAudioView: View {
                 .foregroundColor(headerColor.opacity(0.8))
                 .font(.caption)
         }
+        .disabled(isSaving)
     }
 
     private func formatTime(_ time: TimeInterval) -> String {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%02d:%02d", minutes, seconds)
-    }
-
-    private func checkMicrophonePermission() {
-        if !permissionManager.isMicrophoneAuthorized {
-            permissionManager.requestMicrophonePermission()
-        }
     }
 
     private func setupAudioSession() {
@@ -220,11 +230,15 @@ struct ReRecordAudioView: View {
         }
     }
 
-    private func startRecordingTimer() {
-        recordingTime = 0
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            recordingTime += 1
-            if recordingTime >= maxRecordingDuration {
+    private func startRecordingTimer(resetElapsedTime: Bool = true) {
+        if resetElapsedTime {
+            recordingTime = 0
+        }
+        stopRecordingTimer()
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+            guard let recorder = audioRecorder else { return }
+            recordingTime = recorder.currentTime
+            if recordingTime >= maxRecordingDuration || !recorder.isRecording {
                 stopRecording()
             }
         }
@@ -236,6 +250,10 @@ struct ReRecordAudioView: View {
     }
 
     private func startRecording() {
+        guard CloudTranscriptionDisclosure.isAccepted() else {
+            showCloudTranscriptionDisclosure = true
+            return
+        }
         guard permissionManager.isMicrophoneAuthorized else {
             permissionManager.requestMicrophonePermission()
             return
@@ -255,10 +273,14 @@ struct ReRecordAudioView: View {
         ]
 
         do {
-            audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
-            audioRecorder?.isMeteringEnabled = true
-            audioRecorder?.prepareToRecord()
-            audioRecorder?.record()
+            let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
+            recorder.isMeteringEnabled = true
+            recorder.prepareToRecord()
+            guard recorder.record(forDuration: RecordingDurationPolicy.maximumRecordingDuration) else {
+                print("ReRecord recorder refused to start")
+                return
+            }
+            audioRecorder = recorder
             audioURL = fileURL
             isRecording = true
             isPaused = false
@@ -280,16 +302,16 @@ struct ReRecordAudioView: View {
     }
 
     private func resumeRecording() {
-        audioRecorder?.record()
+        guard let recorder = audioRecorder else { return }
+        let remaining = RecordingDurationPolicy.remainingDuration(after: recorder.currentTime)
+        guard remaining > 0, recorder.record(forDuration: remaining) else {
+            stopRecording()
+            return
+        }
         isPaused = false
         interruptionBannerMessage = nil
         realTimeTranscription.resumeTranscription()
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            recordingTime += 1
-            if recordingTime >= maxRecordingDuration {
-                stopRecording()
-            }
-        }
+        startRecordingTimer(resetElapsedTime: false)
     }
 
     private func stopRecording() {
@@ -348,7 +370,7 @@ struct ReRecordAudioView: View {
     }
 
     private func saveToExistingMemory() {
-        guard let url = audioURL else { return }
+        guard !isSaving, let url = audioURL else { return }
         isSaving = true
         let capturedURL = url
         let objectID = memoryObjectID
@@ -390,6 +412,10 @@ struct ReRecordAudioView: View {
                 FirestoreSyncService.shared.queueMemorySyncWithProfile(entry, profile: profile)
             } catch {
                 print("ReRecord save failed: \(error)")
+                Task { @MainActor in
+                    isSaving = false
+                }
+                return
             }
 
             DispatchQueue.main.async {
@@ -398,6 +424,7 @@ struct ReRecordAudioView: View {
 
             Task { @MainActor in
                 isSaving = false
+                didSaveRecording = true
                 dismiss()
             }
         }

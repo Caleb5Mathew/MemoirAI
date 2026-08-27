@@ -140,6 +140,7 @@ struct SettingsView: View {
     @State private var orderBadgeListener: ListenerRegistration?
     @State private var showOrderHistory = false
     @State private var showSupportCopiedAlert = false
+    @State private var showAudioPrivacyAlert = false
     
     private enum DevUnlockResult {
         case success
@@ -307,6 +308,11 @@ struct SettingsView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text("We couldn't open Mail, so we copied \(SupportContact.email) to your clipboard.")
+        }
+        .alert("Audio & Transcription Privacy", isPresented: $showAudioPrivacyAlert) {
+            Button("Done", role: .cancel) { }
+        } message: {
+            Text("Saved voice memories are uploaded to your private MemoirAI account and sent to OpenAI to create transcripts. You can delete a memory at any time; deletion removes its cloud recording and blocks stale devices from restoring it.")
         }
     }
     
@@ -767,40 +773,68 @@ struct SettingsView: View {
 
     // MARK: - Support Section
     private var supportSection: some View {
-        Button {
-            SupportContact.contact { showSupportCopiedAlert = true }
-        } label: {
-            HStack(spacing: 16) {
-                ZStack {
-                    Circle()
-                        .fill(terracotta.opacity(0.15))
-                        .frame(width: 44, height: 44)
-
-                    Image(systemName: "envelope.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(terracotta)
+        VStack(spacing: 12) {
+            Button {
+                showAudioPrivacyAlert = true
+            } label: {
+                HStack(spacing: 16) {
+                    ZStack {
+                        Circle()
+                            .fill(terracotta.opacity(0.15))
+                            .frame(width: 44, height: 44)
+                        Image(systemName: "waveform.badge.shield")
+                            .font(.system(size: 18))
+                            .foregroundColor(terracotta)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Audio & Transcription Privacy")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(darkText)
+                        Text("How saved recordings are processed")
+                            .font(.system(size: 12))
+                            .foregroundColor(.gray)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.gray.opacity(0.5))
                 }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Contact Support")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(darkText)
-
-                    Text(SupportContact.email)
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray)
-                }
-
-                Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.gray.opacity(0.5))
+                .padding(16)
+                .background(Color.white.opacity(0.6))
+                .cornerRadius(16)
+                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
             }
-            .padding(16)
-            .background(Color.white.opacity(0.6))
-            .cornerRadius(16)
-            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+
+            Button {
+                SupportContact.contact { showSupportCopiedAlert = true }
+            } label: {
+                HStack(spacing: 16) {
+                    ZStack {
+                        Circle()
+                            .fill(terracotta.opacity(0.15))
+                            .frame(width: 44, height: 44)
+                        Image(systemName: "envelope.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(terracotta)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Contact Support")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(darkText)
+                        Text(SupportContact.email)
+                            .font(.system(size: 12))
+                            .foregroundColor(.gray)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.gray.opacity(0.5))
+                }
+                .padding(16)
+                .background(Color.white.opacity(0.6))
+                .cornerRadius(16)
+                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+            }
         }
         .buttonStyle(PlainButtonStyle())
     }

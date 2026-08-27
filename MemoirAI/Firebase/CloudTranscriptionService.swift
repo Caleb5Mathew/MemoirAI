@@ -75,6 +75,35 @@ enum TranscriptionFailurePolicy {
     }
 }
 
+enum RecordingDurationPolicy {
+    static let providerMaximumDuration: TimeInterval = 60 * 60
+    static let finalizationSafetyMargin: TimeInterval = 5
+    static let maximumRecordingDuration = providerMaximumDuration - finalizationSafetyMargin
+    static let warningThreshold = maximumRecordingDuration - 30
+    static let countdownStart = maximumRecordingDuration - 3
+
+    static func remainingDuration(after elapsed: TimeInterval) -> TimeInterval {
+        max(0, maximumRecordingDuration - max(0, elapsed))
+    }
+
+    static func shouldStop(elapsed: TimeInterval) -> Bool {
+        elapsed >= maximumRecordingDuration
+    }
+}
+
+enum CloudTranscriptionDisclosure {
+    private static let acceptedVersionKey = "memoirai_cloud_transcription_disclosure_version"
+    private static let currentVersion = 1
+
+    static func isAccepted(defaults: UserDefaults = .standard) -> Bool {
+        defaults.integer(forKey: acceptedVersionKey) >= currentVersion
+    }
+
+    static func accept(defaults: UserDefaults = .standard) {
+        defaults.set(currentVersion, forKey: acceptedVersionKey)
+    }
+}
+
 actor CloudTranscriptionService {
     static let shared = CloudTranscriptionService()
     private var activeMemoryIDs = Set<UUID>()
@@ -100,7 +129,8 @@ actor CloudTranscriptionService {
         }
         await updateLocalState(memoryID: memoryID, status: "processing")
         let callable = Functions.functions().httpsCallable("transcribeMemoryAudio")
-        callable.timeoutInterval = 310
+        // Allow the 300-second server deadline plus callable transport overhead.
+        callable.timeoutInterval = 330
         do {
             let result = try await callable.call([
                 "memoryId": memoryID.uuidString,

@@ -48,8 +48,8 @@ final class FirebaseConfig {
             )
         }
         #else
-        AppCheck.setAppCheckProviderFactory(DeviceCheckProviderFactory())
-        print("🔐 App Check (Device): DeviceCheck provider configured.")
+        AppCheck.setAppCheckProviderFactory(AppAttestProviderFactory())
+        print("🔐 App Check (Device): App Attest provider configured.")
         #endif
         #endif
         

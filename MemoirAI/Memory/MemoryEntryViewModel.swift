@@ -47,11 +47,6 @@ class MemoryEntryViewModel: ObservableObject {
         save()
     }
 
-    func deleteEntry(_ entry: MemoryEntry) {
-        context.delete(entry)
-        save()
-    }
-
     // ✅ Now calls fetchEntries with remembered profile
     private func save() {
         do {

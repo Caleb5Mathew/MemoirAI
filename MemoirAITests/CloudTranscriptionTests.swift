@@ -121,4 +121,24 @@ struct CloudTranscriptionTests {
             for: "The network connection was lost."
         ) == "failed")
     }
+
+    @Test func recordingDurationPolicy_stopsBeforeProviderCeiling() {
+        #expect(RecordingDurationPolicy.maximumRecordingDuration == 3_595)
+        #expect(RecordingDurationPolicy.providerMaximumDuration == 3_600)
+        #expect(RecordingDurationPolicy.remainingDuration(after: 0) == 3_595)
+        #expect(RecordingDurationPolicy.remainingDuration(after: 3_594) == 1)
+        #expect(RecordingDurationPolicy.remainingDuration(after: 3_600) == 0)
+        #expect(!RecordingDurationPolicy.shouldStop(elapsed: 3_594.99))
+        #expect(RecordingDurationPolicy.shouldStop(elapsed: 3_595))
+    }
+
+    @Test func cloudDisclosure_acceptanceIsVersionedAndPersistent() throws {
+        let suiteName = "CloudTranscriptionDisclosureTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(!CloudTranscriptionDisclosure.isAccepted(defaults: defaults))
+        CloudTranscriptionDisclosure.accept(defaults: defaults)
+        #expect(CloudTranscriptionDisclosure.isAccepted(defaults: defaults))
+    }
 }
