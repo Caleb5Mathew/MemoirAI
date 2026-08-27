@@ -37,6 +37,7 @@ final class FirestoreSyncService {
     
     private let db = Firestore.firestore()
     private let bookVersionSyncSequencer = BookVersionSyncSequencer()
+    @MainActor private var deletedMemoryIDs = Set<UUID>()
     
     /// Sticky per signed-in `uid` so re-register from `performSyncBook` after `incrementPendingBookRenderRetry` does not wipe the count.
     private var lastPostSignInCoverBackfillUserId: String?
@@ -291,25 +292,38 @@ final class FirestoreSyncService {
     private struct PendingMemorySyncRecord: Codable {
         let memoryId: String
         let profileId: String
+        let firebaseUserId: String?
+        let glossary: [String]
         let queuedAt: Date
         /// Incremented when a retry attempt still fails; used for debugging, same as `PendingBookSyncRecord.renderRetryCount`.
         var retryCount: Int
 
-        init(memoryId: String, profileId: String, queuedAt: Date, retryCount: Int = 0) {
+        init(
+            memoryId: String,
+            profileId: String,
+            firebaseUserId: String?,
+            glossary: [String],
+            queuedAt: Date,
+            retryCount: Int = 0
+        ) {
             self.memoryId = memoryId
             self.profileId = profileId
+            self.firebaseUserId = firebaseUserId
+            self.glossary = glossary
             self.queuedAt = queuedAt
             self.retryCount = retryCount
         }
 
         private enum CodingKeys: String, CodingKey {
-            case memoryId, profileId, queuedAt, retryCount
+            case memoryId, profileId, firebaseUserId, glossary, queuedAt, retryCount
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             memoryId = try c.decode(String.self, forKey: .memoryId)
             profileId = try c.decode(String.self, forKey: .profileId)
+            firebaseUserId = try c.decodeIfPresent(String.self, forKey: .firebaseUserId)
+            glossary = try c.decodeIfPresent([String].self, forKey: .glossary) ?? []
             queuedAt = try c.decode(Date.self, forKey: .queuedAt)
             retryCount = try c.decodeIfPresent(Int.self, forKey: .retryCount) ?? 0
         }
@@ -318,6 +332,8 @@ final class FirestoreSyncService {
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode(memoryId, forKey: .memoryId)
             try c.encode(profileId, forKey: .profileId)
+            try c.encodeIfPresent(firebaseUserId, forKey: .firebaseUserId)
+            try c.encode(glossary, forKey: .glossary)
             try c.encode(queuedAt, forKey: .queuedAt)
             try c.encode(retryCount, forKey: .retryCount)
         }
@@ -331,16 +347,19 @@ final class FirestoreSyncService {
         return decoded
     }
 
-    private func registerPendingMemorySync(memoryId: String, profileId: String) {
+    private func registerPendingMemorySync(memoryId: String, profileId: String, glossary: [String]) {
+        guard let firebaseUserId = Auth.auth().currentUser?.uid else { return }
         var records = loadPendingMemorySyncRecords()
-        let existing = records.first { $0.memoryId == memoryId }
+        let existing = records.first { $0.memoryId == memoryId && $0.firebaseUserId == firebaseUserId }
         let preserveRetry = existing?.retryCount ?? 0
         let preserveQueued = existing?.queuedAt ?? Date()
-        records.removeAll { $0.memoryId == memoryId }
+        records.removeAll { $0.memoryId == memoryId && $0.firebaseUserId == firebaseUserId }
         records.append(
             PendingMemorySyncRecord(
                 memoryId: memoryId,
                 profileId: profileId,
+                firebaseUserId: firebaseUserId,
+                glossary: glossary,
                 queuedAt: preserveQueued,
                 retryCount: preserveRetry
             )
@@ -351,13 +370,20 @@ final class FirestoreSyncService {
     }
 
     /// Non-private so tests can exercise the same register/re-register contract as `registerPendingBookSyncForProfile`.
-    func registerPendingMemorySyncForProfile(memoryId: String, profileId: UUID) {
-        registerPendingMemorySync(memoryId: memoryId, profileId: profileId.uuidString)
+    func registerPendingMemorySyncForProfile(memoryId: String, profile: Profile) {
+        registerPendingMemorySync(
+            memoryId: memoryId,
+            profileId: profile.id.uuidString,
+            glossary: CloudTranscriptionService.glossary(for: profile)
+        )
     }
 
     private func incrementPendingMemorySyncRetry(memoryId: String) {
+        let currentUserId = Auth.auth().currentUser?.uid
         var records = loadPendingMemorySyncRecords()
-        guard let i = records.firstIndex(where: { $0.memoryId == memoryId }) else { return }
+        guard let i = records.firstIndex(where: {
+            $0.memoryId == memoryId && ($0.firebaseUserId == nil || $0.firebaseUserId == currentUserId)
+        }) else { return }
         records[i].retryCount += 1
         if let data = try? JSONEncoder().encode(records) {
             UserDefaults.standard.set(data, forKey: Self.pendingMemorySyncStorageKey)
@@ -366,8 +392,11 @@ final class FirestoreSyncService {
     }
 
     private func clearPendingMemorySync(memoryId: String) {
+        let currentUserId = Auth.auth().currentUser?.uid
         var records = loadPendingMemorySyncRecords()
-        records.removeAll { $0.memoryId == memoryId }
+        records.removeAll {
+            $0.memoryId == memoryId && ($0.firebaseUserId == nil || $0.firebaseUserId == currentUserId)
+        }
         if let data = try? JSONEncoder().encode(records) {
             UserDefaults.standard.set(data, forKey: Self.pendingMemorySyncStorageKey)
         }
@@ -377,9 +406,11 @@ final class FirestoreSyncService {
     /// Dedupes by memory id; drops the pending record once synced or once the local `MemoryEntry` no longer exists.
     @MainActor
     private func retryPendingMemorySyncs(for profileID: UUID) async {
-        guard Auth.auth().currentUser?.uid != nil else { return }
+        guard let currentUserId = Auth.auth().currentUser?.uid else { return }
         let want = profileID.uuidString
-        let pending = loadPendingMemorySyncRecords().filter { $0.profileId == want }
+        let pending = loadPendingMemorySyncRecords().filter {
+            $0.profileId == want && ($0.firebaseUserId == nil || $0.firebaseUserId == currentUserId)
+        }
         guard !pending.isEmpty else { return }
 
         let context = PersistenceController.shared.container.viewContext
@@ -389,7 +420,10 @@ final class FirestoreSyncService {
                 continue
             }
             let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", memoryUUID as CVarArg)
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(format: "id == %@", memoryUUID as CVarArg),
+                NSPredicate(format: "firebaseUserId == %@", currentUserId)
+            ])
             request.fetchLimit = 1
             guard let entry = try? context.fetch(request).first else {
                 // Memory no longer exists locally (deleted) — nothing left to sync.
@@ -398,9 +432,31 @@ final class FirestoreSyncService {
             }
             let synced = await syncMemory(entry)
             if synced {
-                clearPendingMemorySync(memoryId: record.memoryId)
+                if TranscriptionRetryPolicy.shouldRequest(
+                    status: entry.transcriptionStatus,
+                    audioFileExtension: URL(string: entry.audioFileURL ?? "")?.pathExtension,
+                    updatedAt: entry.transcriptionUpdatedAt
+                ), let id = entry.id {
+                    do {
+                        _ = try await CloudTranscriptionService.shared.transcribe(memoryID: id, glossary: record.glossary)
+                        clearPendingMemorySync(memoryId: record.memoryId)
+                    } catch {
+                        if entry.transcriptionStatus == "needsRerecording" {
+                            clearPendingMemorySync(memoryId: record.memoryId)
+                        } else {
+                            incrementPendingMemorySyncRetry(memoryId: record.memoryId)
+                        }
+                        print("⚠️ Pending cloud transcription retry failed: \(error.localizedDescription)")
+                    }
+                } else if entry.transcriptionStatus != "processing" {
+                    clearPendingMemorySync(memoryId: record.memoryId)
+                }
             } else {
-                incrementPendingMemorySyncRetry(memoryId: record.memoryId)
+                if entry.transcriptionStatus == "needsRerecording" {
+                    clearPendingMemorySync(memoryId: record.memoryId)
+                } else {
+                    incrementPendingMemorySyncRetry(memoryId: record.memoryId)
+                }
             }
         }
     }
@@ -411,9 +467,15 @@ final class FirestoreSyncService {
     /// Call this after saving to Core Data
     /// - Returns: `true` when the Firestore write (and audio upload, if any) succeeded; `false` on any failure so callers can queue a retry.
     @discardableResult
+    @MainActor
     func syncMemory(_ entry: MemoryEntry, profileName: String? = nil) async -> Bool {
         guard let userId = Auth.auth().currentUser?.uid else {
             print("⚠️ Cannot sync memory - user not signed in")
+            return false
+        }
+
+        if let owner = entry.firebaseUserId, !owner.isEmpty, owner != userId {
+            print("⚠️ Refusing to sync a memory owned by a different Firebase user")
             return false
         }
 
@@ -421,26 +483,68 @@ final class FirestoreSyncService {
             print("⚠️ Cannot sync memory - no ID")
             return false
         }
+        guard !deletedMemoryIDs.contains(memoryId) else {
+            print("⚠️ Skipping sync for deleted memory \(memoryId.uuidString)")
+            return false
+        }
 
         let memoryRef = db.collection("users").document(userId)
             .collection("memories").document(memoryId.uuidString)
 
+        let prompt = entry.prompt ?? ""
+        let text = entry.text ?? ""
+        let createdAt = entry.createdAt ?? Date()
+        let chapter = entry.chapter ?? ""
+        let profileID = entry.profileID?.uuidString ?? ""
+        let characterDetails = entry.characterDetails
+        let audioData = entry.audioData
+        let audioFileURL = entry.audioFileURL
+        let transcriptionStatus = entry.transcriptionStatus
+        let transcriptionEditedText = entry.transcriptionEditedText
+
         do {
-            // Upload audio if available; otherwise remove stale audioURL in Firestore (e.g. after re-record clear).
             var memoryData: [String: Any] = [
-                "prompt": entry.prompt ?? "",
-                "transcription": entry.text ?? "",
-                "createdAt": entry.createdAt ?? Date(),
-                "chapter": entry.chapter ?? "",
-                "profileID": entry.profileID?.uuidString ?? "",
+                "prompt": prompt,
+                "createdAt": createdAt,
+                "chapter": chapter,
+                "profileID": profileID,
                 "syncedAt": FieldValue.serverTimestamp()
             ]
 
-            if let audioData = entry.audioData, !audioData.isEmpty {
-                let uploaded = try await StorageService.shared.uploadAudio(audioData, memoryId: memoryId.uuidString)
-                memoryData["audioURL"] = uploaded
-            } else {
+            let remoteSnapshot = try? await memoryRef.getDocument()
+            let remoteData = remoteSnapshot?.data() ?? [:]
+            let fileExtension = URL(string: audioFileURL ?? "")?.pathExtension.lowercased() == "m4a" ? "m4a" : "caf"
+            let isM4A = fileExtension == "m4a"
+            var audioChanged = false
+
+            if let audioData, !audioData.isEmpty {
+                if isM4A && audioData.count > 25 * 1024 * 1024 {
+                    entry.transcriptionStatus = "needsRerecording"
+                    entry.transcriptionUpdatedAt = Date()
+                    try entry.managedObjectContext?.save()
+                    print("❌ Recording is too large for cloud transcription")
+                    return false
+                }
+
+                let audioSHA256 = Self.sha256Hex(audioData)
+                let storagePath = "users/\(userId)/audio/\(memoryId.uuidString).\(fileExtension)"
+                audioChanged = remoteData["audioSHA256"] as? String != audioSHA256
+                let remotePathMatches = remoteData["audioStoragePath"] as? String == storagePath
+                if !audioChanged, remotePathMatches, let remoteURL = remoteData["audioURL"] as? String {
+                    memoryData["audioURL"] = remoteURL
+                } else {
+                    memoryData["audioURL"] = try await StorageService.shared.uploadAudio(
+                        audioData,
+                        memoryId: memoryId.uuidString,
+                        fileExtension: fileExtension
+                    )
+                }
+                memoryData["audioStoragePath"] = storagePath
+                memoryData["audioSHA256"] = audioSHA256
+            } else if audioFileURL == nil || audioFileURL?.isEmpty == true {
                 memoryData["audioURL"] = FieldValue.delete()
+                memoryData["audioStoragePath"] = FieldValue.delete()
+                memoryData["audioSHA256"] = FieldValue.delete()
             }
 
             // Include profile name for easy identification
@@ -448,12 +552,49 @@ final class FirestoreSyncService {
                 memoryData["profileName"] = profileName
             }
 
-            if let characterDetails = entry.characterDetails {
+            if let characterDetails {
                 memoryData["characterDetails"] = characterDetails
             }
 
+            switch MemoryTranscriptionSyncPolicy.mode(
+                audioChanged: audioChanged,
+                isM4A: isM4A,
+                status: transcriptionStatus,
+                editedText: transcriptionEditedText,
+                text: text
+            ) {
+            case .resetForNewAudio:
+                memoryData["transcription"] = text
+                memoryData["transcriptionStatus"] = "queued"
+                memoryData["transcriptionRaw"] = FieldValue.delete()
+                if let transcriptionEditedText {
+                    memoryData["transcriptionEdited"] = transcriptionEditedText
+                } else {
+                    memoryData["transcriptionEdited"] = FieldValue.delete()
+                }
+                memoryData["transcriptionLanguage"] = FieldValue.delete()
+                memoryData["transcriptionModel"] = FieldValue.delete()
+                memoryData["transcriptionVersion"] = 0
+                memoryData["transcriptionJobId"] = FieldValue.delete()
+                memoryData["transcriptionLeaseExpiresAt"] = FieldValue.delete()
+                memoryData["transcriptionAudioSHA256"] = FieldValue.delete()
+            case .writeEditedText(let editedText):
+                memoryData["transcription"] = editedText
+                memoryData["transcriptionEdited"] = editedText
+            case .writeLegacyText(let legacyText):
+                memoryData["transcription"] = legacyText
+            case .preserveServer:
+                break
+            }
+
             // Save to Firestore
+            guard !deletedMemoryIDs.contains(memoryId) else { return false }
             try await memoryRef.setData(memoryData, merge: true)
+            if audioChanged && isM4A {
+                try? await StorageService.shared.deleteFile(
+                    at: "users/\(userId)/audio/\(memoryId.uuidString).caf"
+                )
+            }
             print("✅ Synced memory \(memoryId.uuidString) to Firebase")
             return true
 
@@ -1650,18 +1791,11 @@ final class FirestoreSyncService {
     
     // MARK: - Hydrate local store from Firestore
 
-    /// When Core Data has **no** `MemoryEntry` rows (e.g. fresh install, CloudKit unavailable) but Firestore
-    /// still has `users/{uid}/memories` (same signed-in Apple/Google user), import documents into Core Data.
+    /// Imports missing memories and reconciles server-owned transcription state for existing rows.
     @MainActor
     func hydrateMemoriesFromFirestoreIfStoreEmpty(context: NSManagedObjectContext) async {
         guard let userId = Auth.auth().currentUser?.uid else {
             print("⚠️ Firestore hydrate skipped — not signed in")
-            return
-        }
-
-        let countRequest: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
-        let localTotal = (try? context.count(for: countRequest)) ?? 0
-        if localTotal > 0 {
             return
         }
 
@@ -1676,24 +1810,41 @@ final class FirestoreSyncService {
 
         guard !snapshot.documents.isEmpty else { return }
 
-        print("📥 Hydrating \(snapshot.documents.count) memories from Firestore (empty local store)…")
+        print("📥 Reconciling \(snapshot.documents.count) memories from Firestore…")
 
         for doc in snapshot.documents {
             guard let memoryUUID = UUID(uuidString: doc.documentID) else { continue }
 
             let existsRequest = MemoryEntry.fetchRequest()
-            existsRequest.predicate = NSPredicate(format: "id == %@", memoryUUID as CVarArg)
+            existsRequest.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(format: "id == %@", memoryUUID as CVarArg),
+                NSPredicate(format: "firebaseUserId == %@", userId)
+            ])
             existsRequest.fetchLimit = 1
-            if let count = try? context.count(for: existsRequest), count > 0 {
-                continue
-            }
 
             let data = doc.data()
-            let entry = MemoryEntry(context: context)
+            let existingEntry = try? context.fetch(existsRequest).first
+            let entry = existingEntry ?? MemoryEntry(context: context)
             entry.id = memoryUUID
             entry.firebaseUserId = userId
             entry.prompt = data["prompt"] as? String
-            entry.text = (data["transcription"] as? String) ?? ""
+            let remoteVersion = (data["transcriptionVersion"] as? NSNumber)?.int32Value ?? 0
+            let remoteStatus = data["transcriptionStatus"] as? String
+            let localNeedsCompletion = remoteStatus == "completed" && entry.transcriptionStatus != "completed"
+            if existingEntry == nil || remoteVersion >= entry.transcriptionVersion || localNeedsCompletion {
+                entry.transcriptionRawText = data["transcriptionRaw"] as? String
+                entry.transcriptionStatus = remoteStatus
+                entry.transcriptionLanguage = data["transcriptionLanguage"] as? String
+                entry.transcriptionModel = data["transcriptionModel"] as? String
+                entry.transcriptionVersion = remoteVersion
+                if let transcriptionTimestamp = data["transcriptionUpdatedAt"] as? Timestamp {
+                    entry.transcriptionUpdatedAt = transcriptionTimestamp.dateValue()
+                }
+                if entry.transcriptionEditedText == nil {
+                    entry.transcriptionEditedText = data["transcriptionEdited"] as? String
+                    entry.text = entry.transcriptionEditedText ?? (data["transcription"] as? String) ?? ""
+                }
+            }
             entry.chapter = data["chapter"] as? String
             entry.characterDetails = data["characterDetails"] as? String
             if let ts = data["createdAt"] as? Timestamp {
@@ -1705,14 +1856,29 @@ final class FirestoreSyncService {
                 entry.profileID = pid
             }
 
-            if let urlStr = data["audioURL"] as? String,
+            if entry.audioData == nil,
+               let urlStr = data["audioURL"] as? String,
                let url = URL(string: urlStr),
                let scheme = url.scheme?.lowercased(),
                scheme == "https" || scheme == "http" {
+                entry.audioFileURL = urlStr
                 do {
                     let (audioData, _) = try await URLSession.shared.data(from: url)
                     if !audioData.isEmpty {
                         entry.audioData = audioData
+                        let storageExtension = URL(
+                            fileURLWithPath: data["audioStoragePath"] as? String ?? ""
+                        ).pathExtension.lowercased()
+                        let fileExtension = storageExtension == "m4a" ? "m4a" : "caf"
+                        let localURL = FileManager.default
+                            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+                            .appendingPathComponent("hydrated_\(memoryUUID.uuidString).\(fileExtension)")
+                        do {
+                            try audioData.write(to: localURL, options: .atomic)
+                            entry.audioFileURL = localURL.absoluteString
+                        } catch {
+                            print("⚠️ Hydrate: local audio write failed for \(memoryUUID.uuidString.prefix(8))… — \(error.localizedDescription)")
+                        }
                     }
                 } catch {
                     print("⚠️ Hydrate: audio download failed for \(memoryUUID.uuidString.prefix(8))… — \(error.localizedDescription)")
@@ -1786,6 +1952,8 @@ final class FirestoreSyncService {
             
             var profileData: [String: Any] = [
                 "name": profile.name,
+                "childNames": profile.childNames,
+                "transcriptionGlossary": profile.transcriptionGlossary,
                 "syncedAt": FieldValue.serverTimestamp()
             ]
             
@@ -1811,17 +1979,33 @@ final class FirestoreSyncService {
     // MARK: - Delete Operations
     
     /// Delete a memory from Firebase
+    @MainActor
     func deleteMemory(memoryId: UUID) async {
         guard let userId = Auth.auth().currentUser?.uid else { return }
-        
+
+        deletedMemoryIDs.insert(memoryId)
+        clearPendingMemorySync(memoryId: memoryId.uuidString)
         let memoryRef = db.collection("users").document(userId)
             .collection("memories").document(memoryId.uuidString)
-        
+
         do {
             try await memoryRef.delete()
             print("✅ Deleted memory \(memoryId.uuidString) from Firebase")
         } catch {
             print("❌ Failed to delete memory: \(error)")
+        }
+
+        for fileExtension in ["m4a", "caf"] {
+            do {
+                try await StorageService.shared.deleteFile(
+                    at: "users/\(userId)/audio/\(memoryId.uuidString).\(fileExtension)"
+                )
+            } catch {
+                let message = error.localizedDescription.lowercased()
+                if !message.contains("not found") && !message.contains("does not exist") {
+                    print("⚠️ Failed to delete \(fileExtension) audio for memory \(memoryId.uuidString): \(error.localizedDescription)")
+                }
+            }
         }
     }
 
@@ -1970,8 +2154,11 @@ extension FirestoreSyncService {
     
     /// Queue a memory sync in the background (fire and forget)
     func queueMemorySync(_ entry: MemoryEntry, profileName: String? = nil) {
-        Task {
-            await syncMemory(entry, profileName: profileName)
+        let objectID = entry.objectID
+        Task { @MainActor in
+            let context = PersistenceController.shared.container.viewContext
+            guard let queuedEntry = try? context.existingObject(with: objectID) as? MemoryEntry else { return }
+            await syncMemory(queuedEntry, profileName: profileName)
         }
     }
     
@@ -1980,7 +2167,12 @@ extension FirestoreSyncService {
     /// registers a pending-retry record so `retryPendingSyncs` resumes it next time the app becomes active —
     /// otherwise an offline save never reaches Firestore until an unrelated flow happens to re-sync it.
     func queueMemorySyncWithProfile(_ entry: MemoryEntry, profile: Profile) {
+        let objectID = entry.objectID
         Task { @MainActor in
+            let context = PersistenceController.shared.container.viewContext
+            guard let queuedEntry = try? context.existingObject(with: objectID) as? MemoryEntry,
+                  let queuedMemoryId = queuedEntry.id?.uuidString else { return }
+            registerPendingMemorySyncForProfile(memoryId: queuedMemoryId, profile: profile)
             var backgroundTaskID = UIBackgroundTaskIdentifier.invalid
             backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "MemoirAI.MemorySync") {
                 if backgroundTaskID != .invalid {
@@ -1997,12 +2189,34 @@ extension FirestoreSyncService {
             // Sync profile to user document first
             await syncProfile(profile)
             // Then sync memory with profile name
-            let synced = await syncMemory(entry, profileName: profile.name)
-            guard let memoryId = entry.id?.uuidString else { return }
+            let synced = await syncMemory(queuedEntry, profileName: profile.name)
+            guard let memoryId = queuedEntry.id?.uuidString else { return }
             if synced {
-                clearPendingMemorySync(memoryId: memoryId)
+                if TranscriptionRetryPolicy.shouldRequest(
+                    status: queuedEntry.transcriptionStatus,
+                    audioFileExtension: URL(string: queuedEntry.audioFileURL ?? "")?.pathExtension,
+                    updatedAt: queuedEntry.transcriptionUpdatedAt
+                ), let id = queuedEntry.id {
+                    do {
+                        _ = try await CloudTranscriptionService.shared.transcribe(memoryID: id, profile: profile)
+                        clearPendingMemorySync(memoryId: memoryId)
+                    } catch {
+                        if queuedEntry.transcriptionStatus == "needsRerecording" {
+                            clearPendingMemorySync(memoryId: memoryId)
+                        } else {
+                            incrementPendingMemorySyncRetry(memoryId: memoryId)
+                        }
+                        print("⚠️ Cloud transcription request failed: \(error.localizedDescription)")
+                    }
+                } else if queuedEntry.transcriptionStatus != "processing" {
+                    clearPendingMemorySync(memoryId: memoryId)
+                }
             } else {
-                registerPendingMemorySyncForProfile(memoryId: memoryId, profileId: profile.id)
+                if queuedEntry.transcriptionStatus == "needsRerecording" {
+                    clearPendingMemorySync(memoryId: memoryId)
+                } else {
+                    incrementPendingMemorySyncRetry(memoryId: memoryId)
+                }
             }
         }
     }

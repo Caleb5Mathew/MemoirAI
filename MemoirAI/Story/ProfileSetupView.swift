@@ -431,6 +431,7 @@ struct ProfileSetupView: View {
             createdAt: profile.createdAt,
             updatedAt: Date(),
             childNames: profile.childNames,
+            transcriptionGlossary: profile.transcriptionGlossary,
             faceDescription: profile.faceDescription,
             faceDescriptionPhotoHash: profile.faceDescriptionPhotoHash
         )
@@ -450,6 +451,7 @@ struct ProfileSetupView: View {
             createdAt: profile.createdAt,
             updatedAt: Date(),
             childNames: profile.childNames,
+            transcriptionGlossary: profile.transcriptionGlossary,
             faceDescription: profile.faceDescription,
             faceDescriptionPhotoHash: profile.faceDescriptionPhotoHash
         )

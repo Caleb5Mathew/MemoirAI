@@ -664,7 +664,7 @@ struct RecordMemoryView: View {
         // Copy current file as checkpoint
         let checkpointURL = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("checkpoint_\(UUID().uuidString).caf")
+            .appendingPathComponent("checkpoint_\(UUID().uuidString).m4a")
         
         do {
             try FileManager.default.copyItem(at: currentURL, to: checkpointURL)
@@ -702,19 +702,18 @@ struct RecordMemoryView: View {
             print("🔴 Enhanced audio session setup error: \(error.localizedDescription)")
         }
         
-        let fileName = UUID().uuidString + ".caf"
+        let fileName = UUID().uuidString + ".m4a"
         let fileURL = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(fileName)
         
         // Use optimal recording format for speech recognition
         let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 44_100,
             AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 32, // Use 32-bit for better quality
-            AVLinearPCMIsFloatKey: true, // Use float for better precision
-            AVLinearPCMIsBigEndianKey: false
+            AVEncoderBitRateKey: 48_000,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
         
         do {
@@ -787,12 +786,10 @@ struct RecordMemoryView: View {
         // Stop audio level monitoring
         audioMonitor.stopMonitoring()
 
-        // Stop real-time transcription and get final transcript
+        // Live text is only a recording aid. The saved memoir is transcribed
+        // from the complete audio file after it has uploaded.
         realTimeTranscription.stopTranscription()
-        let realTimeTranscript = realTimeTranscription.getFinalTranscript()
-        if !realTimeTranscript.isEmpty {
-            typedText = realTimeTranscript
-        }
+        _ = realTimeTranscription.getFinalTranscript()
     }
 
     func clearRecording() {
@@ -845,6 +842,11 @@ struct RecordMemoryView: View {
         let promptToSave  = selectedPrompt ?? "Untitled Prompt"
         let textToSave    = typedText          // capture before UI reset
         let audioURLToSave = audioURL          // capture
+        let audioDataToSave = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
+        guard audioURLToSave == nil || audioDataToSave?.isEmpty == false else {
+            print("❌ Could not read the completed recording; memory was not saved")
+            return
+        }
         let imagesToSave   = selectedImagesData // capture
         
         // 🔥 ENHANCED: Use background context like RecordingView
@@ -856,7 +858,10 @@ struct RecordMemoryView: View {
             newEntry.prompt       = promptToSave
             newEntry.text         = textToSave.isEmpty ? nil : textToSave
             newEntry.audioFileURL = audioURLToSave?.absoluteString
-            newEntry.audioData    = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
+            newEntry.transcriptionEditedText = audioURLToSave == nil || textToSave.isEmpty ? nil : textToSave
+            newEntry.transcriptionStatus = audioURLToSave == nil ? nil : "queued"
+            newEntry.transcriptionLanguage = "en"
+            newEntry.audioData    = audioDataToSave
             newEntry.createdAt    = Date()
             newEntry.profileID    = profileVM.selectedProfile.id
             newEntry.firebaseUserId = MemoryUserScope.currentFirebaseUserId
@@ -876,6 +881,10 @@ struct RecordMemoryView: View {
             
             do {
                 try bgContext.save()
+                FirestoreSyncService.shared.queueMemorySyncWithProfile(
+                    newEntry,
+                    profile: profileVM.selectedProfile
+                )
                 
                 // 2️⃣ Notify on main thread immediately
                 DispatchQueue.main.async {
@@ -902,44 +911,6 @@ struct RecordMemoryView: View {
                 }
             }
             
-            // 4️⃣ Start transcription using same background context
-            if let urlString = newEntry.audioFileURL,
-               let fileURL = URL(string: urlString) {
-                let entryID = newEntry.id
-                if let entryID {
-                    BatchTranscriptionManager.shared.markInFlight(entryID)
-                }
-                // Use enhanced transcription with better accuracy
-                SpeechTranscriber.shared.transcribe(url: fileURL) { result in
-                    switch result {
-                    case .success(let transcript):
-                        bgContext.perform {
-                            newEntry.text = transcript
-
-                            // Generate title if prompt is still "Untitled Prompt"
-                            if newEntry.prompt == "Untitled Prompt" || newEntry.prompt == "Untitled" {
-                                Task {
-                                    await generateAndUpdateTitle(for: newEntry, text: transcript, context: bgContext)
-                                }
-                            }
-
-                            try? bgContext.save()
-
-                            DispatchQueue.main.async {
-                                NotificationCenter.default.post(name: .memorySaved, object: nil)
-                                print("✅ Enhanced transcription completed: \(transcript.prefix(50))...")
-                            }
-                        }
-                    case .failure(let error):
-                        // Leave newEntry.text unset so BatchTranscriptionManager's
-                        // "needs transcription" predicate still matches and retries later.
-                        print("❌ Enhanced transcription failed: \(error.localizedDescription)")
-                    }
-                    if let entryID {
-                        BatchTranscriptionManager.shared.markComplete(entryID)
-                    }
-                }
-            }
         }
         
         // 4️⃣ Reset UI immediately on main thread (but don't dismiss yet)

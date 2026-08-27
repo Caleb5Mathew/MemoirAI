@@ -2,11 +2,13 @@
   "name": "memoirai-functions",
   "private": true,
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "scripts": {
+    "test": "npm run test:merchant-pricing && npm run test:transcription",
     "test:merchant-pricing": "node merchantPricingMath.test.js",
+    "test:transcription": "node transcriptionValidation.test.js",
     "check-style-sync": "node scripts/check-style-sync.js"
   },
   "dependencies": {

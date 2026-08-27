@@ -456,6 +456,9 @@ struct MemoryCard: View {
     /// True while this specific memory's audio is actively being transcribed
     /// (either by the record flow that created it or a batch retry).
     private var isTranscribingNow: Bool {
+        if entry.transcriptionStatus == "queued" || entry.transcriptionStatus == "processing" {
+            return true
+        }
         guard entry.hasAudio, let id = entry.id else { return false }
         return transcriptionManager.isInFlight(id)
     }
@@ -658,6 +661,23 @@ struct MemoryCard: View {
                                 .scaleEffect(0.75)
                             Text("Transcribing…")
                                 .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(colors.textSecondary)
+                        } else if entry.transcriptionStatus == "failed" || entry.transcriptionStatus == "needsRerecording" {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.system(size: 18))
+                                .foregroundColor(colors.terracotta.opacity(0.8))
+                            Text(entry.transcriptionStatus == "needsRerecording" ?
+                                 "This audio needs to be recorded again." :
+                                 "Transcript failed. Open this memory to retry.")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(colors.textSecondary)
+                        } else if entry.transcriptionStatus == nil,
+                                  URL(string: entry.audioFileURL ?? "")?.pathExtension.lowercased() != "m4a" {
+                            Image(systemName: "mic.badge.plus")
+                                .font(.system(size: 18))
+                                .foregroundColor(colors.terracotta.opacity(0.7))
+                            Text("Re-record this older audio to create a transcript.")
+                                .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(colors.textSecondary)
                         } else if entry.hasAudio {
                             Image(systemName: "waveform.circle.fill")

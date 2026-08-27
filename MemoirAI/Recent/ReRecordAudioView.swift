@@ -36,6 +36,7 @@ struct ReRecordAudioView: View {
     private let backgroundColor = Color(red: 0.98, green: 0.96, blue: 0.89)
 
     private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+    private let maxRecordingDuration: TimeInterval = 60 * 60
 
     var body: some View {
         NavigationStack {
@@ -223,6 +224,9 @@ struct ReRecordAudioView: View {
         recordingTime = 0
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             recordingTime += 1
+            if recordingTime >= maxRecordingDuration {
+                stopRecording()
+            }
         }
     }
 
@@ -237,18 +241,17 @@ struct ReRecordAudioView: View {
             return
         }
         setupAudioSession()
-        let filename = UUID().uuidString + ".caf"
+        let filename = UUID().uuidString + ".m4a"
         let fileURL = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(filename)
 
         let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 44_100,
             AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsFloatKey: true,
-            AVLinearPCMIsBigEndianKey: false
+            AVEncoderBitRateKey: 48_000,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
 
         do {
@@ -283,6 +286,9 @@ struct ReRecordAudioView: View {
         realTimeTranscription.resumeTranscription()
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             recordingTime += 1
+            if recordingTime >= maxRecordingDuration {
+                stopRecording()
+            }
         }
     }
 
@@ -358,11 +364,29 @@ struct ReRecordAudioView: View {
             }
 
             let data = try? Data(contentsOf: capturedURL)
+            guard let data, !data.isEmpty else {
+                Task { @MainActor in
+                    isSaving = false
+                }
+                return
+            }
+            let previousAudioURL = entry.audioFileURL.flatMap(URL.init(string:))
             entry.audioData = data
             entry.audioFileURL = capturedURL.absoluteString
+            entry.text = nil
+            entry.transcriptionRawText = nil
+            entry.transcriptionEditedText = nil
+            entry.transcriptionStatus = "queued"
+            entry.transcriptionLanguage = "en"
 
             do {
                 try bgContext.save()
+                if let previousAudioURL,
+                   previousAudioURL.isFileURL,
+                   previousAudioURL != capturedURL,
+                   FileManager.default.fileExists(atPath: previousAudioURL.path) {
+                    try? FileManager.default.removeItem(at: previousAudioURL)
+                }
                 FirestoreSyncService.shared.queueMemorySyncWithProfile(entry, profile: profile)
             } catch {
                 print("ReRecord save failed: \(error)")
@@ -370,40 +394,6 @@ struct ReRecordAudioView: View {
 
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .memorySaved, object: nil)
-            }
-
-            if let urlString = entry.audioFileURL, let fileURL = URL(string: urlString) {
-                let entryID = entry.id
-                if let entryID {
-                    BatchTranscriptionManager.shared.markInFlight(entryID)
-                }
-                SpeechTranscriber.shared.transcribe(url: fileURL) { result in
-                    switch result {
-                    case .success(let transcript):
-                        bgContext.perform {
-                            entry.text = transcript
-                            try? bgContext.save()
-                            if let memoryId = entry.id {
-                                Task {
-                                    await FirestoreSyncService.shared.updateMemoryTranscription(
-                                        memoryId: memoryId,
-                                        transcription: transcript
-                                    )
-                                }
-                            }
-                            DispatchQueue.main.async {
-                                NotificationCenter.default.post(name: .memorySaved, object: nil)
-                            }
-                        }
-                    case .failure(let err):
-                        // Leave entry.text unset so BatchTranscriptionManager's
-                        // "needs transcription" predicate still matches and retries later.
-                        print("ReRecord transcription failed: \(err.localizedDescription)")
-                    }
-                    if let entryID {
-                        BatchTranscriptionManager.shared.markComplete(entryID)
-                    }
-                }
             }
 
             Task { @MainActor in

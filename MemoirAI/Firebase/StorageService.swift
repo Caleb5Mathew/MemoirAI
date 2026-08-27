@@ -78,16 +78,17 @@ final class StorageService {
     // MARK: - Audio Upload
     
     /// Upload audio data and return the download URL
-    func uploadAudio(_ audioData: Data, memoryId: String) async throws -> String {
+    func uploadAudio(_ audioData: Data, memoryId: String, fileExtension: String = "caf") async throws -> String {
         guard let userId = Auth.auth().currentUser?.uid else {
             throw StorageError.notAuthenticated
         }
         
-        let path = "users/\(userId)/audio/\(memoryId).caf"
+        let normalizedExtension = fileExtension.lowercased() == "m4a" ? "m4a" : "caf"
+        let path = "users/\(userId)/audio/\(memoryId).\(normalizedExtension)"
         let ref = storage.reference().child(path)
         
         let metadata = StorageMetadata()
-        metadata.contentType = "audio/x-caf"
+        metadata.contentType = normalizedExtension == "m4a" ? "audio/mp4" : "audio/x-caf"
         
         _ = try await ref.putDataAsync(audioData, metadata: metadata)
         let downloadURL = try await ref.downloadURL()

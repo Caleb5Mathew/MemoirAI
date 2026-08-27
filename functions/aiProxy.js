@@ -6,6 +6,7 @@
 
 const crypto = require("crypto");
 const OpenAI = require("openai");
+const { toFile } = require("openai");
 const admin = require("firebase-admin");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
@@ -53,6 +54,107 @@ const EDIT_IMAGE_MODELS = new Set(["gemini-3-pro-image-preview", "gemini-2.5-fla
 const DEFAULT_EDIT_MODEL = "gemini-3-pro-image-preview";
 const MAX_EDIT_INSTRUCTION_CHARS = 4000;
 const MAX_INPUT_IMAGE_DECODED_BYTES = 20 * 1024 * 1024;
+const TRANSCRIPTION_DAILY_LIMIT = 100;
+const MAX_TRANSCRIPTION_AUDIO_BYTES = 25 * 1024 * 1024;
+const MAX_TRANSCRIPTION_GLOSSARY_TERMS = 40;
+const MAX_TRANSCRIPTION_GLOSSARY_TERM_CHARS = 80;
+const MAX_TRANSCRIPTION_TEXT_CHARS = 500000;
+const TRANSCRIPTION_LEASE_MILLIS = 6 * 60 * 1000;
+
+function transcriptionPrompt() {
+  return "This is a personal memoir recording. Preserve names and wording exactly as spoken.";
+}
+
+function validateTranscriptionRequest(body) {
+  const memoryId = typeof body.memoryId === "string" ? body.memoryId.trim() : "";
+  if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(memoryId)) {
+    throw new HttpsError("invalid-argument", "memoryId must be a UUID.");
+  }
+  const language = typeof body.language === "string" ? body.language.trim().toLowerCase() : "en";
+  if (!/^[a-z]{2}$/.test(language)) {
+    throw new HttpsError("invalid-argument", "language must be an ISO 639-1 code.");
+  }
+  const rawGlossary = Array.isArray(body.glossary) ? body.glossary : [];
+  if (rawGlossary.length > MAX_TRANSCRIPTION_GLOSSARY_TERMS) {
+    throw new HttpsError("invalid-argument", "glossary has too many terms.");
+  }
+  if (rawGlossary.some((term) => typeof term !== "string")) {
+    throw new HttpsError("invalid-argument", "glossary terms must be strings.");
+  }
+  const glossary = [...new Set(rawGlossary.map((term) => term.trim()).filter(Boolean))];
+  if (glossary.some((term) => term.length > MAX_TRANSCRIPTION_GLOSSARY_TERM_CHARS)) {
+    throw new HttpsError("invalid-argument", "A glossary term is too long.");
+  }
+  if (glossary.some((term) => /[<>\r\n]/.test(term))) {
+    throw new HttpsError("invalid-argument", "A glossary term contains unsupported characters.");
+  }
+  return { memoryId, language, glossary };
+}
+
+function validateTranscriptionAudio(audio) {
+  if (!Buffer.isBuffer(audio) || audio.length === 0) {
+    throw new HttpsError("failed-precondition", "Recording upload is empty. Please record it again.");
+  }
+  if (audio.length > MAX_TRANSCRIPTION_AUDIO_BYTES) {
+    throw new HttpsError("failed-precondition", "Recording is too large to transcribe.");
+  }
+}
+
+function validateTranscriptionMetadata(metadata) {
+  const size = Number(metadata?.size);
+  if (!Number.isFinite(size) || size <= 0) {
+    throw new HttpsError("failed-precondition", "Recording upload is empty. Please record it again.");
+  }
+  if (size > MAX_TRANSCRIPTION_AUDIO_BYTES) {
+    throw new HttpsError("failed-precondition", "Recording is too large to transcribe. Please record a shorter version.");
+  }
+  if (String(metadata?.contentType || "").toLowerCase() !== "audio/mp4") {
+    throw new HttpsError("failed-precondition", "Recording format is unsupported. Please record it again.");
+  }
+  const generation = String(metadata?.generation || "").trim();
+  if (!generation) {
+    throw new HttpsError("failed-precondition", "Recording upload is not ready. Please try again.");
+  }
+  return { size, generation };
+}
+
+function transcriptionLeaseDecision(existing, audioSHA256, nowMillis) {
+  const raw = typeof existing.transcriptionRaw === "string" ? existing.transcriptionRaw.trim() : "";
+  if (
+    existing.transcriptionStatus === "completed" &&
+    existing.transcriptionAudioSHA256 === audioSHA256 &&
+    raw
+  ) {
+    return { action: "cached", text: raw };
+  }
+
+  const leaseMillis = existing.transcriptionLeaseExpiresAt?.toMillis?.() ?? 0;
+  if (
+    existing.transcriptionStatus === "processing" &&
+    existing.transcriptionAudioSHA256 === audioSHA256 &&
+    typeof existing.transcriptionJobId === "string" &&
+    leaseMillis > nowMillis
+  ) {
+    return { action: "processing" };
+  }
+  return { action: "claim" };
+}
+
+function normalizedTranscriptionVersion(value) {
+  const version = Number(value);
+  return Number.isSafeInteger(version) && version >= 0 ? version : 0;
+}
+
+function buildTranscriptionAPIRequest(file, language, glossary) {
+  const request = {
+    file,
+    model: "gpt-transcribe",
+    languages: [language],
+    prompt: transcriptionPrompt()
+  };
+  if (glossary.length) request.keywords = glossary;
+  return request;
+}
 
 /**
  * Firestore-transaction daily quota counter at `users/{uid}/aiUsage/{bucket}_{YYYY-MM-DD}`.
@@ -339,6 +441,153 @@ exports.aiChatCompletion = onCall(
   }
 );
 
+exports.transcribeMemoryAudio = onCall(
+  {
+    secrets: [openaiSecret],
+    timeoutSeconds: 300,
+    memory: "1GiB",
+    region: "us-central1",
+    enforceAppCheck: isAppCheckEnforced()
+  },
+  async (request) => {
+    const uid = requireAuth(request);
+    const { memoryId, language, glossary } = validateTranscriptionRequest(request.data || {});
+    const memoryRef = firestore().collection("users").doc(uid).collection("memories").doc(memoryId);
+    const snapshot = await memoryRef.get();
+    if (!snapshot.exists) throw new HttpsError("not-found", "Memory not found.");
+
+    const storagePath = `users/${uid}/audio/${memoryId}.m4a`;
+    if (snapshot.data().audioStoragePath !== storagePath) {
+      throw new HttpsError("failed-precondition", "This recording must be re-recorded before cloud transcription is available.");
+    }
+
+    const apiKey = String(openaiSecret.value() || "").trim();
+    if (!apiKey) throw new HttpsError("internal", "AI provider is not configured.");
+
+    const bucket = admin.storage().bucket();
+    const storageFile = bucket.file(storagePath);
+    let metadata;
+    let audioInfo;
+    try {
+      [metadata] = await storageFile.getMetadata();
+      audioInfo = validateTranscriptionMetadata(metadata);
+    } catch (error) {
+      if (error instanceof HttpsError) throw error;
+      console.error("transcribeMemoryAudio storage metadata failed", { uid, memoryId, message: String(error?.message || error) });
+      throw new HttpsError("failed-precondition", "Recording upload is not ready. Please try again.");
+    }
+
+    let audio;
+    try {
+      [audio] = await bucket.file(storagePath, { generation: audioInfo.generation }).download();
+    } catch (error) {
+      console.error("transcribeMemoryAudio storage download failed", { uid, memoryId, message: String(error?.message || error) });
+      throw new HttpsError("failed-precondition", "Recording upload is not ready. Please try again.");
+    }
+    validateTranscriptionAudio(audio);
+    const audioSHA256 = crypto.createHash("sha256").update(audio).digest("hex");
+    const jobId = crypto.randomUUID();
+    const nowMillis = Date.now();
+    let leaseResult;
+
+    await firestore().runTransaction(async (transaction) => {
+      const latest = await transaction.get(memoryRef);
+      if (!latest.exists) throw new HttpsError("not-found", "Memory not found.");
+      const existing = latest.data();
+      if (existing.audioStoragePath !== storagePath) {
+        throw new HttpsError("aborted", "The recording changed before transcription started.");
+      }
+      if (typeof existing.audioSHA256 === "string" && existing.audioSHA256 !== audioSHA256) {
+        throw new HttpsError("aborted", "The recording changed before transcription started.");
+      }
+      leaseResult = transcriptionLeaseDecision(existing, audioSHA256, nowMillis);
+      if (leaseResult.action !== "claim") return;
+      transaction.set(memoryRef, {
+        transcriptionStatus: "processing",
+        transcriptionJobId: jobId,
+        transcriptionAudioSHA256: audioSHA256,
+        transcriptionAudioGeneration: audioInfo.generation,
+        transcriptionLeaseExpiresAt: admin.firestore.Timestamp.fromMillis(nowMillis + TRANSCRIPTION_LEASE_MILLIS),
+        transcriptionUpdatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    });
+
+    if (leaseResult.action === "cached") {
+      return { status: "completed", text: leaseResult.text, model: "gpt-transcribe", language, cached: true };
+    }
+    if (leaseResult.action === "processing") {
+      return { status: "processing" };
+    }
+
+    try {
+      await checkAndIncrementQuota(uid, "transcription", TRANSCRIPTION_DAILY_LIMIT);
+      const openai = new OpenAI({ apiKey, timeout: 240000, maxRetries: 1 });
+      const file = await toFile(audio, `${memoryId}.m4a`, { type: "audio/mp4" });
+      const response = await openai.audio.transcriptions.create(
+        buildTranscriptionAPIRequest(file, language, glossary)
+      );
+      const text = String(response.text || "").trim();
+      if (!text) throw new HttpsError("failed-precondition", "No speech was detected in this recording.");
+      if (text.length > MAX_TRANSCRIPTION_TEXT_CHARS) {
+        throw new HttpsError("resource-exhausted", "Transcription is too long to save.");
+      }
+
+      let currentMetadata;
+      try {
+        [currentMetadata] = await storageFile.getMetadata();
+      } catch (_) {
+        throw new HttpsError("aborted", "The recording changed while it was being transcribed.");
+      }
+      if (String(currentMetadata.generation || "") !== audioInfo.generation) {
+        throw new HttpsError("aborted", "The recording changed while it was being transcribed.");
+      }
+
+      await firestore().runTransaction(async (transaction) => {
+        const latest = await transaction.get(memoryRef);
+        if (!latest.exists) throw new HttpsError("not-found", "Memory not found.");
+        const existing = latest.data();
+        if (
+          existing.transcriptionJobId !== jobId ||
+          existing.transcriptionAudioSHA256 !== audioSHA256 ||
+          existing.audioStoragePath !== storagePath ||
+          (typeof existing.audioSHA256 === "string" && existing.audioSHA256 !== audioSHA256)
+        ) {
+          throw new HttpsError("aborted", "A newer recording or transcription replaced this request.");
+        }
+        const update = buildTranscriptionUpdate(existing, text, language);
+        transaction.set(memoryRef, update, { merge: true });
+      });
+      return { status: "completed", text, model: "gpt-transcribe", language };
+    } catch (error) {
+      console.error("transcribeMemoryAudio failed", { uid, memoryId, message: String(error?.message || error) });
+      try {
+        await firestore().runTransaction(async (transaction) => {
+          const latest = await transaction.get(memoryRef);
+          if (!latest.exists || latest.data().transcriptionJobId !== jobId) return;
+          transaction.set(memoryRef, {
+            transcriptionStatus: "failed",
+            transcriptionLeaseExpiresAt: admin.firestore.FieldValue.delete(),
+            transcriptionUpdatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        });
+      } catch (stateError) {
+        console.error("transcribeMemoryAudio failure state update failed", { uid, memoryId, message: String(stateError?.message || stateError) });
+      }
+      if (error instanceof HttpsError) throw error;
+      const status = Number(error?.status || error?.statusCode || 0);
+      if (status === 400 || status === 415 || status === 422) {
+        throw new HttpsError("failed-precondition", "The recording could not be read. Please record it again.");
+      }
+      if (status === 429) throw new HttpsError("resource-exhausted", "The transcription service is busy. Please try again later.");
+      if (status >= 500) throw new HttpsError("unavailable", "The transcription service is temporarily unavailable. Please try again.");
+      if (error?.code === "ETIMEDOUT" || error?.code === "ECONNABORTED") {
+        throw new HttpsError("deadline-exceeded", "Transcription timed out. Please try again.");
+      }
+      throw new HttpsError("internal", "Transcription failed. Please try again.");
+    }
+  }
+);
+
 // --- aiGenerateCoverArt ------------------------------------------------------
 
 exports.aiGenerateCoverArt = onCall(
@@ -487,3 +736,32 @@ exports.aiEditImage = onCall(
     }
   }
 );
+
+function buildTranscriptionUpdate(existing, text, language) {
+  const update = {
+    transcriptionRaw: text,
+    transcriptionStatus: "completed",
+    transcriptionLanguage: language,
+    transcriptionModel: "gpt-transcribe",
+    transcriptionVersion: normalizedTranscriptionVersion(existing.transcriptionVersion) + 1,
+    transcriptionLeaseExpiresAt: admin.firestore.FieldValue.delete(),
+    transcriptionUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+  if (typeof existing.transcriptionEdited !== "string") update.transcription = text;
+  return update;
+}
+
+Object.defineProperty(exports, "_test", {
+  enumerable: false,
+  value: {
+    transcriptionPrompt,
+    validateTranscriptionRequest,
+    validateTranscriptionAudio,
+    validateTranscriptionMetadata,
+    buildTranscriptionAPIRequest,
+    buildTranscriptionUpdate,
+    transcriptionLeaseDecision,
+    normalizedTranscriptionVersion
+  }
+});

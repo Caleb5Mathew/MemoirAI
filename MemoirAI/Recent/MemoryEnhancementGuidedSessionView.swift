@@ -587,16 +587,15 @@ struct MemoryEnhancementGuidedSessionView: View {
             return
         }
         pendingTranscript = ""
-        let filename = UUID().uuidString + ".caf"
+        let filename = UUID().uuidString + ".m4a"
         let fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(filename)
         let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 44_100,
             AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsFloatKey: true,
-            AVLinearPCMIsBigEndianKey: false
+            AVEncoderBitRateKey: 48_000,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
         do {
             audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)

@@ -498,7 +498,7 @@ struct RecordingView: View {
 
         let checkpointURL = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("checkpoint_\(UUID().uuidString).caf")
+            .appendingPathComponent("checkpoint_\(UUID().uuidString).m4a")
 
         do {
             try FileManager.default.copyItem(at: currentURL, to: checkpointURL)
@@ -565,19 +565,18 @@ struct RecordingView: View {
         triggerHaptic(.impact(.medium))
         
         // Generate a unique filename with a CAF extension for uncompressed PCM
-        let filename = UUID().uuidString + ".caf"
+        let filename = UUID().uuidString + ".m4a"
         let fileURL = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(filename)
         
         // Use optimal recording format for speech recognition
         let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 44_100,
             AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 32, // Use 32-bit for better quality
-            AVLinearPCMIsFloatKey: true, // Use float for better precision
-            AVLinearPCMIsBigEndianKey: false
+            AVEncoderBitRateKey: 48_000,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
         
         do {
@@ -649,12 +648,10 @@ struct RecordingView: View {
 
         audioMonitor.stopMonitoring()
 
-        // Stop real-time transcription and get final transcript
+        // Live text is only a recording aid. The saved memoir is transcribed
+        // from the complete audio file after it has uploaded.
         realTimeTranscription.stopTranscription()
-        let realTimeTranscript = realTimeTranscription.getFinalTranscript()
-        if !realTimeTranscript.isEmpty {
-            typedText = realTimeTranscript
-        }
+        _ = realTimeTranscription.getFinalTranscript()
     }
 
     func clearRecording() {
@@ -693,6 +690,12 @@ struct RecordingView: View {
         let promptToSave      = activePromptText.isEmpty ? prompt.text : activePromptText
         let textToSave        = typedText
         let audioURLToSave    = audioURL
+        let audioDataToSave   = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
+        guard audioURLToSave == nil || audioDataToSave?.isEmpty == false else {
+            isSaving = false
+            print("❌ Could not read the completed recording; memory was not saved")
+            return
+        }
         let imagesToSave      = selectedImagesData
 
         // 1️⃣ Spin up a private background context so we never block the UI
@@ -703,8 +706,11 @@ struct RecordingView: View {
             entry.id           = UUID()
             entry.prompt       = promptToSave
             entry.text         = textToSave.isEmpty ? nil : textToSave
-            entry.audioData    = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
+            entry.audioData    = audioDataToSave
             entry.audioFileURL = audioURLToSave?.absoluteString
+            entry.transcriptionEditedText = audioURLToSave == nil || textToSave.isEmpty ? nil : textToSave
+            entry.transcriptionStatus = audioURLToSave == nil ? nil : "queued"
+            entry.transcriptionLanguage = "en"
             entry.createdAt    = Date()
             entry.chapter      = chapterTitle
             entry.profileID    = profileVM.selectedProfile.id
@@ -734,48 +740,7 @@ struct RecordingView: View {
                 print("❌ BG save failed:", error)
             }
 
-            // 5️⃣ Kick off speech-to-text if we have an audio URL
-            if let urlString = entry.audioFileURL,
-               let fileURL = URL(string: urlString) {
-                let entryID = entry.id
-                if let entryID {
-                    BatchTranscriptionManager.shared.markInFlight(entryID)
-                }
-                // Use enhanced transcription with better accuracy
-                SpeechTranscriber.shared.transcribe(url: fileURL) { result in
-                    switch result {
-                    case .success(let transcript):
-                        bgContext.perform {
-                            entry.text = transcript
-                            try? bgContext.save()
-
-                            // Update transcription in Firebase
-                            if let memoryId = entry.id {
-                                Task {
-                                    await FirestoreSyncService.shared.updateMemoryTranscription(
-                                        memoryId: memoryId,
-                                        transcription: transcript
-                                    )
-                                }
-                            }
-
-                            DispatchQueue.main.async {
-                                NotificationCenter.default.post(name: .memorySaved, object: nil)
-                                print("✅ Enhanced transcription completed: \(transcript.prefix(50))...")
-                            }
-                        }
-                    case .failure(let error):
-                        // Leave entry.text unset so BatchTranscriptionManager's
-                        // "needs transcription" predicate still matches and retries later.
-                        print("❌ Enhanced transcription failed: \(error.localizedDescription)")
-                    }
-                    if let entryID {
-                        BatchTranscriptionManager.shared.markComplete(entryID)
-                    }
-                }
-            }
-
-            // 6️⃣ Back on the main thread: show toast, then dismiss (or advance the per-child queue)
+            // 5️⃣ Back on the main thread: show toast, then dismiss (or advance the per-child queue)
             DispatchQueue.main.async {
                 isSaving = false
                 showSaveToast = true

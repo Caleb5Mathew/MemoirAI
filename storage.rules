@@ -22,12 +22,24 @@ service firebase.storage {
         || (request.auth != null
             && firestore.exists(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid))
             && firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.revoked != true);
-      allow write, delete: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && (
+          (audioFile.matches('[0-9A-Fa-f-]{36}\\.m4a')
+            && request.resource.contentType == 'audio/mp4'
+            && request.resource.size > 0
+            && request.resource.size <= 25 * 1024 * 1024)
+          || (audioFile.matches('[0-9A-Fa-f-]{36}\\.caf')
+            && request.resource.contentType == 'audio/x-caf'
+            && request.resource.size > 0
+            && request.resource.size <= 250 * 1024 * 1024)
+        );
+      allow delete: if isOwner(userId);
     }
 
     // Backward-compatibility paths for older uploads.
     match /users/{userId}/{allPaths=**} {
-      allow read, write, delete: if isOwner(userId);
+      allow read, write, delete: if isOwner(userId)
+        && !allPaths.matches('audio/.*');
     }
   }
 }

@@ -4680,38 +4680,30 @@ class StoryPageViewModel: ObservableObject {
     }
 
     /// Force-syncs every Core Data memory the cloud worker is going to look
-    /// for to Firestore.  Runs in parallel with a small concurrency cap so we
-    /// don't blow up the network with hundreds of writes at once.
+    /// for to Firestore.
     ///
     /// `setData(merge: true)` makes this idempotent — already-synced memories
     /// just get a `syncedAt` bump.  We use the same `profileName` that gets
     /// written to the storybookJob doc so the cloud function always sees a
     /// consistent label.
-    private func ensureMemoriesSyncedToCloud(entries: [MemoryEntry], profileID: UUID) async {
-        guard !entries.isEmpty else { return }
+    @MainActor
+    private func ensureMemoriesSyncedToCloud(entries: [MemoryEntry], profileID: UUID) async -> Bool {
+        guard !entries.isEmpty else { return true }
         let profileName = self.profileName
 
         let preflightStart = Date()
         print("☁️ [storybookKickoff] preflight syncing \(entries.count) memories to Firestore for profile=\(profileID.uuidString.prefix(8))…")
 
-        await withTaskGroup(of: Void.self) { group in
-            let maxConcurrent = 6
-            var inFlight = 0
-            for entry in entries {
-                if inFlight >= maxConcurrent {
-                    await group.next()
-                    inFlight -= 1
-                }
-                group.addTask {
-                    await FirestoreSyncService.shared.syncMemory(entry, profileName: profileName)
-                }
-                inFlight += 1
+        var allSucceeded = true
+        for entry in entries {
+            if !(await FirestoreSyncService.shared.syncMemory(entry, profileName: profileName)) {
+                allSucceeded = false
             }
-            await group.waitForAll()
         }
 
         let elapsed = String(format: "%.1f", Date().timeIntervalSince(preflightStart))
         print("☁️ [storybookKickoff] preflight sync complete in \(elapsed)s")
+        return allSucceeded
     }
 
     private func kickoffCloudStorybookGeneration(
@@ -4756,7 +4748,43 @@ class StoryPageViewModel: ObservableObject {
         // will surface a clear "no memories on cloud" error if uploads truly
         // failed.
         currentStatus = "Syncing memories to the cloud…"
-        await ensureMemoriesSyncedToCloud(entries: entries, profileID: profileID)
+        guard await ensureMemoriesSyncedToCloud(entries: entries, profileID: profileID) else {
+            throw NSError(
+                domain: "MemoirAI",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Some memories could not be uploaded. Check your connection and try again."]
+            )
+        }
+
+        currentStatus = "Finishing memory transcriptions…"
+        for entry in entries {
+            let text = entry.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard text.isEmpty, let memoryID = entry.id, entry.audioData?.isEmpty == false else { continue }
+            let fileExtension = URL(string: entry.audioFileURL ?? "")?.pathExtension.lowercased()
+            guard fileExtension == "m4a" else {
+                throw NSError(
+                    domain: "MemoirAI",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "One of these memories uses an older recording format. Re-record it before creating the book."]
+                )
+            }
+            do {
+                _ = try await CloudTranscriptionService.shared.transcribe(memoryID: memoryID, glossary: [])
+            } catch {
+                if entry.transcriptionStatus == "needsRerecording" {
+                    throw NSError(
+                        domain: "MemoirAI",
+                        code: 5,
+                        userInfo: [NSLocalizedDescriptionKey: "One of these recordings cannot be transcribed. Record it again before creating the book."]
+                    )
+                }
+                throw NSError(
+                    domain: "MemoirAI",
+                    code: 4,
+                    userInfo: [NSLocalizedDescriptionKey: "A memory is still being transcribed. Wait a moment, then try creating the book again."]
+                )
+            }
+        }
 
         let reservedCreatedAt = Date()
         let reservedBookId = "\(profileID.uuidString)_\(Int(reservedCreatedAt.timeIntervalSince1970))"
@@ -5703,4 +5731,3 @@ extension UIImage {
         QRCodeCache.image(for: text, size: size)
     }
 }
-

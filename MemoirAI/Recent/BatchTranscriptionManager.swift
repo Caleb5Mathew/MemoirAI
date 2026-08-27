@@ -83,7 +83,9 @@ final class BatchTranscriptionManager: ObservableObject {
         request.predicate = NSPredicate(format: "(audioFileURL != nil OR audioData != nil) AND (text == nil OR text == '')")
         // Newest first – shorter recordings usually come last
         request.sortDescriptors = [NSSortDescriptor(keyPath: \MemoryEntry.createdAt, ascending: false)]
-        return (try? context.fetch(request)) ?? []
+        return ((try? context.fetch(request)) ?? []).filter { entry in
+            URL(string: entry.audioFileURL ?? "")?.pathExtension.lowercased() != "m4a"
+        }
     }
 
     private func transcribe(list: [MemoryEntry], index: Int, completion: @escaping () -> Void) {
@@ -132,5 +134,9 @@ final class BatchTranscriptionManager: ObservableObject {
 
 extension MemoryEntry {
     /// Returns true if this entry has audio but no text yet.
-    var needsTranscription: Bool { hasAudio && (text?.isEmpty ?? true) }
-} 
+    var needsTranscription: Bool {
+        hasAudio &&
+        (text?.isEmpty ?? true) &&
+        URL(string: audioFileURL ?? "")?.pathExtension.lowercased() != "m4a"
+    }
+}

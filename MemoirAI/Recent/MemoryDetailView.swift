@@ -474,6 +474,24 @@ struct MemoryDetailView: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            if memory.transcriptionStatus == "failed" || memory.transcriptionStatus == "needsRerecording" {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundColor(terracotta)
+                    Text(memory.transcriptionStatus == "needsRerecording" ?
+                         "This audio can't be transcribed. Record it again." :
+                         "Audio transcript failed.")
+                        .font(.system(size: 14, weight: .medium, design: .serif))
+                        .foregroundColor(textSecondary)
+                    Spacer(minLength: 0)
+                    if memory.transcriptionStatus == "failed" {
+                        Button("Retry", action: retryCloudTranscription)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(terracotta)
+                    }
+                }
+            }
         }
     }
 
@@ -483,10 +501,32 @@ struct MemoryDetailView: View {
     @ViewBuilder
     private var memoryTranscriptionStatusBlock: some View {
         HStack(spacing: 10) {
-            if isTranscribingNow {
+            if memory.transcriptionStatus == "failed" || memory.transcriptionStatus == "needsRerecording" {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(terracotta)
+                Text(memory.transcriptionStatus == "needsRerecording" ?
+                     "This recording needs to be recorded again." :
+                     "We couldn't create the transcript.")
+                    .font(.system(size: 15, weight: .medium, design: .serif))
+                    .foregroundColor(textSecondary)
+                Spacer(minLength: 0)
+                if memory.transcriptionStatus == "failed" {
+                    Button("Retry", action: retryCloudTranscription)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(terracotta)
+                }
+            } else if isTranscribingNow {
                 ProgressView()
                     .tint(terracotta)
                 Text("Transcribing…")
+                    .font(.system(size: 15, weight: .medium, design: .serif))
+                    .foregroundColor(textSecondary)
+            } else if isLegacyRecording {
+                Image(systemName: "mic.badge.plus")
+                    .font(.system(size: 18))
+                    .foregroundColor(terracotta.opacity(0.7))
+                Text("Re-record this older audio to create a new transcript.")
                     .font(.system(size: 15, weight: .medium, design: .serif))
                     .foregroundColor(textSecondary)
             } else {
@@ -504,8 +544,31 @@ struct MemoryDetailView: View {
 
     /// True while this memory's audio is actively being transcribed right now.
     private var isTranscribingNow: Bool {
+        if memory.transcriptionStatus == "queued" || memory.transcriptionStatus == "processing" {
+            return true
+        }
         guard let id = memory.id else { return false }
         return transcriptionManager.isInFlight(id)
+    }
+
+    private var isLegacyRecording: Bool {
+        guard memory.transcriptionStatus == nil else { return false }
+        return URL(string: memory.audioFileURL ?? "")?.pathExtension.lowercased() != "m4a"
+    }
+
+    private func retryCloudTranscription() {
+        memory.transcriptionStatus = "queued"
+        memory.transcriptionUpdatedAt = Date()
+        do {
+            try context.save()
+            FirestoreSyncService.shared.queueMemorySyncWithProfile(
+                memory,
+                profile: profileVM.selectedProfile
+            )
+            NotificationCenter.default.post(name: .memorySaved, object: nil)
+        } catch {
+            print("Failed to queue transcription retry: \(error.localizedDescription)")
+        }
     }
 
     private var memoryEditBlock: some View {
@@ -706,6 +769,9 @@ struct MemoryDetailView: View {
                         titleUpdateTask = nil
                         
                         memory.text = draftText
+                        if memory.transcriptionStatus != nil || memory.transcriptionRawText != nil {
+                            memory.transcriptionEditedText = draftText
+                        }
                         
                         // Final title regeneration if needed (after user stops editing)
                         if !draftText.isEmpty {
@@ -716,6 +782,10 @@ struct MemoryDetailView: View {
                         
                         do {
                             try context.save()
+                            FirestoreSyncService.shared.queueMemorySyncWithProfile(
+                                memory,
+                                profile: profileVM.selectedProfile
+                            )
                             NotificationCenter.default.post(name: .memorySaved, object: nil)
                         } catch {
                             print("Failed to save edited text:", error)
@@ -949,28 +1019,9 @@ struct MemoryDetailView: View {
         }
     }
 
-    private func deleteAudioFileOnDiskIfPresent() {
-        guard let urlString = memory.audioFileURL,
-              let url = URL(string: urlString),
-              url.isFileURL,
-              FileManager.default.fileExists(atPath: url.path) else { return }
-        try? FileManager.default.removeItem(at: url)
-    }
-
     private func confirmClearAudioAndOpenRecorder() {
         showReRecordConfirm = false
         stopPlaybackIfNeeded()
-        deleteAudioFileOnDiskIfPresent()
-        memory.audioData = nil
-        memory.audioFileURL = nil
-        do {
-            try context.save()
-            FirestoreSyncService.shared.queueMemorySyncWithProfile(memory, profile: profileVM.selectedProfile)
-            NotificationCenter.default.post(name: .memorySaved, object: nil)
-            refreshTrigger += 1
-        } catch {
-            print("Failed to clear audio for re-record: \(error)")
-        }
         showReRecordSheet = true
     }
 
@@ -2593,5 +2644,3 @@ struct MemoryDetailView_Previews: PreviewProvider {
         }
     }
 }
-
-
