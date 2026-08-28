@@ -34,6 +34,21 @@ for (const [name, body] of [["cart", cartCommit], ["single", singleCommit]]) {
     body.includes('fulfillmentHoldReason: "book_artifacts_changed_after_payment"'),
     `${name} artifact hold must state the remediation reason`
   );
+  assert.ok(
+    body.includes('db.collection("fulfillmentIncidents")'),
+    `${name} artifact hold must create a durable ops incident`
+  );
 }
+
+assert.match(
+  source,
+  /getSignedUrl\(coverStoragePath, coverGeneration\)/,
+  "Lulu cover URL must be pinned to the paid Storage generation"
+);
+assert.match(
+  source,
+  /getSignedUrl\(interiorStoragePath, interiorGeneration\)/,
+  "Lulu interior URL must be pinned to the paid Storage generation"
+);
 
 console.log("paidCheckoutArtifactGuard.test.js: all assertions passed");

@@ -28,6 +28,7 @@
     <entity name="GlobalCharacter" representedClassName="GlobalCharacter" syncable="YES" codeGenerationType="class">
         <attribute name="canonicalName" optional="YES" attributeType="String"/>
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="firebaseUserId" optional="YES" attributeType="String"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="profileID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
     </entity>

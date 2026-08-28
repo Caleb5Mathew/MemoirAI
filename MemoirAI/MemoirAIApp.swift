@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import CoreData
 import RevenueCat
 import Mixpanel
 import FBSDKCoreKit
@@ -147,6 +148,7 @@ extension Notification.Name {
 @main
 struct MemoirAIApp: App {
     @StateObject private var profileVM = ProfileViewModel()
+    @StateObject private var persistenceLoadMonitor = PersistenceLoadMonitor.shared
     @State private var checkoutSessionBeingVerified: String?
     
     let persistenceController = PersistenceController.shared
@@ -193,7 +195,33 @@ struct MemoirAIApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                switch persistenceLoadMonitor.state {
+                case .loading:
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("Opening your memoir…")
+                            .foregroundStyle(.secondary)
+                    }
+                case .failed(let recoveryMessage):
+                    VStack(spacing: 20) {
+                        Image(systemName: "externaldrive.badge.exclamationmark")
+                            .font(.system(size: 44, weight: .semibold))
+                        Text("Local Data Needs Attention")
+                            .font(.title2.bold())
+                        Text(recoveryMessage)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.secondary)
+                        Text("MemoirAI is read-only until you close and reopen the app after resolving the storage issue.")
+                            .font(.footnote)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(32)
+                case .ready:
+                    ContentView()
+                }
+            }
                 .environmentObject(profileVM)
                 .environmentObject(iCloudManager.shared)
                 .environmentObject(RCSubscriptionManager.shared)
@@ -201,18 +229,42 @@ struct MemoirAIApp: App {
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 // Our custom UI uses light backgrounds; force a light appearance so dynamic text stays dark
                 .preferredColorScheme(.light)
-                .onAppear {
+                .task(id: persistenceLoadMonitor.state) {
+                    guard PersistenceConfigurationPolicy.allowsApplicationContent(
+                        state: persistenceLoadMonitor.state
+                    ) else { return }
                     GenerationProgressMarker.clearStaleOnLaunchIfNeeded()
                     Haptics.warmUp()
-                }
-                .task {
+                    let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
+                    let referencedAudio = Set(
+                        ((try? persistenceController.container.viewContext.fetch(request)) ?? [])
+                            .compactMap(\.audioFileURL)
+                            .compactMap(URL.init(string:))
+                            .filter(\.isFileURL)
+                    )
+                    if let documents = FileManager.default.urls(
+                        for: .documentDirectory,
+                        in: .userDomainMask
+                    ).first {
+                        _ = RecordingOrphanCleanup.removeStaleRecordings(
+                            in: documents,
+                            referencedFileURLs: referencedAudio,
+                            now: Date()
+                        )
+                    }
                     await verifyPendingCheckoutReturnIfNeeded()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .orderCheckoutReturnReceived)) { notification in
+                    guard PersistenceConfigurationPolicy.allowsApplicationContent(
+                        state: persistenceLoadMonitor.state
+                    ) else { return }
                     guard let sessionId = notification.userInfo?["sessionId"] as? String else { return }
                     Task { await verifyCheckoutReturn(sessionId: sessionId) }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    guard PersistenceConfigurationPolicy.allowsApplicationContent(
+                        state: persistenceLoadMonitor.state
+                    ) else { return }
                     PermissionManager.shared.handleAppDidBecomeActive()
                     Task { @MainActor in
                         guard Purchases.isConfigured else { return }

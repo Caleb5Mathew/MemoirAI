@@ -1,6 +1,8 @@
 import Foundation
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
+import FirebaseStorage
 
 enum SharedAccessGrantPolicy {
     static func grantsMemory(
@@ -12,14 +14,33 @@ enum SharedAccessGrantPolicy {
     }
 }
 
+enum SharedAccessDocumentID {
+    static func requestOrGrant(requesterID: String, memoryID: UUID) -> String {
+        "\(memoryID.uuidString)__\(requesterID)"
+    }
+}
+
+enum SharedAudioAccessPolicy {
+    static func audioFile(storagePath: String?, ownerID: String, memoryID: UUID) -> String? {
+        guard let storagePath else { return nil }
+        for fileExtension in ["m4a", "caf"] {
+            let file = "\(memoryID.uuidString).\(fileExtension)"
+            if storagePath == "users/\(ownerID)/audio/\(file)" {
+                return file
+            }
+        }
+        return nil
+    }
+}
+
 /// Family and friends shared access. A scan of someone else's memory QR resolves the
 /// owner through `memoryIndex/{memoryId}`, creates an access request under the owner's
 /// account, and, once the owner approves, reads the shared memory remotely.
 ///
 /// Data model (all rule-gated, see firestore.rules):
 /// - `memoryIndex/{memoryId}` → `{ ownerId }`, written server-side only.
-/// - `users/{ownerId}/accessRequests/{requesterUid}` → created by the requester.
-/// - `users/{ownerId}/accessGrants/{requesterUid}` → written by the owner on approval.
+/// - `users/{ownerId}/accessRequests/{memoryId}__{requesterUid}` → created by the requester.
+/// - `users/{ownerId}/accessGrants/{memoryId}__{requesterUid}` → written by the owner on approval.
 final class SharedAccessService {
     static let shared = SharedAccessService()
 
@@ -44,18 +65,26 @@ final class SharedAccessService {
     }
 
     struct MemoryAccessRequest: Identifiable {
-        /// Requester's uid — also the request doc ID, so one request per person.
+        /// Composite Firestore request document ID.
         let id: String
+        let requesterId: String
         let requesterDisplayName: String
         let memoryId: String?
         let createdAt: Date?
+    }
+
+    struct MemoryAccessGrant: Identifiable {
+        let id: String
+        let requesterId: String
+        let memoryId: String
+        let grantedAt: Date?
     }
 
     struct RemoteMemory {
         let id: String
         let prompt: String?
         let transcription: String?
-        let audioURL: URL?
+        let audioStoragePath: String?
         let profileName: String?
         let createdAt: Date?
     }
@@ -80,8 +109,12 @@ final class SharedAccessService {
         guard let uid = currentUid else { return .none }
         if uid == ownerId { return .owner }
         do {
+            let documentID = SharedAccessDocumentID.requestOrGrant(
+                requesterID: uid,
+                memoryID: memoryId
+            )
             let grant = try await db.collection("users").document(ownerId)
-                .collection("accessGrants").document(uid).getDocument()
+                .collection("accessGrants").document(documentID).getDocument()
             if grant.exists, SharedAccessGrantPolicy.grantsMemory(
                 grantedMemoryID: grant.data()?["memoryId"] as? String,
                 requestedMemoryID: memoryId,
@@ -89,19 +122,32 @@ final class SharedAccessService {
             ) {
                 return .granted
             }
+            let legacyGrant = try await db.collection("users").document(ownerId)
+                .collection("accessGrants").document(uid).getDocument()
+            if legacyGrant.exists, SharedAccessGrantPolicy.grantsMemory(
+                grantedMemoryID: legacyGrant.data()?["memoryId"] as? String,
+                requestedMemoryID: memoryId,
+                revoked: legacyGrant.data()?["revoked"] as? Bool ?? false
+            ) {
+                return .granted
+            }
         } catch {
             // Pre-grant reads can be denied by rules; fall through to the request doc.
         }
         do {
+            let documentID = SharedAccessDocumentID.requestOrGrant(
+                requesterID: uid,
+                memoryID: memoryId
+            )
             let request = try await db.collection("users").document(ownerId)
-                .collection("accessRequests").document(uid).getDocument()
+                .collection("accessRequests").document(documentID).getDocument()
             guard request.data()?["memoryId"] as? String == memoryId.uuidString else {
                 return .none
             }
             switch request.data()?["status"] as? String {
             case "pending": return .pending
             case "denied": return .denied
-            case "approved": return .granted
+            case "approved": return .none
             default: return .none
             }
         } catch {
@@ -111,8 +157,10 @@ final class SharedAccessService {
 
     func submitAccessRequest(ownerId: String, memoryId: UUID, displayName: String) async throws {
         guard let uid = currentUid else { throw SharedAccessError.notSignedIn }
+        let documentID = SharedAccessDocumentID.requestOrGrant(requesterID: uid, memoryID: memoryId)
         try await db.collection("users").document(ownerId)
-            .collection("accessRequests").document(uid).setData([
+            .collection("accessRequests").document(documentID).setData([
+                "requesterUid": uid,
                 "requesterDisplayName": displayName,
                 "status": "pending",
                 "memoryId": memoryId.uuidString,
@@ -127,15 +175,19 @@ final class SharedAccessService {
         onChange: @escaping (GrantStatus) -> Void
     ) -> ListenerRegistration? {
         guard let uid = currentUid else { return nil }
+        let documentID = SharedAccessDocumentID.requestOrGrant(requesterID: uid, memoryID: memoryId)
         return db.collection("users").document(ownerId)
-            .collection("accessRequests").document(uid)
+            .collection("accessRequests").document(documentID)
             .addSnapshotListener { snap, _ in
                 guard snap?.data()?["memoryId"] as? String == memoryId.uuidString else {
                     onChange(.none)
                     return
                 }
                 switch snap?.data()?["status"] as? String {
-                case "approved": onChange(.granted)
+                case "approved":
+                    Task {
+                        onChange(await self.grantStatus(ownerId: ownerId, memoryId: memoryId))
+                    }
                 case "denied": onChange(.denied)
                 case "pending": onChange(.pending)
                 default: onChange(.none)
@@ -144,18 +196,50 @@ final class SharedAccessService {
     }
 
     func fetchSharedMemory(ownerId: String, memoryId: UUID) async throws -> RemoteMemory {
-        let snap = try await db.collection("users").document(ownerId)
-            .collection("memories").document(memoryId.uuidString).getDocument()
+        let userRef = db.collection("users").document(ownerId)
+        var snap = try await userRef
+            .collection("sharedMemories").document(memoryId.uuidString).getDocument()
+        if !snap.exists {
+            // Existing App Store grants used requester-only document IDs before
+            // redacted projections existed. Rules permit this fallback only for
+            // those exact legacy grants; composite grants cannot read the source.
+            snap = try await userRef.collection("memories").document(memoryId.uuidString).getDocument()
+        }
         guard snap.exists, let data = snap.data() else { throw SharedAccessError.memoryUnavailable }
-        let audioURLString = (data["audioURL"] as? String) ?? ""
         return RemoteMemory(
             id: memoryId.uuidString,
             prompt: data["prompt"] as? String,
             transcription: data["transcription"] as? String,
-            audioURL: URL(string: audioURLString),
+            audioStoragePath: data["audioStoragePath"] as? String,
             profileName: data["profileName"] as? String,
             createdAt: (data["createdAt"] as? Timestamp)?.dateValue()
         )
+    }
+
+    func downloadSharedAudio(ownerId: String, memoryId: UUID, storagePath: String) async throws -> URL {
+        let expectedPrefix = "users/\(ownerId)/audio/\(memoryId.uuidString)."
+        guard storagePath.hasPrefix(expectedPrefix),
+              ["m4a", "caf"].contains(URL(fileURLWithPath: storagePath).pathExtension.lowercased()) else {
+            throw SharedAccessError.memoryUnavailable
+        }
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("shared-\(UUID().uuidString).\(URL(fileURLWithPath: storagePath).pathExtension)")
+        do {
+            return try await withCheckedThrowingContinuation { continuation in
+                Storage.storage().reference(withPath: storagePath).write(toFile: destination) { url, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let url {
+                        continuation.resume(returning: url)
+                    } else {
+                        continuation.resume(throwing: SharedAccessError.memoryUnavailable)
+                    }
+                }
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
     }
 
     // MARK: - Owner side
@@ -171,6 +255,7 @@ final class SharedAccessService {
             let data = doc.data()
             return MemoryAccessRequest(
                 id: doc.documentID,
+                requesterId: (data["requesterUid"] as? String) ?? doc.documentID,
                 requesterDisplayName: (data["requesterDisplayName"] as? String) ?? "Someone",
                 memoryId: data["memoryId"] as? String,
                 createdAt: (data["createdAt"] as? Timestamp)?.dateValue()
@@ -178,17 +263,61 @@ final class SharedAccessService {
         }
     }
 
+    func fetchActiveGrants() async throws -> [MemoryAccessGrant] {
+        guard let uid = currentUid else { throw SharedAccessError.notSignedIn }
+        let qs = try await db.collection("users").document(uid)
+            .collection("accessGrants")
+            .whereField("revoked", isEqualTo: false)
+            .limit(to: 100)
+            .getDocuments()
+        var grants: [MemoryAccessGrant] = []
+        for doc in qs.documents {
+            let data = doc.data()
+            guard let requesterId = data["requesterUid"] as? String else { continue }
+            var memoryId = data["memoryId"] as? String
+            if memoryId == nil {
+                let request = try await db.collection("users").document(uid)
+                    .collection("accessRequests").document(doc.documentID)
+                    .getDocument()
+                let requestData = request.data() ?? [:]
+                guard requestData["requesterUid"] as? String == requesterId,
+                      requestData["status"] as? String == "approved" else { continue }
+                memoryId = requestData["memoryId"] as? String
+            }
+            guard let memoryId, UUID(uuidString: memoryId) != nil else { continue }
+            grants.append(MemoryAccessGrant(
+                id: doc.documentID,
+                requesterId: requesterId,
+                memoryId: memoryId,
+                grantedAt: (data["grantedAt"] as? Timestamp)?.dateValue()
+            ))
+        }
+        return grants
+    }
+
     /// Approve atomically: mark the request approved and create the grant in one batch,
     /// so a crash between the two writes can never leave an approved request without a grant.
-    func approve(requesterId: String) async throws {
+    func approve(requestDocumentId: String) async throws {
         guard let uid = currentUid else { throw SharedAccessError.notSignedIn }
         let userRef = db.collection("users").document(uid)
-        let requestRef = userRef.collection("accessRequests").document(requesterId)
+        let requestRef = userRef.collection("accessRequests").document(requestDocumentId)
         let requestSnapshot = try await requestRef.getDocument()
         guard let memoryId = requestSnapshot.data()?["memoryId"] as? String,
-              UUID(uuidString: memoryId) != nil else {
+              let memoryUUID = UUID(uuidString: memoryId) else {
             throw SharedAccessError.memoryUnavailable
         }
+        let requesterId = (requestSnapshot.data()?["requesterUid"] as? String) ?? requestDocumentId
+        let grantDocumentID = SharedAccessDocumentID.requestOrGrant(
+            requesterID: requesterId,
+            memoryID: memoryUUID
+        )
+        let memorySnapshot = try await userRef.collection("memories").document(memoryId).getDocument()
+        guard memorySnapshot.exists else { throw SharedAccessError.memoryUnavailable }
+        let audioFile = SharedAudioAccessPolicy.audioFile(
+            storagePath: memorySnapshot.data()?["audioStoragePath"] as? String,
+            ownerID: uid,
+            memoryID: memoryUUID
+        )
         let batch = db.batch()
         batch.updateData(
             ["status": "approved", "respondedAt": FieldValue.serverTimestamp()],
@@ -201,15 +330,53 @@ final class SharedAccessService {
                 "grantedAt": FieldValue.serverTimestamp(),
                 "revoked": false
             ],
-            forDocument: userRef.collection("accessGrants").document(requesterId)
+            forDocument: userRef.collection("accessGrants").document(grantDocumentID)
         )
+        let memoryData = memorySnapshot.data() ?? [:]
+        var sharedMemoryData: [String: Any] = [
+            "memoryId": memoryId,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+        for key in ["prompt", "transcription", "profileName", "createdAt", "audioStoragePath"] {
+            if let value = memoryData[key] {
+                sharedMemoryData[key] = value
+            }
+        }
+        batch.setData(
+            sharedMemoryData,
+            forDocument: userRef.collection("sharedMemories").document(memoryId),
+            merge: true
+        )
+        if let audioFile {
+            batch.setData(
+                [
+                    "requesterUid": requesterId,
+                    "memoryId": memoryId,
+                    "audioFile": audioFile,
+                    "grantedAt": FieldValue.serverTimestamp(),
+                    "revoked": false
+                ],
+                forDocument: userRef.collection("sharedAudioAccess")
+                    .document("\(audioFile)__\(requesterId)")
+            )
+        }
         try await batch.commit()
     }
 
-    func deny(requesterId: String) async throws {
+    func deny(requestDocumentId: String) async throws {
         guard let uid = currentUid else { throw SharedAccessError.notSignedIn }
         try await db.collection("users").document(uid)
-            .collection("accessRequests").document(requesterId)
+            .collection("accessRequests").document(requestDocumentId)
             .updateData(["status": "denied", "respondedAt": FieldValue.serverTimestamp()])
+    }
+
+    func revoke(grant: MemoryAccessGrant) async throws {
+        guard currentUid != nil else { throw SharedAccessError.notSignedIn }
+        let callable = Functions.functions().httpsCallable("revokeSharedMemoryAccess")
+        callable.timeoutInterval = 30
+        _ = try await callable.call([
+            "grantId": grant.id,
+            "memoryId": grant.memoryId
+        ])
     }
 }

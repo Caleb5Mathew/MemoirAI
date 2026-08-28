@@ -642,6 +642,10 @@ struct RecordMemoryView: View {
         }
         .onDisappear {
             stopRecording()
+            if !isSaving, let audioURL, audioURL.isFileURL {
+                try? FileManager.default.removeItem(at: audioURL)
+                self.audioURL = nil
+            }
             interruptionObserver.onInterruptionBegan = nil
             interruptionObserver.onInterruptionEnded = nil
             interruptionObserver.onRouteChangeDeviceUnavailable = nil
@@ -793,6 +797,7 @@ struct RecordMemoryView: View {
             recorder.prepareToRecord()
             guard recorder.record(forDuration: RecordingDurationPolicy.maximumRecordingDuration) else {
                 print("❌ Recorder refused to start")
+                try? FileManager.default.removeItem(at: fileURL)
                 return
             }
             audioRecorder = recorder
@@ -811,6 +816,7 @@ struct RecordMemoryView: View {
             
             startRecordingTimer()
         } catch {
+            try? FileManager.default.removeItem(at: fileURL)
             print("❌ Failed to start recording: \(error.localizedDescription)")
         }
     }
@@ -921,8 +927,10 @@ struct RecordMemoryView: View {
         // 🔥 ENHANCED: Use background context like RecordingView
         let bgContext = PersistenceController.shared.container.newBackgroundContext()
         bgContext.perform {
-            let audioDataToSave = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
-            guard audioURLToSave == nil || audioDataToSave?.isEmpty == false else {
+            let audioFileSize = audioURLToSave.flatMap {
+                (try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? NSNumber)?.int64Value
+            }
+            guard audioURLToSave == nil || (audioFileSize ?? 0) > 0 else {
                 print("❌ Could not read the completed recording; memory was not saved")
                 DispatchQueue.main.async {
                     isSaving = false
@@ -940,7 +948,7 @@ struct RecordMemoryView: View {
             newEntry.transcriptionEditedText = audioURLToSave == nil || textToSave.isEmpty ? nil : textToSave
             newEntry.transcriptionStatus = audioURLToSave == nil ? nil : "queued"
             newEntry.transcriptionLanguage = "en"
-            newEntry.audioData    = audioDataToSave
+            newEntry.audioData    = nil
             newEntry.createdAt    = Date()
             newEntry.profileID    = profile.id
             newEntry.firebaseUserId = firebaseUserId
@@ -976,7 +984,7 @@ struct RecordMemoryView: View {
                 if let text = textForTitle, !text.isEmpty {
                     let entryObjectID = newEntry.objectID
                     Task {
-                        await generateAndUpdateTitle(for: entryObjectID, text: text)
+                        await generateAndUpdateTitle(for: entryObjectID, text: text, profile: profile)
                     }
                 } else {
                     // If we're waiting for transcription, title will be generated after transcription completes
@@ -1001,7 +1009,11 @@ struct RecordMemoryView: View {
     }
     
     // MARK: - Title Generation Helper
-    private func generateAndUpdateTitle(for objectID: NSManagedObjectID, text: String) async {
+    private func generateAndUpdateTitle(
+        for objectID: NSManagedObjectID,
+        text: String,
+        profile: Profile
+    ) async {
         let titleService = MemoryTitleService()
         if let generatedTitle = await titleService.generateTitle(from: text) {
             let context = PersistenceController.shared.container.newBackgroundContext()
@@ -1012,6 +1024,7 @@ struct RecordMemoryView: View {
                 entry.prompt = generatedTitle
                 do {
                     try context.save()
+                    FirestoreSyncService.shared.queueMemorySyncWithProfile(entry, profile: profile)
                     return true
                 } catch {
                     print("❌ Generated title could not be saved: \(error.localizedDescription)")

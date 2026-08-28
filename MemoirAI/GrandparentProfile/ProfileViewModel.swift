@@ -231,6 +231,12 @@ class ProfileViewModel: ObservableObject {
               profiles[selectedProfileIndex].id == profileID else {
             return .verificationFailed
         }
+        do {
+            try GlobalCharacterManager.shared.deleteAll(for: profileID, userID: userID)
+        } catch {
+            print("Profile character cleanup failed: \(error.localizedDescription)")
+            return .verificationFailed
+        }
         let deletedProfile = profiles.remove(at: selectedProfileIndex)
         var deletedIDs = deletedProfileIDs(userID: userID)
         deletedIDs.insert(deletedProfile.id)
@@ -413,7 +419,8 @@ class ProfileViewModel: ObservableObject {
     }
 
     private func getDocumentsDirectory() -> URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
     }
 
     private func profilesURL(userID: String) -> URL {

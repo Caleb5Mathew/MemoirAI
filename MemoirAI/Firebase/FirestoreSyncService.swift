@@ -66,6 +66,7 @@ actor MemoryOperationSequencer {
 /// This runs alongside CloudKit - CloudKit handles fast local sync,
 /// Firebase provides admin access to all user data
 final class FirestoreSyncService {
+    typealias RenderedPageProvider = @MainActor @Sendable (Int) -> UIImage?
     
     static let shared = FirestoreSyncService()
     
@@ -731,12 +732,17 @@ final class FirestoreSyncService {
             // so would treat unchanged audio as new and reset a completed transcript.
             let remoteSnapshot = try await memoryRef.getDocument()
             let remoteData = remoteSnapshot.data() ?? [:]
-            let fileExtension = URL(string: audioFileURL ?? "")?.pathExtension.lowercased() == "m4a" ? "m4a" : "caf"
+            let localAudioURL = audioFileURL
+                .flatMap(URL.init(string:))
+                .flatMap { $0.isFileURL && FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+            let uploadAudioURL = localAudioURL ?? ((audioData?.isEmpty == false) ? entry.playbackURL : nil)
+            let fileExtension = uploadAudioURL?.pathExtension.lowercased() == "m4a" ? "m4a" : "caf"
             let isM4A = fileExtension == "m4a"
             var audioChanged = false
 
-            if let audioData, !audioData.isEmpty {
-                if isM4A && audioData.count > 25 * 1024 * 1024 {
+            if let uploadAudioURL {
+                let audioByteCount = (try? uploadAudioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                if isM4A && audioByteCount > 25 * 1024 * 1024 {
                     entry.transcriptionStatus = "needsRerecording"
                     entry.transcriptionUpdatedAt = Date()
                     try entry.managedObjectContext?.save()
@@ -744,7 +750,7 @@ final class FirestoreSyncService {
                     return false
                 }
 
-                let audioSHA256 = Self.sha256Hex(audioData)
+                let audioSHA256 = try Self.sha256Hex(fileURL: uploadAudioURL)
                 let storagePath = "users/\(userId)/audio/\(memoryId.uuidString).\(fileExtension)"
                 audioChanged = remoteData["audioSHA256"] as? String != audioSHA256
                 let remotePathMatches = remoteData["audioStoragePath"] as? String == storagePath
@@ -752,7 +758,7 @@ final class FirestoreSyncService {
                     memoryData["audioURL"] = remoteURL
                 } else {
                     memoryData["audioURL"] = try await StorageService.shared.uploadAudio(
-                        audioData,
+                        uploadAudioURL,
                         memoryId: memoryId.uuidString,
                         fileExtension: fileExtension,
                         asUserID: userId
@@ -828,40 +834,6 @@ final class FirestoreSyncService {
     
     // MARK: - Book Sync
 
-    /// Writes identity + cover fields with `merge: true` so `fetchBookVersion` succeeds before the long per-page upload loop finishes.
-    private func mergeEarlyBookVersionCoverMetadata(
-        bookRef: DocumentReference,
-        baseRecord: BookVersionRecord,
-        coverStoragePath: String,
-        coverURL: String
-    ) async throws {
-        var data: [String: Any] = [
-            "bookVersionId": baseRecord.bookVersionId,
-            "profileId": baseRecord.profileId,
-            "createdAt": Timestamp(date: baseRecord.createdAt),
-            "memoryOrder": baseRecord.memoryOrder,
-            "pageCount": baseRecord.pageCount,
-            "artStyle": baseRecord.artStyle,
-            "orientation": baseRecord.orientation,
-            "pageWidth": baseRecord.pageWidth,
-            "pageHeight": baseRecord.pageHeight,
-            "trimSizeInches": baseRecord.trimSizeInches,
-            "layoutVersion": baseRecord.layoutVersion,
-            "renderStatus": BookRenderStatus.pending.rawValue,
-            "source": baseRecord.source,
-            "pages": [],
-            "coverStoragePath": coverStoragePath,
-            "coverURL": coverURL,
-            "coverArtRevision": FieldValue.increment(Int64(1)),
-            "syncedAt": FieldValue.serverTimestamp()
-        ]
-        if let printTitle = baseRecord.printTitle { data["printTitle"] = printTitle }
-        if let backCoverPitch = baseRecord.backCoverPitch { data["backCoverPitch"] = backCoverPitch }
-        if let coverFontPreset = baseRecord.coverFontPreset { data["coverFontPreset"] = coverFontPreset }
-        try await bookRef.setData(data, merge: true)
-        print("[CoverFlow] syncBook earlyMerge DONE bookVersion=\(baseRecord.bookVersionId.prefix(28))… (page uploads still running)")
-    }
-    
     /// Cover generation inputs for print cover (kids + portrait when Gemini is available).
     /// When `headshot` is nil, cover art must not depict people (`generateCoverIllustration` no-humans path).
     struct CoverInputs {
@@ -887,7 +859,9 @@ final class FirestoreSyncService {
         _ book: PersistableStorybook,
         bookId: String,
         renderedPageImages: [UIImage]? = nil,
-        coverInputs: CoverInputs? = nil
+        renderedPageProvider: RenderedPageProvider? = nil,
+        coverInputs: CoverInputs? = nil,
+        coverPDFOverride: Data? = nil
     ) async {
         // Avoid capturing `var cover` in an `@Sendable` closure (Swift 6): resolve inputs once, synchronously.
         let finalCoverInputs: CoverInputs? = {
@@ -901,7 +875,9 @@ final class FirestoreSyncService {
                 book,
                 bookId: bookId,
                 renderedPageImages: rendered,
-                coverInputs: finalCoverInputs
+                renderedPageProvider: renderedPageProvider,
+                coverInputs: finalCoverInputs,
+                coverPDFOverride: coverPDFOverride
             )
         }
     }
@@ -936,7 +912,9 @@ final class FirestoreSyncService {
         _ book: PersistableStorybook,
         bookId: String,
         renderedPageImages: [UIImage]? = nil,
-        coverInputs: CoverInputs? = nil
+        renderedPageProvider: RenderedPageProvider? = nil,
+        coverInputs: CoverInputs? = nil,
+        coverPDFOverride: Data? = nil
     ) async {
         guard let userId = Auth.auth().currentUser?.uid else {
             print("⚠️ Cannot sync book - user not signed in")
@@ -960,8 +938,18 @@ final class FirestoreSyncService {
             var coverStoragePath: String?
             var coverURL: String?
 
+            if let coverPDFOverride {
+                let result = try await StorageService.shared.uploadBookCoverPDF(
+                    coverPDFOverride,
+                    bookId: bookId,
+                    asUserId: userId
+                )
+                coverStoragePath = result.storagePath
+                coverURL = result.downloadURL
+            }
+
             // Landscape trim (11×8.5): AI cover (headshot → likeness; no headshot → non-human art). Title is painted in-image.
-            if isLandscapeTrim, let inputs = coverInputs {
+            if isLandscapeTrim, coverStoragePath == nil, let inputs = coverInputs {
                 let svc = GeminiImageService()
                 let themesPreview = inputs.memoryThemes.prefix(8).joined(separator: " | ")
                 let canonPreview = inputs.protagonistCanonLine?.prefix(160).description ?? "<nil>"
@@ -1203,26 +1191,18 @@ final class FirestoreSyncService {
                 }
             }
 
-            // So the client can load `coverURL` / `coverStoragePath` for the in-app title page
-            // while page PNG uploads are still in progress (otherwise `fetchBookVersion` sees no doc until the final `setData`).
-            if let path = coverStoragePath, let url = coverURL,
-               !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                try await mergeEarlyBookVersionCoverMetadata(
-                    bookRef: bookRef,
-                    baseRecord: baseRecord,
-                    coverStoragePath: path,
-                    coverURL: url
-                )
-            }
-
             var uploadedPages: [BookVersionPageRecord] = []
             var totalPngBytes = 0
             
             for (index, page) in baseRecord.pages.enumerated() {
                 var updatedPage = page
 
-                let renderedImage: UIImage = {
+                let renderedImage: UIImage
+                if let renderedPageProvider,
+                   let streamedImage = await renderedPageProvider(index) {
+                    renderedImage = streamedImage
+                } else {
+                    renderedImage = {
                     // 1. Prefer on-device rendered images (text + illustration) for full visual parity
                     if let renderedPageImages, index < renderedPageImages.count {
                         return renderedPageImages[index]
@@ -1253,7 +1233,8 @@ final class FirestoreSyncService {
                         widthPt: CGFloat(baseRecord.pageWidth),
                         heightPt: CGFloat(baseRecord.pageHeight)
                     )
-                }()
+                    }()
+                }
 
                 let artifacts = try await StorageService.shared.uploadRenderedBookPageArtifacts(
                     renderedImage,
@@ -1284,10 +1265,6 @@ final class FirestoreSyncService {
                     createdAt: page.createdAt
                 )
                 uploadedPages.append(updatedPage)
-                try? await bookRef.setData(
-                    ["pages": FieldValue.arrayUnion([updatedPage.toFirestoreData()])],
-                    merge: true
-                )
             }
             
             let canonicalRecord = BookVersionRecord(
@@ -1468,22 +1445,6 @@ final class FirestoreSyncService {
         return await fetchLatestBookVersionClientFilter(profileID: profileID, userId: userId)
     }
     
-    /// Uploads a new print `cover.pdf` and merges `coverURL` / `coverStoragePath` (same path as initial sync / `regenerateCoverDesign`).
-    func mergeUploadedPrintCoverPDF(bookVersionId: String, pdfData: Data) async throws {
-        guard let userId = Auth.auth().currentUser?.uid else {
-            throw NSError(domain: "FirestoreSyncService", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])
-        }
-        let uploaded = try await StorageService.shared.uploadBookCoverPDF(pdfData, bookId: bookVersionId)
-        let docRef = db.collection("users").document(userId).collection("bookVersions").document(bookVersionId)
-        try await docRef.setData([
-            "coverStoragePath": uploaded.storagePath,
-            "coverURL": uploaded.downloadURL,
-            "coverArtRevision": FieldValue.increment(Int64(1)),
-            "syncedAt": FieldValue.serverTimestamp()
-        ], merge: true)
-        print("[CoverFlow] mergeUploadedPrintCoverPDF DONE book=\(bookVersionId.prefix(28))…")
-    }
-
     /// Fetch one canonical book version by exact ID (admin/order retrieval path).
     func fetchBookVersion(bookVersionId: String) async -> BookVersionRecord? {
         guard let userId = Auth.auth().currentUser?.uid else { return nil }
@@ -2096,7 +2057,7 @@ final class FirestoreSyncService {
                let urlStr = data["audioURL"] as? String,
                let url = URL(string: urlStr),
                let scheme = url.scheme?.lowercased(),
-               scheme == "https" || scheme == "http" {
+               scheme == "https" {
                 // Keep the private cloud reference. Download on playback instead of
                 // yielding during hydration and racing account deletion/session changes.
                 entry.audioFileURL = url.absoluteString
@@ -2519,7 +2480,9 @@ extension FirestoreSyncService {
         _ book: PersistableStorybook,
         bookId: String,
         renderedPageImages: [UIImage]? = nil,
-        coverInputs: FirestoreSyncService.CoverInputs? = nil
+        renderedPageProvider: RenderedPageProvider? = nil,
+        coverInputs: FirestoreSyncService.CoverInputs? = nil,
+        coverPDFOverride: Data? = nil
     ) {
         Task { @MainActor in
             NotificationCenter.default.post(
@@ -2549,7 +2512,9 @@ extension FirestoreSyncService {
                 book,
                 bookId: bookId,
                 renderedPageImages: renderedPageImages,
-                coverInputs: coverInputs
+                renderedPageProvider: renderedPageProvider,
+                coverInputs: coverInputs,
+                coverPDFOverride: coverPDFOverride
             )
         }
     }
@@ -2571,6 +2536,16 @@ extension FirestoreSyncService {
     private static func sha256Hex(_ data: Data) -> String {
         let digest = SHA256.hash(data: data)
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func sha256Hex(fileURL: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 256 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private func resizedSubjectPhotoForUpload(_ image: UIImage, maxEdge: CGFloat = 1024) -> UIImage {

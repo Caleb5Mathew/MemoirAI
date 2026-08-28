@@ -253,6 +253,8 @@ struct MemoryDetailView: View {
     @State private var audioEngine = AVAudioEngine()
     @State private var playerNode = AVAudioPlayerNode()
     @State private var eqNode = AVAudioUnitEQ(numberOfBands: 1)
+    @State private var remotePlayer: AVPlayer?
+    @State private var remotePlaybackObserver: NSObjectProtocol?
     @State private var isPlaying = false
     @State private var playbackGeneration = UUID()
 
@@ -361,6 +363,10 @@ struct MemoryDetailView: View {
     private var memoryVoiceSection: some View {
         if let url = memory.playbackURL {
             memoryAudioRow(url: url)
+        } else if let urlString = memory.audioFileURL,
+                  let remoteURL = URL(string: urlString),
+                  remoteURL.scheme?.lowercased() == "https" {
+            memoryAudioRow(url: remoteURL)
         }
     }
 
@@ -882,6 +888,7 @@ struct MemoryDetailView: View {
                 "created_at": memory.createdAt?.timeIntervalSince1970 ?? 0
             ])
         }
+        .onDisappear { stopPlaybackIfNeeded() }
         .onReceive(NotificationCenter.default.publisher(for: .memorySaved)) { _ in
             // Refresh the UI when character details are saved
             DispatchQueue.main.async {
@@ -957,6 +964,12 @@ struct MemoryDetailView: View {
     
     private func stopPlaybackIfNeeded() {
         playbackGeneration = UUID()
+        remotePlayer?.pause()
+        remotePlayer = nil
+        if let remotePlaybackObserver {
+            NotificationCenter.default.removeObserver(remotePlaybackObserver)
+            self.remotePlaybackObserver = nil
+        }
         if isPlaying {
             playerNode.stop()
             audioEngine.stop()
@@ -971,6 +984,31 @@ struct MemoryDetailView: View {
     }
 
     private func togglePlayback(url: URL) {
+        if !url.isFileURL {
+            if isPlaying {
+                stopPlaybackIfNeeded()
+            } else {
+                let player = AVPlayer(url: url)
+                remotePlayer = player
+                remotePlaybackObserver = NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemDidPlayToEndTime,
+                    object: player.currentItem,
+                    queue: .main
+                ) { _ in
+                    Task { @MainActor in
+                        if let remotePlaybackObserver {
+                            NotificationCenter.default.removeObserver(remotePlaybackObserver)
+                        }
+                        remotePlayer = nil
+                        remotePlaybackObserver = nil
+                        isPlaying = false
+                    }
+                }
+                player.play()
+                isPlaying = true
+            }
+            return
+        }
         do {
             let session = AVAudioSession.sharedInstance()
             try session.overrideOutputAudioPort(.speaker)
@@ -1643,10 +1681,10 @@ struct CharacterDetailsQuestionView: View {
             
             // If character has a name but no globalCharacterId, create/find global character
             if !character.name.isEmpty && character.globalCharacterId == nil {
-                let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
+                guard let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
                     name: character.name,
                     profileID: profileID
-                )
+                ) else { continue }
                 characterDetails.characters[index].globalCharacterId = globalId
                 print("Linked character to global registry")
             }
@@ -1764,10 +1802,10 @@ struct CharacterDetailsQuestionView: View {
         } else if !character.name.isEmpty {
             // If no global ID but has name, find or create global character
             let profileID = profileVM.selectedProfile.id
-            let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
+            guard let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
                 name: character.name,
                 profileID: profileID
-            )
+            ) else { return }
             newCharacter.globalCharacterId = globalId
         }
         

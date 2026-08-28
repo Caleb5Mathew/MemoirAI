@@ -1470,6 +1470,7 @@ struct StoryPage: View {
                 let activityVC = UIActivityViewController(activityItems: [pdfURL], applicationActivities: nil)
 
                 activityVC.completionWithItemsHandler = { _, completed, _, _ in
+                    try? FileManager.default.removeItem(at: pdfURL)
                     self.isDownloading = false
                     if completed {
                         self.showDownloadSuccess = true
@@ -1489,6 +1490,7 @@ struct StoryPage: View {
                     }
                     rootVC.present(activityVC, animated: true)
                 } else {
+                    try? FileManager.default.removeItem(at: pdfURL)
                     self.isDownloading = false
                 }
             }

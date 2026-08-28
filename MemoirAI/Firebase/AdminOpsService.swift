@@ -69,6 +69,8 @@ struct AdminPrintOrder: Identifiable {
     let refundStatus: String?
     let disputeStatus: String?
     let fulfillmentHold: Bool
+    let fulfillmentHoldReason: String?
+    let isFulfillmentIncident: Bool
     /// Server's authoritative signal that this order is a paid order waiting to be sent to Lulu
     /// (mirrors `d.needsPrintAction` — already excludes held orders).
     let needsPrintAction: Bool
@@ -231,6 +233,8 @@ actor AdminOpsService {
             refundStatus: dict["refundStatus"] as? String,
             disputeStatus: dict["disputeStatus"] as? String,
             fulfillmentHold: dict["fulfillmentHold"] as? Bool ?? false,
+            fulfillmentHoldReason: dict["fulfillmentHoldReason"] as? String,
+            isFulfillmentIncident: dict["isFulfillmentIncident"] as? Bool ?? false,
             needsPrintAction: dict["needsPrintAction"] as? Bool ?? false,
             customerEmail: dict["customerEmail"] as? String,
             printTitle: dict["printTitle"] as? String,

@@ -3,9 +3,10 @@ import Foundation
 enum MemoryAudioAvailabilityPolicy {
     static func hasAudio(
         localFileExists: Bool,
-        embeddedAudioByteCount: Int?
+        embeddedAudioByteCount: Int?,
+        hasRemoteAudio: Bool = false
     ) -> Bool {
-        localFileExists || (embeddedAudioByteCount ?? 0) > 0
+        localFileExists || (embeddedAudioByteCount ?? 0) > 0 || hasRemoteAudio
     }
 }
 
@@ -47,9 +48,13 @@ extension MemoryEntry {
         }
 
         let embeddedAudioByteCount = (value(forKey: "audioData") as? Data)?.count
+        let hasRemoteAudio = audioFileURL
+            .flatMap(URL.init(string:))
+            .map { $0.scheme?.lowercased() == "https" } ?? false
         return MemoryAudioAvailabilityPolicy.hasAudio(
             localFileExists: false,
-            embeddedAudioByteCount: embeddedAudioByteCount
+            embeddedAudioByteCount: embeddedAudioByteCount,
+            hasRemoteAudio: hasRemoteAudio
         )
     }
 }

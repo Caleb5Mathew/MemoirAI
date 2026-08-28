@@ -7,6 +7,7 @@ const {
   FREE_PAGE_LIMIT,
   fetchLegacyRevenueCatEntitlement,
   isAdmittedStorybookJob,
+  paidStorybookUsagePeriod,
   releaseStorybookActiveLease,
   settleStorybookReservation,
   storybookReservationCharges,
@@ -53,6 +54,17 @@ assert.strictEqual(activeRevenueCatEntitlement({ subscriber: { entitlements: {
   unrelated: { expires_date: "2026-09-27T12:00:00Z" }
 } } }, now), null);
 assert.strictEqual(FREE_PAGE_LIMIT, 4);
+assert.deepStrictEqual(
+  paidStorybookUsagePeriod(new Date("2026-08-31T23:59:59Z")),
+  {
+    periodKey: "paid_202608",
+    resetAt: new Date("2026-09-01T00:00:00.000Z")
+  }
+);
+assert.strictEqual(
+  paidStorybookUsagePeriod(new Date("2026-09-01T00:00:00Z")).periodKey,
+  "paid_202609"
+);
 assert.deepStrictEqual(storybookReservationCharges({
   reservedPageCount: 4,
   memoryResults: { a: { illustrationStoragePath: "users/u/a.png" } },
@@ -134,6 +146,7 @@ const timestampFromDate = (date) => ({ toDate: () => date });
     serverTimestamp,
     timestampFromDate,
     HttpsError: FakeHttpsError,
+    nowDate: () => new Date("2026-08-27T12:00:00Z"),
     fetchImpl: async () => {
       revenueCatCalls += 1;
       if (revenueCatCalls > 1) throw new Error("Replay must not call RevenueCat");
@@ -149,7 +162,12 @@ const timestampFromDate = (date) => ({ toDate: () => date });
     auth: { uid: "user-1" },
     data: { jobId: "job_1", job: { ...base, clientVersion: 2 } }
   };
-  assert.deepStrictEqual(await handler(request), { status: "queued", jobId: "job_1" });
+  assert.deepStrictEqual(await handler(request), {
+    status: "queued",
+    allowanceRemaining: 98,
+    allowanceResetAt: "2026-09-01T00:00:00.000Z",
+    jobId: "job_1"
+  });
   const jobPath = "users/user-1/storybookJobs/job_1";
   assert.strictEqual(db.rows.get(jobPath).admissionVersion, 1);
   assert.strictEqual(db.rows.get(jobPath).reservationState, "reserved");
@@ -162,6 +180,7 @@ const timestampFromDate = (date) => ({ toDate: () => date });
   const usageAfterReplay = Array.from(db.rows.entries())
     .filter(([path]) => path.includes("/aiUsage/storybook_paid_"))[0][1].reservedPages;
   assert.strictEqual(usageAfterReplay, usageBeforeReplay);
+  assert.ok(Array.from(db.rows.keys()).some((path) => path.endsWith("storybook_paid_202608")));
   await assert.rejects(
     () => handler({ ...request, data: { ...request.data, job: { ...request.data.job, pageCountTarget: 3 } } }),
     (error) => error.code === "already-exists"

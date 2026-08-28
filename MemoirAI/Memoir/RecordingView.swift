@@ -428,6 +428,10 @@ struct RecordingView: View {
                 }
                 onRecordingDismiss?()
                 cleanup()
+                if !isSaving, let audioURL, audioURL.isFileURL {
+                    try? FileManager.default.removeItem(at: audioURL)
+                    self.audioURL = nil
+                }
             }
             // Permission alerts
             .fullScreenCover(isPresented: $permissionManager.showMicrophonePermissionAlert) {
@@ -589,6 +593,7 @@ struct RecordingView: View {
             recorder.prepareToRecord()
             guard recorder.record(forDuration: RecordingDurationPolicy.maximumRecordingDuration) else {
                 debugBanner = "Recorder could not start"
+                try? FileManager.default.removeItem(at: fileURL)
                 return
             }
             audioRecorder = recorder
@@ -614,6 +619,7 @@ struct RecordingView: View {
             startRecordingTimer()
             debugBanner = "Recording started with AAC format"
         } catch {
+            try? FileManager.default.removeItem(at: fileURL)
             print("⚠️ Error starting recorder: \(error.localizedDescription)")
             debugBanner = "Recorder error: \(error.localizedDescription)"
         }
@@ -707,8 +713,10 @@ struct RecordingView: View {
         // 1️⃣ Spin up a private background context so we never block the UI
         let bgContext = PersistenceController.shared.container.newBackgroundContext()
         bgContext.perform {
-            let audioDataToSave = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
-            guard audioURLToSave == nil || audioDataToSave?.isEmpty == false else {
+            let audioFileSize = audioURLToSave.flatMap {
+                (try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? NSNumber)?.int64Value
+            }
+            guard audioURLToSave == nil || (audioFileSize ?? 0) > 0 else {
                 print("❌ Could not read the completed recording; memory was not saved")
                 DispatchQueue.main.async {
                     isSaving = false
@@ -722,7 +730,7 @@ struct RecordingView: View {
             entry.id           = UUID()
             entry.prompt       = promptToSave
             entry.text         = textToSave.isEmpty ? nil : textToSave
-            entry.audioData    = audioDataToSave
+            entry.audioData    = nil
             entry.audioFileURL = audioURLToSave?.absoluteString
             entry.transcriptionEditedText = audioURLToSave == nil || textToSave.isEmpty ? nil : textToSave
             entry.transcriptionStatus = audioURLToSave == nil ? nil : "queued"

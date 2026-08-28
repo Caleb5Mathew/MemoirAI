@@ -2,14 +2,7 @@
 // MemoirAI
 
 import SwiftUI
-import PhotosUI
 import CoreData
-
-// Wrapper to allow Data to be used with .sheet(item:)
-struct IdentifiableData: Identifiable {
-    let id = UUID()
-    let data: Data
-}
 
 struct HomepageView: View {
     // MARK: – Environment & Context
@@ -24,10 +17,6 @@ struct HomepageView: View {
 
     @State private var entries: [MemoryEntry] = []
     private var totalChapters: Int { activeChapters.count }
-
-    @State private var isShowingPhotoPicker = false
-    @State private var photoSelection: PhotosPickerItem? = nil
-    @State private var selectedPhotoData: IdentifiableData? = nil
 
     @State private var showingAddProfile = false
     @State private var showProfileEdit = false
@@ -323,17 +312,6 @@ struct HomepageView: View {
                 AddProfileView()
                     .environmentObject(profileVM)
             }
-            .photosPicker(isPresented: $isShowingPhotoPicker, selection: $photoSelection, matching: .images)
-            .onChange(of: photoSelection) { newItem in
-                if let newItem = newItem {
-                    loadPhotoData(newItem)
-                }
-            }
-            .sheet(item: $selectedPhotoData) { wrapper in
-                CropSheetView(photoData: wrapper.data) { croppedData in
-                    // profileVM.addProfile(...) as needed
-                }
-            }
             .fullScreenCover(isPresented: $showProfileEdit) {
                 ProfileEditView(profileVM: profileVM)
             }
@@ -402,18 +380,6 @@ struct HomepageView: View {
             print("📊 Entries with chapter: \(withChapter.count)")
         } catch {
             print("Failed to fetch entries:", error)
-        }
-    }
-
-    private func loadPhotoData(_ newItem: PhotosPickerItem) {
-        Task {
-            do {
-                if let data = try await newItem.loadTransferable(type: Data.self) {
-                    selectedPhotoData = IdentifiableData(data: data)
-                }
-            } catch {
-                print("Failed to load data:", error)
-            }
         }
     }
 

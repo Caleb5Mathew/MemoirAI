@@ -21,18 +21,31 @@ class GlobalCharacterManager {
     // MARK: - CRUD Operations
     
     /// Find or create a global character by name for a profile
-    func findOrCreateGlobalCharacter(name: String, profileID: UUID) -> UUID {
+    func findOrCreateGlobalCharacter(name: String, profileID: UUID) -> UUID? {
+        guard let userID = MemoryUserScope.currentFirebaseUserId else { return nil }
+        let mayClaimLegacy = AccountLocalDataCleaner.storedProfileIDs(
+            firebaseUserID: userID
+        ).contains(profileID)
         // Try to find existing character
         let request: NSFetchRequest<GlobalCharacter> = GlobalCharacter.fetchRequest()
-        request.predicate = NSPredicate(
-            format: "canonicalName ==[c] %@ AND profileID == %@",
-            name.trimmingCharacters(in: .whitespacesAndNewlines),
-            profileID as CVarArg
-        )
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(
+                format: "canonicalName ==[c] %@ AND profileID == %@",
+                name.trimmingCharacters(in: .whitespacesAndNewlines),
+                profileID as CVarArg
+            ),
+            mayClaimLegacy
+                ? NSPredicate(format: "firebaseUserId == %@ OR firebaseUserId == nil", userID)
+                : NSPredicate(format: "firebaseUserId == %@", userID)
+        ])
         request.fetchLimit = 1
         
         if let existing = try? context.fetch(request).first,
            let existingId = existing.id {
+            if existing.firebaseUserId == nil {
+                existing.firebaseUserId = userID
+                try? context.save()
+            }
             return existingId
         }
         
@@ -42,6 +55,7 @@ class GlobalCharacterManager {
         newCharacter.id = newId
         newCharacter.canonicalName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         newCharacter.profileID = profileID
+        newCharacter.firebaseUserId = userID
         newCharacter.createdAt = Date()
         
         do {
@@ -50,19 +64,35 @@ class GlobalCharacterManager {
             return newId
         } catch {
             print("❌ Failed to create global character: \(error)")
-            // Return the UUID we created even if save failed
-            return newId
+            context.rollback()
+            return nil
         }
     }
     
     /// Get all global characters for a profile
     func getAllGlobalCharacters(for profileID: UUID) -> [GlobalCharacter] {
+        guard let userID = MemoryUserScope.currentFirebaseUserId else { return [] }
+        let mayClaimLegacy = AccountLocalDataCleaner.storedProfileIDs(
+            firebaseUserID: userID
+        ).contains(profileID)
         let request: NSFetchRequest<GlobalCharacter> = GlobalCharacter.fetchRequest()
-        request.predicate = NSPredicate(format: "profileID == %@", profileID as CVarArg)
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "profileID == %@", profileID as CVarArg),
+            mayClaimLegacy
+                ? NSPredicate(format: "firebaseUserId == %@ OR firebaseUserId == nil", userID)
+                : NSPredicate(format: "firebaseUserId == %@", userID)
+        ])
         request.sortDescriptors = [NSSortDescriptor(keyPath: \GlobalCharacter.canonicalName, ascending: true)]
         
         do {
-            return try context.fetch(request)
+            let characters = try context.fetch(request)
+            var claimedLegacyCharacter = false
+            for character in characters where character.firebaseUserId == nil {
+                character.firebaseUserId = userID
+                claimedLegacyCharacter = true
+            }
+            if claimedLegacyCharacter { try context.save() }
+            return characters
         } catch {
             print("❌ Failed to fetch global characters: \(error)")
             return []
@@ -71,24 +101,59 @@ class GlobalCharacterManager {
     
     /// Get global character by ID
     func getGlobalCharacter(id: UUID) -> GlobalCharacter? {
+        guard let userID = MemoryUserScope.currentFirebaseUserId else { return nil }
         let request: NSFetchRequest<GlobalCharacter> = GlobalCharacter.fetchRequest()
-        request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "id == %@", id as CVarArg),
+            NSPredicate(format: "firebaseUserId == %@", userID)
+        ])
         request.fetchLimit = 1
-        
-        return try? context.fetch(request).first
+
+        guard let character = try? context.fetch(request).first else { return nil }
+        if character.firebaseUserId == nil {
+            character.firebaseUserId = userID
+            try? context.save()
+        }
+        return character
     }
     
     /// Get global character by name (case-insensitive)
     func getGlobalCharacter(name: String, profileID: UUID) -> GlobalCharacter? {
+        guard let userID = MemoryUserScope.currentFirebaseUserId else { return nil }
+        let mayClaimLegacy = AccountLocalDataCleaner.storedProfileIDs(
+            firebaseUserID: userID
+        ).contains(profileID)
         let request: NSFetchRequest<GlobalCharacter> = GlobalCharacter.fetchRequest()
-        request.predicate = NSPredicate(
-            format: "canonicalName ==[c] %@ AND profileID == %@",
-            name.trimmingCharacters(in: .whitespacesAndNewlines),
-            profileID as CVarArg
-        )
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(
+                format: "canonicalName ==[c] %@ AND profileID == %@",
+                name.trimmingCharacters(in: .whitespacesAndNewlines),
+                profileID as CVarArg
+            ),
+            mayClaimLegacy
+                ? NSPredicate(format: "firebaseUserId == %@ OR firebaseUserId == nil", userID)
+                : NSPredicate(format: "firebaseUserId == %@", userID)
+        ])
         request.fetchLimit = 1
-        
-        return try? context.fetch(request).first
+
+        guard let character = try? context.fetch(request).first else { return nil }
+        if character.firebaseUserId == nil {
+            character.firebaseUserId = userID
+            try? context.save()
+        }
+        return character
+    }
+
+    func deleteAll(for profileID: UUID, userID: String) throws {
+        let request: NSFetchRequest<GlobalCharacter> = GlobalCharacter.fetchRequest()
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "profileID == %@", profileID as CVarArg),
+            NSPredicate(format: "firebaseUserId == %@ OR firebaseUserId == nil", userID)
+        ])
+        for character in try context.fetch(request) {
+            context.delete(character)
+        }
+        if context.hasChanges { try context.save() }
     }
     
     // MARK: - Character Appearance Management
@@ -211,10 +276,10 @@ class GlobalCharacterManager {
                 }
                 
                 // Find or create global character
-                let globalId = findOrCreateGlobalCharacter(
+                guard let globalId = findOrCreateGlobalCharacter(
                     name: character.name,
                     profileID: profileID
-                )
+                ) else { continue }
                 
                 // Link this character instance to global character
                 characterDetails.characters[index].globalCharacterId = globalId

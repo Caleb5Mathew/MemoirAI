@@ -245,10 +245,10 @@ private func persistExtractedCharacterDetails(
     for index in details.characters.indices {
         let character = details.characters[index]
         if !character.name.isEmpty && character.globalCharacterId == nil {
-            let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
+            guard let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
                 name: character.name,
                 profileID: profileID
-            )
+            ) else { continue }
             details.characters[index].globalCharacterId = globalId
         }
     }

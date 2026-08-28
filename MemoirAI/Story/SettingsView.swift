@@ -1243,10 +1243,12 @@ struct SettingsView: View {
     }
 
     private func signOut() {
-        do {
-            try AuthenticationService.shared.signOut()
-        } catch {
-            print("❌ Sign out failed: \(error)")
+        Task {
+            do {
+                try await AuthenticationService.shared.signOut()
+            } catch {
+                print("❌ Sign out failed: \(error)")
+            }
         }
     }
 

@@ -385,15 +385,17 @@ struct ReRecordAudioView: View {
                 return
             }
 
-            let data = try? Data(contentsOf: capturedURL)
-            guard let data, !data.isEmpty else {
+            let audioFileSize = (try? FileManager.default.attributesOfItem(
+                atPath: capturedURL.path
+            )[.size] as? NSNumber)?.int64Value
+            guard (audioFileSize ?? 0) > 0 else {
                 Task { @MainActor in
                     isSaving = false
                 }
                 return
             }
             let previousAudioURL = entry.audioFileURL.flatMap(URL.init(string:))
-            entry.audioData = data
+            entry.audioData = nil
             entry.audioFileURL = capturedURL.absoluteString
             entry.text = nil
             entry.transcriptionRawText = nil

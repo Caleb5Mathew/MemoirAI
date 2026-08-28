@@ -53,6 +53,23 @@ enum AccountLocalDataPolicy {
 }
 
 enum AccountLocalDataCleaner {
+    static func profileIDs(fromProfileData data: Data) -> Set<UUID> {
+        guard let profiles = try? JSONDecoder().decode([Profile].self, from: data) else { return [] }
+        return Set(profiles.map(\.id))
+    }
+
+    static func storedProfileIDs(
+        firebaseUserID: String,
+        fileManager: FileManager = .default
+    ) -> Set<UUID> {
+        guard let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return []
+        }
+        let url = documents.appendingPathComponent(ProfileStorageScope.fileName(userID: firebaseUserID))
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        return profileIDs(fromProfileData: data)
+    }
+
     static func clearUserDefaults(
         firebaseUserID: String,
         manifest: AccountLocalCleanupManifest,
@@ -102,6 +119,7 @@ enum AccountLocalDataCleaner {
 enum AccountLocalCleanupCoordinator {
     static let pendingKey = "memoirai_account_cleanup_pending_v1"
     static let pendingUserIDKey = "memoirai_account_cleanup_pending_uid_v1"
+    static let pendingProfileIDsKey = "memoirai_account_cleanup_pending_profiles_v1"
 
     static func run(
         firebaseUserID: String,
@@ -116,8 +134,8 @@ enum AccountLocalCleanupCoordinator {
         do {
             manifest = try await clearPersistence()
         } catch {
-            completed = false
             print("Account deletion: Core Data cleanup failed: \(error.localizedDescription)")
+            return false
         }
         do {
             try clearFiles(manifest)
@@ -134,6 +152,7 @@ enum AccountLocalCleanupCoordinator {
         if completed {
             defaults.removeObject(forKey: pendingKey)
             defaults.removeObject(forKey: pendingUserIDKey)
+            defaults.removeObject(forKey: pendingProfileIDsKey)
         }
         return completed
     }
@@ -188,8 +207,16 @@ final class AuthenticationService: ObservableObject {
                 let completed = await AccountLocalCleanupCoordinator.run(
                     firebaseUserID: firebaseUserID,
                     clearPersistence: {
-                        try await PersistenceController.shared.deleteUserData(
-                            firebaseUserId: firebaseUserID
+                        let persistedProfileIDs = Set(
+                            (UserDefaults.standard.stringArray(
+                                forKey: AccountLocalCleanupCoordinator.pendingProfileIDsKey
+                            ) ?? []).compactMap(UUID.init(uuidString:))
+                        )
+                        return try await PersistenceController.shared.deleteUserData(
+                            firebaseUserId: firebaseUserID,
+                            knownProfileIDs: AccountLocalDataCleaner.storedProfileIDs(
+                                firebaseUserID: firebaseUserID
+                            ).union(persistedProfileIDs)
                         )
                     },
                     clearFiles: { manifest in
@@ -233,12 +260,13 @@ final class AuthenticationService: ObservableObject {
     // MARK: - Sign In with Apple
     
     /// Generate a random nonce for Apple Sign In
-    func randomNonceString(length: Int = 32) -> String {
-        precondition(length > 0)
+    func randomNonceString(length: Int = 32) -> String? {
+        guard length > 0 else { return nil }
         var randomBytes = [UInt8](repeating: 0, count: length)
         let errorCode = SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes)
         if errorCode != errSecSuccess {
-            fatalError("Unable to generate nonce. SecRandomCopyBytes failed with OSStatus \(errorCode)")
+            print("Apple sign-in nonce generation failed with OSStatus \(errorCode)")
+            return nil
         }
         
         let charset: [Character] = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
@@ -256,8 +284,11 @@ final class AuthenticationService: ObservableObject {
     }
     
     /// Prepare for Apple Sign In - call before presenting ASAuthorizationController
-    func prepareAppleSignIn() -> String {
-        let nonce = randomNonceString()
+    func prepareAppleSignIn() -> String? {
+        guard let nonce = randomNonceString() else {
+            currentNonce = nil
+            return nil
+        }
         currentNonce = nonce
         return sha256(nonce)
     }
@@ -584,12 +615,20 @@ final class AuthenticationService: ObservableObject {
 
             // Arm the cross-device barrier before any throwable local cleanup. A stale
             // device must not be able to restore profile or onboarding KVS payloads.
+            let knownProfileIDs = AccountLocalDataCleaner.storedProfileIDs(
+                firebaseUserID: user.uid
+            )
+            UserDefaults.standard.set(
+                knownProfileIDs.map(\.uuidString).sorted(),
+                forKey: AccountLocalCleanupCoordinator.pendingProfileIDsKey
+            )
             iCloudManager.shared.resetAfterAccountDeletion(userID: user.uid)
             let localCleanupComplete = await AccountLocalCleanupCoordinator.run(
                 firebaseUserID: user.uid,
                 clearPersistence: {
                     try await PersistenceController.shared.deleteUserData(
-                        firebaseUserId: user.uid
+                        firebaseUserId: user.uid,
+                        knownProfileIDs: knownProfileIDs
                     )
                 },
                 clearFiles: { manifest in
@@ -641,8 +680,9 @@ final class AuthenticationService: ObservableObject {
 
     // MARK: - Sign Out
     
-    func signOut() throws {
+    func signOut() async throws {
         do {
+            PushTokenService.shared.unregisterCurrentUser()
             try Auth.auth().signOut()
             GIDSignIn.sharedInstance.signOut()
             clearLocalCaches()
@@ -805,12 +845,17 @@ final class AuthenticationService: ObservableObject {
 class AppleSignInCoordinator: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
     
     var onCompletion: ((Result<ASAuthorizationAppleIDCredential, Error>) -> Void)?
+    private var fallbackWindow: UIWindow?
     
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let window = windowScene.windows.first else {
-            fatalError("No window available")
+        if let windowScene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }),
+           let window = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first {
+            return window
         }
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        fallbackWindow = window
         return window
     }
     

@@ -1,5 +1,6 @@
 import SwiftUI
 import PDFKit
+import CryptoKit
 
 // MARK: - Shared load / cache (preview + prefetch before revealing storybook)
 
@@ -71,10 +72,6 @@ enum CoverPDFThumbnailService {
         if let hit = PDFThumbnailCache.shared.image(forKey: key) {
             return hit
         }
-        if let disk = PDFThumbnailDiskCache.shared.image(forKey: key) {
-            PDFThumbnailCache.shared.store(image: disk, forKey: key)
-            return disk
-        }
         return nil
     }
 
@@ -90,7 +87,9 @@ enum CoverPDFThumbnailService {
         if let mem = await MainActor.run(body: { PDFThumbnailCache.shared.image(forKey: key) }) {
             return mem
         }
-        if let disk = await MainActor.run(body: { PDFThumbnailDiskCache.shared.image(forKey: key) }) {
+        if let disk = await Task.detached(priority: .utility, operation: {
+            PDFThumbnailDiskCache.shared.image(forKey: key)
+        }).value {
             await MainActor.run {
                 PDFThumbnailCache.shared.store(image: disk, forKey: key)
             }
@@ -197,6 +196,46 @@ enum CoverPDFThumbnailService {
         let fullThumb = page.thumbnail(of: sanitizedSize, for: .mediaBox)
         let oriented = fullThumb.normalizedUpOrientation()
         return oriented.cropping(toNormalizedRect: panelRect)
+    }
+}
+
+enum DiskImageCachePolicy {
+    static func fileName(forKey key: String) -> String {
+        let digest = SHA256.hash(data: Data(key.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined() + ".jpg"
+    }
+
+    static func prune(directory: URL, maximumBytes: Int, maximumAge: TimeInterval) {
+        let fileManager = FileManager.default
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        let cutoff = Date().addingTimeInterval(-maximumAge)
+        var retained: [(url: URL, size: Int, modified: Date)] = []
+        for url in files {
+            let stem = url.deletingPathExtension().lastPathComponent
+            let isDeterministicName = stem.count == 64 && stem.allSatisfy { $0.isHexDigit }
+            guard isDeterministicName,
+                  let values = try? url.resourceValues(forKeys: keys),
+                  values.isRegularFile == true else {
+                try? fileManager.removeItem(at: url)
+                continue
+            }
+            let modified = values.contentModificationDate ?? .distantPast
+            if modified < cutoff {
+                try? fileManager.removeItem(at: url)
+            } else {
+                retained.append((url, values.fileSize ?? 0, modified))
+            }
+        }
+        var total = retained.reduce(0) { $0 + $1.size }
+        for entry in retained.sorted(by: { $0.modified < $1.modified }) where total > maximumBytes {
+            try? fileManager.removeItem(at: entry.url)
+            total -= entry.size
+        }
     }
 }
 
@@ -338,6 +377,13 @@ final class PDFThumbnailDiskCache {
             let dir = base.appendingPathComponent("memoir-cover-thumbs", isDirectory: true)
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
             self.directory = dir
+            queue.async {
+                DiskImageCachePolicy.prune(
+                    directory: dir,
+                    maximumBytes: 50 * 1024 * 1024,
+                    maximumAge: 30 * 24 * 60 * 60
+                )
+            }
         } else {
             self.directory = nil
         }
@@ -345,22 +391,30 @@ final class PDFThumbnailDiskCache {
 
     private func fileURL(forKey key: String) -> URL? {
         guard let directory else { return nil }
-        let hash = String(key.hashValue)
-        return directory.appendingPathComponent("\(hash).jpg", isDirectory: false)
+        return directory.appendingPathComponent(DiskImageCachePolicy.fileName(forKey: key), isDirectory: false)
     }
 
     func image(forKey key: String) -> UIImage? {
         guard let url = fileURL(forKey: key),
               let data = try? Data(contentsOf: url),
               let img = UIImage(data: data) else { return nil }
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
         return img
     }
 
     func store(image: UIImage, forKey key: String) {
-        guard let url = fileURL(forKey: key),
-              let data = image.jpegData(compressionQuality: 0.88) else { return }
+        guard let url = fileURL(forKey: key) else { return }
+        let cacheDirectory = directory
         queue.async {
+            guard let data = image.jpegData(compressionQuality: 0.88) else { return }
             try? data.write(to: url, options: .atomic)
+            if let directory = cacheDirectory {
+                DiskImageCachePolicy.prune(
+                    directory: directory,
+                    maximumBytes: 50 * 1024 * 1024,
+                    maximumAge: 30 * 24 * 60 * 60
+                )
+            }
         }
     }
 
@@ -385,6 +439,13 @@ final class IllustrationImageDiskCache {
             let dir = base.appendingPathComponent("memoir-illustrations", isDirectory: true)
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
             self.directory = dir
+            queue.async {
+                DiskImageCachePolicy.prune(
+                    directory: dir,
+                    maximumBytes: 300 * 1024 * 1024,
+                    maximumAge: 30 * 24 * 60 * 60
+                )
+            }
         } else {
             self.directory = nil
         }
@@ -392,22 +453,30 @@ final class IllustrationImageDiskCache {
 
     private func fileURL(forKey key: String) -> URL? {
         guard let directory else { return nil }
-        let hash = String(key.hashValue)
-        return directory.appendingPathComponent("\(hash).jpg", isDirectory: false)
+        return directory.appendingPathComponent(DiskImageCachePolicy.fileName(forKey: key), isDirectory: false)
     }
 
     func image(forKey key: String) -> UIImage? {
         guard let url = fileURL(forKey: key),
               let data = try? Data(contentsOf: url),
               let img = UIImage(data: data) else { return nil }
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
         return img
     }
 
     func store(image: UIImage, forKey key: String) {
-        guard let url = fileURL(forKey: key),
-              let data = image.jpegData(compressionQuality: 0.9) else { return }
+        guard let url = fileURL(forKey: key) else { return }
+        let cacheDirectory = directory
         queue.async {
+            guard let data = image.jpegData(compressionQuality: 0.9) else { return }
             try? data.write(to: url, options: .atomic)
+            if let directory = cacheDirectory {
+                DiskImageCachePolicy.prune(
+                    directory: directory,
+                    maximumBytes: 300 * 1024 * 1024,
+                    maximumAge: 30 * 24 * 60 * 60
+                )
+            }
         }
     }
 

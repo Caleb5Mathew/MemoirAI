@@ -29,7 +29,13 @@ const {
 const naming = require("./naming");
 const { createOrderMirrorHandler } = require("./purchasedBooks");
 const { opsAlertSmtpUrl, sendOpsAlert } = require("./opsAlerts");
+const {
+  buildArtifactFulfillmentIncident,
+  deliverFulfillmentIncidentAlert
+} = require("./fulfillmentIncident");
 const { createMemoryDeletionCleanupHandler } = require("./memoryDeletionCleanup");
+const { createRevokeSharedMemoryAccessHandler } = require("./sharedAccessRevocation");
+const { createSharedMemoryProjectionHandler } = require("./sharedMemoryProjection");
 const {
   memoryIndexBelongsToUser,
   memoryIndexClaimDecision
@@ -46,6 +52,7 @@ const {
 } = require("./checkoutReturnVerification");
 const {
   appendLuluStatusHistory,
+  buildPaidArtifactSnapshot,
   buildSingleBookOrderRecords,
   chooseMonotonicOrderStatus,
   claimOrderForFulfillment,
@@ -139,6 +146,8 @@ function orderRecordForOpsQueue(orderId, userId, data) {
     refundStatus: d.refundStatus || null,
     disputeStatus: d.disputeStatus || null,
     fulfillmentHold: Boolean(d.fulfillmentHold),
+    fulfillmentHoldReason: d.fulfillmentHoldReason || null,
+    isFulfillmentIncident: Boolean(d.isFulfillmentIncident),
     needsPrintAction: !d.fulfillmentHold && !d.luluPrintJobId &&
       (d.status === "paid" || d.status === "lulu_failed" ||
         (d.status === "pending_fulfillment" && !d.luluPrintJobId)),
@@ -1853,42 +1862,33 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
 
   const coverStoragePath = orderData.coverPdfStoragePath;
   const interiorStoragePath = orderData.interiorPdfStoragePath;
-  if (!coverStoragePath || !interiorStoragePath) {
-    throw new Error("Order missing PDF storage paths");
+  const coverGeneration = String(orderData.coverArtifactGeneration || "").trim();
+  const interiorGeneration = String(orderData.interiorArtifactGeneration || "").trim();
+  if (!coverStoragePath || !interiorStoragePath || !coverGeneration || !interiorGeneration) {
+    throw new Error("Order missing immutable PDF artifact identity");
   }
   const expectedPaths = canonicalBookArtifactPaths(userId, orderData.bookVersionId);
   assertCanonicalBookArtifact(coverStoragePath, expectedPaths.cover, "Cover");
   assertCanonicalBookArtifact(interiorStoragePath, expectedPaths.interior, "Interior");
 
+  const coverFile = bucket.file(coverStoragePath, { generation: coverGeneration });
+  const interiorFile = bucket.file(interiorStoragePath, { generation: interiorGeneration });
   const [coverExists, interiorExists] = await Promise.all([
-    bucket.file(coverStoragePath).exists(),
-    bucket.file(interiorStoragePath).exists()
+    coverFile.exists(),
+    interiorFile.exists()
   ]);
   if (!coverExists[0]) {
-    throw new Error("Cover PDF missing from Storage");
+    throw new Error(`Paid cover PDF generation ${coverGeneration} is unavailable`);
   }
   if (!interiorExists[0]) {
-    throw new Error("Interior PDF missing from Storage");
+    throw new Error(`Paid interior PDF generation ${interiorGeneration} is unavailable`);
   }
 
-  const bookSnap = await db.collection("users").doc(userId)
-    .collection("bookVersions").doc(orderData.bookVersionId).get();
-  const bookRecord = bookSnap.exists ? bookSnap.data() : {};
-  if (bookRecord.renderStatus !== "rendered") {
-    throw new Error(`bookVersion renderStatus=${bookRecord.renderStatus || "missing"}, expected rendered`);
+  const podPackageId = String(orderData.selectedPodPackageId || "").trim();
+  const pageCount = Number(orderData.pageCount || 0);
+  if (!podPackageId || !Number.isSafeInteger(pageCount) || pageCount <= 0) {
+    throw new Error("Order missing immutable POD package or page count");
   }
-
-  let podPackageId = orderData.selectedPodPackageId || null;
-  if (!podPackageId) {
-    const inputs = await getBookVersionOrderInputs(
-      userId,
-      orderData.bookVersionId,
-      orderData.selectedProductOptionId || null
-    );
-    podPackageId = inputs.podPackageId;
-  }
-
-  const pageCount = bookRecord.pageCount || bookRecord.pages?.length || 0;
   let luluAuthForSubmit = null;
   if (podPackageId && pageCount > 0) {
     try {
@@ -1902,7 +1902,7 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
       const expW = parseFloat(dims.width);
       const expH = parseFloat(dims.height);
       if (Number.isFinite(expW) && Number.isFinite(expH)) {
-        const [coverBuf] = await bucket.file(coverStoragePath).download();
+        const [coverBuf] = await coverFile.download();
         const coverPdf = await PDFDocument.load(coverBuf);
         const page0 = coverPdf.getPage(0);
         const { width: wPt, height: hPt } = page0.getSize();
@@ -1964,13 +1964,11 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
     }
 
     const [coverSignedUrl, interiorSignedUrl] = await Promise.all([
-      getSignedUrl(coverStoragePath),
-      getSignedUrl(interiorStoragePath)
+      getSignedUrl(coverStoragePath, coverGeneration),
+      getSignedUrl(interiorStoragePath, interiorGeneration)
     ]);
 
-    const firstPageTitle = bookRecord.pages?.[0]?.title || "Story";
-    const printTitleRaw = bookRecord.printTitle != null ? String(bookRecord.printTitle).trim() : "";
-    const chosenTitle = printTitleRaw || firstPageTitle;
+    const chosenTitle = String(claimedOrderData.printTitle || "").trim();
     const bookTitle = chosenTitle ? `${chosenTitle} (Story)` : "MemoirAI Story";
 
     const shippingAddress = claimedOrderData.shippingAddress || {};
@@ -2048,12 +2046,20 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
 // GCS V4 signed URLs cannot exceed 7 days (604800s). Use 23h to avoid clock-skew rejections.
 const GCS_MAX_SIGNED_URL_TTL_SEC = 82800;
 
-async function getSignedUrl(storagePath, expiresInSeconds = GCS_MAX_SIGNED_URL_TTL_SEC) {
+async function getSignedUrl(
+  storagePath,
+  generation,
+  expiresInSeconds = GCS_MAX_SIGNED_URL_TTL_SEC
+) {
+  const immutableGeneration = String(generation || "").trim();
+  if (!immutableGeneration) {
+    throw new Error("Signed artifact generation is required");
+  }
   const ttl = Math.min(
     Math.max(60, Math.floor(Number(expiresInSeconds) || GCS_MAX_SIGNED_URL_TTL_SEC)),
     GCS_MAX_SIGNED_URL_TTL_SEC
   );
-  const file = bucket.file(storagePath);
+  const file = bucket.file(storagePath, { generation: immutableGeneration });
   const [url] = await file.getSignedUrl({
     version: "v4",
     action: "read",
@@ -2095,13 +2101,16 @@ exports.adminGetOrderPdf = onRequest({ timeoutSeconds: 60, memory: "512MiB" }, a
   const storagePath = type === "cover"
     ? orderData.coverPdfStoragePath
     : orderData.interiorPdfStoragePath;
+  const generation = type === "cover"
+    ? orderData.coverArtifactGeneration
+    : orderData.interiorArtifactGeneration;
 
-  if (!storagePath) {
-    res.status(404).json({ error: `No ${type} PDF storage path on order` });
+  if (!storagePath || !generation) {
+    res.status(404).json({ error: `No immutable ${type} PDF identity on order` });
     return;
   }
 
-  const file = bucket.file(storagePath);
+  const file = bucket.file(storagePath, { generation: String(generation) });
   const [exists] = await file.exists();
   if (!exists) { res.status(404).json({ error: `${type} PDF not found in storage` }); return; }
 
@@ -3428,6 +3437,8 @@ exports.createCheckoutSession = onCall(
     const expectedFulfillmentItem = {
       bookVersionId,
       selectedPodPackageId: selectedOption.podPackageId,
+      pageCount,
+      printTitle: printTitleFromBookVersionRecord(record),
       fulfillmentFingerprint: checkoutFulfillmentFingerprint(
         record,
         selectedOption.podPackageId
@@ -3895,7 +3906,15 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
         coverStoragePath: expected.cover,
         pdfStoragePath: expected.interior,
         coverURL: validated.coverURL,
-        pdfURL: validated.pdfURL
+        pdfURL: validated.pdfURL,
+        coverArtifactGeneration: String(validated.coverArtifactGeneration || ""),
+        coverArtifactSize: Number(validated.coverArtifactSize || 0),
+        pdfArtifactGeneration: String(validated.pdfArtifactGeneration || ""),
+        pdfArtifactSize: Number(validated.pdfArtifactSize || 0),
+        fulfillmentSnapshot: buildPaidArtifactSnapshot({
+          bookVersion: validated,
+          checkoutItem: item
+        })
       });
     }
   } catch (error) {
@@ -3904,7 +3923,17 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
       stripeSessionId: session.id,
       error: String(error?.message || error)
     });
-    await pendRef.set({
+    const incident = buildArtifactFulfillmentIncident({
+      stripeSession: session,
+      checkoutKind: "cart",
+      userId: userIdFromMeta,
+      cartOrderGroupId,
+      bookVersionIds: (pend.items || []).map((item) => item?.bookVersionId),
+      serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
+    });
+    const incidentRef = db.collection("fulfillmentIncidents").doc(incident.incidentId);
+    const holdBatch = db.batch();
+    holdBatch.set(pendRef, {
       status: "paid_fulfillment_hold",
       fulfillmentHold: true,
       fulfillmentHoldReason: "book_artifacts_changed_after_payment",
@@ -3913,17 +3942,22 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
       paidAt: admin.firestore.FieldValue.serverTimestamp(),
       fulfillmentHoldAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
+    holdBatch.set(incidentRef, incident, { merge: true });
+    await holdBatch.commit();
     await releaseCheckoutLease({
       db,
       userId: userIdFromMeta,
       leaseId: pend.checkoutLeaseId
     }).catch(() => {});
-    sendOpsAlert(
-      `Paid cart needs refund review — ${cartOrderGroupId}`,
-      `Stripe session ${session.id} was paid, but its book artifacts changed before order creation.\n` +
-        `User: ${userIdFromMeta}\nCart: ${cartOrderGroupId}\n\n` +
-        "Do not print. Review and refund or rebuild the exact paid artifacts in Stripe/Firestore."
-    ).catch(() => {});
+    await deliverFulfillmentIncidentAlert({
+      incidentRef,
+      incident,
+      sendAlert: sendOpsAlert,
+      serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+      increment: (value) => admin.firestore.FieldValue.increment(value)
+    }).catch((alertError) => {
+      console.error("Paid cart incident alert persistence failed", String(alertError?.message || alertError));
+    });
     return { ok: false, reason: "fulfillment_hold_artifacts_changed" };
   }
   if (validatedItems.length === 0) {
@@ -3957,7 +3991,9 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
       shippingAddress,
       shippingLevel,
       selectedProductOptionId: item.productOptionId || null,
-      selectedPodPackageId: item.selectedPodPackageId || null,
+      selectedPodPackageId: item.fulfillmentSnapshot.selectedPodPackageId,
+      pageCount: item.fulfillmentSnapshot.pageCount,
+      fulfillmentFingerprint: item.fulfillmentSnapshot.fulfillmentFingerprint,
       quantity: qty,
       unitCents: unit,
       lineTotalCents: lineTotal,
@@ -3965,12 +4001,16 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
         totalCents: lineTotal,
         currency: "usd"
       },
-      printTitle: item.printTitle || null,
+      printTitle: item.fulfillmentSnapshot.printTitle,
       productTitle: item.productTitle || null,
       bookDisplayName: item.bookDisplayName || null,
       userHandle: item.userHandle || null,
       coverPdfStoragePath: item.coverStoragePath,
       interiorPdfStoragePath: item.pdfStoragePath,
+      coverArtifactGeneration: item.coverArtifactGeneration,
+      coverArtifactSize: item.coverArtifactSize,
+      interiorArtifactGeneration: item.pdfArtifactGeneration,
+      interiorArtifactSize: item.pdfArtifactSize,
       coverURL: item.coverURL || null,
       pdfURL: item.pdfURL || null,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -4228,7 +4268,16 @@ async function commitPaidSingleCheckoutFromStripeSession(session, { isStripeTest
       bookVersionId,
       error: String(error?.message || error)
     });
-    await pendingSingleRef.set({
+    const incident = buildArtifactFulfillmentIncident({
+      stripeSession: session,
+      checkoutKind: "single_book",
+      userId,
+      bookVersionIds: [bookVersionId],
+      serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
+    });
+    const incidentRef = db.collection("fulfillmentIncidents").doc(incident.incidentId);
+    const holdBatch = db.batch();
+    holdBatch.set(pendingSingleRef, {
       status: "paid_fulfillment_hold",
       fulfillmentHold: true,
       fulfillmentHoldReason: "book_artifacts_changed_after_payment",
@@ -4236,13 +4285,18 @@ async function commitPaidSingleCheckoutFromStripeSession(session, { isStripeTest
       paidAt: admin.firestore.FieldValue.serverTimestamp(),
       fulfillmentHoldAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
+    holdBatch.set(incidentRef, incident, { merge: true });
+    await holdBatch.commit();
     await releaseCheckoutLease({ db, userId, leaseId: meta.checkoutLeaseId }).catch(() => {});
-    sendOpsAlert(
-      `Paid book needs refund review — ${session.id}`,
-      `Stripe session ${session.id} was paid, but its book artifacts changed before order creation.\n` +
-        `User: ${userId}\nBook: ${bookVersionId}\n\n` +
-        "Do not print. Review and refund or rebuild the exact paid artifacts in Stripe/Firestore."
-    ).catch(() => {});
+    await deliverFulfillmentIncidentAlert({
+      incidentRef,
+      incident,
+      sendAlert: sendOpsAlert,
+      serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+      increment: (value) => admin.firestore.FieldValue.increment(value)
+    }).catch((alertError) => {
+      console.error("Paid single incident alert persistence failed", String(alertError?.message || alertError));
+    });
     return { ok: false, reason: "fulfillment_hold_artifacts_changed" };
   }
   const records = buildSingleBookOrderRecords({
@@ -4251,6 +4305,7 @@ async function commitPaidSingleCheckoutFromStripeSession(session, { isStripeTest
       ...bookVersion,
       printTitle: printTitleFromBookVersionRecord(bookVersion)
     },
+    expectedFulfillmentItem: pendingSingle.expectedFulfillmentItem,
     shippingAddress,
     isStripeTestMode,
     serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
@@ -4802,14 +4857,42 @@ exports.reconcilePendingCartCheckouts = onSchedule(
       console.error("reconcilePendingCartCheckouts: single checkout query failed");
     }
 
-    if (processed > 0 || !snap.empty || singleCandidateCount > 0) {
+    let incidentCandidateCount = 0;
+    try {
+      const incidentSnap = await db.collection("fulfillmentIncidents")
+        .where("alertDelivered", "==", false)
+        .limit(40)
+        .get();
+      incidentCandidateCount = incidentSnap.size;
+      for (const incidentDoc of incidentSnap.docs) {
+        const incident = incidentDoc.data() || {};
+        if (incident.status !== "open" || !incident.alertSubject || !incident.alertBody) {
+          continue;
+        }
+        await deliverFulfillmentIncidentAlert({
+          incidentRef: incidentDoc.ref,
+          incident,
+          sendAlert: sendOpsAlert,
+          serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+          increment: (value) => admin.firestore.FieldValue.increment(value)
+        });
+        processed += 1;
+      }
+    } catch (error) {
+      console.error(
+        "reconcilePendingCartCheckouts: fulfillment incident alert retry failed",
+        String(error?.message || error)
+      );
+    }
+
+    if (processed > 0 || !snap.empty || singleCandidateCount > 0 || incidentCandidateCount > 0) {
       console.log(
         JSON.stringify({
           msg: "reconcilePendingCartCheckouts:run_complete",
           debugId,
           stage: "complete",
           processed,
-          candidateDocs: snap.size + singleCandidateCount,
+          candidateDocs: snap.size + singleCandidateCount + incidentCandidateCount,
           elapsedMs: Date.now() - runStartMs
         })
       );
@@ -4833,6 +4916,33 @@ exports.adminListPrintOrders = onCall({ timeoutSeconds: 120 }, async (request) =
     if (!userId) continue;
     userIds.add(userId);
     all.push(orderRecordForOpsQueue(orderDoc.id, userId, data));
+  }
+  const incidentsSnap = await db.collection("fulfillmentIncidents")
+    .where("status", "==", "open")
+    .limit(lim)
+    .get();
+  for (const incidentDoc of incidentsSnap.docs) {
+    const incident = incidentDoc.data() || {};
+    const userId = String(incident.userId || "").trim();
+    if (!userId) continue;
+    userIds.add(userId);
+    all.push(orderRecordForOpsQueue(incidentDoc.id, userId, {
+      orderId: incidentDoc.id,
+      status: "paid_fulfillment_hold",
+      fulfillmentHold: true,
+      fulfillmentHoldReason: incident.incidentType || "paid_artifact_mismatch",
+      isFulfillmentIncident: true,
+      customerEmail: incident.customerEmail || null,
+      printTitle: "Paid checkout incident",
+      bookDisplayName: (incident.bookVersionIds || []).join(", "),
+      totalCents: incident.amountTotal,
+      pricing: { totalCents: incident.amountTotal, currency: incident.currency || "usd" },
+      stripePaymentIntentId: incident.stripePaymentIntentId || null,
+      stripeSessionId: incident.stripeSessionId || null,
+      luluError: "Exact paid PDF generation changed or became unavailable. Refund or restore before printing.",
+      createdAt: incident.createdAt,
+      updatedAt: incident.updatedAt
+    }));
   }
   const sortByCreated = (a, b) => {
     const ta = a.createdAt || "";
@@ -4864,6 +4974,7 @@ exports.adminListPrintOrders = onCall({ timeoutSeconds: 120 }, async (request) =
     stats: {
       totalOrders: all.length,
       needsPrint: pending.length,
+      fulfillmentIncidents: incidentsSnap.size,
       totalRevenueCents,
       totalProfitCents,
       statusCounts
@@ -4960,10 +5071,12 @@ exports.adminVerifyOrderPdfs = onCall(
 
     const coverStoragePath = orderData.coverPdfStoragePath;
     const interiorStoragePath = orderData.interiorPdfStoragePath;
-    if (!coverStoragePath || !interiorStoragePath) {
+    const coverGeneration = String(orderData.coverArtifactGeneration || "").trim();
+    const interiorGeneration = String(orderData.interiorArtifactGeneration || "").trim();
+    if (!coverStoragePath || !interiorStoragePath || !coverGeneration || !interiorGeneration) {
       throw new HttpsError(
         "failed-precondition",
-        "Order is missing PDF storage paths. The book may not have been rendered yet."
+        "Order is missing immutable PDF artifact identity. The book may not have been rendered before payment."
       );
     }
     try {
@@ -4974,49 +5087,38 @@ exports.adminVerifyOrderPdfs = onCall(
       throw new HttpsError("failed-precondition", "Order PDF storage paths are invalid.");
     }
 
-    // Use the Firebase Storage download URLs already on the order — no signed URLs needed for preview.
-    // Signed URLs are only required by Lulu (generated at submit time in fulfillOrder).
-    const coverDownloadUrl = orderData.coverURL || null;
-    const interiorDownloadUrl = orderData.pdfURL || null;
+    const podPackageId = String(orderData.selectedPodPackageId || "").trim() || null;
+    const pageCountValue = Number(orderData.pageCount || 0);
+    const pageCount = Number.isSafeInteger(pageCountValue) && pageCountValue > 0
+      ? pageCountValue
+      : null;
 
-    // podPackageId and pageCount match the logic in submitPaidOrderToLulu
-    let podPackageId = orderData.selectedPodPackageId || null;
-    if (!podPackageId) {
-      try {
-        const inputs = await getBookVersionOrderInputs(
-          targetUserId,
-          orderData.bookVersionId,
-          orderData.selectedProductOptionId || null
-        );
-        podPackageId = inputs.podPackageId || null;
-      } catch (_) { /* non-fatal — will surface as missing below */ }
-    }
+    const coverFile = bucket.file(coverStoragePath, { generation: coverGeneration });
+    const interiorFile = bucket.file(interiorStoragePath, { generation: interiorGeneration });
 
-    // pageCount lives on the bookVersion doc, not the order
-    let pageCount = null;
-    if (orderData.bookVersionId) {
-      try {
-        const bvSnap = await db.collection("users").doc(targetUserId)
-          .collection("bookVersions").doc(orderData.bookVersionId).get();
-        const bv = bvSnap.exists ? bvSnap.data() : {};
-        pageCount = bv.pageCount || bv.pages?.length || null;
-      } catch (_) { /* non-fatal */ }
-    }
-
-    // Check file existence and sizes from GCS metadata (direct bucket access, no signing)
+    // Check the exact paid generations, never the mutable latest object at these paths.
     const [coverExistsArr, interiorExistsArr] = await Promise.all([
-      bucket.file(coverStoragePath).exists(),
-      bucket.file(interiorStoragePath).exists()
+      coverFile.exists(),
+      interiorFile.exists()
     ]);
     const coverExists = coverExistsArr[0];
     const interiorExists = interiorExistsArr[0];
+    const previewExpiry = Date.now() + 15 * 60 * 1000;
+    const [coverDownloadUrl, interiorDownloadUrl] = await Promise.all([
+      coverExists
+        ? coverFile.getSignedUrl({ version: "v4", action: "read", expires: previewExpiry }).then(([url]) => url)
+        : Promise.resolve(null),
+      interiorExists
+        ? interiorFile.getSignedUrl({ version: "v4", action: "read", expires: previewExpiry }).then(([url]) => url)
+        : Promise.resolve(null)
+    ]);
 
     let interiorFileSizeBytes = null;
     let coverFileSizeBytes = null;
     try {
       const metaResults = await Promise.all([
-        interiorExists ? bucket.file(interiorStoragePath).getMetadata() : Promise.resolve([null]),
-        coverExists ? bucket.file(coverStoragePath).getMetadata() : Promise.resolve([null])
+        interiorExists ? interiorFile.getMetadata() : Promise.resolve([null]),
+        coverExists ? coverFile.getMetadata() : Promise.resolve([null])
       ]);
       interiorFileSizeBytes = metaResults[0][0]?.size ? parseInt(metaResults[0][0].size, 10) : null;
       coverFileSizeBytes = metaResults[1][0]?.size ? parseInt(metaResults[1][0].size, 10) : null;
@@ -5041,7 +5143,7 @@ exports.adminVerifyOrderPdfs = onCall(
         // Download cover PDF once and run Lulu API calls in parallel
         const [luluAuth, [coverBuf]] = await Promise.all([
           getLuluAccessToken(),
-          bucket.file(coverStoragePath).download()
+          coverFile.download()
         ]);
 
         const [dims, costResult] = await Promise.all([
@@ -5221,6 +5323,14 @@ exports.onMemoryDisplayNaming = onDocumentCreated(
   }
 );
 
+exports.onMemorySharedProjection = onDocumentWritten(
+  { document: "users/{userId}/memories/{memoryId}", retry: true },
+  createSharedMemoryProjectionHandler({
+    db,
+    serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
+  })
+);
+
 exports.onMemoryIndexCleanup = onDocumentDeleted(
   { document: "users/{userId}/memories/{memoryId}", retry: true },
   createMemoryDeletionCleanupHandler({
@@ -5245,6 +5355,19 @@ exports.deleteOwnAccount = onCall(
   })
 );
 
+exports.revokeSharedMemoryAccess = onCall(
+  {
+    timeoutSeconds: 30,
+    enforceAppCheck: isAppCheckEnforced()
+  },
+  createRevokeSharedMemoryAccessHandler({
+    db,
+    bucket,
+    HttpsError,
+    serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
+  })
+);
+
 // Family and friends: push the owner when someone requests access to their memories.
 // Best-effort — a missing/stale token just means they see the in-app banner instead.
 exports.onAccessRequestNotifyOwner = onDocumentCreated(
@@ -5257,12 +5380,11 @@ exports.onAccessRequestNotifyOwner = onDocumentCreated(
       const ownerDoc = await db.collection("users").doc(ownerId).get();
       const token = String(ownerDoc.data()?.fcmToken || "").trim();
       if (!token) return;
-      const requesterName = String(snap.data()?.requesterDisplayName || "Someone").slice(0, 80);
       await admin.messaging().send({
         token,
         notification: {
           title: "Memoir access request",
-          body: `${requesterName} asked to hear your memories. Open Memoir to approve.`
+          body: "Someone asked to hear a memory. Open Memoir to review the request."
         },
         apns: {
           payload: { aps: { sound: "default", badge: 1 } }

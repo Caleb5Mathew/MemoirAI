@@ -14,9 +14,30 @@ function stripeSessionOrderId(sessionId) {
   return `ord_stripe_${digest}`;
 }
 
+function buildPaidArtifactSnapshot({ bookVersion, checkoutItem }) {
+  const record = bookVersion && typeof bookVersion === "object" ? bookVersion : {};
+  const item = checkoutItem && typeof checkoutItem === "object" ? checkoutItem : {};
+  const pageCount = Number(record.pageCount || record.pages?.length || 0);
+  const selectedPodPackageId = String(item.selectedPodPackageId || "").trim();
+  if (!Number.isSafeInteger(pageCount) || pageCount <= 0 || !selectedPodPackageId) {
+    throw new Error("Paid fulfillment snapshot is incomplete");
+  }
+  return {
+    pageCount,
+    selectedPodPackageId,
+    printTitle: item.printTitle || record.printTitle || null,
+    fulfillmentFingerprint: String(item.fulfillmentFingerprint || ""),
+    coverArtifactGeneration: String(record.coverArtifactGeneration || ""),
+    coverArtifactSize: Number(record.coverArtifactSize || 0),
+    interiorArtifactGeneration: String(record.pdfArtifactGeneration || ""),
+    interiorArtifactSize: Number(record.pdfArtifactSize || 0)
+  };
+}
+
 function buildSingleBookOrderRecords({
   session,
   bookVersion,
+  expectedFulfillmentItem,
   shippingAddress,
   isStripeTestMode,
   serverTimestamp
@@ -33,7 +54,15 @@ function buildSingleBookOrderRecords({
   if (!Number.isSafeInteger(lineTotalCents) || lineTotalCents <= 0) {
     throw new Error("Invalid single-book checkout total");
   }
-  const printTitle = bookVersion.printTitle || null;
+  const artifactSnapshot = buildPaidArtifactSnapshot({
+    bookVersion,
+    checkoutItem: {
+      ...(expectedFulfillmentItem || {}),
+      selectedPodPackageId: meta.selectedPodPackageId || expectedFulfillmentItem?.selectedPodPackageId,
+      printTitle: expectedFulfillmentItem?.printTitle || bookVersion.printTitle || null
+    }
+  });
+  const printTitle = artifactSnapshot.printTitle;
   const profileId = bookVersion.profileId != null ? String(bookVersion.profileId) : null;
   const customerEmail = session.customer_details?.email || session.customer_email || null;
   const item = {
@@ -41,12 +70,18 @@ function buildSingleBookOrderRecords({
     profileId,
     printTitle,
     productOptionId: meta.selectedProductOptionId || null,
-    selectedPodPackageId: meta.selectedPodPackageId || null,
+    selectedPodPackageId: artifactSnapshot.selectedPodPackageId,
+    pageCount: artifactSnapshot.pageCount,
+    fulfillmentFingerprint: artifactSnapshot.fulfillmentFingerprint,
     quantity: 1,
     unitCents: lineTotalCents,
     lineTotalCents,
     coverStoragePath: meta.coverStoragePath,
     pdfStoragePath: meta.pdfStoragePath,
+    coverArtifactGeneration: artifactSnapshot.coverArtifactGeneration,
+    coverArtifactSize: artifactSnapshot.coverArtifactSize,
+    pdfArtifactGeneration: artifactSnapshot.interiorArtifactGeneration,
+    pdfArtifactSize: artifactSnapshot.interiorArtifactSize,
     coverURL: bookVersion.coverURL || null,
     pdfURL: bookVersion.pdfURL || null,
     bookDisplayName: bookVersion.bookDisplayName || null,
@@ -66,7 +101,9 @@ function buildSingleBookOrderRecords({
     shippingAddress,
     shippingLevel: meta.shippingLevel || "MAIL",
     selectedProductOptionId: meta.selectedProductOptionId || null,
-    selectedPodPackageId: meta.selectedPodPackageId || null,
+    selectedPodPackageId: artifactSnapshot.selectedPodPackageId,
+    pageCount: artifactSnapshot.pageCount,
+    fulfillmentFingerprint: artifactSnapshot.fulfillmentFingerprint,
     quantity: 1,
     unitCents: lineTotalCents,
     lineTotalCents,
@@ -77,6 +114,10 @@ function buildSingleBookOrderRecords({
     userHandle: bookVersion.userHandle || null,
     coverPdfStoragePath: meta.coverStoragePath,
     interiorPdfStoragePath: meta.pdfStoragePath,
+    coverArtifactGeneration: artifactSnapshot.coverArtifactGeneration,
+    coverArtifactSize: artifactSnapshot.coverArtifactSize,
+    interiorArtifactGeneration: artifactSnapshot.interiorArtifactGeneration,
+    interiorArtifactSize: artifactSnapshot.interiorArtifactSize,
     coverURL: bookVersion.coverURL || null,
     pdfURL: bookVersion.pdfURL || null,
     createdAt: serverTimestamp(),
@@ -287,6 +328,7 @@ module.exports = {
   FULFILLMENT_LEASE_MILLIS,
   LULU_STATUS_HISTORY_LIMIT,
   appendLuluStatusHistory,
+  buildPaidArtifactSnapshot,
   buildSingleBookOrderRecords,
   chooseMonotonicOrderStatus,
   claimOrderForFulfillment,

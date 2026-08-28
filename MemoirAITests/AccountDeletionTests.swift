@@ -41,27 +41,30 @@ struct AccountDeletionTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         var cacheClears = 0
+        var fileClears = 0
         let failed = await AccountLocalCleanupCoordinator.run(
             firebaseUserID: "user-a",
             defaults: defaults,
             clearPersistence: { throw CleanupFailure() },
-            clearFiles: { _ in },
+            clearFiles: { _ in fileClears += 1 },
             clearCaches: { cacheClears += 1 }
         )
         #expect(!failed)
         #expect(defaults.bool(forKey: AccountLocalCleanupCoordinator.pendingKey))
-        #expect(cacheClears == 1)
+        #expect(cacheClears == 0)
+        #expect(fileClears == 0)
 
         let succeeded = await AccountLocalCleanupCoordinator.run(
             firebaseUserID: "user-a",
             defaults: defaults,
             clearPersistence: { .empty },
-            clearFiles: { _ in },
+            clearFiles: { _ in fileClears += 1 },
             clearCaches: { cacheClears += 1 }
         )
         #expect(succeeded)
         #expect(defaults.object(forKey: AccountLocalCleanupCoordinator.pendingKey) == nil)
-        #expect(cacheClears == 2)
+        #expect(cacheClears == 1)
+        #expect(fileClears == 1)
     }
 
     @MainActor
@@ -204,5 +207,13 @@ struct AccountDeletionTests {
         #expect(try context.count(for: photoRequest) == 0)
         let characterRequest = NSFetchRequest<NSManagedObject>(entityName: "GlobalCharacter")
         #expect(try context.count(for: characterRequest) == 1)
+    }
+
+    @Test func profileFileIDsRemainAvailableForCharacterCleanup() throws {
+        let first = Profile(name: "First")
+        let second = Profile(name: "Second")
+        let data = try JSONEncoder().encode([first, second])
+        #expect(AccountLocalDataCleaner.profileIDs(fromProfileData: data) == [first.id, second.id])
+        #expect(AccountLocalDataCleaner.profileIDs(fromProfileData: Data([0xFF])).isEmpty)
     }
 }

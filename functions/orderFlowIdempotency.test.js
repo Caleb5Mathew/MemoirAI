@@ -3,6 +3,7 @@
 const assert = require("assert");
 const {
   appendLuluStatusHistory,
+  buildPaidArtifactSnapshot,
   buildSingleBookOrderRecords,
   chooseMonotonicOrderStatus,
   claimOrderForFulfillment,
@@ -78,7 +79,17 @@ async function run() {
       profileId: "profile-1",
       printTitle: "A Life Story",
       coverURL: "https://example.com/cover.pdf",
-      pdfURL: "https://example.com/interior.pdf"
+      pdfURL: "https://example.com/interior.pdf",
+      coverArtifactGeneration: "17",
+      coverArtifactSize: 1024,
+      pdfArtifactGeneration: "18",
+      pdfArtifactSize: 2048,
+      pageCount: 48
+    },
+    expectedFulfillmentItem: {
+      selectedPodPackageId: "0850X1100FCSTDPB080CW444MXX",
+      fulfillmentFingerprint: "paid-fingerprint",
+      printTitle: "Paid Title"
     },
     shippingAddress: { name: "Buyer" },
     isStripeTestMode: false,
@@ -87,7 +98,38 @@ async function run() {
   assert.strictEqual(records.orderData.orderId, orderId);
   assert.strictEqual(records.orderData.status, "paid");
   assert.strictEqual(records.paidCheckoutData.items.length, 1);
+  assert.strictEqual(records.orderData.coverArtifactGeneration, "17");
+  assert.strictEqual(records.orderData.interiorArtifactGeneration, "18");
+  assert.strictEqual(records.paidCheckoutData.items[0].pdfArtifactSize, 2048);
+  assert.strictEqual(records.orderData.pageCount, 48);
+  assert.strictEqual(records.orderData.printTitle, "Paid Title");
+  assert.strictEqual(records.orderData.selectedPodPackageId, "0850X1100FCSTDPB080CW444MXX");
+  assert.strictEqual(records.orderData.fulfillmentFingerprint, "paid-fingerprint");
   assert.strictEqual(records.bookVersionData.lastPaidStripeSessionId, sessionId);
+
+  const immutableSnapshot = buildPaidArtifactSnapshot({
+    bookVersion: {
+      pageCount: 48,
+      printTitle: "Mutable live title",
+      coverArtifactGeneration: "17",
+      pdfArtifactGeneration: "18"
+    },
+    checkoutItem: {
+      selectedPodPackageId: "paid-pod",
+      printTitle: "Paid Title",
+      fulfillmentFingerprint: "paid-fingerprint"
+    }
+  });
+  assert.deepStrictEqual(immutableSnapshot, {
+    pageCount: 48,
+    selectedPodPackageId: "paid-pod",
+    printTitle: "Paid Title",
+    fulfillmentFingerprint: "paid-fingerprint",
+    coverArtifactGeneration: "17",
+    coverArtifactSize: 0,
+    interiorArtifactGeneration: "18",
+    interiorArtifactSize: 0
+  });
   assert.deepStrictEqual(missingCartSessionDisposition({
     attemptStripeSessionId: "cs_recovered",
     existingOrderCount: 0

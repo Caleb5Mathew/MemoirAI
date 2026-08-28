@@ -19,8 +19,35 @@ struct AccountLocalCleanupManifest {
     )
 }
 import Foundation
+import SwiftUI
+
+@MainActor
+final class PersistenceLoadMonitor: ObservableObject {
+    enum State: Equatable {
+        case loading
+        case ready
+        case failed(String)
+    }
+
+    static let shared = PersistenceLoadMonitor()
+    @Published private(set) var state: State = .loading
+
+    private init() {}
+
+    func report(_ error: NSError) {
+        state = .failed(PersistenceConfigurationPolicy.recoveryMessage(error: error))
+    }
+
+    func markReady() {
+        state = .ready
+    }
+}
 
 enum PersistenceConfigurationPolicy {
+    static func allowsApplicationContent(state: PersistenceLoadMonitor.State) -> Bool {
+        state == .ready
+    }
+
     static func usesCloudKit(inMemory: Bool, isRunningTests: Bool) -> Bool {
         !inMemory && !isRunningTests
     }
@@ -29,6 +56,43 @@ enum PersistenceConfigurationPolicy {
         attemptedCloudKit
             && error.domain == NSCocoaErrorDomain
             && [134060, 134400].contains(error.code)
+    }
+
+    static func recoveryMessage(error: NSError) -> String {
+        "Memoir could not open its saved data. Your existing store was preserved. Free device storage, restart the app, and contact support if this continues. (\(error.code))"
+    }
+}
+
+enum RecordingOrphanCleanup {
+    static func removeStaleRecordings(
+        in directory: URL,
+        referencedFileURLs: Set<URL>,
+        now: Date,
+        gracePeriod: TimeInterval = 30 * 24 * 60 * 60,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        let candidates = (try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        var removed: [URL] = []
+        for url in candidates {
+            guard ["m4a", "caf"].contains(url.pathExtension.lowercased()),
+                  UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil,
+                  !referencedFileURLs.contains(url),
+                  let modifiedAt = try? url.resourceValues(
+                    forKeys: [.contentModificationDateKey]
+                  ).contentModificationDate,
+                  now.timeIntervalSince(modifiedAt) >= gracePeriod else { continue }
+            do {
+                try fileManager.removeItem(at: url)
+                removed.append(url)
+            } catch {
+                print("Recording orphan cleanup failed for \(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        return removed
     }
 }
 
@@ -51,8 +115,7 @@ struct PersistenceController {
         do {
             try ctx.save()
         } catch {
-            let nsError = error as NSError
-            fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
+            print("Preview data save failed: \(error.localizedDescription)")
         }
 
         return controller
@@ -65,13 +128,13 @@ struct PersistenceController {
         let persistentContainer = NSPersistentCloudKitContainer(name: "MemoirDataModel")
         container = persistentContainer
 
-        if inMemory {
-            persistentContainer.persistentStoreDescriptions.first!.url =
-                URL(fileURLWithPath: "/dev/null")
+        let description = persistentContainer.persistentStoreDescriptions.first
+            ?? NSPersistentStoreDescription()
+        if persistentContainer.persistentStoreDescriptions.isEmpty {
+            persistentContainer.persistentStoreDescriptions = [description]
         }
-
-        guard let description = persistentContainer.persistentStoreDescriptions.first else {
-            fatalError("Failed to retrieve a persistent store description.")
+        if inMemory {
+            description.url = URL(fileURLWithPath: "/dev/null")
         }
 
         description.shouldMigrateStoreAutomatically = true
@@ -96,20 +159,34 @@ struct PersistenceController {
                     error: error,
                     attemptedCloudKit: attemptedCloudKit
                 ) else {
-                    fatalError("Unresolved error \(error), \(error.userInfo)")
+                    Self.loadEmergencyInMemoryStore(
+                        container: persistentContainer,
+                        originalError: error
+                    )
+                    return
                 }
                 description.cloudKitContainerOptions = nil
                 persistentContainer.loadPersistentStores { localDescription, localError in
                     if let localError = localError as NSError? {
-                        fatalError("Local Core Data fallback failed \(localError), \(localError.userInfo)")
+                        Self.loadEmergencyInMemoryStore(
+                            container: persistentContainer,
+                            originalError: localError
+                        )
+                        return
                     }
                     print("⚠️ CloudKit unavailable (\(error.code)); local Core Data fallback loaded")
                     print("✅ CloudKit container: \(localDescription.cloudKitContainerOptions?.containerIdentifier ?? "None")")
+                    Task { @MainActor in
+                        PersistenceLoadMonitor.shared.markReady()
+                    }
                 }
                 return
             }
             print("✅ Core Data store loaded successfully")
             print("✅ CloudKit container: \(storeDescription.cloudKitContainerOptions?.containerIdentifier ?? "None")")
+            Task { @MainActor in
+                PersistenceLoadMonitor.shared.markReady()
+            }
         })
 
         container.viewContext.automaticallyMergesChangesFromParent = true
@@ -117,6 +194,27 @@ struct PersistenceController {
         
         // Ensure fresh data on every fetch (no staleness)
         container.viewContext.stalenessInterval = 0
+    }
+
+    private static func loadEmergencyInMemoryStore(
+        container: NSPersistentCloudKitContainer,
+        originalError: NSError
+    ) {
+        let emergencyDescription = NSPersistentStoreDescription()
+        emergencyDescription.type = NSInMemoryStoreType
+        emergencyDescription.url = URL(fileURLWithPath: "/dev/null")
+        emergencyDescription.cloudKitContainerOptions = nil
+        container.persistentStoreDescriptions = [emergencyDescription]
+        container.loadPersistentStores { _, emergencyError in
+            if let emergencyError {
+                print("Emergency Core Data store failed: \(emergencyError.localizedDescription)")
+            } else {
+                print("Loaded emergency in-memory Core Data store; original store remains untouched")
+            }
+            Task { @MainActor in
+                PersistenceLoadMonitor.shared.report(originalError)
+            }
+        }
     }
     
 }
@@ -141,7 +239,10 @@ extension PersistenceController {
 
     /// Deletes through a managed object context so the removals are exported to
     /// the user's private CloudKit database instead of bypassing mirroring at SQL level.
-    func deleteUserData(firebaseUserId: String) async throws -> AccountLocalCleanupManifest {
+    func deleteUserData(
+        firebaseUserId: String,
+        knownProfileIDs: Set<UUID> = []
+    ) async throws -> AccountLocalCleanupManifest {
         let context = container.newBackgroundContext()
         context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
         let manifest: AccountLocalCleanupManifest = try await context.perform {
@@ -149,7 +250,7 @@ extension PersistenceController {
             memoryRequest.predicate = NSPredicate(format: "firebaseUserId == %@", firebaseUserId)
             memoryRequest.fetchBatchSize = 100
             let memories = try context.fetch(memoryRequest)
-            let profileIDs = Set(memories.compactMap(\.profileID))
+            var profileIDs = Set(memories.compactMap(\.profileID)).union(knownProfileIDs)
             let memoryIDs = Set(memories.compactMap(\.id))
             let urls = memories.compactMap(\.audioFileURL)
                 .compactMap(URL.init(string:))
@@ -159,12 +260,17 @@ extension PersistenceController {
                 context.delete(memory)
             }
 
-            if !profileIDs.isEmpty {
-                let characterRequest: NSFetchRequest<GlobalCharacter> = GlobalCharacter.fetchRequest()
-                characterRequest.predicate = NSPredicate(format: "profileID IN %@", Array(profileIDs))
-                for character in try context.fetch(characterRequest) {
-                    context.delete(character)
-                }
+            let characterRequest: NSFetchRequest<GlobalCharacter> = GlobalCharacter.fetchRequest()
+            characterRequest.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [
+                NSPredicate(format: "firebaseUserId == %@", firebaseUserId),
+                NSPredicate(
+                    format: "firebaseUserId == nil AND profileID IN %@",
+                    Array(profileIDs)
+                )
+            ])
+            for character in try context.fetch(characterRequest) {
+                if let profileID = character.profileID { profileIDs.insert(profileID) }
+                context.delete(character)
             }
             if context.hasChanges {
                 try context.save()

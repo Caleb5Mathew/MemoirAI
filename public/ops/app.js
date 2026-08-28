@@ -68,6 +68,9 @@
     if (o.fulfillmentHold) {
       badges.push('<span class="badge-warn" title="Do not print — refund/dispute hold">HOLD</span>');
     }
+    if (o.isFulfillmentIncident) {
+      badges.push('<span class="badge-fail" title="Paid checkout requires manual remediation">INCIDENT</span>');
+    }
     return badges.length ? " " + badges.join(" ") : "";
   }
 
@@ -78,6 +81,11 @@
   function firestoreOrderLink(userId, orderId) {
     return "https://console.firebase.google.com/project/memoirai-7db06/firestore/databases/-default-/data/~2Fusers~2F" +
       encodeURIComponent(userId) + "~2Forders~2F" + encodeURIComponent(orderId);
+  }
+
+  function firestoreIncidentLink(incidentId) {
+    return "https://console.firebase.google.com/project/memoirai-7db06/firestore/databases/-default-/data/~2FfulfillmentIncidents~2F" +
+      encodeURIComponent(incidentId);
   }
 
   function luluJobsLink() {
@@ -109,6 +117,7 @@
     state.autoFulfill = Boolean(data.autoFulfillEnabled);
     state.userCount = data.userCount || 0;
     state.pendingCount = data.pendingCount || 0;
+    state.fulfillmentIncidentCount = data.stats?.fulfillmentIncidents || 0;
     return data;
   }
 
@@ -121,6 +130,7 @@
     $("stats-row").innerHTML =
       statCard("Total orders", s.totalOrders, "") +
       statCard("Needs print", s.needsPrint, "accent") +
+      statCard("Paid holds", s.fulfillmentIncidents || 0, "") +
       statCard("Revenue", rev, "ok") +
       statCard("Firebase users", state.userCount, "") +
       statCard("Total profit", profit, "profit");
@@ -289,7 +299,9 @@
         linkIf(o.pdfURL, "Interior PDF") +
         linkIf(o.coverURL, "Cover PDF") +
         linkIf(stripe, "Stripe payment") +
-        '<a href="' + firestoreOrderLink(o.userId, o.orderId) + '" target="_blank" rel="noopener">Firestore</a>' +
+        '<a href="' + (o.isFulfillmentIncident
+          ? firestoreIncidentLink(o.orderId)
+          : firestoreOrderLink(o.userId, o.orderId)) + '" target="_blank" rel="noopener">Firestore</a>' +
         '<a href="' + luluJobsLink() + '" target="_blank" rel="noopener">Lulu portal</a>' +
       "</div>" +
       '<div id="drawer-actions"></div>';

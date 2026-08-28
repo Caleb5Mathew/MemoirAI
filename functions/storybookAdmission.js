@@ -15,6 +15,19 @@ const SUBJECT_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const JOB_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
+function paidStorybookUsagePeriod(date) {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) {
+    throw new Error("valid usage date is required");
+  }
+  const year = date.getUTCFullYear();
+  const monthIndex = date.getUTCMonth();
+  const month = String(monthIndex + 1).padStart(2, "0");
+  return {
+    periodKey: `paid_${year}${month}`,
+    resetAt: new Date(Date.UTC(year, monthIndex + 1, 1, 0, 0, 0, 0))
+  };
+}
+
 function requireString(value, field, maxLength, { allowEmpty = true } = {}) {
   const stringValue = String(value ?? "").trim();
   if ((!allowEmpty && !stringValue) || stringValue.length > maxLength) {
@@ -330,9 +343,8 @@ async function admitLegacyStorybookJob({
   }
 
   const dayKey = now.toISOString().slice(0, 10);
-  const periodKey = isPaid
-    ? `paid_${String(entitlement.expires_date || "lifetime").replace(/[^0-9A-Za-z]/g, "").slice(0, 32)}`
-    : "free_lifetime";
+  const paidPeriod = isPaid ? paidStorybookUsagePeriod(now) : null;
+  const periodKey = paidPeriod?.periodKey || "free_lifetime";
   const userRef = db.collection("users").doc(userId);
   const activeRef = userRef.collection("aiUsage").doc("storybook_active");
   const usageRef = userRef.collection("aiUsage").doc(`storybook_${periodKey}`);
@@ -384,6 +396,7 @@ async function admitLegacyStorybookJob({
       reservedPages: usedPages + payload.pageCountTarget,
       limit: perUserLimit,
       periodKey,
+      resetAt: paidPeriod ? timestampFromDate(paidPeriod.resetAt) : null,
       updatedAt: serverTimestamp()
     }, { merge: true });
     transaction.set(globalRef, {
@@ -429,7 +442,14 @@ function stableHash(value) {
   return crypto.createHash("sha256").update(JSON.stringify(ordered)).digest("hex");
 }
 
-function createStorybookJobHandler({ db, serverTimestamp, timestampFromDate, HttpsError, fetchImpl = fetch }) {
+function createStorybookJobHandler({
+  db,
+  serverTimestamp,
+  timestampFromDate,
+  HttpsError,
+  fetchImpl = fetch,
+  nowDate = () => new Date()
+}) {
   return async (request) => {
     if (!request.auth?.uid) throw new HttpsError("unauthenticated", "Must be signed in");
     const userId = request.auth.uid;
@@ -470,11 +490,10 @@ function createStorybookJobHandler({ db, serverTimestamp, timestampFromDate, Htt
       throw new HttpsError("permission-denied", "A subscription is required for this book size.");
     }
 
-    const now = new Date();
+    const now = nowDate();
     const dayKey = now.toISOString().slice(0, 10);
-    const periodKey = isPaid
-      ? `paid_${String(entitlement.expires_date || "lifetime").replace(/[^0-9A-Za-z]/g, "").slice(0, 32)}`
-      : "free_lifetime";
+    const paidPeriod = isPaid ? paidStorybookUsagePeriod(now) : null;
+    const periodKey = paidPeriod?.periodKey || "free_lifetime";
     const activeRef = userRef.collection("aiUsage").doc("storybook_active");
     const usageRef = userRef.collection("aiUsage").doc(`storybook_${periodKey}`);
     const globalRef = db.collection("globalAIUsage").doc(`storybook_${dayKey}`);
@@ -515,10 +534,12 @@ function createStorybookJobHandler({ db, serverTimestamp, timestampFromDate, Htt
         throw new HttpsError("resource-exhausted", "Storybook generation is at its daily capacity.");
       }
 
+      const nextReservedPages = usedPages + payload.pageCountTarget;
       transaction.set(usageRef, {
-        reservedPages: usedPages + payload.pageCountTarget,
+        reservedPages: nextReservedPages,
         limit: perUserLimit,
         periodKey,
+        resetAt: paidPeriod ? timestampFromDate(paidPeriod.resetAt) : null,
         updatedAt: serverTimestamp()
       }, { merge: true });
       transaction.set(globalRef, {
@@ -553,7 +574,11 @@ function createStorybookJobHandler({ db, serverTimestamp, timestampFromDate, Htt
         memoryResults: {},
         skippedMemoryIds: []
       });
-      return { status: "queued" };
+      return {
+        status: "queued",
+        allowanceRemaining: Math.max(0, perUserLimit - nextReservedPages),
+        allowanceResetAt: paidPeriod?.resetAt.toISOString() || null
+      };
     });
 
     return { ...result, jobId };
@@ -572,6 +597,7 @@ module.exports = {
   createStorybookJobHandler,
   fetchLegacyRevenueCatEntitlement,
   isAdmittedStorybookJob,
+  paidStorybookUsagePeriod,
   releaseStorybookActiveLease,
   settleStorybookReservation,
   storybookReservationCharges,

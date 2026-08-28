@@ -53,6 +53,7 @@ service firebase.storage {
       allow read: if isOwner(userId);
       allow create, update: if isOwner(userId)
         && !hasActiveCheckoutLock(userId)
+        && !isPaidBookVersion(userId, bookVersionId)
         && (
           (pageFile.matches('page_[0-9]{3}\\.png')
             && request.resource.contentType == 'image/png'
@@ -72,6 +73,7 @@ service firebase.storage {
       allow read: if isOwner(userId);
       allow create, update: if isOwner(userId)
         && !hasActiveCheckoutLock(userId)
+        && !isPaidBookVersion(userId, bookVersionId)
         && request.resource.contentType == 'application/pdf'
         && request.resource.size > 0
         && request.resource.size <= 100 * 1024 * 1024;
@@ -84,6 +86,7 @@ service firebase.storage {
       allow read: if isOwner(userId);
       allow create, update: if isOwner(userId)
         && !hasActiveCheckoutLock(userId)
+        && !isPaidBookVersion(userId, bookVersionId)
         && request.resource.contentType == 'application/pdf'
         && request.resource.size > 0
         && request.resource.size <= 100 * 1024 * 1024;
@@ -123,18 +126,26 @@ service firebase.storage {
         )
         && (isOwner(userId)
         || (isActiveAuthenticatedUser()
-            && firestore.exists(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid))
-            && firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.revoked != true
             && (
-              firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.get('memoryId', '') + '.m4a' == audioFile
-              || firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.get('memoryId', '') + '.caf' == audioFile
+              (firestore.exists(/databases/(default)/documents/users/$(userId)/sharedAudioAccess/$(audioFile + '__' + request.auth.uid))
+                && firestore.get(/databases/(default)/documents/users/$(userId)/sharedAudioAccess/$(audioFile + '__' + request.auth.uid)).data.requesterUid == request.auth.uid
+                && firestore.get(/databases/(default)/documents/users/$(userId)/sharedAudioAccess/$(audioFile + '__' + request.auth.uid)).data.audioFile == audioFile
+                && firestore.get(/databases/(default)/documents/users/$(userId)/sharedAudioAccess/$(audioFile + '__' + request.auth.uid)).data.revoked != true)
               || (
-                firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.get('memoryId', '') == ''
-                && firestore.exists(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid))
-                && firestore.get(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid)).data.status == 'approved'
+                firestore.exists(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid))
+                && firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.revoked != true
                 && (
-                  firestore.get(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid)).data.memoryId + '.m4a' == audioFile
-                  || firestore.get(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid)).data.memoryId + '.caf' == audioFile
+                  firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.get('memoryId', '') + '.m4a' == audioFile
+                  || firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.get('memoryId', '') + '.caf' == audioFile
+                  || (
+                    firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.get('memoryId', '') == ''
+                    && firestore.exists(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid))
+                    && firestore.get(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid)).data.status == 'approved'
+                    && (
+                      firestore.get(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid)).data.memoryId + '.m4a' == audioFile
+                      || firestore.get(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid)).data.memoryId + '.caf' == audioFile
+                    )
+                  )
                 )
               )
             )));

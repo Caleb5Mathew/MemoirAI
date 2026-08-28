@@ -6,7 +6,7 @@
   },
   "main": "index.js",
   "scripts": {
-    "test": "npm run test:merchant-pricing && npm run test:transcription && npm run test:memory-deletion && npm run test:memory-index-ownership && npm run test:account-deletion && npm run test:account-state-guards && npm run test:account-operation-lock && npm run test:admin-authorization && npm run test:book-pdf && npm run test:storybook-logging && npm run test:storybook-failure-privacy && npm run test:storybook-admission && npm run test:retry-deadline && npm run test:lulu-webhook-auth && npm run test:checkout-return && npm run test:order-flow && npm run test:storage-artifact-urls && npm run test:paid-checkout-artifacts",
+    "test": "npm run test:merchant-pricing && npm run test:transcription && npm run test:memory-deletion && npm run test:memory-index-ownership && npm run test:account-deletion && npm run test:account-state-guards && npm run test:account-operation-lock && npm run test:admin-authorization && npm run test:book-pdf && npm run test:storybook-logging && npm run test:storybook-failure-privacy && npm run test:storybook-admission && npm run test:retry-deadline && npm run test:lulu-webhook-auth && npm run test:checkout-return && npm run test:order-flow && npm run test:storage-artifact-urls && npm run test:paid-checkout-artifacts && npm run test:fulfillment-incident && npm run test:shared-access-revocation && npm run test:shared-memory-projection",
     "test:merchant-pricing": "node merchantPricingMath.test.js",
     "test:transcription": "node transcriptionValidation.test.js",
     "test:memory-deletion": "node memoryDeletionCleanup.test.js",
@@ -25,6 +25,9 @@
     "test:order-flow": "node orderFlowIdempotency.test.js",
     "test:storage-artifact-urls": "node storageArtifactUrls.test.js",
     "test:paid-checkout-artifacts": "node paidCheckoutArtifactGuard.test.js",
+    "test:fulfillment-incident": "node fulfillmentIncident.test.js",
+    "test:shared-access-revocation": "node sharedAccessRevocation.test.js",
+    "test:shared-memory-projection": "node sharedMemoryProjection.test.js",
     "check-style-sync": "node scripts/check-style-sync.js"
   },
   "dependencies": {

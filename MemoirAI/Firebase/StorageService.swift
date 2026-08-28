@@ -86,7 +86,7 @@ final class StorageService {
     
     /// Upload audio data and return the download URL
     func uploadAudio(
-        _ audioData: Data,
+        _ audioFileURL: URL,
         memoryId: String,
         fileExtension: String = "caf",
         asUserID userID: String
@@ -106,7 +106,7 @@ final class StorageService {
         let metadata = StorageMetadata()
         metadata.contentType = normalizedExtension == "m4a" ? "audio/mp4" : "audio/x-caf"
         
-        _ = try await ref.putDataAsync(audioData, metadata: metadata)
+        _ = try await ref.putFileAsync(from: audioFileURL, metadata: metadata)
         guard Auth.auth().currentUser?.uid == userID else {
             try? await ref.delete()
             throw StorageError.uploadFailed("The signed-in account changed during upload.")
@@ -130,7 +130,7 @@ final class StorageService {
                 outputTokens: 0,
                 inputImageCount: 0,
                 outputImageCount: 0,
-                uploadedBytes: audioData.count
+                uploadedBytes: (try? audioFileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             )
         )
         

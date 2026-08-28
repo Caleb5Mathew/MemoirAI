@@ -68,6 +68,22 @@ enum SubscriptionStorageScope {
     }
 }
 
+enum SubscriptionAllowancePeriod {
+    static func utcMonthKey(for date: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        let parts = calendar.dateComponents([.year, .month], from: date)
+        return String(format: "%04d-%02d", parts.year ?? 0, parts.month ?? 0)
+    }
+
+    static func nextResetDate(after date: Date) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
+        return calendar.date(byAdding: .month, value: 1, to: start) ?? date
+    }
+}
+
 @MainActor
 final class RCSubscriptionManager: NSObject, ObservableObject {
     static let shared = RCSubscriptionManager()
@@ -84,7 +100,6 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     private let lastResetPrefix    = "memoirai_image_lastReset_"
     private let renewalDateKeyPrefix = "memoirai_renewal_date_"
     private let initializationKey  = "memoirai_initialized_"
-    private let lastPurchaseDateKey = "memoirai_last_purchase_date_"
     
     // Maximum images per subscription period
     private let maxImagesPerPeriod: Int = 100
@@ -396,7 +411,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     }
 
     // 🔥 COMPLETELY FIXED: This is the core fix for the 50/50 vs 45/50 issue
-    private func setActiveTier(_ tier: Tier, renewalDate: Date?, latestPurchaseDate: Date?) {
+    private func setActiveTier(_ tier: Tier, renewalDate: Date?, latestPurchaseDate _: Date?) {
         guard let firebaseUserID = Auth.auth().currentUser?.uid else {
             activeTier = nil
             remainingAllowance = 0
@@ -425,11 +440,12 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             userID: firebaseUserID,
             tierRawValue: tier.rawValue
         )
-        let purchaseDateKey = SubscriptionStorageScope.key(
-            prefix: lastPurchaseDateKey,
+        let resetPeriodKey = SubscriptionStorageScope.key(
+            prefix: lastResetPrefix,
             userID: firebaseUserID,
             tierRawValue: tier.rawValue
         )
+        let currentPeriod = SubscriptionAllowancePeriod.utcMonthKey(for: Date())
         
         // Check if this is the first time we're setting up this tier
         let isFirstTimeSetup = !UserDefaults.standard.bool(forKey: initKey)
@@ -440,29 +456,14 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             UserDefaults.standard.set(remainingAllowance, forKey: allowanceUDKey)
             UserDefaults.standard.set(true, forKey: initKey)
             
-            // Set initial reset tracking
-            if let purchaseDate = latestPurchaseDate {
-                UserDefaults.standard.set(purchaseDate, forKey: purchaseDateKey)
-            }
+            UserDefaults.standard.set(currentPeriod, forKey: resetPeriodKey)
             
             print("RCManager: First-time setup for \(tier.displayName). Starting allowance: \(remainingAllowance)")
             UserDefaults.standard.synchronize()
             return
         }
         
-        // 🔥 CHECK FOR PERIOD RESET based on purchase date
-        var shouldReset = false
-        if let currentPurchaseDate = latestPurchaseDate {
-            if let lastProcessedPurchaseDate = UserDefaults.standard.object(forKey: purchaseDateKey) as? Date {
-                // If the new purchase date is later than the last one we processed, it's a renewal.
-                if currentPurchaseDate > lastProcessedPurchaseDate {
-                    shouldReset = true
-                }
-        } else {
-                // If we don't have a stored purchase date, but we have one now, treat it as a reset event.
-                shouldReset = true
-            }
-        }
+        let shouldReset = UserDefaults.standard.string(forKey: resetPeriodKey) != currentPeriod
         
         // 🔥 CHECK FOR TIER CHANGE
         let tierChanged = oldTierID != nil && oldTierID != tier.rawValue
@@ -471,10 +472,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             // Reset allowance
             remainingAllowance = maxImagesPerPeriod
             
-            // Update reset tracking with the new purchase date
-            if let purchaseDate = latestPurchaseDate {
-                UserDefaults.standard.set(purchaseDate, forKey: purchaseDateKey)
-            }
+            UserDefaults.standard.set(currentPeriod, forKey: resetPeriodKey)
             
             UserDefaults.standard.set(remainingAllowance, forKey: allowanceUDKey)
             print("RCManager: Allowance reset for \(tier.displayName). Reason: \(tierChanged ? "Tier changed" : "Period reset"). New allowance: \(remainingAllowance)")
@@ -602,31 +600,10 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     
     // Get formatted renewal date string
     func getRenewalDateString() -> String {
-        guard let tier = activeTier else { return "N/A" }
-        
-        let calendar = Calendar.current
-        let now = Date()
-        
-        if tier.isYearly {
-            // For yearly subscriptions, next reset is next Monday
-            let nextMonday = calendar.nextDate(after: now, matching: DateComponents(weekday: 2), matchingPolicy: .nextTime) ?? now
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            return formatter.string(from: nextMonday)
-        } else {
-            // For monthly subscriptions, use actual renewal date
-            if let renewalDate = nextRenewalDate {
-                let formatter = DateFormatter()
-                formatter.dateStyle = .medium
-                return formatter.string(from: renewalDate)
-            } else {
-                // Fallback to next month
-                let nextMonth = calendar.date(byAdding: .month, value: 1, to: now) ?? now
-                let formatter = DateFormatter()
-                formatter.dateStyle = .medium
-                return formatter.string(from: nextMonth)
-            }
-        }
+        guard activeTier != nil else { return "N/A" }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter.string(from: SubscriptionAllowancePeriod.nextResetDate(after: Date()))
     }
     
     // Check if user has any active subscription

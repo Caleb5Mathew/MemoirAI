@@ -10,7 +10,12 @@ struct SharedMemoryView: View {
     @State private var memory: SharedAccessService.RemoteMemory? = nil
     @State private var loadFailed = false
     @State private var player: AVPlayer? = nil
+    @State private var localAudioURL: URL? = nil
     @State private var isPlaying = false
+    @State private var isLoadingAudio = false
+    @State private var playbackTask: Task<Void, Never>? = nil
+    @State private var isVisible = false
+    @State private var playbackError: String? = nil
 
     private let darkText = Color(red: 0.25, green: 0.2, blue: 0.15)
     private let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
@@ -32,7 +37,7 @@ struct SharedMemoryView: View {
                                 .foregroundColor(darkText)
                         }
 
-                        if memory.audioURL != nil {
+                        if memory.audioStoragePath != nil {
                             Button {
                                 togglePlayback()
                             } label: {
@@ -40,7 +45,7 @@ struct SharedMemoryView: View {
                                     Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                                         .font(.system(size: 44))
                                         .foregroundColor(terracotta)
-                                    Text(isPlaying ? "Pause" : "Hear this memory")
+                                    Text(isLoadingAudio ? "Loading audio…" : (isPlaying ? "Pause" : "Hear this memory"))
                                         .font(.system(size: 17, weight: .semibold, design: .serif))
                                         .foregroundColor(darkText)
                                     Spacer()
@@ -49,6 +54,13 @@ struct SharedMemoryView: View {
                                 .background(Color.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 16))
                             }
                             .buttonStyle(.plain)
+                            .disabled(isLoadingAudio)
+                        }
+
+                        if let playbackError {
+                            Text(playbackError)
+                                .font(.system(size: 13))
+                                .foregroundColor(.red)
                         }
 
                         if let transcription = memory.transcription, !transcription.isEmpty {
@@ -77,7 +89,13 @@ struct SharedMemoryView: View {
             }
         }
         .task { await load() }
-        .onDisappear { stopPlayback() }
+        .onAppear { isVisible = true }
+        .onDisappear {
+            isVisible = false
+            playbackTask?.cancel()
+            playbackTask = nil
+            stopPlayback()
+        }
     }
 
     private func load() async {
@@ -93,29 +111,61 @@ struct SharedMemoryView: View {
     }
 
     private func togglePlayback() {
-        guard let url = memory?.audioURL else { return }
+        guard let storagePath = memory?.audioStoragePath else { return }
         Haptics.tap()
         if isPlaying {
             player?.pause()
             isPlaying = false
             return
         }
-        if player == nil {
+        guard player == nil, !isLoadingAudio else { return }
+        isLoadingAudio = true
+        playbackTask = Task { @MainActor in
+            defer {
+                isLoadingAudio = false
+                playbackTask = nil
+            }
+            do {
+                let url = try await SharedAccessService.shared.downloadSharedAudio(
+                    ownerId: route.ownerId,
+                    memoryId: route.memoryId,
+                    storagePath: storagePath
+                )
+                guard !Task.isCancelled else {
+                    try? FileManager.default.removeItem(at: url)
+                    return
+                }
+                guard isVisible else {
+                    try? FileManager.default.removeItem(at: url)
+                    return
+                }
+                localAudioURL = url
+                playbackError = nil
+            } catch {
+                if error is CancellationError { return }
+                playbackError = "This audio is no longer shared or could not be downloaded."
+                return
+            }
             do {
                 try AVAudioSession.sharedInstance().setCategory(.playback)
                 try AVAudioSession.sharedInstance().setActive(true)
             } catch {
                 print("[SharedMemory] audio session error: \(error.localizedDescription)")
             }
-            player = AVPlayer(url: url)
+            guard let localAudioURL, isVisible, !Task.isCancelled else { return }
+            player = AVPlayer(url: localAudioURL)
+            player?.play()
+            isPlaying = true
         }
-        player?.play()
-        isPlaying = true
     }
 
     private func stopPlayback() {
         player?.pause()
         player = nil
         isPlaying = false
+        if let localAudioURL {
+            try? FileManager.default.removeItem(at: localAudioURL)
+            self.localAudioURL = nil
+        }
     }
 }
