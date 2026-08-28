@@ -3,11 +3,24 @@ import Testing
 @testable import MemoirAI
 
 struct RuntimeFlowPolicyTests {
-    @Test func storybookPayloadCapsPinnedMemoriesAtServerLimit() {
-        let ids = (0..<130).map { _ in UUID() }
-        let pinned = StorybookJobPayloadPolicy.pinnedMemoryIDs(ids)
-        #expect(pinned.count == StorybookJobPayloadPolicy.maximumPinnedMemoryCount)
-        #expect(pinned.first == ids.first?.uuidString)
+    @Test func storybookHistoryRetentionCapsRevisionCountAndBytes() {
+        let small = Array(repeating: 1_000, count: StorybookHistoryRetentionPolicy.maximumRevisionCount + 2)
+        #expect(StorybookHistoryRetentionPolicy.removalCount(forOldestFirstByteCounts: small) == 2)
+
+        let oversized = [
+            StorybookHistoryRetentionPolicy.maximumTotalByteCount,
+            10,
+            10
+        ]
+        #expect(StorybookHistoryRetentionPolicy.removalCount(forOldestFirstByteCounts: oversized) == 1)
+        #expect(StorybookHistoryRetentionPolicy.removalCount(
+            forOldestFirstByteCounts: [StorybookHistoryRetentionPolicy.maximumTotalByteCount + 1]
+        ) == 0)
+    }
+    @Test func legacyGenerationCountsAreClampedAtTheServerContract() {
+        #expect(StorybookGenerationBatchPolicy.clampedTargetPageCount(0) == 1)
+        #expect(StorybookGenerationBatchPolicy.clampedTargetPageCount(3) == 3)
+        #expect(StorybookGenerationBatchPolicy.clampedTargetPageCount(100) == 9)
     }
 
     @Test func editedStorybooksAlwaysReceiveUniqueRevisionIdentifiers() {
@@ -166,6 +179,13 @@ struct RuntimeFlowPolicyTests {
         #expect(paused == .paused)
         #expect(paused.accessibilityLabel == "Resume recording")
         #expect(paused.accessibilityValue == "Paused")
+    }
+
+    @Test func recordingStartRequiresAnAuthenticatedUserScope() {
+        #expect(MemoryUserScope.recordingStartFailureMessage(firebaseUserID: nil) != nil)
+        #expect(MemoryUserScope.recordingStartFailureMessage(firebaseUserID: "   ") != nil)
+        #expect(MemoryUserScope.recordingStartFailureMessage(firebaseUserID: "anonymous-user") == nil)
+        #expect(MemoryUserScope.recordingStartFailureMessage(firebaseUserID: " signed-in-user ") == nil)
     }
 
     @Test func audioStoragePathIsPinnedToTheCapturedUser() {

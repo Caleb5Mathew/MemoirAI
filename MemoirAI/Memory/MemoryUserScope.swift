@@ -59,6 +59,13 @@ enum MemoryUserScope {
         MemoryOwnershipPolicy.normalizedUserID(FirebaseConfig.shared.currentUserId)
     }
 
+    static func recordingStartFailureMessage(firebaseUserID: String?) -> String? {
+        guard MemoryOwnershipPolicy.normalizedUserID(firebaseUserID) != nil else {
+            return "MemoirAI needs a secure connection before recording so your memory can be saved safely. Check your internet connection and try again."
+        }
+        return nil
+    }
+
     static func profilePredicate(profileID: UUID) -> NSPredicate {
         guard let uid = currentFirebaseUserId else {
             return NSPredicate(value: false)

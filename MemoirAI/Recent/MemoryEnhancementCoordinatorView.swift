@@ -133,10 +133,12 @@ struct MemoryEnhancementCoordinatorView: View {
             }
         }
         .onAppear {
-            Mixpanel.mainInstance().track(event: "Memory Enhancement Flow Opened", properties: [
-                "voice_available": voiceAvailable,
-                "memory_id": memory.id?.uuidString ?? ""
-            ])
+            Mixpanel.mainInstance().track(
+                event: "Memory Enhancement Flow Opened",
+                properties: AnalyticsPrivacyPolicy.sanitized([
+                    "voice_available": voiceAvailable
+                ])
+            )
         }
     }
 }
@@ -212,10 +214,12 @@ private struct MemoryEnhancementAutoSaveSuccessView: View {
                 profile: profileVM.selectedProfile,
                 mergeWithExisting: false
             )
-            Mixpanel.mainInstance().track(event: "Memory Enhancement Auto Saved", properties: [
-                "memory_id": memory.id?.uuidString ?? "",
-                "characters_saved": characterCount
-            ])
+            Mixpanel.mainInstance().track(
+                event: "Memory Enhancement Auto Saved",
+                properties: AnalyticsPrivacyPolicy.sanitized([
+                    "characters_saved": characterCount
+                ])
+            )
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 onFinished()
             }

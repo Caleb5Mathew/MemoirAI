@@ -69,6 +69,7 @@ struct RecordMemoryView: View {
     @State private var recordingTimer: Timer?
     @State private var isKeyboardSavePressed = false
     @State private var showCloudTranscriptionDisclosure = false
+    @State private var recordingStartErrorMessage: String?
     @State private var saveErrorMessage: String?
     
     // Timeout warning states
@@ -614,6 +615,17 @@ struct RecordMemoryView: View {
             Text("Saved recordings are uploaded to your private MemoirAI account and sent to OpenAI to create a transcript. You can delete the recording and transcript at any time.")
         }
         .alert(
+            "Recording Unavailable",
+            isPresented: Binding(
+                get: { recordingStartErrorMessage != nil },
+                set: { if !$0 { recordingStartErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { recordingStartErrorMessage = nil }
+        } message: {
+            Text(recordingStartErrorMessage ?? "Please check your connection and try again.")
+        }
+        .alert(
             "Memory Not Saved",
             isPresented: Binding(
                 get: { saveErrorMessage != nil },
@@ -754,13 +766,21 @@ struct RecordMemoryView: View {
     
     // MARK: - Recording
     func startRecording() {
+        if let failureMessage = MemoryUserScope.recordingStartFailureMessage(
+            firebaseUserID: MemoryUserScope.currentFirebaseUserId
+        ) {
+            recordingStartErrorMessage = failureMessage
+            return
+        }
         guard CloudTranscriptionDisclosure.isAccepted() else {
             showCloudTranscriptionDisclosure = true
             return
         }
         // Check microphone permission before starting
         guard permissionManager.isMicrophoneAuthorized else {
-            permissionManager.requestMicrophonePermission()
+            permissionManager.requestMicrophonePermission {
+                startRecording()
+            }
             return
         }
         
@@ -1036,7 +1056,7 @@ struct RecordMemoryView: View {
             // Post notification on main thread after save completes
             await MainActor.run {
                 NotificationCenter.default.post(name: .memorySaved, object: nil)
-                print("✅ Title generated and updated: '\(generatedTitle)'")
+                print("✅ Title generated and updated")
             }
         }
     }

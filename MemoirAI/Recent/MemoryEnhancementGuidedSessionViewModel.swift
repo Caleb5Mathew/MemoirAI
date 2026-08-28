@@ -281,11 +281,13 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
         if let memoryId {
             EnhancementSessionDraft.clear(memoryId: memoryId)
         }
-        Mixpanel.mainInstance().track(event: "Memory Enhancement Guided Complete", properties: [
-            "turns": turns.count,
-            "characters_extracted": details.characters.count,
-            "memory_id": memoryId?.uuidString ?? ""
-        ])
+        Mixpanel.mainInstance().track(
+            event: "Memory Enhancement Guided Complete",
+            properties: AnalyticsPrivacyPolicy.sanitized([
+                "turns": turns.count,
+                "characters_extracted": details.characters.count
+            ])
+        )
         onFinished(details)
     }
 }

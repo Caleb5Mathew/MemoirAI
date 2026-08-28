@@ -52,7 +52,8 @@ struct BookVersionPersistOrderingTests {
         let book = "order-test-\(UUID().uuidString)"
         FirestoreSyncService.shared.registerPendingBookSyncForProfile(
             bookId: book,
-            profileId: profile
+            profileId: profile,
+            firebaseUserId: "pending-book-test-user"
         )
         let data = try #require(suite.data(forKey: Self.key))
         let rows = try JSONDecoder().decode([PendingRow].self, from: data)
@@ -74,14 +75,22 @@ struct BookVersionPersistOrderingTests {
         suite.removeObject(forKey: Self.key)
         let profile = UUID()
         let book = "retry-preserve-\(UUID().uuidString)"
-        FirestoreSyncService.shared.registerPendingBookSyncForProfile(bookId: book, profileId: profile)
+        FirestoreSyncService.shared.registerPendingBookSyncForProfile(
+            bookId: book,
+            profileId: profile,
+            firebaseUserId: "pending-book-test-user"
+        )
         var data = try #require(suite.data(forKey: Self.key))
         var rows = try JSONDecoder().decode([PendingRowFull].self, from: data)
         #expect(rows.count == 1)
         rows[0].renderRetryCount = 4
         let patched = try JSONEncoder().encode(rows)
         suite.set(patched, forKey: Self.key)
-        FirestoreSyncService.shared.registerPendingBookSyncForProfile(bookId: book, profileId: profile)
+        FirestoreSyncService.shared.registerPendingBookSyncForProfile(
+            bookId: book,
+            profileId: profile,
+            firebaseUserId: "pending-book-test-user"
+        )
         data = try #require(suite.data(forKey: Self.key))
         rows = try JSONDecoder().decode([PendingRowFull].self, from: data)
         let row = try #require(rows.first { $0.bookId == book })

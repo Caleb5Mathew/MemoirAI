@@ -120,7 +120,7 @@ struct ContentView: View {
                     syncStorybookJobObserverBinding()
                     // Handle any pending deep link after onboarding completes
                     if let pendingID = pendingDeepLinkID {
-                        print("🔗 Processing pending deep link: \(pendingID.uuidString)")
+                        print("🔗 Processing pending deep link: \(pendingID.uuidString.prefix(8))…")
                         pendingDeepLinkID = nil
                         Task {
                             await authService.signInAnonymouslyIfNeeded()
@@ -225,7 +225,7 @@ struct ContentView: View {
         }
 
         lastDeepLinkAt = Date()
-        print("✅ Parsed memory ID: \(memoryID.uuidString)")
+        print("✅ Parsed memory ID: \(memoryID.uuidString.prefix(8))…")
 
         // Check if onboarding is complete
         let done = localCompleted || iCloudManager.hasCompletedOnboarding
@@ -234,7 +234,7 @@ struct ContentView: View {
             Task { await routeParsedMemory(memoryID: memoryID, source: source) }
         } else {
             // User hasn't completed onboarding - queue the deep link
-            print("[QRDeepLink] queued pending onboarding memoryID=\(memoryID.uuidString) source=\(source)")
+            print("[QRDeepLink] queued pending onboarding memoryID=\(memoryID.uuidString.prefix(8))… source=\(source)")
             pendingDeepLinkID = memoryID
             deepLinkErrorMessage = "Please complete the setup to view this memory."
             showDeepLinkError = true
@@ -243,7 +243,7 @@ struct ContentView: View {
 
     private func routeParsedMemory(memoryID: UUID, source: String) async {
         let found = PersistenceController.shared.entry(id: memoryID) != nil
-        print("[QRDeepLink] memoryID=\(memoryID.uuidString) entryFound=\(found) source=\(source)")
+        print("[QRDeepLink] memoryID=\(memoryID.uuidString.prefix(8))… entryFound=\(found) source=\(source)")
         if found {
             print("[QRDeepLink] navWillPush=true source=\(source)")
             nav.showMemoryDetail(id: memoryID)
@@ -259,7 +259,7 @@ struct ContentView: View {
     private func routeNonLocalMemory(memoryID: UUID, source: String) async {
         do {
             guard let ownerId = try await SharedAccessService.shared.resolveOwner(memoryId: memoryID) else {
-                print("[QRDeepLink] owner not resolved memoryID=\(memoryID.uuidString) source=\(source)")
+                print("[QRDeepLink] owner not resolved memoryID=\(memoryID.uuidString.prefix(8))… source=\(source)")
                 await MainActor.run {
                     deepLinkErrorMessage = "This memory could not be found. It may have been deleted."
                     showDeepLinkError = true
@@ -342,9 +342,9 @@ struct ContentView: View {
             UserDefaults.standard.set(uid, forKey: MemoryOwnershipPolicy.legacyOwnerKey)
             cloudStore.set(uid, forKey: MemoryOwnershipPolicy.cloudLegacyOwnerKey)
             cloudStore.synchronize()
-            print("✅ Local ownership backfill complete for UID \(uid): \(legacyRows.count) rows updated")
+            print("✅ Local ownership backfill complete for UID \(uid.prefix(8))…: \(legacyRows.count) rows updated")
         } catch {
-            print("❌ Local ownership backfill failed for UID \(uid): \(error)")
+            print("❌ Local ownership backfill failed for UID \(uid.prefix(8))…: \(error)")
         }
     }
 

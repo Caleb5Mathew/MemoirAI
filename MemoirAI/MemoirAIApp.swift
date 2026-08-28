@@ -185,6 +185,7 @@ struct MemoirAIApp: App {
         // ─ Mixpanel ───────────────────────────────────────────────
         Mixpanel.initialize(token: "6437139af64d0541c2a8a8e5157ae72f",
                             trackAutomaticEvents: true)
+        Mixpanel.mainInstance().useIPAddressForGeoLocation = false
         Mixpanel.mainInstance().track(event: "App Launched")
 
         if !UserDefaults.standard.bool(forKey: "hasLaunchedBefore") {

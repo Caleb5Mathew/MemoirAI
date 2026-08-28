@@ -25,10 +25,37 @@ enum StorybookStorageScope {
     }
 }
 
+enum StorybookHistoryRetentionPolicy {
+    static let maximumRevisionCount = 8
+    static let maximumTotalByteCount = 120 * 1024 * 1024
+
+    /// Input sizes must be oldest first. Always retains the newest revision.
+    static func removalCount(forOldestFirstByteCounts byteCounts: [Int]) -> Int {
+        guard byteCounts.count > 1 else { return 0 }
+        var remainingCount = byteCounts.count
+        var remainingBytes = byteCounts.reduce(0, +)
+        var removalCount = 0
+        while remainingCount > 1,
+              (remainingCount > maximumRevisionCount || remainingBytes > maximumTotalByteCount) {
+            remainingBytes -= max(0, byteCounts[removalCount])
+            remainingCount -= 1
+            removalCount += 1
+        }
+        return removalCount
+    }
+}
+
+enum StorybookLocalFilePolicy {
+    static func accepts(byteCount: Int) -> Bool {
+        StorybookPayloadCapacityPolicy.accepts(encodedByteCount: byteCount)
+    }
+}
+
 /// Persists encoded storybook `Data` under Application Support to avoid CFPreferences size limits.
 enum StorybookLocalStore {
     private static let rootFolderName = "StorybookCache"
     private static let currentFileName = "current.book"
+    private static let pendingFileName = "pending.book"
     private static let historyFolderName = "history"
     private static let bookExtension = "book"
 
@@ -85,6 +112,10 @@ enum StorybookLocalStore {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return dir
+    }
+
+    private static func pendingBookURL(profileID: UUID) throws -> URL {
+        try profileDirectory(profileID: profileID).appendingPathComponent(pendingFileName)
     }
 
     // MARK: - Legacy keys (must match StoryPageViewModel history)
@@ -145,7 +176,8 @@ enum StorybookLocalStore {
             defaults.removeObject(forKey: currentKey)
             defaults.removeObject(forKey: historyKey)
             defaults.set(true, forKey: flagKey)
-            print("✅ StorybookLocalStore: migrated legacy UserDefaults for profile \(profileID.uuidString)")
+            try pruneHistory(profileID: profileID)
+            print("✅ StorybookLocalStore: migrated legacy UserDefaults for profile \(profileID.uuidString.prefix(8))…")
         } catch {
             print("❌ StorybookLocalStore: migration failed for \(profileID): \(error.localizedDescription)")
         }
@@ -156,6 +188,35 @@ enum StorybookLocalStore {
     static func writeCurrentBook(data: Data, profileID: UUID) throws {
         migrateLegacyUserDefaultsIfNeeded(profileID: profileID)
         try atomicWrite(data: data, to: try currentBookURL(profileID: profileID))
+    }
+
+    static func writePendingBook(data: Data, profileID: UUID) throws {
+        guard StorybookLocalFilePolicy.accepts(byteCount: data.count) else {
+            throw BookPageEditorPersistenceError.bookTooLarge
+        }
+        migrateLegacyUserDefaultsIfNeeded(profileID: profileID)
+        try atomicWrite(data: data, to: try pendingBookURL(profileID: profileID))
+    }
+
+    static func readPendingBookData(profileID: UUID) -> Data? {
+        migrateLegacyUserDefaultsIfNeeded(profileID: profileID)
+        guard let url = try? pendingBookURL(profileID: profileID) else { return nil }
+        return readBoundedBookData(at: url)
+    }
+
+    static func removePendingBook(profileID: UUID) {
+        guard let url = try? pendingBookURL(profileID: profileID),
+              FileManager.default.fileExists(atPath: url.path) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    static func promotePendingBook(bookVersionID: String, profileID: UUID) throws {
+        guard let data = readPendingBookData(profileID: profileID),
+              let book = try? JSONDecoder().decode(PersistableStorybook.self, from: data),
+              book.bookVersionID == bookVersionID else { return }
+        try writeCurrentBook(data: data, profileID: profileID)
+        try appendHistory(data: data, profileID: profileID)
+        removePendingBook(profileID: profileID)
     }
 
     /// Appends one full encoded book to history (one file per save — no giant plist arrays).
@@ -173,33 +234,71 @@ enum StorybookLocalStore {
         let name = String(format: "%016lld_%@.\(bookExtension)", stamp, suffix)
         let fileURL = historyDir.appendingPathComponent(name)
         try atomicWrite(data: data, to: fileURL)
+        try pruneHistory(profileID: profileID)
     }
 
     static func readCurrentBookData(profileID: UUID) -> Data? {
         migrateLegacyUserDefaultsIfNeeded(profileID: profileID)
         let url = try? currentBookURL(profileID: profileID)
-        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try? Data(contentsOf: url)
+        guard let url else { return nil }
+        return readBoundedBookData(at: url)
     }
 
-    /// All history payloads in chronological order (sorted by encoded filename).
-    /// Removes any `history/*.book` whose decoded `PersistableStorybook.createdAt` (whole seconds) matches this profile.
-    static func removeHistoryFiles(matchingBookCreatedAt: Date, profileID: UUID) {
+    /// Removes exactly one canonical revision; timestamp fallback is only for legacy books without an ID.
+    static func removeHistoryFile(
+        bookVersionID: String,
+        fallbackCreatedAt: Date,
+        profileID: UUID
+    ) {
         migrateLegacyUserDefaultsIfNeeded(profileID: profileID)
         guard let historyDir = try? historyDirectory(profileID: profileID),
               let urls = try? FileManager.default.contentsOfDirectory(
                 at: historyDir,
                 includingPropertiesForKeys: nil
               ) else { return }
-        let wantSec = Int(matchingBookCreatedAt.timeIntervalSince1970)
         let decoder = JSONDecoder()
         for url in urls where url.pathExtension == bookExtension {
-            guard let d = try? Data(contentsOf: url),
+            guard let d = readBoundedBookData(at: url),
                   let b = try? decoder.decode(PersistableStorybook.self, from: d) else { continue }
-            if b.profileID == profileID, Int(b.createdAt.timeIntervalSince1970) == wantSec {
+            let matchesCanonicalID = b.bookVersionID == bookVersionID
+            let matchesLegacyTimestamp = b.bookVersionID == nil
+                && abs(b.createdAt.timeIntervalSince(fallbackCreatedAt)) < 0.001
+            if b.profileID == profileID, matchesCanonicalID || matchesLegacyTimestamp {
                 try? FileManager.default.removeItem(at: url)
+                break
             }
         }
+    }
+
+    static func removeCloudCache(
+        bookVersionID: String,
+        fallbackCreatedAt: Date,
+        profileID: UUID
+    ) {
+        guard let userID = MemoryUserScope.currentFirebaseUserId else { return }
+        let store = NSUbiquitousKeyValueStore.default
+        let currentKey = StorybookStorageScope.cloudCurrentKey(userID: userID, profileID: profileID)
+        if let data = store.data(forKey: currentKey),
+           let book = try? JSONDecoder().decode(PersistableStorybook.self, from: data) {
+            let matchesCanonicalID = book.bookVersionID == bookVersionID
+            let matchesLegacyTimestamp = book.bookVersionID == nil
+                && abs(book.createdAt.timeIntervalSince(fallbackCreatedAt)) < 0.001
+            if matchesCanonicalID || matchesLegacyTimestamp {
+                store.removeObject(forKey: currentKey)
+            }
+        }
+
+        let historyKey = StorybookStorageScope.cloudHistoryKey(userID: userID, profileID: profileID) + "_metadata"
+        let metadata = store.array(forKey: historyKey) as? [[String: Any]] ?? []
+        let filtered = metadata.filter { entry in
+            if let storedID = entry["bookVersionID"] as? String {
+                return storedID != bookVersionID
+            }
+            guard let timestamp = entry["createdAt"] as? Double else { return true }
+            return abs(timestamp - fallbackCreatedAt.timeIntervalSince1970) >= 0.001
+        }
+        store.set(filtered, forKey: historyKey)
+        store.synchronize()
     }
 
     static func readHistoryDataArray(profileID: UUID) -> [Data] {
@@ -214,7 +313,8 @@ enum StorybookLocalStore {
         let files = urls
             .filter { $0.pathExtension == bookExtension }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        return files.compactMap { try? Data(contentsOf: $0) }
+            .suffix(StorybookHistoryRetentionPolicy.maximumRevisionCount)
+        return files.compactMap(readBoundedBookData)
     }
 
     static func removeCurrentBook(profileID: UUID) {
@@ -236,5 +336,37 @@ enum StorybookLocalStore {
             try fm.removeItem(at: url)
         }
         try fm.moveItem(at: tmp, to: url)
+    }
+
+    private static func readBoundedBookData(at url: URL) -> Data? {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+              values.isRegularFile == true,
+              let fileSize = values.fileSize,
+              StorybookLocalFilePolicy.accepts(byteCount: fileSize) else {
+            return nil
+        }
+        return try? Data(contentsOf: url, options: .mappedIfSafe)
+    }
+
+    private static func pruneHistory(profileID: UUID) throws {
+        let historyDir = try historyDirectory(profileID: profileID)
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: historyDir,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )
+        .filter { $0.pathExtension == bookExtension }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        let sizes = urls.map { url in
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+            return max(0, values?.fileSize ?? 0)
+        }
+        let count = StorybookHistoryRetentionPolicy.removalCount(
+            forOldestFirstByteCounts: sizes
+        )
+        for url in urls.prefix(count) {
+            try FileManager.default.removeItem(at: url)
+        }
     }
 }

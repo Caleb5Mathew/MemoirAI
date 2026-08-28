@@ -552,13 +552,14 @@ struct RelationshipJourneyView: View {
                 }
             }
         } else {
-            Mixpanel.mainInstance().track(event: "Opened Prompt", properties: [
-                "chapter_number": chapter.number,
-                "chapter_title": chapter.title,
-                "prompt_text": prompt.text,
-                "is_completed": isCompleted,
-                "memoir_mode": "relationships"
-            ])
+            Mixpanel.mainInstance().track(
+                event: "Opened Prompt",
+                properties: AnalyticsPrivacyPolicy.sanitized([
+                    "chapter_number": chapter.number,
+                    "is_completed": isCompleted,
+                    "memoir_mode": "relationships"
+                ])
+            )
             selectedPrompt = prompt
         }
     }

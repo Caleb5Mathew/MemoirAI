@@ -108,6 +108,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var subscriptionManager: RCSubscriptionManager
     @EnvironmentObject var profileVM: ProfileViewModel
+    @ObservedObject private var notificationManager = NotificationManager.shared
     
     // Colors
     let softCream = Color(red: 0.98, green: 0.96, blue: 0.89)
@@ -187,10 +188,14 @@ struct SettingsView: View {
     // For free users, limit to what they have remaining (minimum 1 to prevent slider crash)
     private var maxSelectablePages: Int {
         if isSubscribed {
-            return max(1, subscriptionManager.remainingAllowance)
+            return StorybookGenerationBatchPolicy.maximumSelectablePages(
+                remainingAllowance: subscriptionManager.remainingAllowance
+            )
         } else {
             // Minimum 1 to prevent slider range crash (1...0 is invalid)
-            return max(1, FreePreviewConfig.freeImagesRemaining)
+            return StorybookGenerationBatchPolicy.maximumSelectablePages(
+                remainingAllowance: FreePreviewConfig.freeImagesRemaining
+            )
         }
     }
     
@@ -607,6 +612,10 @@ struct SettingsView: View {
                     .foregroundColor(.gray)
             }
             .opacity(canGenerate ? 1.0 : 0.5)
+
+            Text("Up to \(StorybookGenerationBatchPolicy.maximumPagesPerBook) memories per book")
+                .font(.system(size: 12))
+                .foregroundColor(.gray)
             
             // Warning if exceeding allowance (subscribed users)
             if isSubscribed && pageCountSetting > subscriptionManager.remainingAllowance {
@@ -849,6 +858,8 @@ struct SettingsView: View {
     // MARK: - Support Section
     private var supportSection: some View {
         VStack(spacing: 12) {
+            notificationSettingsRow
+
             Button {
                 guard let privacyURL = URL(string: "https://memoirai-7db06.web.app/privacy") else { return }
                 openURL(privacyURL)
@@ -1223,6 +1234,56 @@ struct SettingsView: View {
             } catch {
                 accountLinkError = error.localizedDescription
             }
+        }
+    }
+
+    private var notificationSettingsRow: some View {
+        let action = NotificationPermissionPolicy.action(for: notificationManager.authorizationStatus)
+
+        return Button {
+            switch action {
+            case .request:
+                notificationManager.requestPermission()
+            case .openSettings:
+                guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                openURL(url)
+            case .none:
+                break
+            }
+        } label: {
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(terracotta.opacity(0.15))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: action == .none ? "bell.badge.fill" : "bell.slash.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(terracotta)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Notifications")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(darkText)
+                    Text(action == .none ? "Family request alerts are enabled" : "Enable alerts for family requests")
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray)
+                }
+                Spacer()
+                if action != .none {
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.gray.opacity(0.5))
+                }
+            }
+            .padding(16)
+            .background(Color.white.opacity(0.6))
+            .cornerRadius(16)
+            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+        .disabled(action == .none)
+        .task {
+            notificationManager.refreshAuthorizationStatus()
         }
     }
 

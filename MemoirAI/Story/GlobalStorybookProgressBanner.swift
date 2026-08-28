@@ -61,7 +61,8 @@ struct GlobalStorybookProgressBanner: View {
                     .padding(.top, 6)
                     .padding(.trailing, 6)
                 }
-                .padding(.horizontal, 16)
+                .padding(.leading, 68)
+                .padding(.trailing, 16)
                 .padding(.top, 8)
             }
         }

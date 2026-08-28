@@ -63,6 +63,10 @@ service firebase.storage {
             && request.resource.contentType == 'image/jpeg'
             && request.resource.size > 0
             && request.resource.size <= 10 * 1024 * 1024)
+          || (pageFile.matches('page_[0-9]{3}\\.freeform\\.json')
+            && request.resource.contentType == 'application/json'
+            && request.resource.size > 0
+            && request.resource.size <= 34 * 1000 * 1000)
         );
       allow delete: if isOwner(userId)
         && !hasActiveCheckoutLock(userId)

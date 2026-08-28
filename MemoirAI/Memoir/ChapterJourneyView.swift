@@ -333,13 +333,14 @@ struct ChapterJourneyView: View {
                 return
             }
 
-            Mixpanel.mainInstance().track(event: "Opened Prompt", properties: [
-                "chapter_number": chapter.number,
-                "chapter_title": chapter.title,
-                "prompt_text": prompt.text,
-                "is_completed": isCompleted,
-                "per_child_count": expanded.count
-            ])
+            Mixpanel.mainInstance().track(
+                event: "Opened Prompt",
+                properties: AnalyticsPrivacyPolicy.sanitized([
+                    "chapter_number": chapter.number,
+                    "is_completed": isCompleted,
+                    "per_child_count": expanded.count
+                ])
+            )
 
             if expanded.count == 1 {
                 // Single child (or no kids): open a regular RecordingView with the substituted text.
@@ -374,12 +375,13 @@ struct ChapterJourneyView: View {
             }
         } else {
             // Track prompt opened
-            Mixpanel.mainInstance().track(event: "Opened Prompt", properties: [
-                "chapter_number": chapter.number,
-                "chapter_title": chapter.title,
-                "prompt_text": prompt.text,
-                "is_completed": isCompleted
-            ])
+            Mixpanel.mainInstance().track(
+                event: "Opened Prompt",
+                properties: AnalyticsPrivacyPolicy.sanitized([
+                    "chapter_number": chapter.number,
+                    "is_completed": isCompleted
+                ])
+            )
 
             // start a new recording (no animation to prevent visual flash)
             selectedPrompt = prompt

@@ -62,7 +62,7 @@ actor MemoryTitleService {
                 return nil
             }
 
-            print("✅ Generated title: '\(cleanedTitle)'")
+            print("✅ Generated memory title")
             return cleanedTitle
 
         } catch {

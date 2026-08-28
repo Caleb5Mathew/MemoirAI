@@ -1,1 +1,115 @@
-////  TranscriptChunker.swift//  MemoirAI////  Created by user941803 on 5/9/25.//import Foundationstruct TranscriptChunker {    /// Splits `text` into scene-based chunks, each ≤ maxTokens tokens.    /// You can tune maxTokens to ~120_000 for GPT-4-Turbo.    static func chunk(_ text: String, maxTokens: Int = 120_000) -> [String] {        print("[TranscriptChunker DEBUG] chunk() called. Input text length: \(text.count), maxTokens: \(maxTokens)")        if text.isEmpty {            print("[TranscriptChunker DEBUG] Input text is empty. Returning empty array.")            return []        }        // 1) Naïvely split on blank lines        let paragraphs = text.components(separatedBy: "\n\n")        print("[TranscriptChunker DEBUG] Text split into \(paragraphs.count) initial paragraphs by '\\n\\n'.")        // paragraphs.enumerated().forEach { index, para in        //     print("[TranscriptChunker DEBUG]   Initial Paragraph \(index): \"\(para.prefix(80))...\" (length: \(para.count))")        // }        var chunks: [String] = []        var currentChunkText = ""        var currentChunkApproxTokens = 0        print("[TranscriptChunker DEBUG] Starting to process paragraphs to form chunks...")        for (index, para) in paragraphs.enumerated() {            let paraFirstFewWords = para.split(separator: " ").prefix(10).joined(separator: " ")            print("[TranscriptChunker DEBUG] Processing paragraph #\(index + 1) of \(paragraphs.count). Para (start): \"\(paraFirstFewWords)...\" (length: \(para.count))")            if para.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && currentChunkText.isEmpty {                print("[TranscriptChunker DEBUG]   Paragraph is empty or whitespace and current chunk is empty. Skipping.")                continue            }                        let tentativeChunkText: String            if currentChunkText.isEmpty {                tentativeChunkText = para                print("[TranscriptChunker DEBUG]   Current chunk is empty. Tentative chunk is just the paragraph.")            } else {                tentativeChunkText = currentChunkText + "\n\n" + para                print("[TranscriptChunker DEBUG]   Appending paragraph to current chunk. Tentative chunk starts with: \"\(currentChunkText.prefix(40))...\" and ends with \"...\(para.suffix(40))\"")            }            let wordCount = tentativeChunkText.split { $0.isWhitespace || $0.isNewline }.count // More robust word count            let approxTokens = Int(Double(wordCount) * 1.3)            print("[TranscriptChunker DEBUG]   Tentative chunk word count: \(wordCount), Approx tokens: \(approxTokens) (limit: \(maxTokens))")            if approxTokens <= maxTokens {                currentChunkText = tentativeChunkText                currentChunkApproxTokens = approxTokens                print("[TranscriptChunker DEBUG]   Approx tokens (\(approxTokens)) <= maxTokens (\(maxTokens)). Added paragraph to current chunk.")                print("[TranscriptChunker DEBUG]   Current chunk now has approx \(currentChunkApproxTokens) tokens. Current chunk length: \(currentChunkText.count)")            } else {                print("[TranscriptChunker DEBUG]   Approx tokens (\(approxTokens)) > maxTokens (\(maxTokens)). Current chunk will be finalized.")                if !currentChunkText.isEmpty {                    print("[TranscriptChunker DEBUG]   Finalizing current chunk (approx \(currentChunkApproxTokens) tokens, length: \(currentChunkText.count)). Adding to chunks list.")                    // print("[TranscriptChunker DEBUG]     Finalized Chunk Content: \"\(currentChunkText)\"") // Potentially very verbose                    chunks.append(currentChunkText)                    print("[TranscriptChunker DEBUG]   Added chunk. Total chunks now: \(chunks.count)")                } else {                    // This case means the single paragraph itself is too large                    print("[TranscriptChunker DEBUG]   Current chunk was empty, but paragraph itself is too large (approx \(approxTokens) tokens).")                }                // Start a new chunk with the current paragraph                currentChunkText = para                let currentParaWordCount = para.split { $0.isWhitespace || $0.isNewline }.count                currentChunkApproxTokens = Int(Double(currentParaWordCount) * 1.3)                print("[TranscriptChunker DEBUG]   Starting new chunk with current paragraph. New chunk approx tokens: \(currentChunkApproxTokens), length: \(currentChunkText.count)")                // If even the single paragraph is too large, it gets added as its own chunk.                // The spec "each ≤ maxTokens tokens" might be violated here if a single paragraph is too big.                // The current logic adds it anyway.                if currentChunkApproxTokens > maxTokens {                    print("[TranscriptChunker WARNING]   Single paragraph approx tokens (\(currentChunkApproxTokens)) exceeds maxTokens (\(maxTokens)). This paragraph will form a chunk that is too large.")                    // If such a large paragraph should be split further or truncated, logic would be needed here.                    // For now, it will be added as is in the next step or at the end.                }            }        }        // Add the last remaining chunk        if !currentChunkText.isEmpty {            print("[TranscriptChunker DEBUG] Loop finished. Adding final current chunk (approx \(currentChunkApproxTokens) tokens, length: \(currentChunkText.count)) to chunks list.")            // print("[TranscriptChunker DEBUG]     Final Chunk Content: \"\(currentChunkText)\"") // Potentially very verbose            chunks.append(currentChunkText)            print("[TranscriptChunker DEBUG] Added final chunk. Total chunks now: \(chunks.count).")        } else {            print("[TranscriptChunker DEBUG] Loop finished. No final current chunk to add (it was empty).")        }                print("[TranscriptChunker DEBUG] chunk() finished. Returning \(chunks.count) chunks.")        chunks.enumerated().forEach { index, chunkContent in            let wordCount = chunkContent.split { $0.isWhitespace || $0.isNewline }.count            let approxTokens = Int(Double(wordCount) * 1.3)            print("[TranscriptChunker DEBUG]   Returned Chunk \(index + 1): Approx tokens: \(approxTokens), Length: \(chunkContent.count), Starts with: \"\(chunkContent.prefix(80))...\"")        }        return chunks    }}
+//
+//  TranscriptChunker.swift
+//  MemoirAI
+//
+//  Created by user941803 on 5/9/25.
+//
+
+import Foundation
+
+struct TranscriptChunker {
+    /// A conservative token estimate that accounts for both natural-language words
+    /// and long strings without whitespace.
+    static func approximateTokenCount(_ text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+
+        let wordCount = text.split(whereSeparator: { $0.isWhitespace }).count
+        return approximateTokenCount(wordCount: wordCount, utf8Count: text.utf8.count)
+    }
+
+    private static func approximateTokenCount(wordCount: Int, utf8Count: Int) -> Int {
+        let wordEstimate = Int(Double(wordCount) * 1.3)
+        let byteEstimate = (utf8Count + 3) / 4
+        return max(wordEstimate, byteEstimate)
+    }
+
+    /// Splits `text` into chunks whose estimated token count never exceeds `maxTokens`.
+    static func chunk(_ text: String, maxTokens: Int = 120_000) -> [String] {
+        guard maxTokens > 0 else { return [] }
+
+        let paragraphs = text
+            .components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !paragraphs.isEmpty else { return [] }
+
+        var units: [(text: String, startsParagraph: Bool)] = []
+        for paragraph in paragraphs {
+            let unitStartIndex = units.count
+            if approximateTokenCount(paragraph) <= maxTokens {
+                units.append((paragraph, true))
+                continue
+            }
+
+            var currentWords: [Substring] = []
+            var currentUTF8Count = 0
+            for word in paragraph.split(whereSeparator: { $0.isWhitespace }) {
+                let separatorByteCount = currentWords.isEmpty ? 0 : 1
+                let candidateUTF8Count = currentUTF8Count + separatorByteCount + word.utf8.count
+                if approximateTokenCount(
+                    wordCount: currentWords.count + 1,
+                    utf8Count: candidateUTF8Count
+                ) <= maxTokens {
+                    currentWords.append(word)
+                    currentUTF8Count = candidateUTF8Count
+                    continue
+                }
+
+                if !currentWords.isEmpty {
+                    units.append((currentWords.joined(separator: " "), units.count == unitStartIndex))
+                    currentWords.removeAll(keepingCapacity: true)
+                    currentUTF8Count = 0
+                }
+
+                let wordText = String(word)
+                if approximateTokenCount(wordText) <= maxTokens {
+                    currentWords.append(word)
+                    currentUTF8Count = word.utf8.count
+                    continue
+                }
+
+                var fragment = ""
+                var fragmentUTF8Count = 0
+                for scalar in wordText.unicodeScalars {
+                    let scalarText = String(scalar)
+                    let candidateUTF8Count = fragmentUTF8Count + scalarText.utf8.count
+                    if !fragment.isEmpty,
+                       approximateTokenCount(wordCount: 1, utf8Count: candidateUTF8Count) > maxTokens {
+                        units.append((fragment, units.count == unitStartIndex))
+                        fragment = scalarText
+                        fragmentUTF8Count = scalarText.utf8.count
+                    } else {
+                        fragment.append(contentsOf: scalarText)
+                        fragmentUTF8Count = candidateUTF8Count
+                    }
+                }
+                if !fragment.isEmpty {
+                    units.append((fragment, units.count == unitStartIndex))
+                }
+            }
+
+            if !currentWords.isEmpty {
+                units.append((currentWords.joined(separator: " "), units.count == unitStartIndex))
+            }
+        }
+
+        var chunks: [String] = []
+        var current = ""
+        for unit in units {
+            let separator = current.isEmpty ? "" : (unit.startsParagraph ? "\n\n" : " ")
+            let candidate = current + separator + unit.text
+            if approximateTokenCount(candidate) <= maxTokens {
+                current = candidate
+            } else {
+                if !current.isEmpty { chunks.append(current) }
+                current = unit.text
+            }
+        }
+        if !current.isEmpty { chunks.append(current) }
+
+        #if DEBUG
+        print("[TranscriptChunker] split \(text.count) characters into \(chunks.count) chunks")
+        #endif
+        return chunks
+    }
+}

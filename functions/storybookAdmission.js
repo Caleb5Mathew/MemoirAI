@@ -2,6 +2,7 @@ const crypto = require("crypto");
 
 const REVENUECAT_PUBLIC_API_KEY = "appl_HTtNKyhVPddJOKrcqGCnWtvZcto";
 const PAID_PAGE_LIMIT = 100;
+const MAX_PAGES_PER_JOB = 9;
 // The app offers three preview images plus one one-time tutorial image. The
 // server caps the combined lifetime allowance so a modified client cannot
 // exceed what the product promises.
@@ -11,7 +12,7 @@ const ACTIVE_LEASE_MS = 20 * 60 * 1000;
 const WORKER_HEARTBEAT_STALE_MS = 2 * 60 * 1000;
 const MAX_WORKER_ATTEMPTS = 3;
 const STORYBOOK_ADMISSION_VERSION = 1;
-const SUBJECT_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+const SUBJECT_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const JOB_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -43,12 +44,12 @@ function sanitizeStorybookJobPayload(input, userId, jobId) {
   if (String(input?.bookVersionId || jobId) !== jobId) throw new Error("bookVersionId mismatch");
 
   const pageCountTarget = Number(input?.pageCountTarget);
-  if (!Number.isInteger(pageCountTarget) || pageCountTarget < 1 || pageCountTarget > PAID_PAGE_LIMIT) {
+  if (!Number.isInteger(pageCountTarget) || pageCountTarget < 1 || pageCountTarget > MAX_PAGES_PER_JOB) {
     throw new Error("invalid pageCountTarget");
   }
 
   const pinnedMemoryIds = Array.isArray(input?.pinnedMemoryIds) ? input.pinnedMemoryIds : [];
-  if (pinnedMemoryIds.length > PAID_PAGE_LIMIT || pinnedMemoryIds.some((id) => !UUID_PATTERN.test(String(id)))) {
+  if (pinnedMemoryIds.length > MAX_PAGES_PER_JOB || pinnedMemoryIds.some((id) => !UUID_PATTERN.test(String(id)))) {
     throw new Error("invalid pinnedMemoryIds");
   }
 
@@ -587,6 +588,7 @@ function createStorybookJobHandler({
 
 module.exports = {
   FREE_PAGE_LIMIT,
+  MAX_PAGES_PER_JOB,
   MAX_WORKER_ATTEMPTS,
   STORYBOOK_ADMISSION_VERSION,
   WORKER_HEARTBEAT_STALE_MS,

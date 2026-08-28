@@ -7,6 +7,7 @@ const {
   FREE_PAGE_LIMIT,
   fetchLegacyRevenueCatEntitlement,
   isAdmittedStorybookJob,
+  MAX_PAGES_PER_JOB,
   paidStorybookUsagePeriod,
   releaseStorybookActiveLease,
   settleStorybookReservation,
@@ -28,7 +29,7 @@ const base = {
 
 assert.strictEqual(sanitizeStorybookJobPayload(base, "user-1", "job_1").status, "queued");
 assert.throws(
-  () => sanitizeStorybookJobPayload({ ...base, pageCountTarget: 101 }, "user-1", "job_1"),
+  () => sanitizeStorybookJobPayload({ ...base, pageCountTarget: MAX_PAGES_PER_JOB + 1 }, "user-1", "job_1"),
   /pageCountTarget/
 );
 assert.throws(
@@ -54,6 +55,7 @@ assert.strictEqual(activeRevenueCatEntitlement({ subscriber: { entitlements: {
   unrelated: { expires_date: "2026-09-27T12:00:00Z" }
 } } }, now), null);
 assert.strictEqual(FREE_PAGE_LIMIT, 4);
+assert.strictEqual(MAX_PAGES_PER_JOB, 9);
 assert.deepStrictEqual(
   paidStorybookUsagePeriod(new Date("2026-08-31T23:59:59Z")),
   {

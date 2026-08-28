@@ -147,7 +147,7 @@ final class BatchTranscriptionManager: ObservableObject {
             case .failure(let error):
                 // Leave memory.text untouched so `needsTranscription` still matches
                 // this entry and a future batch run retries it.
-                print("❌ Enhanced batch transcription error for memory \(memory.id?.uuidString ?? "?"):", error)
+                print("❌ Enhanced batch transcription error for memory \(memory.id?.uuidString.prefix(8) ?? "?")…:", error)
             }
             if let entryID = memory.id {
                 self.markComplete(entryID)

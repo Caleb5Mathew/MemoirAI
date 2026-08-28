@@ -8,10 +8,59 @@ const path = require("path");
 const fs = require("fs");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
+const {
+  boundedProviderRequestTimeoutMs,
+  canStartProviderAttempt
+} = require("./retryDeadlinePolicy");
 
 const GEMINI_IMAGE_MODEL = "gemini-3-pro-image-preview";
 const GEMINI_TEXT_MODEL = "gemini-2.5-flash";
 const OPENAI_TEXT_MODEL = "gpt-5-mini";
+const GEMINI_MAX_SERIALIZED_REQUEST_BYTES = 19 * 1024 * 1024;
+
+function mimeTypeForImageBuffer(value) {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value || []);
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) return "image/png";
+  if (
+    buffer.length >= 3 &&
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff
+  ) return "image/jpeg";
+  return null;
+}
+
+function serializedGeminiRequestBody(body) {
+  const serialized = JSON.stringify(body);
+  if (Buffer.byteLength(serialized) > GEMINI_MAX_SERIALIZED_REQUEST_BYTES) {
+    const error = new Error("Reference images exceed the provider request limit.");
+    error.code = "reference-payload-too-large";
+    throw error;
+  }
+  return serialized;
+}
+
+function openAITextRequestOptions(deadlineAtMs, nowMs = Date.now()) {
+  const timeout = deadlineAtMs == null
+    ? 30_000
+    : boundedProviderRequestTimeoutMs({
+        maximumTimeoutMs: 30_000,
+        nowMs,
+        deadlineMs: deadlineAtMs
+      });
+  if (timeout == null) {
+    const error = new Error("Worker deadline does not allow another text request.");
+    error.code = "worker-deadline";
+    throw error;
+  }
+  return { timeout, maxRetries: 0 };
+}
 
 function storageBucket() {
   return admin.storage().bucket();
@@ -278,13 +327,11 @@ function stripLikelyHallucinatedNarratorGender(memoryText, job, characters) {
   if (String(job?.gender || "").trim()) return characters;
   if (memoryHasExplicitNarratorGenderCue(memoryText)) return characters;
   let stripped = 0;
-  const lastGender = [];
   const out = characters.map((c) => {
     if (!isMemoirNarratorCard(c)) return c;
     const g = String(c.gender || "").trim();
     if (!g) return c;
     stripped += 1;
-    lastGender.push(g);
     return { ...c, gender: "" };
   });
   if (stripped > 0) {
@@ -293,7 +340,7 @@ function stripLikelyHallucinatedNarratorGender(memoryText, job, characters) {
         JSON.stringify({
           kind: "storybook.narratorGenderHeuristicStripped",
           strippedCount: stripped,
-          gendersRemoved: lastGender
+          valuesRemoved: stripped
         })
       );
     } catch (_) {
@@ -1302,6 +1349,10 @@ function assembleFinalPrompt(
   const sceneForPrompt = String(sceneDescription || "").trim();
   const canonLines = options.canonLines || [];
   const referenceImageOrder = options.referenceImageOrder || [];
+  const pageAgeOverride = narratorAgeOverrideForPage(
+    String(options.characterDetailsForAge || ""),
+    memoryText
+  );
 
   let antiStyle =
     "Avoid mixing in unrelated illustration genres or default styles not specified in STYLE LOCK.";
@@ -1342,10 +1393,9 @@ function assembleFinalPrompt(
           `REFERENCE IMAGE #${idx} (identity / likeness ONLY): Use for recognizable facial identity only. Do NOT copy photographic lighting, skin texture, exposure, or lens look. Re-render the person completely in the STYLE LOCK above. The reference photograph itself MUST NOT appear inside the output image — no inset, no thumbnail, no corner box, no picture-in-picture, no polaroid, no framed photo on a wall/desk/locket, no avatar bubble. It is out-of-frame information only.`
         );
         if (hasHeadshot) {
-          const ageOverride = narratorAgeOverrideForPage(String(options.characterDetailsForAge || ""), memoryText);
-          if (ageOverride) {
+          if (pageAgeOverride) {
             parts.push(
-              `AGE OVERRIDE FOR THIS PAGE: The narrator must be rendered at age ${ageOverride.age} (life stage: ${ageOverride.lifeStage}). Preserve facial identity from the headshot but adjust facial proportions, body proportions, hair length/style, and clothing to match age ${ageOverride.age}. Treat the headshot as identity reference, not as age reference. Re-age the face only: do NOT change ethnicity, skin tone, gender presentation, or facial bone structure beyond age-appropriate development. Identity comes from the headshot reference image; only age changes.`
+              `AGE OVERRIDE FOR THIS PAGE: The narrator must be rendered at age ${pageAgeOverride.age} (life stage: ${pageAgeOverride.lifeStage}). Preserve facial identity from the headshot but adjust facial proportions, body proportions, hair length/style, and clothing to match age ${pageAgeOverride.age}. Treat the headshot as identity reference, not as age reference. Re-age the face only: do NOT change ethnicity, skin tone, gender presentation, or facial bone structure beyond age-appropriate development. Identity comes from the headshot reference image; only age changes.`
             );
           }
         }
@@ -1421,6 +1471,9 @@ function assembleFinalPrompt(
   parts.push(
     "- Faces: when people are present, faces should be visible and distinct (unless MEMORY CONTEXT implies otherwise)."
   );
+  parts.push(
+    "- Singular-object lock: show one physically coherent instant and do not duplicate the same singular object to satisfy conflicting simultaneous actions. If one person holds an object while another uses that object, choose the clearest single action and render exactly one object."
+  );
   const identityBlock = narratorIdentityPromptSection(narratorPresence, hasHeadshot, job || {});
   if (identityBlock && narratorPresence !== "likelyAbsent") {
     parts.push("- Memoir subject / narrator cues:");
@@ -1429,6 +1482,11 @@ function assembleFinalPrompt(
     }
     parts.push(
       "  Narrator MUST appear in-frame as a visible person whenever this memory places them in the scene (not off-screen, not symbolic-only)."
+    );
+  }
+  if (pageAgeOverride) {
+    parts.push(
+      `- FINAL NARRATOR AGE LOCK (overrides present-day headshot/profile age cues): Render the memoir narrator at age ${pageAgeOverride.age}, clearly reading as ${pageAgeOverride.article} ${pageAgeOverride.lifeStage}. Use the headshot only for stable identity cues such as facial structure, eye shape, skin tone, ethnicity, and gender presentation. Do not copy present-day gray hair, wrinkles, beard color, or labels such as "older adult" when they conflict with age ${pageAgeOverride.age}.`
     );
   }
   if (artStyle === "realistic") {
@@ -1458,7 +1516,7 @@ function extractJsonObjectFromAssistantText(content) {
 function explicitAge(memoryText) {
   const lower = String(memoryText || "").toLowerCase();
   const patterns = [
-    /\b(?:i was|when i was|at age|age|turned|turning)\s+(\d{1,2})\b/,
+    /\b(?:i was|when i was|at(?: age)?|age|turned|turning)\s+(\d{1,2})\b/,
     /\b(\d{1,2})\s*(?:years old|year old|yrs old)\b/
   ];
   for (const re of patterns) {
@@ -1487,14 +1545,29 @@ function explicitAge(memoryText) {
     sixteen: 16,
     seventeen: 17,
     eighteen: 18,
-    nineteen: 19,
-    twenty: 20
+    nineteen: 19
   };
-  const wm = lower.match(/\b(?:i was|when i was|at age|age|turned|turning)\s+([a-z\-]+)\b/);
+  const tensAges = {
+    twenty: 20,
+    thirty: 30,
+    forty: 40,
+    fifty: 50,
+    sixty: 60,
+    seventy: 70,
+    eighty: 80,
+    ninety: 90
+  };
+  const wm = lower.match(
+    /\b(?:i was|when i was|at(?: age)?|age|turned|turning)\s+([a-z]+(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?)\b/
+  );
   if (wm && wm[1]) {
-    const token = wm[1].replace(/-/g, " ");
-    for (const [word, value] of Object.entries(wordAges)) {
-      if (token.includes(word)) return value;
+    const words = wm[1].replace(/-/g, " ").split(/\s+/).filter(Boolean);
+    if (words.length === 1) {
+      if (wordAges[words[0]] != null) return wordAges[words[0]];
+      if (tensAges[words[0]] != null) return tensAges[words[0]];
+    }
+    if (words.length === 2 && tensAges[words[0]] != null && wordAges[words[1]] != null) {
+      return tensAges[words[0]] + wordAges[words[1]];
     }
   }
   if (/\b(?:high\s+school\s+)?senior\s+year\b/.test(lower)) return 17;
@@ -1563,12 +1636,12 @@ function ageFromNarratorCard(characterDetailsString) {
   return ageStringToInt(String(narr.age || "").trim());
 }
 
-/** Per-page narrator age for image prompts: prefer narrator card age, else explicit age in memory text. */
+/** Per-page narrator age: a memory's historical age overrides the present-day profile card. */
 function narratorAgeOverrideForPage(characterDetailsString, memoryText) {
   const narr = narratorCharacterRowFromDetailsString(characterDetailsString);
   const cardAge = ageStringToInt(String(narr?.age || "").trim());
   const explicit = explicitAge(memoryText);
-  const n = cardAge != null ? cardAge : explicit;
+  const n = explicit != null ? explicit : cardAge;
   if (n == null) return null;
   const a = parseInt(String(n), 10);
   if (!Number.isFinite(a) || a < 1 || a > 110) return null;
@@ -1576,9 +1649,10 @@ function narratorAgeOverrideForPage(characterDetailsString, memoryText) {
   if (a <= 12) lifeStage = "child";
   else if (a <= 17) lifeStage = "teen";
   else if (a <= 35) lifeStage = "young adult";
-  else if (a <= 55) lifeStage = "middle aged";
-  else lifeStage = "elderly";
-  return { age: a, lifeStage };
+  else if (a <= 64) lifeStage = "middle aged";
+  else lifeStage = "older adult";
+  const article = /^[aeiou]/i.test(lifeStage) ? "an" : "a";
+  return { age: a, lifeStage, article };
 }
 
 function heuristicAgeFromLifeStage(memoryText) {
@@ -1682,7 +1756,13 @@ function extractImageBufferFromGeminiResponse(data, notFoundMessage) {
   throw err;
 }
 
-async function generateIllustrationBuffer(geminiApiKey, prompt, size, referenceImageBuffers) {
+async function generateIllustrationBuffer(
+  geminiApiKey,
+  prompt,
+  size,
+  referenceImageBuffers,
+  { deadlineAtMs } = {}
+) {
   const anti =
     "Do not include any words, letters, numbers, captions, signs, logos, or typographic marks in the image.";
   const antiReferenceEcho =
@@ -1704,9 +1784,15 @@ async function generateIllustrationBuffer(geminiApiKey, prompt, size, referenceI
   const imageParts = [];
   for (const buf of referenceImageBuffers || []) {
     if (!buf || !buf.length) continue;
+    const mimeType = mimeTypeForImageBuffer(buf);
+    if (!mimeType) {
+      const error = new Error("Reference image has an unsupported format.");
+      error.code = "invalid-reference-image";
+      throw error;
+    }
     imageParts.push({
       inline_data: {
-        mime_type: "image/jpeg",
+        mime_type: mimeType,
         data: Buffer.isBuffer(buf) ? buf.toString("base64") : Buffer.from(buf).toString("base64")
       }
     });
@@ -1725,13 +1811,26 @@ async function generateIllustrationBuffer(geminiApiKey, prompt, size, referenceI
       imageConfig: { aspectRatio }
     }
   };
+  const serializedBody = serializedGeminiRequestBody(body);
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
+  const timeoutMs = deadlineAtMs == null
+    ? 180_000
+    : boundedProviderRequestTimeoutMs({
+        maximumTimeoutMs: 180_000,
+        nowMs: Date.now(),
+        deadlineMs: deadlineAtMs
+      });
+  if (timeoutMs == null) {
+    const error = new Error("Worker deadline does not allow another image request.");
+    error.code = "worker-deadline";
+    throw error;
+  }
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(180000)
+    body: serializedBody,
+    signal: AbortSignal.timeout(timeoutMs)
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -1774,7 +1873,12 @@ function parseLeakDetectorResponse(data) {
  * prompt forbidding it. Never throws; any error means "no leak detected" so the page
  * is never failed by its own guard.
  */
-async function detectReferenceLeak(geminiApiKey, imageBuf) {
+async function detectReferenceLeak(
+  geminiApiKey,
+  imageBuf,
+  { deadlineAtMs, beforeAttempt } = {}
+) {
+  if (beforeAttempt) await beforeAttempt();
   try {
     if (!imageBuf || !imageBuf.length) return false;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TEXT_MODEL}:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
@@ -1786,7 +1890,7 @@ async function detectReferenceLeak(geminiApiKey, imageBuf) {
           parts: [
             {
               inline_data: {
-                mime_type: "image/png",
+                mime_type: mimeTypeForImageBuffer(imageBuf) || "image/png",
                 data: Buffer.isBuffer(imageBuf) ? imageBuf.toString("base64") : Buffer.from(imageBuf).toString("base64")
               }
             },
@@ -1796,11 +1900,19 @@ async function detectReferenceLeak(geminiApiKey, imageBuf) {
       ],
       generationConfig: { temperature: 0, maxOutputTokens: 64, responseMimeType: "application/json" }
     };
+    const timeoutMs = deadlineAtMs == null
+      ? 30_000
+      : boundedProviderRequestTimeoutMs({
+          maximumTimeoutMs: 30_000,
+          nowMs: Date.now(),
+          deadlineMs: deadlineAtMs
+        });
+    if (timeoutMs == null) return false;
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return false;
@@ -1820,7 +1932,14 @@ const LEAK_RETRY_CLAUSE =
  * returns the retry result regardless of its own verdict. `log` is an optional
  * (event, details) callback for structured logging; it must not throw.
  */
-async function generateIllustrationBufferGuarded(geminiApiKey, prompt, size, referenceImageBuffers, log) {
+async function generateIllustrationBufferGuarded(
+  geminiApiKey,
+  prompt,
+  size,
+  referenceImageBuffers,
+  log,
+  { deadlineAtMs, beforeAttempt } = {}
+) {
   const emit = (event, details) => {
     try {
       if (log) log(event, details);
@@ -1828,26 +1947,49 @@ async function generateIllustrationBufferGuarded(geminiApiKey, prompt, size, ref
       // logging must never break generation
     }
   };
-  const first = await generateIllustrationBuffer(geminiApiKey, prompt, size, referenceImageBuffers);
+  const first = await generateIllustrationBuffer(
+    geminiApiKey,
+    prompt,
+    size,
+    referenceImageBuffers,
+    { deadlineAtMs }
+  );
   const hasRefs = Array.isArray(referenceImageBuffers) && referenceImageBuffers.some((b) => b && b.length);
   if (!hasRefs) return first;
 
-  const leaked = await detectReferenceLeak(geminiApiKey, first);
+  const leaked = await detectReferenceLeak(geminiApiKey, first, {
+    deadlineAtMs,
+    beforeAttempt
+  });
   if (!leaked) return first;
 
   emit("storybook.leakDetected", { promptLen: prompt.length, size });
+  if (deadlineAtMs != null && !canStartProviderAttempt({
+    nowMs: Date.now(),
+    deadlineMs: deadlineAtMs,
+    minimumExecutionMs: 120_000
+  })) {
+    emit("storybook.leakRetryResult", { ok: false, reason: "deadline-budget" });
+    return first;
+  }
   try {
+    if (beforeAttempt) await beforeAttempt();
     const retry = await generateIllustrationBuffer(
       geminiApiKey,
       `${prompt}\n\n${LEAK_RETRY_CLAUSE}`,
       size,
-      referenceImageBuffers
+      referenceImageBuffers,
+      { deadlineAtMs }
     );
     emit("storybook.leakRetryResult", { ok: true, bytes: retry.length });
     return retry;
   } catch (e) {
     // The corrective attempt failing must not lose the page — ship the first render.
-    emit("storybook.leakRetryResult", { ok: false, message: String(e?.message || e) });
+    emit("storybook.leakRetryResult", {
+      ok: false,
+      errorName: String(e?.name || "Error").slice(0, 80),
+      status: Number.isFinite(e?.status) ? e.status : null
+    });
     return first;
   }
 }
@@ -2056,22 +2198,51 @@ COMPOSITION:
 • Favor broad shapes and gentle gradients where back-cover marketing text would typically sit.`;
 }
 
-async function generateBackCoverPitch(geminiApiKey, prompt) {
+async function generateBackCoverPitch(geminiApiKey, prompt, { deadlineAtMs } = {}) {
+  if (deadlineAtMs != null && !canStartProviderAttempt({
+    nowMs: Date.now(),
+    deadlineMs: deadlineAtMs,
+    minimumExecutionMs: 15_000
+  })) return null;
+  const timeoutMs = deadlineAtMs == null
+    ? 60_000
+    : boundedProviderRequestTimeoutMs({
+        maximumTimeoutMs: 60_000,
+        nowMs: Date.now(),
+        deadlineMs: deadlineAtMs
+      });
+  if (timeoutMs == null) return null;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TEXT_MODEL}:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.7, maxOutputTokens: 256 }
+    generationConfig: { temperature: 0.7, maxOutputTokens: 768 }
   };
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(60000)
+    signal: AbortSignal.timeout(timeoutMs)
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) return null;
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   return text ? String(text).trim() : null;
+}
+
+function isUsableBackCoverPitch(value) {
+  const pitch = String(value || "").trim();
+  if (!pitch || !/[.!?]$/.test(pitch)) return false;
+  const wordCount = pitch.split(/\s+/).filter(Boolean).length;
+  const sentenceCount = (pitch.match(/[.!?](?=\s|$)/g) || []).length;
+  return wordCount >= 24 && wordCount <= 160 && sentenceCount >= 2;
+}
+
+function fallbackBackCoverPitch(profileName) {
+  const name = String(profileName || "").trim().replace(/\s+/g, " ").slice(0, 100);
+  const opening = name
+    ? `Step into the moments that shaped ${name}'s life, from everyday traditions to brave new beginnings.`
+    : "Step into the moments that shaped a life, from everyday traditions to brave new beginnings.";
+  return `${opening} Told with warmth and honesty, these memories preserve the people, places, and choices that mattered most. This keepsake is made to be shared, revisited, and passed down through generations.`;
 }
 
 function isQuestionDrivenMemory(entry) {
@@ -2104,9 +2275,9 @@ function loadStyleReferencePng(styleReferencePreset) {
 }
 
 function createStorybookAI(openaiApiKey, geminiApiKey) {
-  const openai = new OpenAI({ apiKey: openaiApiKey });
+  const openai = new OpenAI({ apiKey: openaiApiKey, maxRetries: 0, timeout: 30_000 });
 
-  async function chatMini(messages, extra = {}) {
+  async function chatMini(messages, extra = {}, { deadlineAtMs } = {}) {
     // gpt-5 models reject max_tokens and non-default temperature, and spend reasoning
     // tokens from the completion budget — normalize legacy params from call sites.
     const { max_tokens: legacyMaxTokens, temperature: _ignoredTemperature, ...rest } = extra;
@@ -2117,11 +2288,14 @@ function createStorybookAI(openaiApiKey, geminiApiKey) {
       max_completion_tokens: Math.max(Number(legacyMaxTokens) || 512, 128),
       ...rest
     };
-    const completion = await openai.chat.completions.create(params);
+    const completion = await openai.chat.completions.create(
+      params,
+      openAITextRequestOptions(deadlineAtMs)
+    );
     return completion.choices[0]?.message?.content || "";
   }
 
-  async function rankMemoriesWithLLM(memories, topN) {
+  async function rankMemoriesWithLLM(memories, topN, options = {}) {
     const requestedCount = Math.max(1, topN);
     const valid = memories.filter((m) => m.id && String(m.transcription || "").trim());
     if (requestedCount >= valid.length) return valid;
@@ -2140,7 +2314,11 @@ function createStorybookAI(openaiApiKey, geminiApiKey) {
       content: `Return ONLY JSON { "top": ["uuid1","uuid2"] }. \nMemories: ${stubStr}`
     };
     try {
-      const content = await chatMini([system, user], { max_tokens: 512, temperature: 0 });
+      const content = await chatMini(
+        [system, user],
+        { max_tokens: 512, temperature: 0 },
+        options
+      );
       const slice = extractJsonObjectFromAssistantText(content) || content;
       const parsed = JSON.parse(slice);
       const ids = parsed.top;
@@ -2161,12 +2339,15 @@ function createStorybookAI(openaiApiKey, geminiApiKey) {
         .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
         .slice(0, requestedCount);
     } catch (e) {
-      console.warn("rankMemoriesWithLLM failed", e);
+      console.warn("rankMemoriesWithLLM failed", {
+        name: String(e?.name || "Error").slice(0, 80),
+        status: Number.isFinite(e?.status) ? e.status : null
+      });
       return valid.slice(0, requestedCount);
     }
   }
 
-  async function extractAge(memoryText, characterDetailsString) {
+  async function extractAge(memoryText, characterDetailsString, options = {}) {
     const ex = explicitAge(memoryText);
     if (ex != null) return ex;
     const fromCards = ageFromNarratorCard(String(characterDetailsString || ""));
@@ -2182,7 +2363,8 @@ function createStorybookAI(openaiApiKey, geminiApiKey) {
           { role: "system", content: systemPrompt },
           { role: "user", content: memoryText }
         ],
-        { temperature: 0, max_tokens: 5 }
+        { temperature: 0, max_tokens: 5 },
+        options
       );
       const trimmed = String(responseText).trim();
       const age =
@@ -2192,12 +2374,15 @@ function createStorybookAI(openaiApiKey, geminiApiKey) {
       const h = heuristicAgeFromLifeStage(memoryText);
       if (h != null) return h;
     } catch (e) {
-      console.warn("extractAge failed", e);
+      console.warn("extractAge failed", {
+        name: String(e?.name || "Error").slice(0, 80),
+        status: Number.isFinite(e?.status) ? e.status : null
+      });
     }
     return 999;
   }
 
-  async function extractVisualScene(rawText, characterContext) {
+  async function extractVisualScene(rawText, characterContext, options = {}) {
     const characterGuidance = characterContext
       ? `
 
@@ -2249,13 +2434,14 @@ Output: One paragraph describing the scene action and participants accurately.`;
         { role: "system", content: systemPrompt },
         { role: "user", content: rawText }
       ],
-      { temperature: 0.05 }
+      { temperature: 0.05 },
+      options
     );
     const out = String(scene || rawText).trim() || rawText;
     return out;
   }
 
-  async function extractTitleAndCharacters(memoryText, characterContext) {
+  async function extractTitleAndCharacters(memoryText, characterContext, options = {}) {
     const systemPrompt = `You are a book editor. Your job is to create a title and a 'featuring' list for a memory.
 
 1. Title: Create a short, engaging title (max 5 words).
@@ -2278,7 +2464,8 @@ Extract title and featuring list.`;
           { role: "system", content: systemPrompt },
           { role: "user", content: prompt }
         ],
-        { temperature: 0.3, max_tokens: 100, response_format: { type: "json_object" } }
+        { temperature: 0.3, max_tokens: 100, response_format: { type: "json_object" } },
+        options
       );
       const parsed = JSON.parse(content);
       return { title: parsed.title || "A Special Memory", featuring: parsed.featuring || "" };
@@ -2298,7 +2485,7 @@ Extract title and featuring list.`;
     assembleFinalPrompt,
     generateIllustrationBuffer,
     generateIllustrationBufferGuarded,
-    generateBackCoverPitch: (p) => generateBackCoverPitch(geminiApiKey, p),
+    generateBackCoverPitch: (p, options) => generateBackCoverPitch(geminiApiKey, p, options),
     loadStyleReferencePng,
     artStyleMemoryIllustrationStyleDescription,
     normalizeArtStyleKey,
@@ -2309,7 +2496,9 @@ Extract title and featuring list.`;
     filterCanonRowsForEntry,
     canonRowToPromptLine,
     shouldAttachHeadshot,
-    nameMatchesProfileFirstToken
+    nameMatchesProfileFirstToken,
+    isUsableBackCoverPitch,
+    fallbackBackCoverPitch
   };
 }
 
@@ -2337,6 +2526,11 @@ module.exports = {
   filterCanonRowsForEntry,
   canonRowToPromptLine,
   shouldAttachHeadshot,
-  nameMatchesProfileFirstToken
+  nameMatchesProfileFirstToken,
+  isUsableBackCoverPitch,
+  fallbackBackCoverPitch,
+  explicitAge,
+  mimeTypeForImageBuffer,
+  serializedGeminiRequestBody,
+  openAITextRequestOptions
 };
-

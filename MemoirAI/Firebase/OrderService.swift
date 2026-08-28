@@ -159,6 +159,7 @@ extension OrderService {
     /// `userInfo` dictionary and any `NSUnderlyingErrorKey` chain. Server-side, prefer non-`internal`
     /// `HttpsError` codes and put diagnostics in the top-level message when possible.
     static func printCallableDiagnostics(_ error: Error, context: String) {
+        #if DEBUG
         var lines: [String] = []
         lines.append("📛 Callable error — \(context)")
         if isBareInternalCallableErrorLikelyDroppedConnection(error) {
@@ -204,6 +205,10 @@ extension OrderService {
         }
 
         print(lines.joined(separator: "\n"))
+        #else
+        let ns = error as NSError
+        print("📛 Callable error — \(context), domain=\(ns.domain), code=\(ns.code)")
+        #endif
     }
 
     #if DEBUG

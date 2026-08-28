@@ -16,7 +16,6 @@ struct HomepageView: View {
     @State private var promptCompleted: Bool = false
 
     @State private var entries: [MemoryEntry] = []
-    private var totalChapters: Int { activeChapters.count }
 
     @State private var showingAddProfile = false
     @State private var showProfileEdit = false
@@ -32,23 +31,6 @@ struct HomepageView: View {
 
     // MARK: – Computed Properties
 
-    /// How many full chapters have been completed?
-    private func completedChaptersCount() -> Int {
-        activeChapters.filter { chapter in
-            filledPromptSlotsForChapter(entries: entries, chapter: chapter) >= chapter.prompts.count
-        }.count
-    }
-
-    /// The text to show under "Continue Your Memoir"
-    private var progressText: String {
-        let done = completedChaptersCount()
-        if done == 0 {
-            return "No chapters completed yet"
-        } else {
-            return "\(done) of \(totalChapters) chapters completed"
-        }
-    }
-    
     /// Total memories completed (across all chapters)
     private var completedMemoriesCount: Int {
         entries.filter { entry in
@@ -120,24 +102,7 @@ struct HomepageView: View {
                                 .padding(.horizontal)
                         }
 
-                        // START RECORDING
-                        NavigationLink(destination: RecordMemoryView()
-                            .environmentObject(profileVM)
-                            .environmentObject(tutorialCoordinator)) {
-                            Text("Start Recording")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundColor(.white)
-                                .padding(.vertical, 14)
-                                .frame(maxWidth: .infinity)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 24)
-                                        .fill(Color(red: 0.83, green: 0.45, blue: 0.14))
-                                )
-                                .padding(.horizontal)
-                                .shadow(color: Color.orange.opacity(0.25), radius: 6, x: 0, y: 3)
-                        }
-
-                        // CONTINUE YOUR MEMOIR
+                        // CONTINUE YOUR MEMORIES
                         Button {
                             if hasChosenMemoirMode {
                                 navigateToMemoir = true
@@ -146,28 +111,25 @@ struct HomepageView: View {
                             }
                         } label: {
                             HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Continue Your Memoir")
-                                        .font(.footnote)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.black)
-                                    Text(progressText)
-                                        .font(.subheadline)
-                                        .foregroundColor(.black.opacity(0.7))
-                                }
+                                Text("Continue Your Memories")
+                                    .font(.system(size: 18, weight: .semibold))
                                 Spacer()
                                 HStack(spacing: 8) {
                                     Text("\(completionPercentage)%")
                                         .font(.system(size: 16, weight: .bold))
-                                        .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
+                                        .foregroundColor(.white)
                                     Image(systemName: "chevron.right")
-                                        .foregroundColor(.gray)
+                                        .foregroundColor(.white.opacity(0.85))
                                 }
                             }
-                            .padding()
-                            .background(Color(red: 0.98, green: 0.93, blue: 0.80))
-                            .cornerRadius(16)
-                            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 22)
+                            .padding(.vertical, 14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 24)
+                                    .fill(Color(red: 0.83, green: 0.45, blue: 0.14))
+                            )
+                            .shadow(color: Color.orange.opacity(0.25), radius: 6, x: 0, y: 3)
                             .padding(.horizontal)
                         }
                         .buttonStyle(.plain)
@@ -180,31 +142,6 @@ struct HomepageView: View {
                             }
                         )
                         .accessibilityIdentifier("tutorialContinueYourMemoir")
-
-                        // RECORD MEMORIES
-                        NavigationLink(destination: RecordMemoryView()
-                            .environmentObject(profileVM)
-                            .environmentObject(tutorialCoordinator)) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Record Memories")
-                                        .font(.footnote)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.black)
-                                    Text("Share stories in your own voice")
-                                        .font(.subheadline)
-                                        .foregroundColor(.black.opacity(0.7))
-                                }
-                                Spacer()
-                                Image(systemName: "mic.fill")
-                                    .foregroundColor(Color(red: 0.83, green: 0.45, blue: 0.14))
-                            }
-                            .padding()
-                            .background(Color(red: 0.98, green: 0.93, blue: 0.80))
-                            .cornerRadius(16)
-                            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
-                            .padding(.horizontal)
-                        }
                         
                         // YOUR BOOK (Premium Gradient Outline)
                         NavigationLink(destination: StoryPage()
@@ -373,7 +310,7 @@ struct HomepageView: View {
         
         do {
             entries = try context.fetch(request)
-            print("📊 Homepage fetched \(entries.count) entries for profile \(profileVM.selectedProfile.name)")
+            print("📊 Homepage fetched \(entries.count) entries for active profile")
             
             // Debug: log how many have chapters
             let withChapter = entries.filter { $0.chapter != nil && !($0.chapter?.isEmpty ?? true) }

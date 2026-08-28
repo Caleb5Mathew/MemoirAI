@@ -223,7 +223,7 @@ class GlobalCharacterManager {
     /// Migrate existing memories to use global character registry
     /// Scans memories owned by this profile, creates global characters, and links existing character instances.
     func migrateExistingCharacters(for profileID: UUID) {
-        print("🔄 Starting character migration for profile: \(profileID.uuidString)")
+        print("🔄 Starting character migration for profile: \(profileID.uuidString.prefix(8))…")
         
         let memoryRequest: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
         guard let uid = MemoryUserScope.currentFirebaseUserId else {
@@ -367,7 +367,7 @@ class GlobalCharacterManager {
         
         do {
             try context.save()
-            print("✅ Merged character \(source.canonicalName ?? "") into \(target.canonicalName ?? ""), updated \(updatedCount) memories")
+            print("✅ Merged character records; updated \(updatedCount) memories")
             return true
         } catch {
             print("❌ Failed to merge characters: \(error)")

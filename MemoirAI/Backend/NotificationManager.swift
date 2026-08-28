@@ -1,13 +1,47 @@
 import Foundation
 import UserNotifications
 
+enum NotificationPermissionAction: Equatable {
+    case request
+    case openSettings
+    case none
+}
+
+enum NotificationPermissionPolicy {
+    static func action(for status: UNAuthorizationStatus) -> NotificationPermissionAction {
+        switch status {
+        case .notDetermined:
+            return .request
+        case .denied:
+            return .openSettings
+        case .authorized, .provisional, .ephemeral:
+            return .none
+        @unknown default:
+            return .none
+        }
+    }
+}
+
 class NotificationManager: ObservableObject {
     static let shared = NotificationManager()
-    
-    private init() {}
+
+    @Published private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
+
+    private init() {
+        refreshAuthorizationStatus()
+    }
+
+    func refreshAuthorizationStatus() {
+        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+            DispatchQueue.main.async {
+                self?.authorizationStatus = settings.authorizationStatus
+            }
+        }
+    }
     
     func requestPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { [weak self] granted, error in
+            self?.refreshAuthorizationStatus()
             if granted {
                 print("✅ Notification permission granted")
             } else if let error = error {
@@ -66,4 +100,4 @@ class NotificationManager: ObservableObject {
     func cancelAllNotifications() {
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
     }
-} 
+}

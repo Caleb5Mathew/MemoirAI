@@ -150,8 +150,8 @@ struct RecentMemoriesView: View {
                                     .foregroundColor(.gray)
                             }
                             .onAppear {
-                                print("❌ Memory not found for ID: \(memoryID.uuidString)")
-                                print("📋 Available memory IDs: \(entries.compactMap { $0.id?.uuidString })")
+                                print("❌ Memory not found for ID: \(memoryID.uuidString.prefix(8))…")
+                                print("📋 Available memory count: \(entries.count)")
                             }
                         }
                     }
@@ -162,7 +162,7 @@ struct RecentMemoriesView: View {
                     checkPermissionsAndTranscribe()
                 }
                 .onChange(of: profileVM.selectedProfile.id) { newID in
-                    print("🔄 Switched to profile: \(profileVM.selectedProfile.name ?? "Unnamed") (ID: \(newID))")
+                    print("🔄 Switched profile (ID: \(newID.uuidString.prefix(8))…)")
                     fetchEntries(for: newID)
                     // Check permissions again when switching profiles
                     checkPermissionsAndTranscribe()
@@ -303,7 +303,7 @@ struct RecentMemoriesView: View {
 
         do {
             entries = try context.fetch(request)
-            print("📂 Fetched \(entries.count) memories for profile \(profileVM.selectedProfile.name ?? "Unnamed")")
+            print("📂 Fetched \(entries.count) memories for active profile")
             
             // Generate titles for existing memories that still have "Untitled Prompt"
             generateTitlesForUntitledMemories()
@@ -347,7 +347,7 @@ struct RecentMemoriesView: View {
                         }
                         context.refresh(mainEntry, mergeChanges: true)
                         NotificationCenter.default.post(name: .memorySaved, object: nil)
-                        print("✅ Generated title for existing memory: '\(generatedTitle)'")
+                        print("✅ Generated title for existing memory")
                     } catch {
                         print("❌ Failed to save generated memory title: \(error.localizedDescription)")
                     }
@@ -538,10 +538,10 @@ struct MemoryCard: View {
     
     var body: some View {
         Button(action: {
-            print("🔵 MemoryCard tapped - Memory ID: \(entry.id?.uuidString ?? "nil")")
+            print("🔵 MemoryCard tapped - Memory ID: \(entry.id?.uuidString.prefix(8) ?? "nil")…")
             if let id = entry.id {
                 selectedMemoryID = id
-                print("🔵 Set selectedMemoryID to: \(id.uuidString)")
+                print("🔵 Set selectedMemoryID to: \(id.uuidString.prefix(8))…")
             } else {
                 print("❌ Memory entry has no ID!")
             }

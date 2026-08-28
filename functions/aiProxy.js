@@ -23,6 +23,7 @@ const {
   buildCoverIllustrationPrompt,
   buildBackCoverIllustrationPrompt
 } = require("./storybookAI");
+const { safeErrorMetadata, safeLogIdentifier } = require("./privacyLogging");
 
 const openaiSecret = defineSecret("OPENAI_API_KEY");
 const geminiSecret = defineSecret("GEMINI_API_KEY");
@@ -192,7 +193,7 @@ async function probeTranscriptionAudio(audio) {
     return JSON.parse(stdout)?.streams?.[0] || null;
   } finally {
     await fsPromises.unlink(temporaryPath).catch((error) => {
-      console.error("transcription temporary audio cleanup failed", String(error?.message || error));
+      console.error("transcription temporary audio cleanup failed", safeErrorMetadata(error));
     });
   }
 }
@@ -221,7 +222,7 @@ async function validateProbedTranscriptionDuration(audio, probeAudio = probeTran
   try {
     probe = await probeAudio(audio);
   } catch (error) {
-    console.error("transcription audio probe failed", String(error?.message || error));
+    console.error("transcription audio probe failed", safeErrorMetadata(error));
     throw new HttpsError("failed-precondition", "Recording format is unsupported. Please record it again.");
   }
 
@@ -593,7 +594,10 @@ async function callOpenAiChat({ apiKey, model, messages, temperature, maxTokens,
       ...extra
     });
   } catch (e) {
-    console.error("aiChatCompletion openai upstream error", String(e?.message || e));
+    console.error("aiChatCompletion openai upstream error", {
+      name: String(e?.name || "Error").slice(0, 80),
+      status: Number.isFinite(e?.status) ? e.status : null
+    });
     throw new HttpsError("internal", "Upstream AI provider request failed.");
   }
   const choice = (completion.choices && completion.choices[0]) || {};
@@ -648,12 +652,11 @@ async function callGeminiChat({ apiKey, model, messages, temperature, maxTokens,
     });
     data = await res.json().catch(() => ({}));
   } catch (e) {
-    console.error("aiChatCompletion gemini network error", String(e?.message || e));
+    console.error("aiChatCompletion gemini network error", safeErrorMetadata(e));
     throw new HttpsError("internal", "Upstream AI provider request failed.");
   }
   if (!res.ok) {
-    const apiMsg = (data && data.error && data.error.message) || `HTTP ${res.status}`;
-    console.error("aiChatCompletion gemini upstream error", res.status, apiMsg);
+    console.error("aiChatCompletion gemini upstream error", { status: res.status });
     throw new HttpsError("internal", "Upstream AI provider request failed.");
   }
 
@@ -767,7 +770,11 @@ exports.transcribeMemoryAudio = onCall(
       audioInfo = validateTranscriptionMetadata(metadata);
     } catch (error) {
       if (error instanceof HttpsError) throw error;
-      console.error("transcribeMemoryAudio storage metadata failed", { uid, memoryId, message: String(error?.message || error) });
+      console.error("transcribeMemoryAudio storage metadata failed", {
+        userIdHash: safeLogIdentifier(uid),
+        memoryIdHash: safeLogIdentifier(memoryId),
+        ...safeErrorMetadata(error)
+      });
       throw new HttpsError("failed-precondition", "Recording upload is not ready. Please try again.");
     }
 
@@ -775,7 +782,11 @@ exports.transcribeMemoryAudio = onCall(
     try {
       [audio] = await bucket.file(storagePath, { generation: audioInfo.generation }).download();
     } catch (error) {
-      console.error("transcribeMemoryAudio storage download failed", { uid, memoryId, message: String(error?.message || error) });
+      console.error("transcribeMemoryAudio storage download failed", {
+        userIdHash: safeLogIdentifier(uid),
+        memoryIdHash: safeLogIdentifier(memoryId),
+        ...safeErrorMetadata(error)
+      });
       throw new HttpsError("failed-precondition", "Recording upload is not ready. Please try again.");
     }
     validateTranscriptionAudio(audio);
@@ -854,7 +865,11 @@ exports.transcribeMemoryAudio = onCall(
       });
       return { status: "completed", text, model: "gpt-transcribe", language };
     } catch (error) {
-      console.error("transcribeMemoryAudio failed", { uid, memoryId, message: String(error?.message || error) });
+      console.error("transcribeMemoryAudio failed", {
+        userIdHash: safeLogIdentifier(uid),
+        memoryIdHash: safeLogIdentifier(memoryId),
+        ...safeErrorMetadata(error)
+      });
       try {
         await firestore().runTransaction(async (transaction) => {
           const latest = await transaction.get(memoryRef);
@@ -866,7 +881,11 @@ exports.transcribeMemoryAudio = onCall(
           }, { merge: true });
         });
       } catch (stateError) {
-        console.error("transcribeMemoryAudio failure state update failed", { uid, memoryId, message: String(stateError?.message || stateError) });
+        console.error("transcribeMemoryAudio failure state update failed", {
+          userIdHash: safeLogIdentifier(uid),
+          memoryIdHash: safeLogIdentifier(memoryId),
+          ...safeErrorMetadata(stateError)
+        });
       }
       if (error instanceof HttpsError) throw error;
       const status = Number(error?.status || error?.statusCode || 0);
@@ -956,10 +975,14 @@ exports.aiGenerateCoverArt = onCall(
     let imageBuf;
     try {
       imageBuf = await generateIllustrationBufferGuarded(apiKey, prompt, "5:4", refs, (event, details) =>
-        console.log(event, { uid, kind, ...details })
+        console.log(event, { userIdHash: safeLogIdentifier(uid), kind, ...details })
       );
     } catch (e) {
-      console.error("aiGenerateCoverArt generation failed", { uid, kind, message: String(e?.message || e) });
+      console.error("aiGenerateCoverArt generation failed", {
+        userIdHash: safeLogIdentifier(uid),
+        kind,
+        ...safeErrorMetadata(e)
+      });
       throw new HttpsError("internal", "Cover art generation failed. Please try again.");
     }
 
@@ -967,7 +990,11 @@ exports.aiGenerateCoverArt = onCall(
     try {
       return await uploadPngWithDownloadURL(storagePath, imageBuf);
     } catch (e) {
-      console.error("aiGenerateCoverArt upload failed", { uid, kind, message: String(e?.message || e) });
+      console.error("aiGenerateCoverArt upload failed", {
+        userIdHash: safeLogIdentifier(uid),
+        kind,
+        ...safeErrorMetadata(e)
+      });
       throw new HttpsError("internal", "Cover art upload failed. Please try again.");
     }
   }
@@ -1020,7 +1047,11 @@ exports.aiEditImage = onCall(
         styleAnchorBuffer
       });
     } catch (e) {
-      console.error("aiEditImage generation failed", { uid, model, message: String(e?.message || e) });
+      console.error("aiEditImage generation failed", {
+        userIdHash: safeLogIdentifier(uid),
+        model,
+        ...safeErrorMetadata(e)
+      });
       throw new HttpsError("internal", "Image edit failed. Please try again.");
     }
 
@@ -1028,7 +1059,10 @@ exports.aiEditImage = onCall(
     try {
       return await uploadPngWithDownloadURL(storagePath, imageBuf);
     } catch (e) {
-      console.error("aiEditImage upload failed", { uid, message: String(e?.message || e) });
+      console.error("aiEditImage upload failed", {
+        userIdHash: safeLogIdentifier(uid),
+        ...safeErrorMetadata(e)
+      });
       throw new HttpsError("internal", "Image edit upload failed. Please try again.");
     }
   }

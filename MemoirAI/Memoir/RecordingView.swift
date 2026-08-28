@@ -19,6 +19,7 @@ struct RecordingView: View {
     var progressLabel: String? = nil
     @State private var isSaving = false
     @State private var showCloudTranscriptionDisclosure = false
+    @State private var recordingStartErrorMessage: String?
     @State private var saveErrorMessage: String?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var context
@@ -395,6 +396,17 @@ struct RecordingView: View {
                 Text("Saved recordings are uploaded to your private MemoirAI account and sent to OpenAI to create a transcript. You can delete the recording and transcript at any time.")
             }
             .alert(
+                "Recording Unavailable",
+                isPresented: Binding(
+                    get: { recordingStartErrorMessage != nil },
+                    set: { if !$0 { recordingStartErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { recordingStartErrorMessage = nil }
+            } message: {
+                Text(recordingStartErrorMessage ?? "Please check your connection and try again.")
+            }
+            .alert(
                 "Memory Not Saved",
                 isPresented: Binding(
                     get: { saveErrorMessage != nil },
@@ -560,13 +572,21 @@ struct RecordingView: View {
     }
 
     func startRecording() {
+        if let failureMessage = MemoryUserScope.recordingStartFailureMessage(
+            firebaseUserID: MemoryUserScope.currentFirebaseUserId
+        ) {
+            recordingStartErrorMessage = failureMessage
+            return
+        }
         guard CloudTranscriptionDisclosure.isAccepted() else {
             showCloudTranscriptionDisclosure = true
             return
         }
         // Check microphone permission before starting
         guard permissionManager.isMicrophoneAuthorized else {
-            permissionManager.requestMicrophonePermission()
+            permissionManager.requestMicrophonePermission {
+                startRecording()
+            }
             return
         }
         
@@ -603,10 +623,12 @@ struct RecordingView: View {
             isPaused = false
             
             // Track recording started
-            Mixpanel.mainInstance().track(event: "Started Recording", properties: [
-                "chapter_title": chapterTitle,
-                "prompt_text": activePromptText.isEmpty ? prompt.text : activePromptText
-            ])
+            Mixpanel.mainInstance().track(
+                event: "Started Recording",
+                properties: AnalyticsPrivacyPolicy.sanitized([
+                    "has_custom_prompt": !activePromptText.isEmpty
+                ])
+            )
             
             // Start audio level monitoring
             if let recorder = audioRecorder {
@@ -694,15 +716,15 @@ struct RecordingView: View {
         isSaving = true       // you can overlay a ProgressView if desired
 
         // Track memory saved
-        let savedPrompt = activePromptText.isEmpty ? prompt.text : activePromptText
-        Mixpanel.mainInstance().track(event: "Saved Memory", properties: [
-            "chapter_title": chapterTitle,
-            "prompt_text": savedPrompt,
-            "has_audio": audioURL != nil,
-            "has_text": !typedText.isEmpty,
-            "has_photos": false,
-            "recording_duration": recordingTime
-        ])
+        Mixpanel.mainInstance().track(
+            event: "Saved Memory",
+            properties: AnalyticsPrivacyPolicy.sanitized([
+                "has_audio": audioURL != nil,
+                "has_text": !typedText.isEmpty,
+                "has_photos": false,
+                "recording_duration": recordingTime
+            ])
+        )
 
         // Capture current values before we mutate UI state
         let promptToSave      = activePromptText.isEmpty ? prompt.text : activePromptText

@@ -45,6 +45,7 @@ const { assertAccountAvailableForCheckout } = require("./accountStateGuards");
 const { acquireCheckoutLease, releaseCheckoutLease } = require("./accountOperationLock");
 const { isMemoirAdminToken } = require("./adminAuthorization");
 const { createStorybookJobHandler } = require("./storybookAdmission");
+const { safeErrorMetadata, safeLogIdentifier } = require("./privacyLogging");
 const { verifyLuluWebhookSignature } = require("./luluWebhookAuth");
 const {
   checkoutSessionHasConfirmedPayment,
@@ -816,8 +817,7 @@ async function requestLuluAccessToken(authUrl, encodedBasicAuth) {
     body: "grant_type=client_credentials"
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Lulu auth failed: ${res.status} ${text}`);
+    throw new Error(`Lulu auth failed: ${res.status}`);
   }
   const data = await res.json();
   if (!data?.access_token) {
@@ -910,7 +910,7 @@ async function luluPostCoverDimensions(accessToken, luluBaseUrl, podPackageId, i
   });
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`Lulu cover-dimensions failed: ${res.status} ${String(text).slice(0, 400)}`);
+    throw new Error(`Lulu cover-dimensions failed: ${res.status}`);
   }
   try {
     return JSON.parse(text);
@@ -941,16 +941,8 @@ async function luluFetchShippingOptions(accessToken, luluBaseUrl, payload) {
     body: JSON.stringify(payload)
   });
   if (!res.ok) {
-    const text = await res.text();
-    let snippet = text;
-    try {
-      const parsed = JSON.parse(text);
-      snippet = JSON.stringify(parsed).slice(0, 400);
-    } catch (_) {
-      snippet = String(text).slice(0, 400);
-    }
-    console.warn(`luluFetchShippingOptions failed status=${res.status} snippet=${snippet}`);
-    throw new Error(`Lulu shipping-options failed: ${res.status} ${snippet}`);
+    console.warn(`luluFetchShippingOptions failed status=${res.status}`);
+    throw new Error(`Lulu shipping-options failed: ${res.status}`);
   }
   return res.json();
 }
@@ -1064,9 +1056,6 @@ async function estimateLuluShippingMethodsForCart({ lineItems, shippingAddress, 
     raw = await luluFetchShippingOptions(auth.accessToken, auth.luluBaseUrl, payload);
   }
   const rows = Array.isArray(raw) ? raw : [];
-  if (rows.length > 0) {
-    console.log(`${logLabel} shipping-options sample=${JSON.stringify(rows[0]).slice(0, 520)}`);
-  }
   const mapped = rows.map(mapLuluShippingOptionsRowToMethod).filter(Boolean);
   const ordered = orderShippingMethodsByKnownLevels(mapped);
   console.log(`${logLabel} shipping-options returned ${rows.length} rows, mapped ${ordered.length} methods`);
@@ -1101,27 +1090,8 @@ async function luluCalculateCost(accessToken, luluBaseUrl, podPackageId, pageCou
     })
   });
   if (!res.ok) {
-    const text = await res.text();
-    let parsed = null;
-    try {
-      parsed = JSON.parse(text);
-    } catch (_) {
-      parsed = null;
-    }
-    let compact = text;
-    if (parsed && typeof parsed === "object") {
-      const firstIssue = Array.isArray(parsed?.line_item_errors) ? parsed.line_item_errors[0] : null;
-      compact = JSON.stringify({
-        message: parsed.message || parsed.detail || null,
-        code: parsed.code || parsed.error || null,
-        firstIssue: firstIssue || null
-      });
-    }
-    console.warn(
-      `luluCalculateCost failed status=${res.status} base=${luluBaseUrl} ` +
-      `snippet=${String(compact).slice(0, 300)}`
-    );
-    throw new Error(`Lulu cost calculation failed: ${res.status} ${compact}`);
+    console.warn(`luluCalculateCost failed status=${res.status} base=${luluBaseUrl}`);
+    throw new Error(`Lulu cost calculation failed: ${res.status}`);
   }
   return res.json();
 }
@@ -1626,8 +1596,7 @@ async function luluCreatePrintJob(accessToken, luluBaseUrl, payload) {
     body: JSON.stringify(payload)
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Lulu create print job failed: ${res.status} ${text}`);
+    throw new Error(`Lulu create print job failed: ${res.status}`);
   }
   return res.json();
 }
@@ -1645,8 +1614,7 @@ async function luluGetPrintJob(accessToken, luluBaseUrl, printJobId) {
     }
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Lulu get print job failed: ${res.status} ${text}`);
+    throw new Error(`Lulu get print job failed: ${res.status}`);
   }
   return res.json();
 }
@@ -1668,8 +1636,7 @@ async function luluFindPrintJobByExternalId(accessToken, luluBaseUrl, externalId
     }
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Lulu external id lookup failed: ${res.status} ${text}`);
+    throw new Error(`Lulu external id lookup failed: ${res.status}`);
   }
   const body = await res.json();
   const exactMatches = (Array.isArray(body?.results) ? body.results : [])
@@ -2243,7 +2210,11 @@ exports.generateBookVersionPdf = onRequest(
     if (error instanceof PdfPackagingValidationError) {
       return jsonError(res, error.httpStatus, error.message);
     }
-    console.error(`BOOK_RENDER_CLAIM_FAILED user=${userId} version=${bookVersionId}:`, error);
+    console.error("BOOK_RENDER_CLAIM_FAILED", {
+      userHash: safeLogIdentifier(userId),
+      versionHash: safeLogIdentifier(bookVersionId),
+      ...safeErrorMetadata(error)
+    });
     return jsonError(res, 500, "Failed to claim PDF render lease");
   }
 
@@ -2283,7 +2254,13 @@ exports.generateBookVersionPdf = onRequest(
   const drawY = (heightPt - drawHeight) / 2;
 
   const startMs = Date.now();
-  console.log(`BOOK_RENDER_START user=${userId} version=${bookVersionId} pages=${pages.length} size=${widthPt}x${heightPt} with bleed`);
+  console.log("BOOK_RENDER_START", {
+    userHash: safeLogIdentifier(userId),
+    versionHash: safeLogIdentifier(bookVersionId),
+    pageCount: pages.length,
+    widthPt,
+    heightPt
+  });
 
   try {
     // Preflight every authoritative GCS metadata record before downloading any source bytes.
@@ -2375,7 +2352,13 @@ exports.generateBookVersionPdf = onRequest(
       }, { merge: true });
     });
 
-    console.log(`BOOK_RENDER_SUCCESS user=${userId} version=${bookVersionId} sourceBytes=${totalSourceBytes} pdfBytes=${pdfBytes.length} durationMs=${renderDurationMs}`);
+    console.log("BOOK_RENDER_SUCCESS", {
+      userHash: safeLogIdentifier(userId),
+      versionHash: safeLogIdentifier(bookVersionId),
+      sourceBytes: totalSourceBytes,
+      pdfBytes: pdfBytes.length,
+      durationMs: renderDurationMs
+    });
 
     return res.status(200).json({
       status: "rendered",
@@ -2386,7 +2369,11 @@ exports.generateBookVersionPdf = onRequest(
       message: "PDF generated successfully"
     });
   } catch (error) {
-    console.error(`BOOK_RENDER_FAILED user=${userId} version=${bookVersionId}:`, error);
+    console.error("BOOK_RENDER_FAILED", {
+      userHash: safeLogIdentifier(userId),
+      versionHash: safeLogIdentifier(bookVersionId),
+      ...safeErrorMetadata(error)
+    });
     try {
       await db.runTransaction(async (transaction) => {
         const [latest, lease] = await Promise.all([
@@ -2405,7 +2392,11 @@ exports.generateBookVersionPdf = onRequest(
         }, { merge: true });
       });
     } catch (stateError) {
-      console.error(`BOOK_RENDER_FAILURE_STATE_FAILED user=${userId} version=${bookVersionId}:`, stateError);
+      console.error("BOOK_RENDER_FAILURE_STATE_FAILED", {
+        userHash: safeLogIdentifier(userId),
+        versionHash: safeLogIdentifier(bookVersionId),
+        ...safeErrorMetadata(stateError)
+      });
     }
     const status = error instanceof PdfPackagingValidationError ? error.httpStatus : 500;
     const message = error instanceof PdfPackagingValidationError

@@ -14,18 +14,56 @@ import FirebaseFunctions
 import FirebaseStorage
 import UIKit
 
+enum PendingStorybookMatchPolicy {
+    static func matches(
+        _ book: PersistableStorybook,
+        pendingBookID: String,
+        profileID: UUID
+    ) -> Bool {
+        guard book.profileID == profileID else { return false }
+        if let canonicalBookID = book.bookVersionID {
+            return canonicalBookID == pendingBookID
+        }
+        guard let pendingCreatedAt = createdAtUnixSeconds(from: pendingBookID) else {
+            return false
+        }
+        return Int(book.createdAt.timeIntervalSince1970) == pendingCreatedAt
+    }
+
+    static func createdAtUnixSeconds(from bookID: String) -> Int? {
+        let parts = bookID.split(separator: "_")
+        guard parts.count >= 2, let encodedTimestamp = Int(parts[1]) else { return nil }
+        return encodedTimestamp >= 10_000_000_000 ? encodedTimestamp / 1_000 : encodedTimestamp
+    }
+}
+
 /// Chains `syncBook` / Storage for the same `bookVersionId` so concurrent in-place saves do not interleave.
 private actor BookVersionSyncSequencer {
-    private var inFlight: [String: Task<Void, Never>] = [:]
+    private struct Tail {
+        let token: UUID
+        let task: Task<Void, Never>
+    }
+    private var inFlight: [String: Tail] = [:]
     /// Runs `work` after any earlier task for the same `bookId` has finished; latest snapshot wins.
-    func run(bookId: String, work: @Sendable @escaping () async -> Void) async {
-        let previous = inFlight[bookId]
-        let t = Task {
+    func run<Result: Sendable>(
+        bookId: String,
+        work: @Sendable @escaping () async -> Result
+    ) async -> Result {
+        let previous = inFlight[bookId]?.task
+        let token = UUID()
+        let resultTask = Task {
             await previous?.value
-            await work()
+            return await work()
         }
-        inFlight[bookId] = t
-        await t.value
+        let completionTask = Task {
+            _ = await resultTask.value
+        }
+        inFlight[bookId] = Tail(token: token, task: completionTask)
+        let result = await resultTask.value
+        if inFlight[bookId]?.token == token {
+            inFlight.removeValue(forKey: bookId)
+        }
+        return result
     }
 }
 
@@ -75,6 +113,7 @@ final class FirestoreSyncService {
     private let memoryOperationSequencer = MemoryOperationSequencer()
     private let memorySyncPersistenceLock = NSLock()
     private let memoryDeletionPersistenceLock = NSLock()
+    private let bookSyncPersistenceLock = NSLock()
     
     /// Sticky per signed-in `uid` so re-register from `performSyncBook` after `incrementPendingBookRenderRetry` does not wipe the count.
     private var lastPostSignInCoverBackfillUserId: String?
@@ -166,80 +205,111 @@ final class FirestoreSyncService {
         return decoded
     }
 
-    private func registerPendingBookSync(bookId: String, profileId: String) {
-        guard let firebaseUserId = Auth.auth().currentUser?.uid else { return }
-        var records = loadPendingBookSyncRecords()
-        let existing = records.first {
-            $0.bookId == bookId && $0.firebaseUserId == firebaseUserId
-        }
-        let preserveRetry = existing?.renderRetryCount ?? 0
-        let preserveQueued = existing?.queuedAt ?? Date()
-        records.removeAll { $0.bookId == bookId && $0.firebaseUserId == firebaseUserId }
-        records.append(
-            PendingBookSyncRecord(
-                bookId: bookId,
-                profileId: profileId,
-                firebaseUserId: firebaseUserId,
-                queuedAt: preserveQueued,
-                renderRetryCount: preserveRetry
+    private func registerPendingBookSync(
+        bookId: String,
+        profileId: String,
+        firebaseUserId: String
+    ) {
+        guard let firebaseUserId = MemoryOwnershipPolicy.normalizedUserID(firebaseUserId) else { return }
+        bookSyncPersistenceLock.withLock {
+            var records = loadPendingBookSyncRecords()
+            let existing = records.first {
+                $0.bookId == bookId && $0.firebaseUserId == firebaseUserId
+            }
+            let preserveRetry = existing?.renderRetryCount ?? 0
+            let preserveQueued = existing?.queuedAt ?? Date()
+            records.removeAll { $0.bookId == bookId && $0.firebaseUserId == firebaseUserId }
+            records.append(
+                PendingBookSyncRecord(
+                    bookId: bookId,
+                    profileId: profileId,
+                    firebaseUserId: firebaseUserId,
+                    queuedAt: preserveQueued,
+                    renderRetryCount: preserveRetry
+                )
             )
-        )
-        if let data = try? JSONEncoder().encode(records) {
-            UserDefaults.standard.set(data, forKey: Self.pendingBookSyncStorageKey)
+            if let data = try? JSONEncoder().encode(records) {
+                UserDefaults.standard.set(data, forKey: Self.pendingBookSyncStorageKey)
+            }
         }
     }
 
     /// Public so `StoryPageViewModel.persistStorybook` can register *before* `queueBookSync` schedules work (removes a crash window).
     func registerPendingBookSyncForProfile(bookId: String, profileId: UUID) {
-        registerPendingBookSync(bookId: bookId, profileId: profileId.uuidString)
+        guard let firebaseUserId = Auth.auth().currentUser?.uid else { return }
+        registerPendingBookSync(
+            bookId: bookId,
+            profileId: profileId.uuidString,
+            firebaseUserId: firebaseUserId
+        )
+    }
+
+    func registerPendingBookSyncForProfile(
+        bookId: String,
+        profileId: UUID,
+        firebaseUserId: String
+    ) {
+        registerPendingBookSync(
+            bookId: bookId,
+            profileId: profileId.uuidString,
+            firebaseUserId: firebaseUserId
+        )
     }
 
     private func incrementPendingBookRenderRetry(bookId: String) {
         guard let firebaseUserId = Auth.auth().currentUser?.uid else { return }
-        var records = loadPendingBookSyncRecords()
-        guard let i = records.firstIndex(where: {
-            $0.bookId == bookId && $0.firebaseUserId == firebaseUserId
-        }) else { return }
-        records[i].renderRetryCount += 1
-        if let data = try? JSONEncoder().encode(records) {
-            UserDefaults.standard.set(data, forKey: Self.pendingBookSyncStorageKey)
+        bookSyncPersistenceLock.withLock {
+            var records = loadPendingBookSyncRecords()
+            guard let i = records.firstIndex(where: {
+                $0.bookId == bookId && $0.firebaseUserId == firebaseUserId
+            }) else { return }
+            records[i].renderRetryCount += 1
+            if let data = try? JSONEncoder().encode(records) {
+                UserDefaults.standard.set(data, forKey: Self.pendingBookSyncStorageKey)
+            }
+            print("[CoverFlow] incrementPendingBookRenderRetry bookId=\(bookId.prefix(28))… count=\(records[i].renderRetryCount)")
         }
-        print("[CoverFlow] incrementPendingBookRenderRetry bookId=\(bookId.prefix(28))… count=\(records[i].renderRetryCount)")
     }
 
     private func clearPendingBookSync(bookId: String) {
         guard let firebaseUserId = Auth.auth().currentUser?.uid else { return }
-        var records = loadPendingBookSyncRecords()
-        records.removeAll { $0.bookId == bookId && $0.firebaseUserId == firebaseUserId }
-        if let data = try? JSONEncoder().encode(records) {
-            UserDefaults.standard.set(data, forKey: Self.pendingBookSyncStorageKey)
+        bookSyncPersistenceLock.withLock {
+            var records = loadPendingBookSyncRecords()
+            records.removeAll { $0.bookId == bookId && $0.firebaseUserId == firebaseUserId }
+            if let data = try? JSONEncoder().encode(records) {
+                UserDefaults.standard.set(data, forKey: Self.pendingBookSyncStorageKey)
+            }
         }
-    }
-
-    /// `bookVersionId` is `profileUUID_createdAtUnix` or `…_legacy`; returns `createdAt` unix seconds embedded in the id.
-    private func createdAtUnixFromBookVersionId(_ bookId: String) -> Int? {
-        let parts = bookId.split(separator: "_").map(String.init)
-        guard parts.count >= 2 else { return nil }
-        if parts.count >= 3, parts.last == "legacy" {
-            return Int(parts[parts.count - 2])
-        }
-        return Int(parts[1])
     }
 
     private func localStorybookMatchingPending(bookId: String, profileID: UUID) -> PersistableStorybook? {
         let decoder = JSONDecoder()
-        guard let ts = createdAtUnixFromBookVersionId(bookId) else { return nil }
+        if let pendingData = StorybookLocalStore.readPendingBookData(profileID: profileID),
+           let book = try? decoder.decode(PersistableStorybook.self, from: pendingData),
+           PendingStorybookMatchPolicy.matches(
+               book,
+               pendingBookID: bookId,
+               profileID: profileID
+           ) {
+            return book
+        }
         // Prefer current on-disk book when it matches this `bookId` (fresher than a stale history entry).
         if let currentData = StorybookLocalStore.readCurrentBookData(profileID: profileID),
            let book = try? decoder.decode(PersistableStorybook.self, from: currentData),
-           book.profileID == profileID,
-           Int(book.createdAt.timeIntervalSince1970) == ts {
+           PendingStorybookMatchPolicy.matches(
+               book,
+               pendingBookID: bookId,
+               profileID: profileID
+           ) {
             return book
         }
         for data in StorybookLocalStore.readHistoryDataArray(profileID: profileID) {
             guard let book = try? decoder.decode(PersistableStorybook.self, from: data),
-                  book.profileID == profileID,
-                  Int(book.createdAt.timeIntervalSince1970) == ts else { continue }
+                  PendingStorybookMatchPolicy.matches(
+                      book,
+                      pendingBookID: bookId,
+                      profileID: profileID
+                  ) else { continue }
             return book
         }
         return nil
@@ -262,6 +332,10 @@ final class FirestoreSyncService {
                cloud.renderStatus == BookRenderStatus.rendered.rawValue,
                cloud.pdfURL != nil,
                !(cloud.coverURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+                try? StorybookLocalStore.promotePendingBook(
+                    bookVersionID: record.bookId,
+                    profileID: profileID
+                )
                 clearPendingBookSync(bookId: record.bookId)
                 continue
             }
@@ -279,6 +353,10 @@ final class FirestoreSyncService {
                 }
                 let renderOk = await invokeBookRenderFunction(bookVersionId: record.bookId) != nil
                 if renderOk {
+                    try? StorybookLocalStore.promotePendingBook(
+                        bookVersionID: record.bookId,
+                        profileID: profileID
+                    )
                     clearPendingBookSync(bookId: record.bookId)
                 } else {
                     incrementPendingBookRenderRetry(bookId: record.bookId)
@@ -288,7 +366,13 @@ final class FirestoreSyncService {
             guard let book = localStorybookMatchingPending(bookId: record.bookId, profileID: profileID) else {
                 continue
             }
-            await syncBook(book, bookId: record.bookId, renderedPageImages: nil, coverInputs: nil)
+            let synced = await syncBook(book, bookId: record.bookId, renderedPageImages: nil, coverInputs: nil)
+            if synced {
+                try? StorybookLocalStore.promotePendingBook(
+                    bookVersionID: record.bookId,
+                    profileID: profileID
+                )
+            }
         }
     }
 
@@ -701,7 +785,7 @@ final class FirestoreSyncService {
             return false
         }
         guard !isMemoryDeletionPending(memoryId: memoryId, firebaseUserId: userId) else {
-            print("⚠️ Skipping sync for deleted memory \(memoryId.uuidString)")
+            print("⚠️ Skipping sync for deleted memory \(memoryId.uuidString.prefix(8))…")
             return false
         }
 
@@ -823,7 +907,7 @@ final class FirestoreSyncService {
                     at: "users/\(userId)/audio/\(memoryId.uuidString).caf"
                 )
             }
-            print("✅ Synced memory \(memoryId.uuidString) to Firebase")
+            print("✅ Synced memory \(memoryId.uuidString.prefix(8))… to Firebase")
             return true
 
         } catch {
@@ -862,7 +946,7 @@ final class FirestoreSyncService {
         renderedPageProvider: RenderedPageProvider? = nil,
         coverInputs: CoverInputs? = nil,
         coverPDFOverride: Data? = nil
-    ) async {
+    ) async -> Bool {
         // Avoid capturing `var cover` in an `@Sendable` closure (Swift 6): resolve inputs once, synchronously.
         let finalCoverInputs: CoverInputs? = {
             if let c = coverInputs { return c }
@@ -870,7 +954,7 @@ final class FirestoreSyncService {
             return nil
         }()
         let rendered = renderedPageImages
-        await bookVersionSyncSequencer.run(bookId: bookId) { [self] in
+        return await bookVersionSyncSequencer.run(bookId: bookId) { [self] in
             await self.performSyncBook(
                 book,
                 bookId: bookId,
@@ -915,21 +999,25 @@ final class FirestoreSyncService {
         renderedPageProvider: RenderedPageProvider? = nil,
         coverInputs: CoverInputs? = nil,
         coverPDFOverride: Data? = nil
-    ) async {
+    ) async -> Bool {
         guard let userId = Auth.auth().currentUser?.uid else {
             print("⚠️ Cannot sync book - user not signed in")
-            return
+            return false
         }
         guard book.ownerUserID == userId else {
             print("⚠️ Refusing to sync a storybook outside the active account")
-            return
+            return false
         }
         
         let bookRef = db.collection("users").document(userId)
             .collection("bookVersions").document(bookId)
         
         do {
-            registerPendingBookSync(bookId: bookId, profileId: book.profileID.uuidString)
+            registerPendingBookSync(
+                bookId: bookId,
+                profileId: book.profileID.uuidString,
+                firebaseUserId: userId
+            )
             print("[CoverFlow] syncBook START bookId=\(bookId.prefix(28))… persistPages=\(book.pageItems.count) hasRenderedImages=\(renderedPageImages != nil) hasCoverInputs=\(coverInputs != nil)")
             // Build canonical version record first.
             let syncStart = Date()
@@ -951,9 +1039,7 @@ final class FirestoreSyncService {
             // Landscape trim (11×8.5): AI cover (headshot → likeness; no headshot → non-human art). Title is painted in-image.
             if isLandscapeTrim, coverStoragePath == nil, let inputs = coverInputs {
                 let svc = GeminiImageService()
-                let themesPreview = inputs.memoryThemes.prefix(8).joined(separator: " | ")
-                let canonPreview = inputs.protagonistCanonLine?.prefix(160).description ?? "<nil>"
-                print("[CoverFlow] AI cover START trim=landscape bookId=\(bookId.prefix(28))… artStyleKey=\(inputs.artStyle.firestoreKey) hasHeadshot=\(inputs.headshot != nil) printTitle=\"\(inputs.printTitle)\" themesCount=\(inputs.memoryThemes.count) themesPreview=[\(themesPreview)] backCoverPitchLen=\(inputs.backCoverPitch.count) protagonistCanonLine.head=\(canonPreview) ethnicity=\(inputs.ethnicity ?? "<nil>") gender=\(inputs.gender ?? "<nil>")")
+                print("[CoverFlow] AI cover START trim=landscape bookId=\(bookId.prefix(28))… artStyleKey=\(inputs.artStyle.firestoreKey) hasHeadshot=\(inputs.headshot != nil) themesCount=\(inputs.memoryThemes.count) backCoverPitchLen=\(inputs.backCoverPitch.count) hasCanon=\(inputs.protagonistCanonLine?.isEmpty == false)")
                 do {
                     guard let coverArt = try await svc.generateCoverIllustration(
                         headshot: inputs.headshot,
@@ -1073,9 +1159,7 @@ final class FirestoreSyncService {
             // Portrait trim: prefer Gemini + AI title when `coverInputs` are available.
             if !isLandscapeTrim, coverStoragePath == nil, let inputs = coverInputs {
                 let svc = GeminiImageService()
-                let themesPreview = inputs.memoryThemes.prefix(8).joined(separator: " | ")
-                let canonPreview = inputs.protagonistCanonLine?.prefix(160).description ?? "<nil>"
-                print("[CoverFlow] AI cover START trim=portrait bookId=\(bookId.prefix(28))… artStyleKey=\(inputs.artStyle.firestoreKey) hasHeadshot=\(inputs.headshot != nil) printTitle=\"\(inputs.printTitle)\" themesCount=\(inputs.memoryThemes.count) themesPreview=[\(themesPreview)] backCoverPitchLen=\(inputs.backCoverPitch.count) protagonistCanonLine.head=\(canonPreview) ethnicity=\(inputs.ethnicity ?? "<nil>") gender=\(inputs.gender ?? "<nil>")")
+                print("[CoverFlow] AI cover START trim=portrait bookId=\(bookId.prefix(28))… artStyleKey=\(inputs.artStyle.firestoreKey) hasHeadshot=\(inputs.headshot != nil) themesCount=\(inputs.memoryThemes.count) backCoverPitchLen=\(inputs.backCoverPitch.count) hasCanon=\(inputs.protagonistCanonLine?.isEmpty == false)")
                 do {
                     guard let coverArt = try await svc.generateCoverIllustration(
                         headshot: inputs.headshot,
@@ -1197,6 +1281,28 @@ final class FirestoreSyncService {
             for (index, page) in baseRecord.pages.enumerated() {
                 var updatedPage = page
 
+                let recoveredFreeformImage: UIImage?
+                if renderedPageProvider == nil,
+                   renderedPageImages == nil,
+                   index < book.pageItems.count,
+                   let document = book.pageItems[index].freeformDocument {
+                    let memoryID = book.pageItems[index].url
+                        .flatMap(URL.init(string:))
+                        .flatMap(MemoryLinks.parseMemoryDeepLink)
+                    recoveredFreeformImage = await MainActor.run {
+                        BookPagePrintRenderer.render(
+                            document: document,
+                            pixelSize: CGSize(
+                                width: CGFloat(baseRecord.pageWidth) * 2,
+                                height: CGFloat(baseRecord.pageHeight) * 2
+                            ),
+                            memoryID: memoryID
+                        )
+                    }
+                } else {
+                    recoveredFreeformImage = nil
+                }
+
                 let renderedImage: UIImage
                 if let renderedPageProvider,
                    let streamedImage = await renderedPageProvider(index) {
@@ -1207,13 +1313,17 @@ final class FirestoreSyncService {
                     if let renderedPageImages, index < renderedPageImages.count {
                         return renderedPageImages[index]
                     }
-                    // 2. Fallback: use persisted image data for illustrations (e.g. legacy migration)
+                    // 2. Process-death retry: rebuild the editable page from its persisted layers.
+                    if let recoveredFreeformImage {
+                        return recoveredFreeformImage
+                    }
+                    // 3. Fallback: use persisted image data for illustrations (e.g. legacy migration)
                     if index < book.pageItems.count,
                        let imageData = book.pageItems[index].imageData,
                        let image = UIImage(data: imageData) {
                         return image
                     }
-                    // 3. Fallback: render text pages from content (required for Cloud Function; never skip)
+                    // 4. Fallback: render text pages from content (required for Cloud Function; never skip)
                     if page.type == "textPage" {
                         let text = page.textContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                         return fallbackTextPageImage(
@@ -1224,7 +1334,7 @@ final class FirestoreSyncService {
                             heightPt: CGFloat(baseRecord.pageHeight)
                         )
                     }
-                    // 4. Last resort: blank placeholder (ensures every page has an artifact)
+                    // 5. Last resort: blank placeholder (ensures every page has an artifact)
                     print("⚠️ No image for page \(index) (type=\(page.type)); using blank placeholder")
                     return fallbackTextPageImage(
                         text: " ",
@@ -1245,6 +1355,21 @@ final class FirestoreSyncService {
                 )
                 totalPngBytes += artifacts.png.bytes
 
+                var freeformDocumentStoragePath: String?
+                var freeformDocumentURL: String?
+                if index < book.pageItems.count,
+                   let document = book.pageItems[index].freeformDocument {
+                    let documentData = try JSONEncoder().encode(document)
+                    let uploaded = try await StorageService.shared.uploadFreeformBookPageDocument(
+                        documentData,
+                        bookId: bookId,
+                        pageIndex: index,
+                        asUserId: userId
+                    )
+                    freeformDocumentStoragePath = uploaded.storagePath
+                    freeformDocumentURL = uploaded.downloadURL
+                }
+
                 updatedPage = BookVersionPageRecord(
                     pageIndex: page.pageIndex,
                     type: page.type,
@@ -1262,6 +1387,8 @@ final class FirestoreSyncService {
                     renderedPixelHeight: artifacts.png.pixelHeight,
                     renderedChecksum: artifacts.png.checksum,
                     renderedBytes: artifacts.png.bytes,
+                    freeformDocumentStoragePath: freeformDocumentStoragePath,
+                    freeformDocumentURL: freeformDocumentURL,
                     createdAt: page.createdAt
                 )
                 uploadedPages.append(updatedPage)
@@ -1330,11 +1457,12 @@ final class FirestoreSyncService {
                 incrementPendingBookRenderRetry(bookId: bookId)
             }
             
-            print("✅ Synced canonical book version \(bookId) to Firebase with \(uploadedPages.count) pages and \(totalPngBytes) PNG bytes (layout: \(Int(baseRecord.pageWidth))x\(Int(baseRecord.pageHeight))pt)")
-            
+            print("✅ Synced canonical book version \(bookId.prefix(28))… to Firebase with \(uploadedPages.count) pages and \(totalPngBytes) PNG bytes (layout: \(Int(baseRecord.pageWidth))x\(Int(baseRecord.pageHeight))pt)")
+            return true
         } catch {
             print("[CoverFlow] syncBook ERROR bookId=\(bookId.prefix(28))… — \(error.localizedDescription)")
             print("❌ Failed to sync book to Firebase: \(error)")
+            return false
         }
     }
 
@@ -1425,7 +1553,7 @@ final class FirestoreSyncService {
             ]
             
             try await bookRef.setData(bookData, merge: true)
-            print("✅ Synced book metadata for \(bookId)")
+            print("✅ Synced book metadata for \(bookId.prefix(28))…")
         } catch {
             print("❌ Failed to sync book metadata: \(error)")
         }
@@ -1536,8 +1664,7 @@ final class FirestoreSyncService {
                 return nil
             }
             if http.statusCode == 409, !didRetryCoverRepair {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                print("⚠️ Render function 409 (missing cover / precondition); repairing cover then retrying once. body=\(body)")
+                print("⚠️ Render function 409 (missing cover / precondition); repairing cover then retrying once")
                 _ = await ensureCoverDesignExistsIfMissing(
                     bookVersionId: bookVersionId,
                     respectSessionBudget: false
@@ -1549,8 +1676,7 @@ final class FirestoreSyncService {
                 )
             }
             guard (200...299).contains(http.statusCode) else {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                print("❌ Render function failed (\(http.statusCode)): \(body)")
+                print("❌ Render function failed with HTTP \(http.statusCode)")
                 return nil
             }
 
@@ -2092,7 +2218,7 @@ final class FirestoreSyncService {
         // Mark migration as complete
         let key = migrationCompletionKey(for: userId)
         UserDefaults.standard.set(true, forKey: key)
-        print("✅ Migration complete for \(userId) using key: \(key)")
+        print("✅ Migration complete for \(userId.prefix(8))…")
     }
     
     /// Check if migration has been completed
@@ -2123,7 +2249,7 @@ final class FirestoreSyncService {
             }
             
             try await userRef.setData(userData, merge: true)
-            print("✅ Synced profile info to user document: \(profile.name)")
+            print("✅ Synced profile info to user document")
             
             // Also save to profiles subcollection for history
             let profileRef = userRef.collection("profiles").document(profile.id.uuidString)
@@ -2235,12 +2361,12 @@ final class FirestoreSyncService {
                 let errorCode = (error as NSError).code
                 if errorCode != StorageErrorCode.objectNotFound.rawValue {
                     removedAllAudio = false
-                    print("⚠️ Failed to delete \(fileExtension) audio for memory \(memoryId.uuidString): \(error.localizedDescription)")
+                    print("⚠️ Failed to delete \(fileExtension) audio for memory \(memoryId.uuidString.prefix(8))…: \(error.localizedDescription)")
                 }
             }
         }
         if removedAllAudio {
-            print("✅ Deleted memory \(memoryId.uuidString) and blocked stale recreation")
+            print("✅ Deleted memory \(memoryId.uuidString.prefix(8))… and blocked stale recreation")
         }
         return removedAllAudio
     }
@@ -2277,17 +2403,17 @@ final class FirestoreSyncService {
             return .blockedBecauseOrderExists
         }
         do {
+            try await StorageService.shared.deleteBookVersionFolder(bookId: bookId)
             try await db.collection("users").document(userId)
                 .collection("bookVersions").document(bookId)
                 .delete()
-            try? await db.collection("users").document(userId)
+            try await db.collection("users").document(userId)
                 .collection("books").document(bookId)
                 .delete()
         } catch {
             return .error(error.localizedDescription)
         }
         clearPendingBookSync(bookId: bookId)
-        await StorageService.shared.deleteBookVersionFolder(bookId: bookId)
         print("🗑️ deleteBookVersion completed: \(bookId.prefix(32))…")
         return .deleted
     }

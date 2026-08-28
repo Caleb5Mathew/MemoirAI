@@ -402,6 +402,33 @@ final class StorageService {
         return UploadedBookPageArtifacts(png: pngArtifact, jpeg: jpegArtifact)
     }
 
+    /// Stores the editable layer document separately from Firestore so image data
+    /// cannot push a book-version document over Firestore's size limit.
+    func uploadFreeformBookPageDocument(
+        _ data: Data,
+        bookId: String,
+        pageIndex: Int,
+        asUserId userId: String
+    ) async throws -> (storagePath: String, downloadURL: String) {
+        guard !data.isEmpty,
+              data.count <= BookPageCapacityPolicy.maximumEncodedDocumentByteCount else {
+            throw StorageError.invalidImageData
+        }
+
+        let path = String(
+            format: "users/%@/bookVersions/%@/pages/page_%03d.freeform.json",
+            userId,
+            bookId,
+            pageIndex
+        )
+        let ref = storage.reference().child(path)
+        let metadata = StorageMetadata()
+        metadata.contentType = "application/json"
+        _ = try await ref.putDataAsync(data, metadata: metadata)
+        let downloadURL = try await ref.downloadURL()
+        return (path, downloadURL.absoluteString)
+    }
+
     /// Upload the cover PDF for a Kids Book (24×10.25" at 300 DPI).
     /// Path: users/{uid}/bookVersions/{bookId}/cover.pdf
     func uploadBookCoverPDF(_ pdfData: Data, bookId: String) async throws -> (storagePath: String, downloadURL: String) {
@@ -506,13 +533,15 @@ final class StorageService {
     }
 
     /// Recursively deletes all files under `users/{uid}/bookVersions/{bookId}/` (including `pages/`, `cover.pdf`, `book.pdf`).
-    func deleteBookVersionFolder(bookId: String) async {
-        guard let userId = Auth.auth().currentUser?.uid else { return }
+    func deleteBookVersionFolder(bookId: String) async throws {
+        guard let userId = Auth.auth().currentUser?.uid else {
+            throw StorageError.uploadFailed("Not signed in")
+        }
         let ref = storage.reference().child("users/\(userId)/bookVersions/\(bookId)")
-        await deleteStorageRefRecursively(ref)
+        try await deleteStorageRefRecursively(ref)
     }
 
-    private func deleteStorageRefRecursively(_ ref: StorageReference) async {
+    private func deleteStorageRefRecursively(_ ref: StorageReference) async throws {
         do {
             let list = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<StorageListResult, Error>) in
                 ref.listAll { result, error in
@@ -522,21 +551,20 @@ final class StorageService {
                 }
             }
             for p in list.prefixes {
-                await deleteStorageRefRecursively(p)
+                try await deleteStorageRefRecursively(p)
             }
             for item in list.items {
-                do {
-                    try await item.delete()
-                } catch {
-                    print("⚠️ Storage delete \(item.fullPath): \(error.localizedDescription)")
-                }
+                try await item.delete()
             }
         } catch {
-            // Listing an empty or missing "folder" may return an error; skip noisy logs for not-found.
-            let msg = error.localizedDescription.lowercased()
-            if !msg.contains("not found") && !msg.contains("not exist") {
-                print("⚠️ deleteStorage list \(ref.fullPath): \(error.localizedDescription)")
+            let nsError = error as NSError
+            let message = error.localizedDescription.lowercased()
+            if nsError.domain == StorageErrorDomain,
+               nsError.code == StorageErrorCode.objectNotFound.rawValue {
+                return
             }
+            if message.contains("not found") || message.contains("not exist") { return }
+            throw error
         }
     }
     
