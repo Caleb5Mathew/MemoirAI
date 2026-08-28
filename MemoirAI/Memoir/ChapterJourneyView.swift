@@ -28,6 +28,7 @@ struct ChapterJourneyView: View {
 
     let highlightColor = Color(red: 254/255, green: 242/255, blue: 215/255)
     let deepGreen = Color(red: 39/255, green: 60/255, blue: 34/255)
+    private let headerSurface = Color(red: 1.0, green: 0.97, blue: 0.90)
 
     private var childNames: [String] {
         profileVM.selectedProfile.childNames
@@ -246,6 +247,11 @@ struct ChapterJourneyView: View {
                         .font(.system(size: 26, weight: .semibold))
                         .foregroundColor(deepGreen)
                         .frame(width: 44, height: 44)
+                        .background(
+                            Circle()
+                                .fill(headerSurface.opacity(0.96))
+                                .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
+                        )
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -274,8 +280,9 @@ struct ChapterJourneyView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
             .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Color.white.opacity(0.35))
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(headerSurface.opacity(0.96))
+                    .shadow(color: .black.opacity(0.16), radius: 12, y: 5)
             )
             .padding(.horizontal, 16)
         }
