@@ -165,7 +165,7 @@ async function run() {
   };
   const fingerprint = checkoutFulfillmentFingerprint(fingerprintRecord, "pod-1");
   const secondProductFingerprint = checkoutFulfillmentFingerprint(fingerprintRecord, "pod-2");
-  await validateCheckoutBookArtifacts({
+  const validated = await validateCheckoutBookArtifacts({
     userId: "owner-1",
     expectedItems: [
       { bookVersionId: "book-1", selectedPodPackageId: "pod-1", fulfillmentFingerprint: fingerprint },
@@ -182,6 +182,9 @@ async function run() {
     }
   });
   assert.deepStrictEqual(validatedIds, ["book-1"]);
+  assert.strictEqual(validated.length, 2);
+  assert.strictEqual(validated[0].record, fingerprintRecord);
+  assert.strictEqual(validated[1].record, fingerprintRecord);
   await assert.rejects(
     validateCheckoutBookArtifacts({
       userId: "owner-1",

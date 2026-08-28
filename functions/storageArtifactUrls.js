@@ -171,6 +171,7 @@ async function validateCheckoutBookArtifacts({ userId, expectedItems, ensureArti
     throw new Error("Checkout book list is invalid");
   }
   const recordsByBook = new Map();
+  const validatedItems = [];
   for (const item of expectedItems) {
     const bookVersionId = String(item?.bookVersionId || "").trim();
     if (!bookVersionId || !item?.fulfillmentFingerprint) {
@@ -191,7 +192,9 @@ async function validateCheckoutBookArtifacts({ userId, expectedItems, ensureArti
     if (currentFingerprint !== item.fulfillmentFingerprint) {
       throw new Error("Checkout book changed after pricing");
     }
+    validatedItems.push({ item, record });
   }
+  return validatedItems;
 }
 
 module.exports = {

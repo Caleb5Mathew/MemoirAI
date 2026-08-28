@@ -3425,6 +3425,16 @@ exports.createCheckoutSession = onCall(
 
     const stripe = createStripeClient({ maxNetworkRetries: 1, timeoutMs: 20 * 1000 });
     const checkoutLeaseId = `single:${debugId}`;
+    const expectedFulfillmentItem = {
+      bookVersionId,
+      selectedPodPackageId: selectedOption.podPackageId,
+      fulfillmentFingerprint: checkoutFulfillmentFingerprint(
+        record,
+        selectedOption.podPackageId
+      ),
+      coverStoragePath,
+      pdfStoragePath
+    };
     await acquireCheckoutLease({
       db, userId, leaseId: checkoutLeaseId, HttpsError,
       serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
@@ -3432,14 +3442,7 @@ exports.createCheckoutSession = onCall(
     try {
       await validateCheckoutBookArtifacts({
         userId,
-        expectedItems: [{
-          bookVersionId,
-          selectedPodPackageId: selectedOption.podPackageId,
-          fulfillmentFingerprint: checkoutFulfillmentFingerprint(
-            record,
-            selectedOption.podPackageId
-          )
-        }],
+        expectedItems: [expectedFulfillmentItem],
         ensureArtifacts: (ownerId, versionId) =>
           ensureBookVersionArtifactUrls(db, bucket, ownerId, versionId)
       });
@@ -3533,6 +3536,7 @@ exports.createCheckoutSession = onCall(
         status: "pending",
         coverStoragePath,
         pdfStoragePath,
+        expectedFulfillmentItem,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         expiresAt: admin.firestore.Timestamp.fromMillis(Number(session.expires_at || 0) * 1000)
       });
@@ -3834,6 +3838,9 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
   if (pend.status === "paid") {
     return { ok: false, reason: "already_paid_pending_doc" };
   }
+  if (pend.status === "paid_fulfillment_hold") {
+    return { ok: false, reason: "fulfillment_hold_artifacts_changed" };
+  }
 
   const userIdFromMeta = pendRef.parent.parent.id;
   const cartOrderGroupId = pendRef.id;
@@ -3872,20 +3879,17 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
 
   const validatedItems = [];
   try {
-    for (const item of pend.items || []) {
+    const validatedArtifacts = await validateCheckoutBookArtifacts({
+      userId: userIdFromMeta,
+      expectedItems: pend.items || [],
+      ensureArtifacts: (ownerId, versionId) =>
+        ensureBookVersionArtifactUrls(db, bucket, ownerId, versionId)
+    });
+    for (const { item, record: validated } of validatedArtifacts) {
       const bookVersionId = String(item?.bookVersionId || "").trim();
       const expected = canonicalBookArtifactPaths(userIdFromMeta, bookVersionId);
       assertCanonicalBookArtifact(item?.coverStoragePath, expected.cover, "Cover");
       assertCanonicalBookArtifact(item?.pdfStoragePath, expected.interior, "Interior");
-      const validated = await ensureBookVersionArtifactUrls(
-        db,
-        bucket,
-        userIdFromMeta,
-        bookVersionId
-      );
-      if (!validated?.coverURL || !validated?.pdfURL) {
-        throw new Error("Book artifacts are missing");
-      }
       validatedItems.push({
         ...item,
         coverStoragePath: expected.cover,
@@ -3895,8 +3899,32 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
       });
     }
   } catch (error) {
-    console.warn("Paid cart artifact validation failed");
-    return { ok: false, reason: "invalid_book_artifacts" };
+    console.error("Paid cart fulfillment placed on hold: artifact fingerprint changed", {
+      cartOrderGroupId,
+      stripeSessionId: session.id,
+      error: String(error?.message || error)
+    });
+    await pendRef.set({
+      status: "paid_fulfillment_hold",
+      fulfillmentHold: true,
+      fulfillmentHoldReason: "book_artifacts_changed_after_payment",
+      stripeSessionId: session.id,
+      stripePaymentIntentId: session.payment_intent || null,
+      paidAt: admin.firestore.FieldValue.serverTimestamp(),
+      fulfillmentHoldAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await releaseCheckoutLease({
+      db,
+      userId: userIdFromMeta,
+      leaseId: pend.checkoutLeaseId
+    }).catch(() => {});
+    sendOpsAlert(
+      `Paid cart needs refund review — ${cartOrderGroupId}`,
+      `Stripe session ${session.id} was paid, but its book artifacts changed before order creation.\n` +
+        `User: ${userIdFromMeta}\nCart: ${cartOrderGroupId}\n\n` +
+        "Do not print. Review and refund or rebuild the exact paid artifacts in Stripe/Firestore."
+    ).catch(() => {});
+    return { ok: false, reason: "fulfillment_hold_artifacts_changed" };
   }
   if (validatedItems.length === 0) {
     return { ok: false, reason: "invalid_book_artifacts" };
@@ -4158,6 +4186,16 @@ async function commitPaidSingleCheckoutFromStripeSession(session, { isStripeTest
   }
 
   const pendingSingleRef = db.collection("pendingSingleCheckouts").doc(session.id);
+  const pendingSingleSnap = await pendingSingleRef.get();
+  const pendingSingle = pendingSingleSnap.data() || {};
+  if (!pendingSingleSnap.exists || pendingSingle.userId !== userId || pendingSingle.bookVersionId !== bookVersionId) {
+    const error = new Error("Missing or mismatched pending checkout");
+    error.clientStatus = 400;
+    throw error;
+  }
+  if (pendingSingle.status === "paid_fulfillment_hold") {
+    return { ok: false, reason: "fulfillment_hold_artifacts_changed" };
+  }
   const existingSnap = await db.collection("users").doc(userId).collection("orders")
     .where("stripeSessionId", "==", session.id).limit(1).get();
   if (!existingSnap.empty) {
@@ -4174,12 +4212,38 @@ async function commitPaidSingleCheckoutFromStripeSession(session, { isStripeTest
     const expectedPaths = canonicalBookArtifactPaths(userId, bookVersionId);
     assertCanonicalBookArtifact(coverStoragePath, expectedPaths.cover, "Cover");
     assertCanonicalBookArtifact(pdfStoragePath, expectedPaths.interior, "Interior");
-    bookVersion = await ensureBookVersionArtifactUrls(db, bucket, userId, bookVersionId);
-    if (!bookVersion?.coverURL || !bookVersion?.pdfURL) throw new Error("Book artifacts are missing");
-  } catch (_) {
-    const error = new Error("Invalid book artifacts");
-    error.clientStatus = 400;
-    throw error;
+    const validatedArtifacts = await validateCheckoutBookArtifacts({
+      userId,
+      expectedItems: [pendingSingle.expectedFulfillmentItem],
+      ensureArtifacts: (ownerId, versionId) =>
+        ensureBookVersionArtifactUrls(db, bucket, ownerId, versionId)
+    });
+    bookVersion = validatedArtifacts[0]?.record;
+    if (!bookVersion?.coverURL || !bookVersion?.pdfURL) {
+      throw new Error("Book artifacts are missing");
+    }
+  } catch (error) {
+    console.error("Paid single checkout fulfillment placed on hold: artifact fingerprint changed", {
+      stripeSessionId: session.id,
+      bookVersionId,
+      error: String(error?.message || error)
+    });
+    await pendingSingleRef.set({
+      status: "paid_fulfillment_hold",
+      fulfillmentHold: true,
+      fulfillmentHoldReason: "book_artifacts_changed_after_payment",
+      stripePaymentIntentId: session.payment_intent || null,
+      paidAt: admin.firestore.FieldValue.serverTimestamp(),
+      fulfillmentHoldAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await releaseCheckoutLease({ db, userId, leaseId: meta.checkoutLeaseId }).catch(() => {});
+    sendOpsAlert(
+      `Paid book needs refund review — ${session.id}`,
+      `Stripe session ${session.id} was paid, but its book artifacts changed before order creation.\n` +
+        `User: ${userId}\nBook: ${bookVersionId}\n\n` +
+        "Do not print. Review and refund or rebuild the exact paid artifacts in Stripe/Firestore."
+    ).catch(() => {});
+    return { ok: false, reason: "fulfillment_hold_artifacts_changed" };
   }
   const records = buildSingleBookOrderRecords({
     session,
@@ -4305,6 +4369,14 @@ exports.stripeWebhook = onRequest(
           console.error("Stripe webhook: pending cart missing", cartOrderGroupId);
           return jsonError(res, 400, "Missing pending checkout");
         }
+        if (commitResult.reason === "fulfillment_hold_artifacts_changed") {
+          return res.status(200).json({
+            received: true,
+            cart: true,
+            paid: true,
+            fulfillmentHold: true
+          });
+        }
         return jsonError(res, 500, "Cart checkout commit failed");
       }
 
@@ -4325,6 +4397,13 @@ exports.stripeWebhook = onRequest(
       const single = await commitPaidSingleCheckoutFromStripeSession(session, {
         isStripeTestMode: event.livemode === false
       });
+      if (!single.ok && single.reason === "fulfillment_hold_artifacts_changed") {
+        return res.status(200).json({
+          received: true,
+          paid: true,
+          fulfillmentHold: true
+        });
+      }
       console.log(`Single-book checkout committed order=${single.orderId} duplicate=${single.duplicate}`);
       return res.status(200).json({
         received: true,
@@ -4638,6 +4717,8 @@ exports.reconcilePendingCartCheckouts = onSchedule(
               );
             } else if (heal.reason === "already_paid_pending_doc" || heal.reason === "orders_already_exist") {
               updates.reconcileNote = heal.reason;
+            } else if (heal.reason === "fulfillment_hold_artifacts_changed") {
+              updates.reconcileNote = "paid_fulfillment_hold_artifacts_changed";
             } else {
               console.warn(
                 JSON.stringify({
@@ -4693,10 +4774,15 @@ exports.reconcilePendingCartCheckouts = onSchedule(
             const healed = await commitPaidSingleCheckoutFromStripeSession(session, {
               isStripeTestMode: session.livemode === false
             });
-            updates.status = "paid";
-            updates.reconcileNote = healed.duplicate
-              ? "single_order_already_committed"
-              : "healed_by_reconcilePendingCartCheckouts";
+            if (!healed.ok && healed.reason === "fulfillment_hold_artifacts_changed") {
+              updates.status = "paid_fulfillment_hold";
+              updates.reconcileNote = "paid_fulfillment_hold_artifacts_changed";
+            } else {
+              updates.status = "paid";
+              updates.reconcileNote = healed.duplicate
+                ? "single_order_already_committed"
+                : "healed_by_reconcilePendingCartCheckouts";
+            }
           }
           await doc.ref.set(updates, { merge: true });
           processed += 1;
