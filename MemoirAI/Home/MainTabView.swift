@@ -6,13 +6,13 @@ struct MainTabView: View {
     @AppStorage("memoirai.lastTab") private var selectedTab = 0
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
-    @StateObject private var familyManager = FamilyManager.shared
     @ObservedObject private var authService = AuthenticationService.shared
     @AppStorage(MemoirPersistenceUserDefaults.suggestAccountLinkAfterBook) private var suggestBookBackup = false
     @State private var bookBackupBannerDismissed = false
     @State private var showEmailBackupSheet = false
     @State private var pendingAccessRequestCount = 0
     @State private var showAccessRequests = false
+    @State private var accountLinkError: String?
 
     private var showBookBackupNudge: Bool {
         suggestBookBackup && authService.isAnonymous && !bookBackupBannerDismissed
@@ -47,22 +47,6 @@ struct MainTabView: View {
                         .onAppear {
                             UITabBar.appearance().isHidden = false
                         }
-
-                    // MARK: - Family Tab (Commented out for development)
-                    // TODO: Uncomment when family features are ready for production
-                    /*
-                    FamilyView()
-                        .environmentObject(profileVM)
-                        .environmentObject(familyManager)
-                        .tabItem {
-                            Image(systemName: "person.3.fill")
-                            Text("Family")
-                        }
-                        .tag(2)
-                        .onAppear {
-                            UITabBar.appearance().isHidden = false
-                        }
-                    */
                 }
                 .ignoresSafeArea(edges: .bottom)
                 .accentColor(.black)
@@ -114,6 +98,17 @@ struct MainTabView: View {
         }
         .navigationBarHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        .alert(
+            "Account Could Not Be Linked",
+            isPresented: Binding(
+                get: { accountLinkError != nil },
+                set: { if !$0 { accountLinkError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { accountLinkError = nil }
+        } message: {
+            Text(accountLinkError ?? "Please try again.")
+        }
         // (Onboarding overlay removed – handled globally)
     }
 
@@ -190,11 +185,11 @@ struct MainTabView: View {
                         do {
                             try await AuthenticationService.shared.linkAppleAccount(credential: credential)
                         } catch {
-                            print("❌ Link Apple failed: \(error.localizedDescription)")
+                            accountLinkError = error.localizedDescription
                         }
                     }
                 case .failure(let error):
-                    print("❌ Apple sign-in failed: \(error.localizedDescription)")
+                    accountLinkError = error.localizedDescription
                 }
             }
             .signInWithAppleButtonStyle(.black)
@@ -207,7 +202,7 @@ struct MainTabView: View {
                     do {
                         try await AuthenticationService.shared.linkGoogleAccount()
                     } catch {
-                        print("❌ Link Google failed: \(error.localizedDescription)")
+                        accountLinkError = error.localizedDescription
                     }
                 }
             } label: {

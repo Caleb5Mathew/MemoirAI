@@ -8,20 +8,29 @@ import Photos
 import FirebaseAuth
 import FirebaseFirestore
 
-/// Filter Xcode console for `[StorybookGen]` to see storybook pipeline details.
-/// In **Release** builds, set `UserDefaults` key `MemoirAI_StorybookVerboseLogging` to `true` to enable the same verbose lines.
+enum StorybookJobPayloadPolicy {
+    static let maximumPinnedMemoryCount = 100
+
+    static func pinnedMemoryIDs(_ ids: [UUID]) -> [String] {
+        ids.prefix(maximumPinnedMemoryCount).map(\.uuidString)
+    }
+}
+
+/// Filter the Debug Xcode console for `[StorybookGen]` to see storybook pipeline details.
 private enum StorybookGenLog {
     #if DEBUG
     static let verbose: Bool = true
     #else
-    static var verbose: Bool { UserDefaults.standard.bool(forKey: "MemoirAI_StorybookVerboseLogging") }
+    static let verbose: Bool = false
     #endif
 
     /// Xcode console truncates long single-line prints (~1024 chars). Chunk large payloads so full transcripts / character JSON survive.
     static let chunkSize: Int = 900
 
     static func line(_ message: String) {
+        #if DEBUG
         print("[StorybookGen] \(message)")
+        #endif
     }
 
     static func verboseLine(_ message: String) {
@@ -29,11 +38,13 @@ private enum StorybookGenLog {
     }
 
     static func fence(_ title: String) {
+        guard verbose else { return }
         line("════════ \(title) ════════")
     }
 
     /// Splits `body` into ~900-char chunks prefixed with `label`. No truncation. Always runs (not gated by `verbose`) — the caller decides.
     static func dumpFull(label: String, body: String) {
+        guard verbose else { return }
         guard !body.isEmpty else {
             line("\(label): (empty)")
             return
@@ -73,6 +84,7 @@ struct PersistablePageItem: Codable {
 }
 
 struct PersistableStorybook: Codable {
+    let ownerUserID: String?
     let profileID: UUID
     let pageItems: [PersistablePageItem]
     let artStyle: String
@@ -85,6 +97,7 @@ struct PersistableStorybook: Codable {
     var coverFontPreset: String?
 
     init(
+        ownerUserID: String? = MemoryUserScope.currentFirebaseUserId,
         profileID: UUID,
         pageItems: [PersistablePageItem],
         artStyle: String,
@@ -93,6 +106,7 @@ struct PersistableStorybook: Codable {
         backCoverPitch: String? = nil,
         coverFontPreset: String? = nil
     ) {
+        self.ownerUserID = ownerUserID
         self.profileID = profileID
         self.pageItems = pageItems
         self.artStyle = artStyle
@@ -100,6 +114,37 @@ struct PersistableStorybook: Codable {
         self.bookDisplayTitle = bookDisplayTitle
         self.backCoverPitch = backCoverPitch
         self.coverFontPreset = coverFontPreset
+    }
+}
+
+enum StorybookOwnershipPolicy {
+    static func canRead(
+        ownerUserID: String?,
+        currentUserID: String?,
+        trustedLegacyOwner: Bool
+    ) -> Bool {
+        guard let currentUserID = MemoryOwnershipPolicy.normalizedUserID(currentUserID) else {
+            return false
+        }
+        if let ownerUserID = MemoryOwnershipPolicy.normalizedUserID(ownerUserID) {
+            return ownerUserID == currentUserID
+        }
+        return trustedLegacyOwner
+    }
+}
+
+enum StorybookAsyncRunPolicy {
+    static func isCurrent(
+        expectedUserID: String,
+        expectedProfileID: UUID,
+        expectedRun: UInt64,
+        currentUserID: String?,
+        currentProfileID: UUID?,
+        currentRun: UInt64
+    ) -> Bool {
+        currentUserID == expectedUserID
+            && currentProfileID == expectedProfileID
+            && currentRun == expectedRun
     }
 }
 
@@ -284,6 +329,8 @@ class StoryPageViewModel: ObservableObject {
     }()
 
     private var currentProfileID: UUID?
+    private var profileLoadGeneration: UInt64 = 0
+    private var profileLoadTask: Task<Void, Never>?
     /// Used so `loadStorybookForProfile` does not clear `skippedMemoriesDuringGeneration` on every `onAppear` for the same profile.
     private var lastStorybookLoadProfileID: UUID?
     private var profileName: String?
@@ -501,6 +548,20 @@ class StoryPageViewModel: ObservableObject {
     
     // NEW: Load persisted storybook for a profile
     func loadStorybookForProfile(_ profileID: UUID, name: String? = nil, profileEthnicity: String? = nil) {
+        profileLoadTask?.cancel()
+        profileLoadGeneration &+= 1
+        let loadToken = profileLoadGeneration
+        let expectedUserID = Auth.auth().currentUser?.uid
+        if currentProfileID != profileID {
+            stopStorybookCloudJobListener()
+            storybookGenerationCounter &+= 1
+            pageItems.removeAll()
+            hasGeneratedStorybook = false
+            isVisualBookReady = false
+            currentBookVersionRecord = nil
+            lastSyncedBookVersionId = nil
+            lastPersistedBookCreatedAt = nil
+        }
         if lastStorybookLoadProfileID != profileID {
             skippedMemoriesDuringGeneration = []
         }
@@ -512,7 +573,13 @@ class StoryPageViewModel: ObservableObject {
             ethnicity = pe
         }
         requiresVisualReadyGate = false
-        Task {
+        profileLoadTask = Task { @MainActor in
+            @MainActor func isCurrentLoad() -> Bool {
+                guard !Task.isCancelled else { return false }
+                guard loadToken == profileLoadGeneration else { return false }
+                guard currentProfileID == profileID else { return false }
+                return Auth.auth().currentUser?.uid == expectedUserID
+            }
             print("[StorybookLoad] loadStorybookForProfile START profile=\(profileID.uuidString.prefix(8)) isLoading=\(isLoading) pageItems=\(pageItems.count) isLoadingGalleryBook=\(isLoadingGalleryBook)")
             // Avoid racing `generateStorybook`: a load that started before generation can still finish after.
             guard !isLoading else {
@@ -524,6 +591,7 @@ class StoryPageViewModel: ObservableObject {
                 return
             }
             await migrateLegacyLocalBooksIfNeeded(for: profileID)
+            guard isCurrentLoad() else { return }
             guard !isLoading else {
                 print("[StorybookLoad] loadStorybookForProfile ABORT (isLoading after migrate)")
                 return
@@ -534,6 +602,7 @@ class StoryPageViewModel: ObservableObject {
             }
             isResumingPendingBookSync = true
             await FirestoreSyncService.shared.retryPendingSyncs(for: profileID)
+            guard isCurrentLoad() else { return }
             isResumingPendingBookSync = false
             guard !isLoading else {
                 print("[StorybookLoad] loadStorybookForProfile ABORT (isLoading after pending sync retry)")
@@ -545,7 +614,12 @@ class StoryPageViewModel: ObservableObject {
             }
             // Do not auto-regenerate covers during normal book loading.
             // Auto backfill can make an existing book's cover art change unexpectedly.
-            let loadedFromCloud = await loadLatestBookVersionFromCloud(for: profileID)
+            let loadedFromCloud = await loadLatestBookVersionFromCloud(
+                for: profileID,
+                loadToken: loadToken,
+                expectedUserID: expectedUserID
+            )
+            guard isCurrentLoad() else { return }
             guard !isLoading else {
                 print("[StorybookLoad] loadStorybookForProfile ABORT (isLoading after cloud) loadedFromCloud=\(loadedFromCloud)")
                 return
@@ -1333,9 +1407,19 @@ class StoryPageViewModel: ObservableObject {
             print("❌ Local storybook file cache failed (continuing with cloud/Firebase): \(error.localizedDescription)")
         }
 
+        guard let userID = MemoryUserScope.currentFirebaseUserId,
+              storybookData.ownerUserID == userID else {
+            throw CocoaError(.userCancelled)
+        }
         let cloudStore = NSUbiquitousKeyValueStore.default
-        let cloudKey = "memoir_storybook_\(profileID.uuidString)"
-        let cloudHistoryKey = "memoir_storybook_history_\(profileID.uuidString)"
+        let cloudKey = StorybookStorageScope.cloudCurrentKey(
+            userID: userID,
+            profileID: profileID
+        )
+        let cloudHistoryKey = StorybookStorageScope.cloudHistoryKey(
+            userID: userID,
+            profileID: profileID
+        )
         let createdAt = storybookData.createdAt
         if dataSizeMB < 0.95 {
             cloudStore.set(data, forKey: cloudKey)
@@ -1361,6 +1445,7 @@ class StoryPageViewModel: ObservableObject {
                 return item
             }
             let compressedStorybook = PersistableStorybook(
+                ownerUserID: storybookData.ownerUserID,
                 profileID: storybookData.profileID,
                 pageItems: compressedItems,
                 artStyle: storybookData.artStyle,
@@ -1513,7 +1598,11 @@ class StoryPageViewModel: ObservableObject {
             let cloudStore = NSUbiquitousKeyValueStore.default
             cloudStore.synchronize()
             
-            let cloudKey = "memoir_storybook_\(profileID.uuidString)"
+            guard let userID = MemoryUserScope.currentFirebaseUserId else { return }
+            let cloudKey = StorybookStorageScope.cloudCurrentKey(
+                userID: userID,
+                profileID: profileID
+            )
             
             // Check if stored as data in iCloud KVS
             if let cloudData = cloudStore.data(forKey: cloudKey) {
@@ -1532,6 +1621,17 @@ class StoryPageViewModel: ObservableObject {
         let decoder = JSONDecoder()
         do {
             let storybook = try decoder.decode(PersistableStorybook.self, from: storybookData)
+            let currentUserID = MemoryUserScope.currentFirebaseUserId
+            let trustedLegacyOwner = currentUserID.map {
+                UserDefaults.standard.bool(forKey: "firebase_migration_complete_\($0)")
+            } ?? false
+            guard StorybookOwnershipPolicy.canRead(
+                ownerUserID: storybook.ownerUserID,
+                currentUserID: currentUserID,
+                trustedLegacyOwner: trustedLegacyOwner
+            ) else {
+                throw CocoaError(.userCancelled)
+            }
             let layout = BookVersionLayoutFactory.layout(forArtStyle: storybook.artStyle)
             loadedBookOrientation = layout.orientation
             loadedBookPageWidth = CGFloat(layout.pageWidth)
@@ -1614,9 +1714,18 @@ class StoryPageViewModel: ObservableObject {
         return book.createdAt
     }
 
-    private func loadLatestBookVersionFromCloud(for profileID: UUID) async -> Bool {
+    private func loadLatestBookVersionFromCloud(
+        for profileID: UUID,
+        loadToken: UInt64,
+        expectedUserID: String?
+    ) async -> Bool {
         guard let record = await FirestoreSyncService.shared.fetchLatestBookVersion(profileID: profileID) else {
             print("[StorybookLoad] fetchLatestBookVersion → nil")
+            return false
+        }
+        guard loadToken == profileLoadGeneration,
+              currentProfileID == profileID,
+              Auth.auth().currentUser?.uid == expectedUserID else {
             return false
         }
         let cloudCreated = record.createdAt
@@ -1642,8 +1751,12 @@ class StoryPageViewModel: ObservableObject {
             return false
         }
 
-        await applyBookVersionRecord(record)
-        return true
+        return await applyBookVersionRecord(
+            record,
+            profileApplyToken: loadToken,
+            expectedProfileID: profileID,
+            expectedUserID: expectedUserID
+        )
     }
     
     func loadBookVersionRecord(_ record: BookVersionRecord) {
@@ -1714,7 +1827,13 @@ class StoryPageViewModel: ObservableObject {
     ///   Canonical metadata is applied up front; `pageItems` is published with placeholder illustrations immediately for My Library loads (`isLoadingGalleryBook` clears before downloads finish).
     /// - Returns: `true` if `pageItems` were committed for this record.
     @discardableResult
-    private func applyBookVersionRecord(_ record: BookVersionRecord, galleryApplyToken: UInt64? = nil) async -> Bool {
+    private func applyBookVersionRecord(
+        _ record: BookVersionRecord,
+        galleryApplyToken: UInt64? = nil,
+        profileApplyToken: UInt64? = nil,
+        expectedProfileID: UUID? = nil,
+        expectedUserID: String? = nil
+    ) async -> Bool {
         print("[StorybookLoad] applyBookVersionRecord id=\(record.bookVersionId.prefix(28))… createdAt=\(record.createdAt.timeIntervalSince1970) pages=\(record.pages.count) isLoading=\(isLoading) hasPrintCoverPDF=\(record.printCoverPDFURL != nil) galleryToken=\(galleryApplyToken.map(String.init) ?? "nil")")
         if StorybookCloudApplyPolicy.isIncompleteCloudRecord(record) {
             print("⚠️ applyBookVersionRecord — incomplete cloud (pages in doc=\(record.pages.count), pageCount=\(record.pageCount)) — not applying; consider repair sync")
@@ -1735,13 +1854,15 @@ class StoryPageViewModel: ObservableObject {
         let isDeferredGalleryApply = galleryToken != nil
 
         func stillValidForGallery() -> Bool {
-            guard let t = galleryToken else { return true }
-            return t == galleryBookLoadGeneration && !Task.isCancelled
+            guard !Task.isCancelled else { return false }
+            if let t = galleryToken, t != galleryBookLoadGeneration { return false }
+            if let token = profileApplyToken, token != profileLoadGeneration { return false }
+            if let expectedProfileID, currentProfileID != expectedProfileID { return false }
+            if let expectedUserID, Auth.auth().currentUser?.uid != expectedUserID { return false }
+            return true
         }
 
-        if isDeferredGalleryApply {
-            guard stillValidForGallery() else { return false }
-        }
+        guard stillValidForGallery() else { return false }
 
         applyCanonicalBookMetadataFromCloudRecord(record)
         illustrationReloadSources = [:]
@@ -2571,12 +2692,16 @@ class StoryPageViewModel: ObservableObject {
     
     private func clearPersistedStorybook(for profileID: UUID) {
         StorybookLocalStore.removeCurrentBook(profileID: profileID)
-        let localKey = "storybook_\(profileID.uuidString)"
+        guard let userID = MemoryUserScope.currentFirebaseUserId else { return }
+        let localKey = "storybook_\(userID)_\(profileID.uuidString)"
         UserDefaults.standard.removeObject(forKey: localKey)
         
         // Also clear from iCloud
         let cloudStore = NSUbiquitousKeyValueStore.default
-        let cloudKey = "memoir_storybook_\(profileID.uuidString)"
+        let cloudKey = StorybookStorageScope.cloudCurrentKey(
+            userID: userID,
+            profileID: profileID
+        )
         cloudStore.removeObject(forKey: cloudKey)
         cloudStore.synchronize()
         
@@ -3406,7 +3531,7 @@ class StoryPageViewModel: ObservableObject {
               let data = detailsString.data(using: .utf8),
               let characterDetails = try? JSONDecoder().decode(CharacterDetails.self, from: data),
               !characterDetails.characters.isEmpty else {
-            print("ℹ️ No character details found for memory: \(entry.prompt ?? "Untitled")")
+            print("No character details found for memory")
             return ""
         }
         
@@ -3875,7 +4000,7 @@ class StoryPageViewModel: ObservableObject {
             detected.append(raw)
         }
 
-        print("🔎 Auto-detected names for memory '\(entry.prompt ?? "Untitled")': \(detected)")
+        print("Auto-detected \(detected.count) character name candidate(s)")
         return detected
     }
 
@@ -4377,7 +4502,12 @@ class StoryPageViewModel: ObservableObject {
         entry.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    private func rebuildPageItemsFromCloudJobData(_ data: [String: Any], profileID: UUID) async throws {
+    private func rebuildPageItemsFromCloudJobData(
+        _ data: [String: Any],
+        profileID: UUID,
+        expectedUserID: String,
+        expectedRun: UInt64
+    ) async throws {
         pageRebuildTicket &+= 1
         let ticket = pageRebuildTicket
         let ordered = (data["orderedMemoryIds"] as? [String]) ?? []
@@ -4395,6 +4525,14 @@ class StoryPageViewModel: ObservableObject {
 
         var newPages: [PageItem] = []
         let pool = try await fetchMemoryEntries(for: profileID)
+        guard StorybookAsyncRunPolicy.isCurrent(
+            expectedUserID: expectedUserID,
+            expectedProfileID: profileID,
+            expectedRun: expectedRun,
+            currentUserID: Auth.auth().currentUser?.uid,
+            currentProfileID: currentProfileID,
+            currentRun: storybookGenerationCounter
+        ) else { return }
         var byId: [UUID: MemoryEntry] = [:]
         for e in pool { if let mid = e.id { byId[mid] = e } }
 
@@ -4407,6 +4545,14 @@ class StoryPageViewModel: ObservableObject {
             guard let urlStr = res["illustrationURL"] as? String,
                   let u = URL(string: urlStr) else { continue }
             let (imgData, _) = try await URLSession.shared.data(from: u)
+            guard StorybookAsyncRunPolicy.isCurrent(
+                expectedUserID: expectedUserID,
+                expectedProfileID: profileID,
+                expectedRun: expectedRun,
+                currentUserID: Auth.auth().currentUser?.uid,
+                currentProfileID: currentProfileID,
+                currentRun: storybookGenerationCounter
+            ) else { return }
             guard let img = UIImage(data: imgData) else { continue }
 
             let displayTitle = (res["displayTitle"] as? String) ?? (entry.prompt ?? "Memory")
@@ -4426,7 +4572,15 @@ class StoryPageViewModel: ObservableObject {
         }
         // A newer rebuild started while this one was downloading images — drop this
         // result instead of stomping the fresher page set.
-        guard ticket == pageRebuildTicket else { return }
+        guard ticket == pageRebuildTicket,
+              StorybookAsyncRunPolicy.isCurrent(
+                expectedUserID: expectedUserID,
+                expectedProfileID: profileID,
+                expectedRun: expectedRun,
+                currentUserID: Auth.auth().currentUser?.uid,
+                currentProfileID: currentProfileID,
+                currentRun: storybookGenerationCounter
+              ) else { return }
         skippedMemoriesDuringGeneration = skipped
         pageItems = newPages
     }
@@ -4442,14 +4596,36 @@ class StoryPageViewModel: ObservableObject {
         storybookCloudJobListener = ref.addSnapshotListener { [weak self] snap, err in
             guard let self, err == nil, let snap, snap.exists else { return }
             Task { @MainActor in
-                guard thisRun == self.storybookGenerationCounter else { return }
+                guard thisRun == self.storybookGenerationCounter,
+                      self.currentProfileID == profileID,
+                      Auth.auth().currentUser?.uid == uid else { return }
                 let data = snap.data() ?? [:]
-                await self.handleStorybookCloudJobSnapshot(data: data, jobId: jobId, profileID: profileID, thisRun: thisRun)
+                await self.handleStorybookCloudJobSnapshot(
+                    data: data,
+                    jobId: jobId,
+                    profileID: profileID,
+                    userID: uid,
+                    thisRun: thisRun
+                )
             }
         }
     }
 
-    private func handleStorybookCloudJobSnapshot(data: [String: Any], jobId: String, profileID: UUID, thisRun: UInt64) async {
+    private func handleStorybookCloudJobSnapshot(
+        data: [String: Any],
+        jobId: String,
+        profileID: UUID,
+        userID: String,
+        thisRun: UInt64
+    ) async {
+        guard StorybookAsyncRunPolicy.isCurrent(
+            expectedUserID: userID,
+            expectedProfileID: profileID,
+            expectedRun: thisRun,
+            currentUserID: Auth.auth().currentUser?.uid,
+            currentProfileID: currentProfileID,
+            currentRun: storybookGenerationCounter
+        ) else { return }
         let status = String(describing: data["status"] ?? "")
         let prog = data["progress"] as? [String: Any] ?? [:]
         let completed = (prog["completedMemoryCount"] as? NSNumber)?.intValue ?? (prog["completedMemoryCount"] as? Int) ?? 0
@@ -4505,10 +4681,26 @@ class StoryPageViewModel: ObservableObject {
 
         if status == "running" || status == "ranking" || status == "queued" {
             if lastRebuiltCompletedCount != completed || pageItems.isEmpty {
-                if (try? await rebuildPageItemsFromCloudJobData(data, profileID: profileID)) != nil {
+                if (try? await rebuildPageItemsFromCloudJobData(
+                    data,
+                    profileID: profileID,
+                    expectedUserID: userID,
+                    expectedRun: thisRun
+                )) != nil,
+                   StorybookAsyncRunPolicy.isCurrent(
+                    expectedUserID: userID,
+                    expectedProfileID: profileID,
+                    expectedRun: thisRun,
+                    currentUserID: Auth.auth().currentUser?.uid,
+                    currentProfileID: currentProfileID,
+                    currentRun: storybookGenerationCounter
+                   ) {
                     lastRebuiltCompletedCount = completed
                 }
             }
+            guard Auth.auth().currentUser?.uid == userID,
+                  currentProfileID == profileID,
+                  storybookGenerationCounter == thisRun else { return }
             hasGeneratedStorybook = !pageItems.isEmpty
             return
         }
@@ -4518,7 +4710,14 @@ class StoryPageViewModel: ObservableObject {
             cloudStorybookFinalizeStarted = true
             Self.dumpCloudJobAuditTrail(jobId: jobId, data: data)
             guard let reservedAt = lastPersistedBookCreatedAt else { return }
-            await runFinalizeAfterCloudAI(jobId: jobId, profileID: profileID, jobData: data, reservedCreatedAt: reservedAt, thisRun: thisRun)
+            await runFinalizeAfterCloudAI(
+                jobId: jobId,
+                profileID: profileID,
+                userID: userID,
+                jobData: data,
+                reservedCreatedAt: reservedAt,
+                thisRun: thisRun
+            )
         }
     }
 
@@ -4596,25 +4795,48 @@ class StoryPageViewModel: ObservableObject {
         }
     }
 
-    private func runFinalizeAfterCloudAI(jobId: String, profileID: UUID, jobData: [String: Any], reservedCreatedAt: Date, thisRun: UInt64) async {
+    private func runFinalizeAfterCloudAI(
+        jobId: String,
+        profileID: UUID,
+        userID: String,
+        jobData: [String: Any],
+        reservedCreatedAt: Date,
+        thisRun: UInt64
+    ) async {
+        func isCurrentRun() -> Bool {
+            StorybookAsyncRunPolicy.isCurrent(
+                expectedUserID: userID,
+                expectedProfileID: profileID,
+                expectedRun: thisRun,
+                currentUserID: Auth.auth().currentUser?.uid,
+                currentProfileID: currentProfileID,
+                currentRun: storybookGenerationCounter
+            )
+        }
+        guard isCurrentRun() else { return }
         do {
             currentStatus = "Finalizing your book…"
             isFinalizingAssets = true
             progressEstimator?.noteFinalizeStep(.rebuildPages)
             publishProgressSnapshot()
             let cloudPitch = jobData["backCoverPitch"] as? String
-            try await rebuildPageItemsFromCloudJobData(jobData, profileID: profileID)
+            try await rebuildPageItemsFromCloudJobData(
+                jobData,
+                profileID: profileID,
+                expectedUserID: userID,
+                expectedRun: thisRun
+            )
+            guard isCurrentRun() else { return }
             guard !pageItems.isEmpty else {
                 // The cloud job claims `aiComplete` but produced no usable
                 // illustrations.  Mark the job as `failed` in Firestore so the
                 // aggressive auto-route in `ContentView` doesn't keep
                 // re-attaching us to this same broken document and looping.
-                Task.detached { [jobId] in
-                    try? await FirestoreSyncService.shared.markStorybookJobFailed(
-                        jobId: jobId,
-                        reason: "Image generation failed for every memory. Please try again."
-                    )
-                }
+                try? await FirestoreSyncService.shared.markStorybookJobFailed(
+                    jobId: jobId,
+                    reason: "Image generation failed for every memory. Please try again."
+                )
+                guard isCurrentRun() else { return }
                 stopStorybookCloudJobListener()
                 GenerationProgressMarker.clear(for: profileID)
                 throw NSError(
@@ -4639,6 +4861,7 @@ class StoryPageViewModel: ObservableObject {
             progressEstimator?.noteFinalizeStep(.persist)
             publishProgressSnapshot()
             await preparePrintPackagingBeforePersist(existingBackCoverPitchFromCloud: cloudPitch)
+            guard isCurrentRun() else { return }
             persistStorybook(for: profileID, reservedCreatedAt: reservedCreatedAt, reservedBookVersionId: jobId)
             currentStatus = "Finalizing cover and print assets…"
             progressEstimator?.noteFinalizeStep(.coverAndPrint)
@@ -4646,6 +4869,7 @@ class StoryPageViewModel: ObservableObject {
             if let bookVersionId = lastSyncedBookVersionId {
                 let readinessTimeout = Self.canonicalReadinessBudgetSeconds(pageCount: pageItems.count)
                 let ready = await waitForCanonicalBookReadiness(bookVersionId: bookVersionId, timeoutSeconds: readinessTimeout)
+                guard isCurrentRun() else { return }
                 if !ready {
                     isVisualBookReady = !pageItems.isEmpty
                 }
@@ -4655,11 +4879,14 @@ class StoryPageViewModel: ObservableObject {
                 publishProgressSnapshot()
                 let pollBudget = Self.canonicalReadinessBudgetSeconds(pageCount: pageItems.count)
                 await installFreshBookVersionRecordAfterGeneration(bookVersionId: bookId, pollBudgetSeconds: pollBudget)
+                guard isCurrentRun() else { return }
             }
-            if let bookId = lastSyncedBookVersionId, thisRun == storybookGenerationCounter {
+            guard isCurrentRun() else { return }
+            if let bookId = lastSyncedBookVersionId {
                 scheduleBackgroundCoverBackfillIfNeeded(bookVersionId: bookId)
             }
             try await FirestoreSyncService.shared.markStorybookJobComplete(jobId: jobId)
+            guard isCurrentRun() else { return }
             stopStorybookCloudJobListener()
             stopProgressTracking(succeeded: true)
             // The user watched this generation finish — don't force-route them back to it
@@ -4669,10 +4896,12 @@ class StoryPageViewModel: ObservableObject {
                 GenerationProgressMarker.clear(for: profileID)
             }
         } catch {
+            guard isCurrentRun() else { return }
             errorMessage = error.localizedDescription
             cloudStorybookFinalizeStarted = false
             stopProgressTracking(succeeded: false)
         }
+        guard isCurrentRun() else { return }
         isFinalizingAssets = false
         isLoading = false
         isVisualBookReady = !pageItems.isEmpty
@@ -4821,7 +5050,9 @@ class StoryPageViewModel: ObservableObject {
         if let photoPath {
             job["subjectPhotoStoragePath"] = photoPath
         }
-        let pinnedIds = entries.compactMap { $0.id?.uuidString }
+        let pinnedIds = StorybookJobPayloadPolicy.pinnedMemoryIDs(
+            entries.compactMap(\.id)
+        )
         if !pinnedIds.isEmpty {
             job["pinnedMemoryIds"] = pinnedIds
         }
@@ -4867,10 +5098,19 @@ class StoryPageViewModel: ObservableObject {
             ethnicity = pe
         }
         guard let uid = Auth.auth().currentUser?.uid else { return }
+        let thisRun = storybookGenerationCounter
         let snap = try? await Firestore.firestore()
             .collection("users").document(uid)
             .collection("storybookJobs").document(jobId)
             .getDocument()
+        guard StorybookAsyncRunPolicy.isCurrent(
+            expectedUserID: uid,
+            expectedProfileID: profileID,
+            expectedRun: thisRun,
+            currentUserID: Auth.auth().currentUser?.uid,
+            currentProfileID: currentProfileID,
+            currentRun: storybookGenerationCounter
+        ) else { return }
         if let ts = snap?.data()?["createdAt"] as? Timestamp {
             lastPersistedBookCreatedAt = ts.dateValue()
         } else {
@@ -4886,10 +5126,15 @@ class StoryPageViewModel: ObservableObject {
             ?? (snap?.data()?["pageCountTarget"] as? Int)
             ?? 10
         startProgressTracking(pageCountHint: pageCountHint)
-        let thisRun = storybookGenerationCounter
         startStorybookCloudJobListener(jobId: jobId, profileID: profileID, thisRun: thisRun)
         if let data = snap?.data() {
-            await handleStorybookCloudJobSnapshot(data: data, jobId: jobId, profileID: profileID, thisRun: thisRun)
+            await handleStorybookCloudJobSnapshot(
+                data: data,
+                jobId: jobId,
+                profileID: profileID,
+                userID: uid,
+                thisRun: thisRun
+            )
         }
     }
 

@@ -244,7 +244,7 @@ class FamilyManager: ObservableObject {
         addFamilyActivity(.storyShared(sharedStory))
         saveFamilyData()
         
-        print("📤 Shared story: \(memoryEntry.prompt ?? "Untitled")")
+        print("Shared story")
     }
     
     func addReaction(to storyId: UUID, reaction: StoryReaction.ReactionType) {
@@ -394,4 +394,4 @@ enum FamilyActivity: Identifiable {
         case .memberJoined(let member): return "\(member.name) joined the family"
         }
     }
-} 
+}

@@ -121,15 +121,19 @@ struct ContentView: View {
                     // Handle any pending deep link after onboarding completes
                     if let pendingID = pendingDeepLinkID {
                         print("🔗 Processing pending deep link: \(pendingID.uuidString)")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            nav.showMemoryDetail(id: pendingID)
-                            pendingDeepLinkID = nil
+                        pendingDeepLinkID = nil
+                        Task {
+                            await authService.signInAnonymouslyIfNeeded()
+                            await routeParsedMemory(memoryID: pendingID, source: "pendingOnboarding")
                         }
                     }
                     
                     // Auto sign-in anonymously and trigger migration
                     Task {
                         await authService.signInAnonymouslyIfNeeded()
+                        if let userID = MemoryUserScope.currentFirebaseUserId {
+                            await profileVM.activateUser(userID)
+                        }
                         await backfillLocalMemoryOwnershipIfNeeded()
 
                         await FirestoreSyncService.shared.hydrateMemoriesFromFirestoreIfStoreEmpty(
@@ -153,6 +157,20 @@ struct ContentView: View {
                 }
             } else {
                 OnboardingFlow()
+            }
+        }
+        .id(authService.user?.uid ?? "signed-out")
+        .onChange(of: authService.user?.uid) { oldUserID, newUserID in
+            guard oldUserID != newUserID else { return }
+            path = NavigationPath()
+            nav.clear()
+            syncStorybookJobObserverBinding()
+            guard let newUserID else { return }
+            Task {
+                await profileVM.activateUser(newUserID)
+                await FirestoreSyncService.shared.hydrateMemoriesFromFirestoreIfStoreEmpty(
+                    context: PersistenceController.shared.container.viewContext
+                )
             }
         }
         .onAppear {
@@ -192,7 +210,7 @@ struct ContentView: View {
     /// Accepts `memoirai://memory/{UUID}` (legacy printed books) and
     /// `https://memoirai-7db06.web.app/memory/{UUID}` (universal links in new books).
     private func handleDeepLink(_ url: URL, source: String) {
-        print("[QRDeepLink] received url=\(url.absoluteString) source=\(source)")
+        print("[QRDeepLink] received memory link source=\(source)")
 
         guard MemoryLinks.looksLikeMemoryLink(url) else {
             // Not a memory link (Google/Facebook auth callbacks etc.) — not ours to handle.
@@ -200,7 +218,7 @@ struct ContentView: View {
             return
         }
         guard let memoryID = MemoryLinks.parseMemoryDeepLink(url) else {
-            print("[QRDeepLink] reject invalidUUID url=\(url.absoluteString) source=\(source)")
+            print("[QRDeepLink] rejected invalid memory link source=\(source)")
             deepLinkErrorMessage = "Invalid memory link format."
             showDeepLinkError = true
             return
@@ -213,19 +231,7 @@ struct ContentView: View {
         let done = localCompleted || iCloudManager.hasCompletedOnboarding
 
         if done {
-            // Verify memory exists before navigating
-            let entry = PersistenceController.shared.entry(id: memoryID)
-            let found = entry != nil
-            print("[QRDeepLink] memoryID=\(memoryID.uuidString) entryFound=\(found) source=\(source)")
-            if found {
-                print("[QRDeepLink] navWillPush=true source=\(source)")
-                nav.showMemoryDetail(id: memoryID)
-            } else {
-                // Not in the local store: could be someone else's memory (shared scan) or an
-                // own memory that has not hydrated yet. Resolve the owner and route.
-                print("[QRDeepLink] memory not in store — resolving owner source=\(source)")
-                Task { await routeNonLocalMemory(memoryID: memoryID, source: source) }
-            }
+            Task { await routeParsedMemory(memoryID: memoryID, source: source) }
         } else {
             // User hasn't completed onboarding - queue the deep link
             print("[QRDeepLink] queued pending onboarding memoryID=\(memoryID.uuidString) source=\(source)")
@@ -233,6 +239,18 @@ struct ContentView: View {
             deepLinkErrorMessage = "Please complete the setup to view this memory."
             showDeepLinkError = true
         }
+    }
+
+    private func routeParsedMemory(memoryID: UUID, source: String) async {
+        let found = PersistenceController.shared.entry(id: memoryID) != nil
+        print("[QRDeepLink] memoryID=\(memoryID.uuidString) entryFound=\(found) source=\(source)")
+        if found {
+            print("[QRDeepLink] navWillPush=true source=\(source)")
+            nav.showMemoryDetail(id: memoryID)
+            return
+        }
+        print("[QRDeepLink] memory not in store — resolving owner source=\(source)")
+        await routeNonLocalMemory(memoryID: memoryID, source: source)
     }
 
     /// A scanned memory that is not in the local store: resolve its owner via the
@@ -268,12 +286,8 @@ struct ContentView: View {
         let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \MemoryEntry.createdAt, ascending: true)]
         
-        if let uid = MemoryUserScope.currentFirebaseUserId {
-            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [
-                NSPredicate(format: "firebaseUserId == %@", uid),
-                NSPredicate(format: "firebaseUserId == nil")
-            ])
-        }
+        guard let uid = MemoryUserScope.currentFirebaseUserId else { return }
+        request.predicate = NSPredicate(format: "firebaseUserId == %@", uid)
         
         do {
             let memories = try context.fetch(request)
@@ -294,8 +308,21 @@ struct ContentView: View {
             return
         }
         
-        let key = "local_memory_uid_backfill_\(uid)"
-        if UserDefaults.standard.bool(forKey: key) {
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        cloudStore.synchronize()
+        let claimedOwnerID = MemoryOwnershipPolicy.resolvedLegacyOwnerID(
+            localOwnerID: UserDefaults.standard.string(forKey: MemoryOwnershipPolicy.legacyOwnerKey),
+            cloudOwnerID: cloudStore.string(forKey: MemoryOwnershipPolicy.cloudLegacyOwnerKey)
+        )
+        guard MemoryOwnershipPolicy.canClaimLegacyRows(
+            claimedOwnerID: claimedOwnerID,
+            currentUserID: uid,
+            deletionBarrierActive: AccountCloudDataPolicy.isDeletionBarrierActive(
+                userID: uid,
+                cloudStore: cloudStore
+            )
+        ) else {
+            print("⚠️ Skipping local ownership backfill - legacy rows belong to another account")
             return
         }
         
@@ -312,7 +339,9 @@ struct ContentView: View {
                 try context.save()
             }
             
-            UserDefaults.standard.set(true, forKey: key)
+            UserDefaults.standard.set(uid, forKey: MemoryOwnershipPolicy.legacyOwnerKey)
+            cloudStore.set(uid, forKey: MemoryOwnershipPolicy.cloudLegacyOwnerKey)
+            cloudStore.synchronize()
             print("✅ Local ownership backfill complete for UID \(uid): \(legacyRows.count) rows updated")
         } catch {
             print("❌ Local ownership backfill failed for UID \(uid): \(error)")

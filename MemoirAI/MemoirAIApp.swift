@@ -30,6 +30,10 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
         UNUserNotificationCenter.current().delegate = self
         application.registerForRemoteNotifications()
 
+        // The Info.plist defaults keep Meta auto-init and advertiser ID collection off.
+        // Apply the current ATT decision before manually starting the SDK so a first
+        // launch can never collect advertising identifiers before consent.
+        ATTHelper.applyCurrentAuthorizationToFacebook()
         ApplicationDelegate.shared.application(
             application,
             didFinishLaunchingWithOptions: launchOptions
@@ -65,15 +69,16 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
         if url.scheme == "memoirai" {
             if url.host == "order-complete" {
                 let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                let sessionId = components?.queryItems?.first(where: { $0.name == "session_id" })?.value
-                if let sessionId = sessionId {
-                    print("[Order] Stripe return — session_id: \(sessionId)")
-                    UserDefaults.standard.set(sessionId, forKey: "lastCompletedStripeSessionId")
+                let rawSessionId = components?.queryItems?.first(where: { $0.name == "session_id" })?.value
+                if let sessionId = CheckoutReturnPolicy.normalizeSessionID(rawSessionId) {
+                    print("[Order] Stripe checkout return received")
+                    UserDefaults.standard.set(sessionId, forKey: CheckoutReturnPolicy.pendingSessionDefaultsKey)
+                    NotificationCenter.default.post(
+                        name: .orderCheckoutReturnReceived,
+                        object: nil,
+                        userInfo: ["sessionId": sessionId]
+                    )
                 }
-                Task { @MainActor in
-                    OrderCartStore.shared.clear()
-                }
-                NotificationCenter.default.post(name: .orderComplete, object: nil, userInfo: ["url": url, "sessionId": sessionId as Any])
                 return true
             }
             if url.host == "order-cancelled" {
@@ -83,7 +88,7 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
             if url.host == "memory" {
                 let trimmed = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
                 if UUID(uuidString: trimmed) != nil {
-                    print("[QRDeepLink] AppDelegate forwarding memory url=\(url.absoluteString)")
+                    print("[QRDeepLink] AppDelegate forwarding valid memory link")
                     NotificationCenter.default.post(
                         name: .memoirOpenMemoryDeepLink,
                         object: nil,
@@ -120,6 +125,9 @@ extension FBAppDelegate: UNUserNotificationCenterDelegate {
 }
 
 extension Notification.Name {
+    static let orderCheckoutReturnReceived = Notification.Name("orderCheckoutReturnReceived")
+    static let orderCheckoutVerificationFailed = Notification.Name("orderCheckoutVerificationFailed")
+    static let orderCheckoutFinalizing = Notification.Name("orderCheckoutFinalizing")
     static let orderComplete = Notification.Name("orderComplete")
     static let orderCancelled = Notification.Name("orderCancelled")
     static let bookCoverBackfillComplete = Notification.Name("bookCoverBackfillComplete")
@@ -139,6 +147,7 @@ extension Notification.Name {
 @main
 struct MemoirAIApp: App {
     @StateObject private var profileVM = ProfileViewModel()
+    @State private var checkoutSessionBeingVerified: String?
     
     let persistenceController = PersistenceController.shared
 
@@ -196,6 +205,13 @@ struct MemoirAIApp: App {
                     GenerationProgressMarker.clearStaleOnLaunchIfNeeded()
                     Haptics.warmUp()
                 }
+                .task {
+                    await verifyPendingCheckoutReturnIfNeeded()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .orderCheckoutReturnReceived)) { notification in
+                    guard let sessionId = notification.userInfo?["sessionId"] as? String else { return }
+                    Task { await verifyCheckoutReturn(sessionId: sessionId) }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                     PermissionManager.shared.handleAppDidBecomeActive()
                     Task { @MainActor in
@@ -203,9 +219,52 @@ struct MemoirAIApp: App {
                         await RCSubscriptionManager.shared.refreshCustomerInfo()
                     }
                     Task {
+                        await profileVM.retryPendingProfileMutations()
                         await FirestoreSyncService.shared.retryPendingSyncs(for: profileVM.selectedProfile.id)
+                        await verifyPendingCheckoutReturnIfNeeded()
                     }
                 }
+        }
+    }
+
+    @MainActor
+    private func verifyPendingCheckoutReturnIfNeeded() async {
+        guard let sessionId = UserDefaults.standard.string(
+            forKey: CheckoutReturnPolicy.pendingSessionDefaultsKey
+        ) else { return }
+        await verifyCheckoutReturn(sessionId: sessionId)
+    }
+
+    @MainActor
+    private func verifyCheckoutReturn(sessionId: String) async {
+        guard let normalized = CheckoutReturnPolicy.normalizeSessionID(sessionId) else {
+            UserDefaults.standard.removeObject(forKey: CheckoutReturnPolicy.pendingSessionDefaultsKey)
+            NotificationCenter.default.post(name: .orderCheckoutVerificationFailed, object: nil)
+            return
+        }
+        guard checkoutSessionBeingVerified != normalized else { return }
+        checkoutSessionBeingVerified = normalized
+        defer { checkoutSessionBeingVerified = nil }
+
+        do {
+            let verification = try await OrderService.shared.verifyCheckoutReturn(sessionId: normalized)
+            guard verification.verified else {
+                if verification.isFinalizingPaidOrder {
+                    NotificationCenter.default.post(name: .orderCheckoutFinalizing, object: nil)
+                    return
+                }
+                NotificationCenter.default.post(name: .orderCheckoutVerificationFailed, object: nil)
+                return
+            }
+            UserDefaults.standard.removeObject(forKey: CheckoutReturnPolicy.pendingSessionDefaultsKey)
+            OrderCartStore.shared.clear()
+            NotificationCenter.default.post(
+                name: .orderComplete,
+                object: nil,
+                userInfo: ["sessionId": normalized]
+            )
+        } catch {
+            NotificationCenter.default.post(name: .orderCheckoutVerificationFailed, object: nil)
         }
     }
 }

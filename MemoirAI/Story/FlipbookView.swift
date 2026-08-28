@@ -401,7 +401,7 @@ struct FlipbookView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             // WebView finished loading
             print("FlipbookView: WebView loaded successfully")
-            print("FlipbookView: URL loaded: \(webView.url?.absoluteString ?? "unknown")")
+            print("FlipbookView: content loaded")
             
             // DEBUG: Check WebView content after loading
             print("FlipbookView: WebView content size after loading: \(webView.scrollView.contentSize)")
@@ -620,4 +620,4 @@ struct FlipbookView_Previews: PreviewProvider {
         )
         .frame(width: 300, height: 400)
     }
-} 
+}

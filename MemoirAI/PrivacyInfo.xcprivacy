@@ -4,6 +4,10 @@
 <dict>
 	<key>NSPrivacyTracking</key>
 	<true/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array>
+		<string>ep1.facebook.com</string>
+	</array>
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array>
 		<!-- Firebase Auth / account identity used to link data to a user across app functionality -->

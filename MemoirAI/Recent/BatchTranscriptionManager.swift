@@ -51,6 +51,10 @@ final class BatchTranscriptionManager: ObservableObject {
     /// Runs serially; calls `completion` on the main queue when finished.
     func start(completion: (() -> Void)? = nil) {
         guard !isRunning else { return }
+        guard let userID = MemoryUserScope.currentFirebaseUserId else {
+            completion?()
+            return
+        }
         
         // Check speech recognition permission first
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
@@ -68,7 +72,7 @@ final class BatchTranscriptionManager: ObservableObject {
         }
 
         isRunning = true
-        transcribe(list: todo, index: 0) {
+        transcribe(list: todo, index: 0, userID: userID) {
             DispatchQueue.main.async {
                 self.isRunning = false
                 completion?()
@@ -79,8 +83,12 @@ final class BatchTranscriptionManager: ObservableObject {
     }
 
     private func fetchUntranscribed() -> [MemoryEntry] {
+        guard let userID = MemoryUserScope.currentFirebaseUserId else { return [] }
         let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
-        request.predicate = NSPredicate(format: "(audioFileURL != nil OR audioData != nil) AND (text == nil OR text == '')")
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "firebaseUserId == %@", userID),
+            NSPredicate(format: "(audioFileURL != nil OR audioData != nil) AND (text == nil OR text == '')")
+        ])
         // Newest first – shorter recordings usually come last
         request.sortDescriptors = [NSSortDescriptor(keyPath: \MemoryEntry.createdAt, ascending: false)]
         return ((try? context.fetch(request)) ?? []).filter { entry in
@@ -88,7 +96,16 @@ final class BatchTranscriptionManager: ObservableObject {
         }
     }
 
-    private func transcribe(list: [MemoryEntry], index: Int, completion: @escaping () -> Void) {
+    private func transcribe(
+        list: [MemoryEntry],
+        index: Int,
+        userID: String,
+        completion: @escaping () -> Void
+    ) {
+        guard MemoryUserScope.currentFirebaseUserId == userID else {
+            completion()
+            return
+        }
         if index >= list.count {
             completion()
             return
@@ -99,7 +116,7 @@ final class BatchTranscriptionManager: ObservableObject {
             DispatchQueue.main.async {
                 self.processed += 1
             }
-            transcribe(list: list, index: index + 1, completion: completion)
+            transcribe(list: list, index: index + 1, userID: userID, completion: completion)
             return
         }
 
@@ -111,11 +128,22 @@ final class BatchTranscriptionManager: ObservableObject {
             guard let self else { return }
             switch result {
             case .success(let text):
+                guard MemoryUserScope.currentFirebaseUserId == userID,
+                      MemoryOwnershipPolicy.belongsToUser(
+                        entryOwnerID: memory.firebaseUserId,
+                        currentUserID: userID
+                      ) else {
+                    break
+                }
                 memory.text = text
-                try? self.context.save()
-                // Notify interested views so they refresh.
-                NotificationCenter.default.post(name: .memorySaved, object: nil)
-                print("✅ Enhanced transcription completed for memory: \(text.prefix(50))...")
+                do {
+                    try self.context.save()
+                    NotificationCenter.default.post(name: .memorySaved, object: nil)
+                    print("Enhanced transcription completed")
+                } catch {
+                    self.context.rollback()
+                    print("❌ Could not save enhanced transcription: \(error.localizedDescription)")
+                }
             case .failure(let error):
                 // Leave memory.text untouched so `needsTranscription` still matches
                 // this entry and a future batch run retries it.
@@ -127,7 +155,12 @@ final class BatchTranscriptionManager: ObservableObject {
             DispatchQueue.main.async {
                 self.processed += 1
             }
-            self.transcribe(list: list, index: index + 1, completion: completion)
+            self.transcribe(
+                list: list,
+                index: index + 1,
+                userID: userID,
+                completion: completion
+            )
         }
     }
 }

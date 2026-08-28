@@ -10,13 +10,49 @@ const { computeBookBaseCentsFromLuluLineMake, sumCartLineShippingCents } = requi
 const {
   mustAbortPdfPackagingForMissingCoverUrl,
   nextCoverPreconditionAttemptMeta,
-  COVER_PRECONDITION_EXHAUSTED_STATUS
+  COVER_PRECONDITION_EXHAUSTED_STATUS,
+  PDF_MAX_PAGE_SOURCE_BYTES,
+  PDF_RENDER_LEASE_MILLIS,
+  PdfPackagingValidationError,
+  validatePdfPackagingManifest,
+  validatePdfSourceMetadata,
+  pdfRenderLeaseDecision,
+  validatePngHeader
 } = require("./bookVersionPdfGuards");
-const { ensureBookVersionArtifactUrls } = require("./storageArtifactUrls");
+const {
+  canonicalBookArtifactPaths,
+  assertCanonicalBookArtifact,
+  checkoutFulfillmentFingerprint,
+  ensureBookVersionArtifactUrls,
+  validateCheckoutBookArtifacts
+} = require("./storageArtifactUrls");
 const naming = require("./naming");
 const { createOrderMirrorHandler } = require("./purchasedBooks");
 const { opsAlertSmtpUrl, sendOpsAlert } = require("./opsAlerts");
 const { createMemoryDeletionCleanupHandler } = require("./memoryDeletionCleanup");
+const {
+  memoryIndexBelongsToUser,
+  memoryIndexClaimDecision
+} = require("./memoryIndexOwnership");
+const { createDeleteOwnAccountHandler } = require("./accountDeletion");
+const { assertAccountAvailableForCheckout } = require("./accountStateGuards");
+const { acquireCheckoutLease, releaseCheckoutLease } = require("./accountOperationLock");
+const { isMemoirAdminToken } = require("./adminAuthorization");
+const { createStorybookJobHandler } = require("./storybookAdmission");
+const { verifyLuluWebhookSignature } = require("./luluWebhookAuth");
+const {
+  checkoutSessionHasConfirmedPayment,
+  createVerifyCheckoutReturnHandler
+} = require("./checkoutReturnVerification");
+const {
+  appendLuluStatusHistory,
+  buildSingleBookOrderRecords,
+  chooseMonotonicOrderStatus,
+  claimOrderForFulfillment,
+  commitSingleBookOrderOnce,
+  missingCartSessionDisposition,
+  stripeSessionOrderId
+} = require("./orderFlowIdempotency");
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -64,17 +100,7 @@ function assertMemoirAdmin(request) {
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "Must be signed in");
   }
-  const emails = String(process.env.ADMIN_EMAILS || "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-  const email = String(request.auth.token.email || "").toLowerCase();
-  if (emails.length && email && emails.includes(email)) {
-    return;
-  }
-  if (request.auth.token.admin === true) {
-    return;
-  }
+  if (isMemoirAdminToken(request.auth.token, process.env.ADMIN_EMAILS)) return;
   throw new HttpsError("permission-denied", "Admin only");
 }
 
@@ -177,6 +203,26 @@ function createStripeClient({ maxNetworkRetries = 1, timeoutMs = 20 * 1000 } = {
     timeout: timeoutMs
   });
 }
+
+exports.verifyCheckoutReturn = onCall(
+  {
+    timeoutSeconds: 30,
+    memory: "256MiB",
+    secrets: [stripeSecretKey],
+    enforceAppCheck: isAppCheckEnforced()
+  },
+  createVerifyCheckoutReturnHandler({
+    createStripeClient,
+    orderRecordExists: async (userId, sessionId) => {
+      const snapshot = await db.collection("users").doc(userId)
+        .collection("paidBookCheckouts")
+        .where("stripeSessionId", "==", sessionId)
+        .limit(1)
+        .get();
+      return !snapshot.empty;
+    }
+  })
+);
 
 function isLikelyTransientStripeError(error) {
   const type = String(error?.type || "");
@@ -476,7 +522,11 @@ async function buildCartCheckoutResolved(userId, items, shippingAddress, shippin
       userHandle: versionRecord.userHandle || null,
       pageCount: resolved.inputs.pageCount,
       productTitle: resolved.inputs.selectedOption.title,
-      dimensionsLabel: resolved.dimensionsLabel
+      dimensionsLabel: resolved.dimensionsLabel,
+      fulfillmentFingerprint: checkoutFulfillmentFingerprint(
+        versionRecord,
+        resolved.inputs.selectedOption.podPackageId
+      )
     });
 
     stripeLineItems.push({
@@ -1187,11 +1237,11 @@ async function getBookVersionOrderInputs(userId, bookVersionId, requestedOptionI
   let record = snapshot.data() || {};
   try {
     const ensured = await ensureBookVersionArtifactUrls(db, bucket, userId, bookVersionId);
-    if (ensured) {
-      record = ensured;
-    }
+    if (!ensured) throw new Error("Book artifact record is missing");
+    record = ensured;
   } catch (e) {
-    console.warn("getBookVersionOrderInputs: ensureBookVersionArtifactUrls failed", userId, bookVersionId, e);
+    console.warn("getBookVersionOrderInputs: book artifact validation failed");
+    throw new HttpsError("failed-precondition", "Book PDF artifacts are invalid. Please regenerate the book.");
   }
   if (record.renderStatus !== "rendered" || !record.pdfURL || !record.coverURL) {
     throw new HttpsError("failed-precondition", "Book PDF is not ready for printing yet");
@@ -1592,19 +1642,52 @@ async function luluGetPrintJob(accessToken, luluBaseUrl, printJobId) {
   return res.json();
 }
 
+async function luluFindPrintJobByExternalId(accessToken, luluBaseUrl, externalId) {
+  const normalized = String(externalId || "").trim();
+  if (!normalized) {
+    throw new Error("Missing Lulu external id");
+  }
+  const url = new URL(`${luluBaseUrl}/print-jobs/`);
+  url.searchParams.set("search", normalized);
+  url.searchParams.set("page_size", "100");
+  url.searchParams.set("exclude_line_items", "true");
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    }
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Lulu external id lookup failed: ${res.status} ${text}`);
+  }
+  const body = await res.json();
+  const exactMatches = (Array.isArray(body?.results) ? body.results : [])
+    .filter((job) => String(job?.external_id || "") === normalized);
+  if (exactMatches.length > 1) {
+    console.error(`Lulu external id collision external_id=${normalized} count=${exactMatches.length}`);
+  }
+  return exactMatches[0] || null;
+}
+
 function mapLuluStatusToOrderStatus(status) {
   const statusMap = {
     CREATED: "submitted_to_printer",
     UNPAID: "submitted_to_printer",
     PAYMENT_IN_PROGRESS: "printing",
     PRODUCTION_READY: "printing",
+    PRODUCTION_DELAYED: "printing",
     IN_PRODUCTION: "printing",
     SHIPPED: "shipped",
     DELIVERED: "delivered",
+    REJECTED: "failed",
+    CANCELED: "failed",
     CANCELLED: "failed",
     ERROR: "failed"
   };
-  return statusMap[status] || status;
+  const normalized = String(status || "UNKNOWN").toUpperCase();
+  return statusMap[normalized] || normalized;
 }
 
 function resolveTrackingUrlFromLuluJob(job) {
@@ -1622,17 +1705,6 @@ function resolveTrackingUrlFromLuluJob(job) {
   return null;
 }
 
-function pushStatusHistory(existingHistory, { status, trackingUrl = null, source = "lulu_sync" }) {
-  const history = Array.isArray(existingHistory) ? [...existingHistory] : [];
-  history.push({
-    status: status || "UNKNOWN",
-    timestamp: new Date().toISOString(),
-    trackingUrl: trackingUrl || null,
-    source
-  });
-  return history;
-}
-
 async function syncOrderStatusFromLulu({ orderRef, orderData }) {
   const luluPrintJobId = orderData.luluPrintJobId;
   if (!luluPrintJobId) {
@@ -1641,40 +1713,128 @@ async function syncOrderStatusFromLulu({ orderRef, orderData }) {
   const { accessToken, luluBaseUrl, environment } = await getLuluAccessToken();
   const job = await luluGetPrintJob(accessToken, luluBaseUrl, luluPrintJobId);
   const luluRawStatus = String(job.status || job.state || "UNKNOWN");
-  const mapped = mapLuluStatusToOrderStatus(luluRawStatus);
   const trackingUrl = resolveTrackingUrlFromLuluJob(job);
-  const statusChanged = orderData.status !== mapped;
-  const trackingChanged = Boolean(trackingUrl) && trackingUrl !== orderData.luluTrackingUrl;
-  const shouldAppendHistory = statusChanged || trackingChanged;
-
-  const updates = {
+  const applied = await applyLuluStatusUpdate({
+    orderRef,
     luluRawStatus,
-    luluLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
-  };
-  if (statusChanged) {
-    updates.status = mapped;
-  }
-  if (trackingUrl) {
-    updates.luluTrackingUrl = trackingUrl;
-  }
-  if (shouldAppendHistory) {
-    updates.luluStatusHistory = pushStatusHistory(orderData.luluStatusHistory, {
-      status: luluRawStatus,
-      trackingUrl,
-      source: "lulu_sync"
-    });
-  }
-
-  await orderRef.update(updates);
+    trackingUrl,
+    source: "lulu_sync"
+  });
   return {
     synced: true,
     environment,
     luluRawStatus,
-    mappedStatus: mapped,
-    statusChanged,
-    trackingChanged
+    mappedStatus: applied.status,
+    statusChanged: applied.statusChanged,
+    trackingChanged: applied.trackingChanged
   };
+}
+
+async function applyLuluStatusUpdate({ orderRef, luluRawStatus, trackingUrl, source }) {
+  return db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(orderRef);
+    if (!snapshot.exists) {
+      return { applied: false, reason: "missing_order" };
+    }
+    const current = snapshot.data() || {};
+    const incomingStatus = mapLuluStatusToOrderStatus(luluRawStatus);
+    const status = chooseMonotonicOrderStatus(current.status, incomingStatus);
+    const acceptedIncomingStatus = status === incomingStatus;
+    const statusChanged = status !== current.status;
+    const trackingChanged = Boolean(trackingUrl) && trackingUrl !== current.luluTrackingUrl;
+    const updates = {
+      status,
+      luluLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      luluStatusHistory: appendLuluStatusHistory(current.luluStatusHistory, {
+        status: luluRawStatus,
+        trackingUrl,
+        source
+      })
+    };
+    if (acceptedIncomingStatus) {
+      updates.luluRawStatus = luluRawStatus;
+    }
+    if (trackingUrl) {
+      updates.luluTrackingUrl = trackingUrl;
+    }
+    transaction.update(orderRef, updates);
+    return { applied: true, status, statusChanged, trackingChanged, acceptedIncomingStatus };
+  });
+}
+
+async function recordLuluJobForFulfillmentLease({ orderRef, leaseToken, luluJob, source, reconciled }) {
+  return db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(orderRef);
+    if (!snapshot.exists) return { submitted: false, skipped: true, reason: "missing_order" };
+    const current = snapshot.data() || {};
+    if (current.luluPrintJobId) {
+      return {
+        submitted: false,
+        skipped: true,
+        reason: "already_submitted",
+        luluJobId: current.luluPrintJobId,
+        mappedStatus: current.status
+      };
+    }
+    if (current.fulfillmentLeaseToken !== leaseToken) {
+      return { submitted: false, skipped: true, reason: "lease_lost" };
+    }
+
+    const luluJobId = luluJob?.id;
+    if (luluJobId == null || String(luluJobId).trim() === "") {
+      throw new Error("Lulu print job response missing id");
+    }
+    const luluRawStatus = String(luluJob.status || luluJob.state || "CREATED");
+    const incomingStatus = mapLuluStatusToOrderStatus(luluRawStatus);
+    const mappedStatus = chooseMonotonicOrderStatus(current.status, incomingStatus);
+    const trackingUrl = resolveTrackingUrlFromLuluJob(luluJob);
+    const updates = {
+      luluPrintJobId: String(luluJobId),
+      luluRawStatus,
+      status: mappedStatus,
+      luluLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      luluStatusHistory: appendLuluStatusHistory(current.luluStatusHistory, {
+        status: luluRawStatus,
+        trackingUrl,
+        source: reconciled ? `${source}_reconciled` : source
+      }),
+      fulfillmentLeaseToken: admin.firestore.FieldValue.delete(),
+      fulfillmentLeaseSource: admin.firestore.FieldValue.delete(),
+      fulfillmentLeaseClaimedAt: admin.firestore.FieldValue.delete(),
+      fulfillmentLeaseExpiresAt: admin.firestore.FieldValue.delete(),
+      luluError: admin.firestore.FieldValue.delete()
+    };
+    if (trackingUrl) updates.luluTrackingUrl = trackingUrl;
+    transaction.update(orderRef, updates);
+    return {
+      submitted: !reconciled,
+      reconciled: Boolean(reconciled),
+      luluJobId: String(luluJobId),
+      mappedStatus,
+      luluRawStatus
+    };
+  });
+}
+
+async function failFulfillmentLease({ orderRef, leaseToken, error }) {
+  return db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(orderRef);
+    if (!snapshot.exists) return false;
+    const current = snapshot.data() || {};
+    if (current.luluPrintJobId || current.fulfillmentLeaseToken !== leaseToken) return false;
+    transaction.update(orderRef, {
+      status: "lulu_failed",
+      luluError: String(error || "Unknown Lulu submit error"),
+      fulfillmentLeaseToken: admin.firestore.FieldValue.delete(),
+      fulfillmentLeaseSource: admin.firestore.FieldValue.delete(),
+      fulfillmentLeaseClaimedAt: admin.firestore.FieldValue.delete(),
+      fulfillmentLeaseExpiresAt: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    return true;
+  });
 }
 
 async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, source }) {
@@ -1696,6 +1856,9 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
   if (!coverStoragePath || !interiorStoragePath) {
     throw new Error("Order missing PDF storage paths");
   }
+  const expectedPaths = canonicalBookArtifactPaths(userId, orderData.bookVersionId);
+  assertCanonicalBookArtifact(coverStoragePath, expectedPaths.cover, "Cover");
+  assertCanonicalBookArtifact(interiorStoragePath, expectedPaths.interior, "Interior");
 
   const [coverExists, interiorExists] = await Promise.all([
     bucket.file(coverStoragePath).exists(),
@@ -1762,12 +1925,44 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
     }
   }
 
-  await orderRef.update({
-    status: "pending_fulfillment",
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  const claim = await claimOrderForFulfillment({
+    runTransaction: (callback) => db.runTransaction(callback),
+    orderRef,
+    source,
+    timestampFromMillis: (millis) => admin.firestore.Timestamp.fromMillis(millis),
+    serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
   });
+  if (!claim.acquired) {
+    return {
+      submitted: false,
+      skipped: true,
+      reason: claim.reason,
+      luluPrintJobId: claim.order?.luluPrintJobId || null,
+      mappedStatus: claim.order?.status || null
+    };
+  }
+  const claimedOrderData = claim.order;
+  const leaseToken = claim.leaseToken;
+  let auth = null;
 
   try {
+    auth = luluAuthForSubmit || await getLuluAccessToken();
+    const existingLuluJob = await luluFindPrintJobByExternalId(
+      auth.accessToken,
+      auth.luluBaseUrl,
+      orderId
+    );
+    if (existingLuluJob) {
+      console.warn(`submitPaidOrderToLulu reconciled existing Lulu job order=${orderId}`);
+      return recordLuluJobForFulfillmentLease({
+        orderRef,
+        leaseToken,
+        luluJob: existingLuluJob,
+        source,
+        reconciled: true
+      });
+    }
+
     const [coverSignedUrl, interiorSignedUrl] = await Promise.all([
       getSignedUrl(coverStoragePath),
       getSignedUrl(interiorStoragePath)
@@ -1778,11 +1973,12 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
     const chosenTitle = printTitleRaw || firstPageTitle;
     const bookTitle = chosenTitle ? `${chosenTitle} (Story)` : "MemoirAI Story";
 
-    const shippingAddress = orderData.shippingAddress || {};
-    const printQty = Math.min(99, Math.max(1, parseInt(orderData.quantity, 10) || 1));
+    const shippingAddress = claimedOrderData.shippingAddress || {};
+    const printQty = Math.min(99, Math.max(1, parseInt(claimedOrderData.quantity, 10) || 1));
     const payload = {
       line_items: [
         {
+          external_id: `${orderId}:1`,
           title: bookTitle,
           cover: { source_url: coverSignedUrl },
           interior: { source_url: interiorSignedUrl },
@@ -1800,49 +1996,46 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
         postcode: shippingAddress.postcode || "",
         phone_number: shippingAddress.phone || "0000000000"
       },
-      contact_email: orderData.customerEmail || "",
-      shipping_level: orderData.shippingLevel || "MAIL",
+      contact_email: claimedOrderData.customerEmail || "",
+      shipping_level: claimedOrderData.shippingLevel || "MAIL",
       external_id: orderId
     };
 
-    const auth = luluAuthForSubmit || await getLuluAccessToken();
     console.log(`submitPaidOrderToLulu source=${source} order=${orderId} env=${auth.environment}`);
     const luluJob = await luluCreatePrintJob(auth.accessToken, auth.luluBaseUrl, payload);
-    const luluJobId = luluJob.id || luluJob.external_id;
-    const luluRawStatus = String(luluJob.status || luluJob.state || "CREATED");
-    const mappedStatus = mapLuluStatusToOrderStatus(luluRawStatus);
-    const trackingUrl = resolveTrackingUrlFromLuluJob(luluJob);
-
-    const updates = {
-      luluPrintJobId: luluJobId,
-      luluRawStatus,
-      status: mappedStatus,
-      luluLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      luluStatusHistory: pushStatusHistory(orderData.luluStatusHistory, {
-        status: luluRawStatus,
-        trackingUrl,
-        source
-      })
-    };
-    if (trackingUrl) {
-      updates.luluTrackingUrl = trackingUrl;
-    }
-    await orderRef.update(updates);
-
-    return {
-      submitted: true,
-      luluJobId,
-      mappedStatus,
-      luluRawStatus
-    };
+    return recordLuluJobForFulfillmentLease({
+      orderRef,
+      leaseToken,
+      luluJob,
+      source,
+      reconciled: false
+    });
   } catch (err) {
     const luluError = String(err?.message || err || "Unknown Lulu submit error");
-    await orderRef.update({
-      status: "lulu_failed",
-      luluError,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+    try {
+      auth = auth || await getLuluAccessToken();
+      const existingLuluJob = await luluFindPrintJobByExternalId(
+        auth.accessToken,
+        auth.luluBaseUrl,
+        orderId
+      );
+      if (existingLuluJob) {
+        console.warn(`submitPaidOrderToLulu recovered uncertain POST order=${orderId}`);
+        return await recordLuluJobForFulfillmentLease({
+          orderRef,
+          leaseToken,
+          luluJob: existingLuluJob,
+          source,
+          reconciled: true
+        });
+      }
+    } catch (reconcileError) {
+      console.error(
+        `submitPaidOrderToLulu reconciliation failed order=${orderId}:`,
+        reconcileError?.message || reconcileError
+      );
+    }
+    await failFulfillmentLease({ orderRef, leaseToken, error: luluError });
     sendOpsAlert(
       `Order fulfillment FAILED — ${orderId}`,
       `Order ${orderId} (user ${userId}, source=${source}) failed to submit to Lulu:\n${luluError}\n\n` +
@@ -1886,11 +2079,7 @@ exports.adminGetOrderPdf = onRequest({ timeoutSeconds: 60, memory: "512MiB" }, a
     return;
   }
 
-  const isAdmin = (() => {
-    const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
-    if (adminEmails.length && adminEmails.includes((decoded.email || "").toLowerCase())) return true;
-    return decoded.admin === true;
-  })();
+  const isAdmin = isMemoirAdminToken(decoded, process.env.ADMIN_EMAILS);
   if (!isAdmin) { res.status(403).json({ error: "Forbidden" }); return; }
 
   const { orderId, userId, type } = req.query;
@@ -1922,7 +2111,9 @@ exports.adminGetOrderPdf = onRequest({ timeoutSeconds: 60, memory: "512MiB" }, a
   file.createReadStream().pipe(res);
 });
 
-exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB" }, async (req, res) => {
+exports.generateBookVersionPdf = onRequest(
+  { timeoutSeconds: 300, memory: "4GiB", concurrency: 1, maxInstances: 5 },
+  async (req, res) => {
   if (req.method !== "POST") {
     return jsonError(res, 405, "Method not allowed");
   }
@@ -1937,8 +2128,15 @@ exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB"
   const userId = decoded.uid;
   const bookVersionId = (req.body && req.body.bookVersionId) || "";
   const forceRegenerate = Boolean(req.body && req.body.forceRegenerate);
-  if (!bookVersionId) {
-    return jsonError(res, 400, "bookVersionId is required");
+  if (
+    typeof bookVersionId !== "string" ||
+    !bookVersionId ||
+    bookVersionId.length > 128 ||
+    bookVersionId === "." ||
+    bookVersionId === ".." ||
+    /[\\/\x00-\x1f\x7f]/.test(bookVersionId)
+  ) {
+    return jsonError(res, 400, "bookVersionId must be a safe document identifier");
   }
 
   const docRef = db.collection("users").doc(userId).collection("bookVersions").doc(bookVersionId);
@@ -1947,36 +2145,10 @@ exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB"
     return jsonError(res, 404, "bookVersionId not found");
   }
 
-  const record = snapshot.data() || {};
-  if (!forceRegenerate
-    && record.renderStatus === "rendered"
-    && record.pdfURL
-    && !mustAbortPdfPackagingForMissingCoverUrl(record)
-  ) {
-    return res.status(200).json({
-      status: "rendered",
-      pdfURL: record.pdfURL,
-      pdfStoragePath: record.pdfStoragePath || null,
-      renderDurationMs: record.renderDurationMs || null,
-      pdfBytes: record.pdfBytes || null,
-      message: "Already rendered"
-    });
-  }
+  const initialRecord = snapshot.data() || {};
 
-  const pages = Array.isArray(record.pages) ? [...record.pages] : [];
-  pages.sort((a, b) => (a.pageIndex || 0) - (b.pageIndex || 0));
-  if (!pages.length) {
-    await docRef.set({
-      renderStatus: "failed",
-      renderError: "No pages available for PDF packaging",
-      renderAttemptCount: (record.renderAttemptCount || 0) + 1,
-      renderedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
-    return jsonError(res, 400, "No pages available for PDF packaging");
-  }
-
-  if (mustAbortPdfPackagingForMissingCoverUrl(record)) {
-    const { exhausted, nextCount } = nextCoverPreconditionAttemptMeta(record);
+  if (mustAbortPdfPackagingForMissingCoverUrl(initialRecord)) {
+    const { exhausted, nextCount } = nextCoverPreconditionAttemptMeta(initialRecord);
     if (exhausted) {
       await docRef.set(
         {
@@ -2009,8 +2181,87 @@ exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB"
     return jsonError(res, 409, "coverURL required before PDF packaging");
   }
 
-  const trimWidthPt = Number(record.pageWidth || 612);
-  const trimHeightPt = Number(record.pageHeight || 792);
+  const renderJobId = crypto.randomUUID();
+  const nowMillis = Date.now();
+  const renderLeaseId = crypto
+    .createHash("sha256")
+    .update(`${userId}\0${bookVersionId}`)
+    .digest("hex");
+  const renderLeaseRef = db.collection("pdfRenderLeases").doc(renderLeaseId);
+  let claim;
+  try {
+    claim = await db.runTransaction(async (transaction) => {
+      const [currentSnapshot, leaseSnapshot] = await Promise.all([
+        transaction.get(docRef),
+        transaction.get(renderLeaseRef)
+      ]);
+      if (!currentSnapshot.exists) return { action: "missing" };
+      const currentRecord = currentSnapshot.data() || {};
+      if (mustAbortPdfPackagingForMissingCoverUrl(currentRecord)) {
+        throw new PdfPackagingValidationError("coverURL required before PDF packaging", 409);
+      }
+      const decision = pdfRenderLeaseDecision(currentRecord, {
+        forceRegenerate,
+        nowMillis,
+        lease: leaseSnapshot.exists ? leaseSnapshot.data() : null
+      });
+      if (decision.action !== "claim") {
+        return { ...decision, record: currentRecord };
+      }
+      const manifest = validatePdfPackagingManifest({ userId, bookVersionId, record: currentRecord });
+      const previousAttempts = Number(currentRecord.renderAttemptCount);
+      transaction.set(renderLeaseRef, {
+        userId,
+        bookVersionId,
+        renderJobId,
+        status: "rendering",
+        startedAt: admin.firestore.FieldValue.serverTimestamp(),
+        expiresAt: admin.firestore.Timestamp.fromMillis(nowMillis + PDF_RENDER_LEASE_MILLIS)
+      });
+      transaction.set(docRef, {
+        renderStatus: "rendering",
+        renderError: admin.firestore.FieldValue.delete(),
+        renderJobId,
+        renderLeaseExpiresAt: admin.firestore.Timestamp.fromMillis(nowMillis + PDF_RENDER_LEASE_MILLIS),
+        renderAttemptCount: Number.isSafeInteger(previousAttempts) && previousAttempts >= 0
+          ? previousAttempts + 1
+          : 1,
+        renderStartedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+      return { action: "claimed", record: currentRecord, manifest };
+    });
+  } catch (error) {
+    if (error instanceof PdfPackagingValidationError) {
+      return jsonError(res, error.httpStatus, error.message);
+    }
+    console.error(`BOOK_RENDER_CLAIM_FAILED user=${userId} version=${bookVersionId}:`, error);
+    return jsonError(res, 500, "Failed to claim PDF render lease");
+  }
+
+  if (claim.action === "missing") {
+    return jsonError(res, 404, "bookVersionId not found");
+  }
+  if (claim.action === "cached") {
+    const cached = claim.record;
+    return res.status(200).json({
+      status: "rendered",
+      pdfURL: cached.pdfURL,
+      pdfStoragePath: cached.pdfStoragePath || null,
+      renderDurationMs: cached.renderDurationMs || null,
+      pdfBytes: cached.pdfBytes || null,
+      message: "Already rendered"
+    });
+  }
+  if (claim.action === "force-denied") {
+    return jsonError(res, 409, "Rendered PDFs are immutable; create a new book version to regenerate.");
+  }
+  if (claim.action === "in-progress") {
+    return res.status(202).json({ status: "rendering", message: "PDF rendering is already in progress" });
+  }
+
+  const pages = claim.manifest.pages;
+  const trimWidthPt = claim.manifest.trimWidthPt;
+  const trimHeightPt = claim.manifest.trimHeightPt;
   const BLEED_PT = 9;
   const widthPt = trimWidthPt + BLEED_PT * 2;
   const heightPt = trimHeightPt + BLEED_PT * 2;
@@ -2026,22 +2277,37 @@ exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB"
   console.log(`BOOK_RENDER_START user=${userId} version=${bookVersionId} pages=${pages.length} size=${widthPt}x${heightPt} with bleed`);
 
   try {
+    // Preflight every authoritative GCS metadata record before downloading any source bytes.
+    // Small batches avoid a burst of hundreds of Storage requests for large books.
+    const pageMetadata = [];
+    const metadataBatchSize = 20;
+    for (let offset = 0; offset < pages.length; offset += metadataBatchSize) {
+      const batch = pages.slice(offset, offset + metadataBatchSize);
+      const results = await Promise.all(batch.map(async ({ storagePath }) => {
+        const [metadata] = await bucket.file(storagePath).getMetadata();
+        return metadata;
+      }));
+      pageMetadata.push(...results);
+    }
+    const sourcePreflight = validatePdfSourceMetadata(pages, pageMetadata);
+
     const pdfDoc = await PDFDocument.create();
     let totalSourceBytes = 0;
 
     for (let i = 0; i < pages.length; i += 1) {
-      const page = pages[i] || {};
-      const storagePath = page.imageStoragePath || page.renderedPageStoragePath;
-      if (!storagePath) {
-        throw new Error(`Missing rendered page storage path at index ${i}`);
+      const { pageIndex, storagePath } = pages[i];
+      const [imageBytes] = await bucket
+        .file(storagePath, { generation: sourcePreflight.generations[i] })
+        .download();
+      if (
+        imageBytes.length !== sourcePreflight.sourceSizes[i] ||
+        imageBytes.length > PDF_MAX_PAGE_SOURCE_BYTES
+      ) {
+        throw new PdfPackagingValidationError(`Page ${pageIndex} changed after metadata preflight.`, 409);
       }
-
-      const [imageBytes] = await bucket.file(storagePath).download();
+      validatePngHeader(imageBytes, pageIndex);
       totalSourceBytes += imageBytes.length;
-      const isJpeg = storagePath.toLowerCase().endsWith(".jpg") || storagePath.toLowerCase().endsWith(".jpeg");
-      const embeddedImage = isJpeg
-        ? await pdfDoc.embedJpg(imageBytes)
-        : await pdfDoc.embedPng(imageBytes);
+      const embeddedImage = await pdfDoc.embedPng(imageBytes);
       const pdfPage = pdfDoc.addPage([widthPt, heightPt]);
       pdfPage.drawImage(embeddedImage, {
         x: drawX,
@@ -2068,19 +2334,37 @@ exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB"
     const pdfURL = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
 
     const renderDurationMs = Date.now() - startMs;
-    const updates = {
-      renderStatus: "rendered",
-      renderError: admin.firestore.FieldValue.delete(),
-      renderAttemptCount: (record.renderAttemptCount || 0) + 1,
-      renderedAt: admin.firestore.FieldValue.serverTimestamp(),
-      pdfStoragePath,
-      pdfURL,
-      pdfPageCount: pages.length,
-      renderDurationMs,
-      totalPngBytes: totalSourceBytes,
-      pdfBytes: pdfBytes.length
-    };
-    await docRef.set(updates, { merge: true });
+    await db.runTransaction(async (transaction) => {
+      const [latest, lease] = await Promise.all([
+        transaction.get(docRef),
+        transaction.get(renderLeaseRef)
+      ]);
+      if (!latest.exists || !lease.exists || lease.data()?.renderJobId !== renderJobId) {
+        throw new PdfPackagingValidationError("PDF render lease was replaced before completion.", 409);
+      }
+      const latestManifest = validatePdfPackagingManifest({
+        userId,
+        bookVersionId,
+        record: latest.data() || {}
+      });
+      if (JSON.stringify(latestManifest) !== JSON.stringify(claim.manifest)) {
+        throw new PdfPackagingValidationError("Book pages changed while the PDF was rendering.", 409);
+      }
+      transaction.delete(renderLeaseRef);
+      transaction.set(docRef, {
+        renderStatus: "rendered",
+        renderError: admin.firestore.FieldValue.delete(),
+        renderJobId: admin.firestore.FieldValue.delete(),
+        renderLeaseExpiresAt: admin.firestore.FieldValue.delete(),
+        renderedAt: admin.firestore.FieldValue.serverTimestamp(),
+        pdfStoragePath,
+        pdfURL,
+        pdfPageCount: pages.length,
+        renderDurationMs,
+        totalPngBytes: totalSourceBytes,
+        pdfBytes: pdfBytes.length
+      }, { merge: true });
+    });
 
     console.log(`BOOK_RENDER_SUCCESS user=${userId} version=${bookVersionId} sourceBytes=${totalSourceBytes} pdfBytes=${pdfBytes.length} durationMs=${renderDurationMs}`);
 
@@ -2094,15 +2378,34 @@ exports.generateBookVersionPdf = onRequest({ timeoutSeconds: 300, memory: "4GiB"
     });
   } catch (error) {
     console.error(`BOOK_RENDER_FAILED user=${userId} version=${bookVersionId}:`, error);
-    await docRef.set({
-      renderStatus: "failed",
-      renderError: String(error.message || error),
-      renderAttemptCount: (record.renderAttemptCount || 0) + 1,
-      renderedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
-    return jsonError(res, 500, `Failed to generate PDF: ${error.message || error}`);
+    try {
+      await db.runTransaction(async (transaction) => {
+        const [latest, lease] = await Promise.all([
+          transaction.get(docRef),
+          transaction.get(renderLeaseRef)
+        ]);
+        if (!lease.exists || lease.data()?.renderJobId !== renderJobId) return;
+        transaction.delete(renderLeaseRef);
+        if (!latest.exists) return;
+        transaction.set(docRef, {
+          renderStatus: "failed",
+          renderError: String(error.message || error).slice(0, 500),
+          renderJobId: admin.firestore.FieldValue.delete(),
+          renderLeaseExpiresAt: admin.firestore.FieldValue.delete(),
+          renderedAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      });
+    } catch (stateError) {
+      console.error(`BOOK_RENDER_FAILURE_STATE_FAILED user=${userId} version=${bookVersionId}:`, stateError);
+    }
+    const status = error instanceof PdfPackagingValidationError ? error.httpStatus : 500;
+    const message = error instanceof PdfPackagingValidationError
+      ? error.message
+      : "Failed to generate PDF";
+    return jsonError(res, status, message);
   }
-});
+  }
+);
 
 // --- Book Ordering (Stripe + Lulu) ---
 
@@ -2564,6 +2867,7 @@ exports.createCartCheckoutSessionFast = onCall(
       throw new HttpsError("unauthenticated", "Must be signed in to order books");
     }
     const userId = request.auth.uid;
+    await assertAccountAvailableForCheckout(db, userId, HttpsError);
     const debugId = `ccf_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
     let stage = "input_validation";
     const {
@@ -2782,24 +3086,41 @@ exports.createCartCheckoutSessionFast = onCall(
 
     stage = "pending_checkout_write";
     const cartOrderGroupId = checkoutId;
+    const checkoutLeaseId = `cart:${cartOrderGroupId}`;
     const pendingRef = db.collection("users").doc(userId).collection("pendingCartCheckouts").doc(cartOrderGroupId);
 
-    await pendingRef.set({
-      cartOrderGroupId,
-      userId,
-      items: resolvedItems,
-      shippingAddress,
-      shippingLevel,
-      totalCents,
-      booksSubtotalCents,
-      orderShippingCents,
-      status: "pending_stripe",
-      quoteId,
-      idempotencyKey: checkoutId,
-      checkoutAttemptDocId: checkoutId,
-      checkoutPath: "fast",
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    await acquireCheckoutLease({
+      db, userId, leaseId: checkoutLeaseId, HttpsError,
+      serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
     });
+    try {
+      await validateCheckoutBookArtifacts({
+        userId,
+        expectedItems: resolvedItems,
+        ensureArtifacts: (ownerId, versionId) =>
+          ensureBookVersionArtifactUrls(db, bucket, ownerId, versionId)
+      });
+      await pendingRef.set({
+        cartOrderGroupId,
+        userId,
+        checkoutLeaseId,
+        items: resolvedItems,
+        shippingAddress,
+        shippingLevel,
+        totalCents,
+        booksSubtotalCents,
+        orderShippingCents,
+        status: "pending_stripe",
+        quoteId,
+        idempotencyKey: checkoutId,
+        checkoutAttemptDocId: checkoutId,
+        checkoutPath: "fast",
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (error) {
+      await releaseCheckoutLease({ db, userId, leaseId: checkoutLeaseId }).catch(() => {});
+      throw error;
+    }
 
     console.log(
       JSON.stringify({
@@ -2834,6 +3155,7 @@ exports.createCartCheckoutSessionFast = onCall(
           mode: "payment",
           payment_method_types: ["card"],
           line_items: stripeLineItems,
+          expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
           success_url: `memoirai://order-complete?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: "memoirai://order-cancelled",
           metadata: {
@@ -2841,7 +3163,8 @@ exports.createCartCheckoutSessionFast = onCall(
             userId,
             shippingLevel: shippingLevel || "MAIL",
             totalCents: String(totalCents),
-            quoteId: quoteId || ""
+            quoteId: quoteId || "",
+            checkoutLeaseId
           },
           customer_email: request.auth.token?.email || undefined,
           payment_intent_data: {
@@ -2854,6 +3177,7 @@ exports.createCartCheckoutSessionFast = onCall(
     } catch (err) {
       const stripeMessage = String(err?.message || err || "unknown");
       const transient = isLikelyTransientStripeError(err);
+      await releaseCheckoutLease({ db, userId, leaseId: checkoutLeaseId }).catch(() => {});
       console.error(
         "createCartCheckoutSessionFast stripe session create failed:",
         {
@@ -3044,6 +3368,7 @@ exports.createCheckoutSession = onCall(
       throw new HttpsError("unauthenticated", "Must be signed in to order a book");
     }
     const userId = request.auth.uid;
+    await assertAccountAvailableForCheckout(db, userId, HttpsError);
     const debugId = `cs_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
     const { bookVersionId, shippingAddress, shippingLevel = "MAIL", clientEstimatedTotalCents, productOptionId = null } = request.data || {};
     if (!bookVersionId || !shippingAddress) {
@@ -3066,10 +3391,6 @@ exports.createCheckoutSession = onCall(
     const dimensions = isLandscape ? "11x8.5\"" : "8.5x11\"";
 
     let totalCents = baseCents;
-    let pricingFallbackReason = null;
-    let pricingFallbackPhase = null;
-    let pricingFallbackStatusCode = null;
-    let pricingFallbackDetail = null;
     try {
       const pricing = await calculateMerchantPricingBreakdown({
         inputs,
@@ -3095,16 +3416,40 @@ exports.createCheckoutSession = onCall(
         }
       }
     } catch (err) {
-      console.warn("Lulu cost calculation failed, using base price:", err.message);
-      const diag = luluFallbackDiagnostics(err);
-      pricingFallbackReason = diag.fallbackReason;
-      pricingFallbackPhase = diag.fallbackPhase;
-      pricingFallbackStatusCode = diag.fallbackStatusCode;
-      pricingFallbackDetail = diag.fallbackDetail;
-      totalCents = baseCents;
+      console.error("createCheckoutSession Lulu pricing unavailable:", String(err?.message || err));
+      throw new HttpsError(
+        "unavailable",
+        "Live print pricing is temporarily unavailable. Please try again before paying."
+      );
     }
 
     const stripe = createStripeClient({ maxNetworkRetries: 1, timeoutMs: 20 * 1000 });
+    const checkoutLeaseId = `single:${debugId}`;
+    await acquireCheckoutLease({
+      db, userId, leaseId: checkoutLeaseId, HttpsError,
+      serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
+    });
+    try {
+      await validateCheckoutBookArtifacts({
+        userId,
+        expectedItems: [{
+          bookVersionId,
+          selectedPodPackageId: selectedOption.podPackageId,
+          fulfillmentFingerprint: checkoutFulfillmentFingerprint(
+            record,
+            selectedOption.podPackageId
+          )
+        }],
+        ensureArtifacts: (ownerId, versionId) =>
+          ensureBookVersionArtifactUrls(db, bucket, ownerId, versionId)
+      });
+    } catch (error) {
+      await releaseCheckoutLease({ db, userId, leaseId: checkoutLeaseId }).catch(() => {});
+      throw new HttpsError(
+        "failed-precondition",
+        "Book PDF artifacts changed before checkout. Please try again."
+      );
+    }
     let session;
     try {
       console.log(JSON.stringify({ msg: "createCheckoutSession:stripe_session_create", userId, debugId, totalCents }));
@@ -3124,6 +3469,7 @@ exports.createCheckoutSession = onCall(
             quantity: 1
           }
         ],
+        expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
         success_url: `memoirai://order-complete?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: "memoirai://order-cancelled",
         metadata: {
@@ -3134,12 +3480,9 @@ exports.createCheckoutSession = onCall(
           totalCents: String(totalCents),
           coverStoragePath,
           pdfStoragePath,
-          pricingFallbackReason: pricingFallbackReason || "",
-          pricingFallbackPhase: pricingFallbackPhase || "",
-          pricingFallbackStatusCode: pricingFallbackStatusCode != null ? String(pricingFallbackStatusCode) : "",
-          pricingFallbackDetail: pricingFallbackDetail || "",
           selectedProductOptionId: selectedOption.optionId,
-          selectedPodPackageId: selectedOption.podPackageId
+          selectedPodPackageId: selectedOption.podPackageId,
+          checkoutLeaseId
         },
         customer_email: request.auth.token?.email || undefined,
         payment_intent_data: {
@@ -3160,6 +3503,7 @@ exports.createCheckoutSession = onCall(
         transient,
         message: stripeMessage
       }, "createCheckoutSession", `single_${debugId}`);
+      await releaseCheckoutLease({ db, userId, leaseId: checkoutLeaseId }).catch(() => {});
       if (transient) {
         throw new HttpsError(
           "unavailable",
@@ -3181,6 +3525,31 @@ exports.createCheckoutSession = onCall(
       });
     }
 
+    try {
+      await db.collection("pendingSingleCheckouts").doc(session.id).set({
+        userId,
+        bookVersionId,
+        checkoutLeaseId,
+        status: "pending",
+        coverStoragePath,
+        pdfStoragePath,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        expiresAt: admin.firestore.Timestamp.fromMillis(Number(session.expires_at || 0) * 1000)
+      });
+    } catch (error) {
+      try {
+        await stripe.checkout.sessions.expire(session.id);
+      } catch (_) {
+        console.error("createCheckoutSession: failed to expire untracked Stripe session");
+      }
+      console.error("createCheckoutSession: pending checkout persistence failed");
+      await releaseCheckoutLease({ db, userId, leaseId: checkoutLeaseId }).catch(() => {});
+      throw new HttpsError(
+        "internal",
+        "Checkout could not be safely prepared. Please try again."
+      );
+    }
+
     return { checkoutUrl: session.url, sessionId: session.id };
   }
 );
@@ -3199,6 +3568,7 @@ exports.createCartCheckoutSession = onCall(
       throw new HttpsError("unauthenticated", "Must be signed in to order books");
     }
     const userId = request.auth.uid;
+    await assertAccountAvailableForCheckout(db, userId, HttpsError);
     const debugId = `ccs_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
     let stage = "input_validation";
     const { items, shippingAddress, shippingLevel = "MAIL", clientEstimatedTotalCents } = request.data || {};
@@ -3270,19 +3640,36 @@ exports.createCartCheckoutSession = onCall(
     }
 
     stage = "pending_checkout_write";
+    const checkoutLeaseId = `cart:${cartOrderGroupId}`;
     const pendingRef = db.collection("users").doc(userId).collection("pendingCartCheckouts").doc(cartOrderGroupId);
-    await pendingRef.set({
-      cartOrderGroupId,
-      userId,
-      items: resolvedItems,
-      shippingAddress,
-      shippingLevel,
-      totalCents,
-      booksSubtotalCents,
-      orderShippingCents,
-      status: "pending_stripe",
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    await acquireCheckoutLease({
+      db, userId, leaseId: checkoutLeaseId, HttpsError,
+      serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
     });
+    try {
+      await validateCheckoutBookArtifacts({
+        userId,
+        expectedItems: resolvedItems,
+        ensureArtifacts: (ownerId, versionId) =>
+          ensureBookVersionArtifactUrls(db, bucket, ownerId, versionId)
+      });
+      await pendingRef.set({
+        cartOrderGroupId,
+        userId,
+        checkoutLeaseId,
+        items: resolvedItems,
+        shippingAddress,
+        shippingLevel,
+        totalCents,
+        booksSubtotalCents,
+        orderShippingCents,
+        status: "pending_stripe",
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (error) {
+      await releaseCheckoutLease({ db, userId, leaseId: checkoutLeaseId }).catch(() => {});
+      throw error;
+    }
     console.log(
       JSON.stringify({
         msg: "createCartCheckoutSession:pending_written",
@@ -3313,13 +3700,15 @@ exports.createCartCheckoutSession = onCall(
         mode: "payment",
         payment_method_types: ["card"],
         line_items: stripeLineItems,
+        expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
         success_url: `memoirai://order-complete?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: "memoirai://order-cancelled",
         metadata: {
           cartOrderGroupId,
           userId,
           shippingLevel: shippingLevel || "MAIL",
-          totalCents: String(totalCents)
+          totalCents: String(totalCents),
+          checkoutLeaseId
         },
         customer_email: request.auth.token?.email || undefined,
         payment_intent_data: {
@@ -3329,6 +3718,7 @@ exports.createCartCheckoutSession = onCall(
     } catch (err) {
       const stripeMessage = String(err?.message || err || "unknown");
       const transient = isLikelyTransientStripeError(err);
+      await releaseCheckoutLease({ db, userId, leaseId: checkoutLeaseId }).catch(() => {});
       console.error(
         "createCartCheckoutSession stripe session create failed:",
         {
@@ -3480,11 +3870,43 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
   const shippingAddress = pend.shippingAddress || {};
   const shippingLevel = pend.shippingLevel || "MAIL";
 
+  const validatedItems = [];
+  try {
+    for (const item of pend.items || []) {
+      const bookVersionId = String(item?.bookVersionId || "").trim();
+      const expected = canonicalBookArtifactPaths(userIdFromMeta, bookVersionId);
+      assertCanonicalBookArtifact(item?.coverStoragePath, expected.cover, "Cover");
+      assertCanonicalBookArtifact(item?.pdfStoragePath, expected.interior, "Interior");
+      const validated = await ensureBookVersionArtifactUrls(
+        db,
+        bucket,
+        userIdFromMeta,
+        bookVersionId
+      );
+      if (!validated?.coverURL || !validated?.pdfURL) {
+        throw new Error("Book artifacts are missing");
+      }
+      validatedItems.push({
+        ...item,
+        coverStoragePath: expected.cover,
+        pdfStoragePath: expected.interior,
+        coverURL: validated.coverURL,
+        pdfURL: validated.pdfURL
+      });
+    }
+  } catch (error) {
+    console.warn("Paid cart artifact validation failed");
+    return { ok: false, reason: "invalid_book_artifacts" };
+  }
+  if (validatedItems.length === 0) {
+    return { ok: false, reason: "invalid_book_artifacts" };
+  }
+
   const batch = db.batch();
   const createdOrderIds = [];
   const sessionIdSan = String(session.id || "").replace(/\//g, "_");
-  for (let lineIdx = 0; lineIdx < (pend.items || []).length; lineIdx += 1) {
-    const item = pend.items[lineIdx];
+  for (let lineIdx = 0; lineIdx < validatedItems.length; lineIdx += 1) {
+    const item = validatedItems[lineIdx];
     const orderId = `ord_${sessionIdSan}_L${lineIdx}`;
     createdOrderIds.push(orderId);
     const qty = item.quantity || 1;
@@ -3553,7 +3975,7 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
     quoteId: pend.quoteId || null,
     idempotencyKey: pend.idempotencyKey || null,
     checkoutPath: pend.checkoutPath || null,
-    items: pend.items || [],
+    items: validatedItems,
     shippingAddress,
     shippingLevel,
     booksSubtotalCents: pend.booksSubtotalCents != null ? pend.booksSubtotalCents : null,
@@ -3585,8 +4007,8 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
   }
 
   const paidAtBookVersions = admin.firestore.FieldValue.serverTimestamp();
-  for (let lineIdx = 0; lineIdx < (pend.items || []).length; lineIdx += 1) {
-    const item = pend.items[lineIdx];
+  for (let lineIdx = 0; lineIdx < validatedItems.length; lineIdx += 1) {
+    const item = validatedItems[lineIdx];
     const bid = item && item.bookVersionId ? String(item.bookVersionId).trim() : "";
     if (!bid) continue;
     const bvMerge = {
@@ -3711,6 +4133,87 @@ async function handleStripeRefundOrDisputeWebhookEvent(event) {
   return { handled: true, ordersFlagged: updated };
 }
 
+async function commitPaidSingleCheckoutFromStripeSession(session, { isStripeTestMode }) {
+  const meta = session.metadata || {};
+  const {
+    bookVersionId,
+    userId,
+    shippingAddress: addrJson,
+    coverStoragePath,
+    pdfStoragePath
+  } = meta;
+  if (!bookVersionId || !userId || !addrJson || !coverStoragePath || !pdfStoragePath) {
+    const error = new Error("Missing metadata");
+    error.clientStatus = 400;
+    throw error;
+  }
+
+  let shippingAddress;
+  try {
+    shippingAddress = JSON.parse(addrJson);
+  } catch (_) {
+    const error = new Error("Invalid shipping address");
+    error.clientStatus = 400;
+    throw error;
+  }
+
+  const pendingSingleRef = db.collection("pendingSingleCheckouts").doc(session.id);
+  const existingSnap = await db.collection("users").doc(userId).collection("orders")
+    .where("stripeSessionId", "==", session.id).limit(1).get();
+  if (!existingSnap.empty) {
+    await pendingSingleRef.set({
+      status: "paid",
+      paidAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await releaseCheckoutLease({ db, userId, leaseId: meta.checkoutLeaseId }).catch(() => {});
+    return { ok: true, duplicate: true, orderId: existingSnap.docs[0].id };
+  }
+
+  let bookVersion;
+  try {
+    const expectedPaths = canonicalBookArtifactPaths(userId, bookVersionId);
+    assertCanonicalBookArtifact(coverStoragePath, expectedPaths.cover, "Cover");
+    assertCanonicalBookArtifact(pdfStoragePath, expectedPaths.interior, "Interior");
+    bookVersion = await ensureBookVersionArtifactUrls(db, bucket, userId, bookVersionId);
+    if (!bookVersion?.coverURL || !bookVersion?.pdfURL) throw new Error("Book artifacts are missing");
+  } catch (_) {
+    const error = new Error("Invalid book artifacts");
+    error.clientStatus = 400;
+    throw error;
+  }
+  const records = buildSingleBookOrderRecords({
+    session,
+    bookVersion: {
+      ...bookVersion,
+      printTitle: printTitleFromBookVersionRecord(bookVersion)
+    },
+    shippingAddress,
+    isStripeTestMode,
+    serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
+  });
+  const orderId = records.orderId;
+  const orderRef = db.collection("users").doc(userId).collection("orders").doc(orderId);
+  const paidCheckoutRef = db.collection("users").doc(userId)
+    .collection("paidBookCheckouts").doc(orderId);
+  const bookVersionRef = db.collection("users").doc(userId)
+    .collection("bookVersions").doc(bookVersionId);
+  const commitResult = await commitSingleBookOrderOnce({
+    runTransaction: (callback) => db.runTransaction(callback),
+    orderRef,
+    paidCheckoutRef,
+    bookVersionRef,
+    orderData: records.orderData,
+    paidCheckoutData: records.paidCheckoutData,
+    bookVersionData: records.bookVersionData
+  });
+  await pendingSingleRef.set({
+    status: "paid",
+    paidAt: admin.firestore.FieldValue.serverTimestamp()
+  }, { merge: true });
+  await releaseCheckoutLease({ db, userId, leaseId: meta.checkoutLeaseId }).catch(() => {});
+  return { ok: true, created: commitResult.created, duplicate: !commitResult.created, orderId };
+}
+
 exports.stripeWebhook = onRequest(
   {
     timeoutSeconds: 60,
@@ -3751,11 +4254,19 @@ exports.stripeWebhook = onRequest(
       }
     }
 
-    if (event.type !== "checkout.session.completed") {
+    if (!["checkout.session.completed", "checkout.session.async_payment_succeeded"].includes(event.type)) {
       return res.status(200).json({ received: true });
     }
 
     const session = event.data.object;
+    if (!checkoutSessionHasConfirmedPayment(session)) {
+      console.warn("Stripe webhook: checkout completed without confirmed payment", {
+        eventId: event.id,
+        sessionId: session.id,
+        paymentStatus: session.payment_status || null
+      });
+      return res.status(200).json({ received: true, awaitingPayment: true });
+    }
     const meta = session.metadata || {};
     const cartOrderGroupId = meta.cartOrderGroupId;
     const userIdFromMeta = meta.userId;
@@ -3769,6 +4280,9 @@ exports.stripeWebhook = onRequest(
       }
       const pend = pendSnap.data();
       if (pend.status === "paid") {
+        await releaseCheckoutLease({
+          db, userId: userIdFromMeta, leaseId: pend.checkoutLeaseId
+        }).catch(() => {});
         console.log(`Duplicate cart webhook for ${cartOrderGroupId}, skipping`);
         return res.status(200).json({ received: true, duplicate: true, cart: true });
       }
@@ -3782,6 +4296,9 @@ exports.stripeWebhook = onRequest(
           return res.status(200).json({ received: true, duplicate: true, cart: true });
         }
         if (commitResult.reason === "orders_already_exist") {
+          await releaseCheckoutLease({
+            db, userId: userIdFromMeta, leaseId: pend.checkoutLeaseId
+          }).catch(() => {});
           return res.status(200).json({ received: true, duplicate: true, cart: true, healed: true });
         }
         if (commitResult.reason === "missing_pending") {
@@ -3796,161 +4313,29 @@ exports.stripeWebhook = onRequest(
         sendOpsAlert(subject, body).catch(() => {});
       }
 
+      await releaseCheckoutLease({
+        db, userId: userIdFromMeta, leaseId: pend.checkoutLeaseId
+      }).catch(() => {});
+
       console.log(`Cart paid: orders=${commitResult.orderIds.length} group=${cartOrderGroupId}`);
       return res.status(200).json({ received: true, cart: true, orderIds: commitResult.orderIds });
     }
 
-    const {
-      bookVersionId,
-      userId,
-      shippingAddress: addrJson,
-      shippingLevel,
-      coverStoragePath,
-      pdfStoragePath,
-      selectedProductOptionId,
-      selectedPodPackageId
-    } = meta;
-    if (!bookVersionId || !userId || !addrJson || !coverStoragePath || !pdfStoragePath) {
-      console.error("Stripe webhook: missing metadata", session.metadata);
-      return jsonError(res, 400, "Missing metadata");
-    }
-
-    let shippingAddress;
     try {
-      shippingAddress = JSON.parse(addrJson);
-    } catch (e) {
-      return jsonError(res, 400, "Invalid shipping address");
+      const single = await commitPaidSingleCheckoutFromStripeSession(session, {
+        isStripeTestMode: event.livemode === false
+      });
+      console.log(`Single-book checkout committed order=${single.orderId} duplicate=${single.duplicate}`);
+      return res.status(200).json({
+        received: true,
+        duplicate: single.duplicate,
+        orderId: single.orderId,
+        status: "paid"
+      });
+    } catch (error) {
+      console.error("Stripe webhook single-book commit failed", String(error?.message || error));
+      return jsonError(res, error?.clientStatus || 500, error?.clientStatus ? error.message : "Order commit failed");
     }
-
-    const existingSnap = await db
-      .collection("users")
-      .doc(userId)
-      .collection("orders")
-      .where("stripeSessionId", "==", session.id)
-      .limit(1)
-      .get();
-    if (!existingSnap.empty) {
-      console.log(`Duplicate webhook for session ${session.id}, skipping`);
-      return res.status(200).json({ received: true, duplicate: true });
-    }
-
-    const orderId = `ord_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
-
-    const isStripeTestMode = event.livemode === false;
-    const lineTotalCentsSingle = parseInt(session.metadata?.totalCents || "2999", 10);
-
-    let profileIdSingle = null;
-    let printTitleSingle = null;
-    let bvUrls = {};
-    try {
-      await ensureBookVersionArtifactUrls(db, bucket, userId, bookVersionId);
-      const bvSnap = await db.collection("users").doc(userId).collection("bookVersions").doc(bookVersionId).get();
-      if (bvSnap.exists) {
-        const rec = bvSnap.data() || {};
-        bvUrls = rec;
-        profileIdSingle = rec.profileId != null ? String(rec.profileId) : null;
-        printTitleSingle = printTitleFromBookVersionRecord(rec);
-      }
-    } catch (e) {
-      console.warn("Stripe webhook single-book: bookVersions fetch failed", e.message || e);
-    }
-
-    const orderData = {
-      orderId,
-      bookVersionId,
-      userId,
-      stripeSessionId: session.id,
-      stripePaymentIntentId: session.payment_intent || null,
-      luluPrintJobId: null,
-      status: "paid",
-      luluError: null,
-      isTestOrder: isStripeTestMode,
-      customerEmail: session.customer_details?.email || session.customer_email || null,
-      shippingAddress,
-      shippingLevel: shippingLevel || "MAIL",
-      selectedProductOptionId: selectedProductOptionId || null,
-      selectedPodPackageId: selectedPodPackageId || null,
-      quantity: 1,
-      unitCents: lineTotalCentsSingle,
-      lineTotalCents: lineTotalCentsSingle,
-      pricing: {
-        totalCents: lineTotalCentsSingle,
-        currency: "usd"
-      },
-      printTitle: printTitleSingle,
-      productTitle: null,
-      bookDisplayName: bvUrls.bookDisplayName || null,
-      userHandle: bvUrls.userHandle || null,
-      coverPdfStoragePath: coverStoragePath,
-      interiorPdfStoragePath: pdfStoragePath,
-      coverURL: bvUrls.coverURL || null,
-      pdfURL: bvUrls.pdfURL || null,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      luluTrackingUrl: null,
-      luluStatusHistory: []
-    };
-
-    const orderRef = db.collection("users").doc(userId).collection("orders").doc(orderId);
-    const paidSingleRef = db.collection("users").doc(userId).collection("paidBookCheckouts").doc(orderId);
-    const batchSingle = db.batch();
-    batchSingle.set(orderRef, orderData);
-    batchSingle.set(paidSingleRef, {
-      userId,
-      checkoutKind: "single_book",
-      cartOrderGroupId: null,
-      stripeSessionId: session.id,
-      stripePaymentIntentId: session.payment_intent || null,
-      currency: session.currency || "usd",
-      amountTotal: session.amount_total != null ? session.amount_total : lineTotalCentsSingle,
-      isTestOrder: isStripeTestMode,
-      quoteId: null,
-      idempotencyKey: null,
-      checkoutPath: "single_book",
-      items: [
-        {
-          bookVersionId,
-          profileId: profileIdSingle,
-          printTitle: printTitleSingle,
-          productOptionId: selectedProductOptionId || null,
-          selectedPodPackageId: selectedPodPackageId || null,
-          quantity: 1,
-          unitCents: lineTotalCentsSingle,
-          lineTotalCents: lineTotalCentsSingle,
-          coverStoragePath,
-          pdfStoragePath,
-          coverURL: bvUrls.coverURL || null,
-          pdfURL: bvUrls.pdfURL || null,
-          bookDisplayName: bvUrls.bookDisplayName || null,
-          userHandle: bvUrls.userHandle || null
-        }
-      ],
-      shippingAddress,
-      shippingLevel: shippingLevel || "MAIL",
-      booksSubtotalCents: lineTotalCentsSingle,
-      orderShippingCents: 0,
-      totalCents: lineTotalCentsSingle,
-      customerEmail: session.customer_details?.email || session.customer_email || null,
-      orderIds: [orderId],
-      paidAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    batchSingle.set(
-      db.collection("users").doc(userId).collection("bookVersions").doc(bookVersionId),
-      {
-        hasPaidOrder: true,
-        paidAt: admin.firestore.FieldValue.serverTimestamp(),
-        lastPaidStripeSessionId: session.id,
-        pdfStoragePath,
-        coverStoragePath,
-        pdfURL: bvUrls.pdfURL || null,
-        coverURL: bvUrls.coverURL || null
-      },
-      { merge: true }
-    );
-    await batchSingle.commit();
-
-    console.log(`Order ${orderId} saved as 'paid'. Awaiting manual fulfillment.`);
-    return res.status(200).json({ received: true, orderId, status: "paid" });
   }
 );
 
@@ -4005,7 +4390,16 @@ exports.fulfillOrder = onCall(
       throw new HttpsError("internal", String(err?.message || err || "Failed to submit to Lulu"));
     }
 
-    return { success: true, orderId, luluJobId: result.luluJobId || null, status: result.mappedStatus || "submitted_to_printer" };
+    const success = Boolean(result.submitted || result.reconciled ||
+      (result.reason === "already_submitted" && result.luluPrintJobId));
+    return {
+      success,
+      skipped: Boolean(result.skipped),
+      reason: result.reason || null,
+      orderId,
+      luluJobId: result.luluJobId || null,
+      status: result.mappedStatus || null
+    };
   }
 );
 
@@ -4078,24 +4472,11 @@ exports.syncOrderFromLulu = onCall(
   }
 );
 
-function verifyLuluWebhookSignature(rawBody, signature, clientSecret) {
-  if (!rawBody || !signature || !clientSecret) return false;
-  try {
-    const payload = typeof rawBody === "string" ? Buffer.from(rawBody, "utf8") : rawBody;
-    const expected = crypto.createHmac("sha256", clientSecret).update(payload).digest("hex");
-    const sigBuf = Buffer.from(signature.trim(), "hex");
-    const expBuf = Buffer.from(expected, "hex");
-    return sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf);
-  } catch {
-    return false;
-  }
-}
-
 exports.luluWebhook = onRequest(
   {
     timeoutSeconds: 30,
     consumeRawBody: true,
-    secrets: [luluClientSecret]
+    secrets: [luluWebhookSecretParam]
   },
   async (req, res) => {
     if (req.method !== "POST") {
@@ -4104,8 +4485,8 @@ exports.luluWebhook = onRequest(
 
     const signature = req.headers["lulu-hmac-sha256"] || req.headers["Lulu-HMAC-SHA256"];
     const rawBody = req.rawBody;
-    const clientSecret = luluClientSecret.value();
-    if (!verifyLuluWebhookSignature(rawBody, signature, clientSecret)) {
+    const webhookSecret = luluWebhookSecretParam.value();
+    if (!verifyLuluWebhookSignature(rawBody, signature, webhookSecret)) {
       console.warn("Lulu webhook: HMAC signature verification failed");
       return jsonError(res, 401, "Invalid signature");
     }
@@ -4139,27 +4520,17 @@ exports.luluWebhook = onRequest(
 
     const orderDoc = snap.docs[0];
     const orderRef = orderDoc.ref;
-    const orderData = orderDoc.data() || {};
-    const hist = pushStatusHistory(orderData.luluStatusHistory, {
-      status,
+    const applied = await applyLuluStatusUpdate({
+      orderRef,
+      luluRawStatus: String(status || "UNKNOWN"),
       trackingUrl: trackingUrl || null,
       source: "lulu_webhook"
     });
-    const ourStatus = mapLuluStatusToOrderStatus(status);
-
-    const updates = {
-      status: ourStatus,
-      luluRawStatus: status || null,
-      luluLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      luluStatusHistory: hist
-    };
-    if (trackingUrl) {
-      updates.luluTrackingUrl = trackingUrl;
-    }
-
-    await orderRef.update(updates);
-    return res.status(200).json({ received: true });
+    return res.status(200).json({
+      received: true,
+      status: applied.status || null,
+      ignoredRegression: applied.applied && !applied.acceptedIncomingStatus
+    });
   }
 );
 
@@ -4189,18 +4560,53 @@ exports.reconcilePendingCartCheckouts = onSchedule(
       console.error("reconcilePendingCartCheckouts query failed:", err.message || err);
       return;
     }
-    if (snap.empty) {
-      return;
-    }
     let processed = 0;
     for (const doc of snap.docs) {
       const data = doc.data() || {};
       if (data.status === "paid") {
         continue;
       }
-      const sid = data.stripeSessionId;
+      let sid = data.stripeSessionId;
       if (!sid) {
-        continue;
+        const userRef = doc.ref.parent.parent;
+        const attemptId = String(
+          data.checkoutAttemptDocId || data.idempotencyKey || data.cartOrderGroupId || doc.id
+        );
+        const [attemptSnapshot, existingOrders] = await Promise.all([
+          userRef.collection("checkoutAttempts").doc(attemptId).get(),
+          userRef.collection("orders")
+            .where("cartOrderGroupId", "==", data.cartOrderGroupId || doc.id)
+            .limit(1)
+            .get()
+        ]);
+        const disposition = missingCartSessionDisposition({
+          attemptStripeSessionId: attemptSnapshot.data()?.stripeSessionId,
+          existingOrderCount: existingOrders.size
+        });
+        if (disposition.action === "recover_session") {
+          sid = disposition.sessionId;
+          await doc.ref.set({
+            stripeSessionId: sid,
+            reconcileNote: "recovered_session_from_checkout_attempt",
+            checkoutReconcileAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        } else {
+          const status = disposition.action === "mark_paid" ? "paid" : "stripe_create_failed";
+          await doc.ref.set({
+            status,
+            reconcileNote: disposition.action === "mark_paid"
+              ? "aligned_with_existing_orders"
+              : "missing_stripe_session_after_timeout",
+            checkoutReconcileAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          await releaseCheckoutLease({
+            db,
+            userId: userRef.id,
+            leaseId: data.checkoutLeaseId
+          }).catch(() => {});
+          processed += 1;
+          continue;
+        }
       }
       try {
         const session = await stripe.checkout.sessions.retrieve(String(sid));
@@ -4266,14 +4672,58 @@ exports.reconcilePendingCartCheckouts = onSchedule(
         );
       }
     }
-    if (processed > 0 || !snap.empty) {
+    let singleCandidateCount = 0;
+    try {
+      const singleSnap = await db.collection("pendingSingleCheckouts")
+        .where("status", "==", "pending")
+        .limit(40)
+        .get();
+      singleCandidateCount = singleSnap.size;
+      for (const doc of singleSnap.docs) {
+        try {
+          const session = await stripe.checkout.sessions.retrieve(doc.id);
+          const updates = {
+            checkoutReconcileAt: admin.firestore.FieldValue.serverTimestamp(),
+            stripeSessionStatus: session.status || null,
+            stripePaymentStatus: session.payment_status || null
+          };
+          if (session.status === "expired") {
+            updates.status = "checkout_expired";
+          } else if (session.status === "complete" && session.payment_status === "paid") {
+            const healed = await commitPaidSingleCheckoutFromStripeSession(session, {
+              isStripeTestMode: session.livemode === false
+            });
+            updates.status = "paid";
+            updates.reconcileNote = healed.duplicate
+              ? "single_order_already_committed"
+              : "healed_by_reconcilePendingCartCheckouts";
+          }
+          await doc.ref.set(updates, { merge: true });
+          processed += 1;
+        } catch (error) {
+          console.warn(
+            "reconcilePendingCartCheckouts: single checkout heal failed",
+            doc.id,
+            String(error?.message || error)
+          );
+          await doc.ref.set({
+            checkoutReconcileAt: admin.firestore.FieldValue.serverTimestamp(),
+            reconcileNote: "single_checkout_heal_failed"
+          }, { merge: true }).catch(() => {});
+        }
+      }
+    } catch (_) {
+      console.error("reconcilePendingCartCheckouts: single checkout query failed");
+    }
+
+    if (processed > 0 || !snap.empty || singleCandidateCount > 0) {
       console.log(
         JSON.stringify({
           msg: "reconcilePendingCartCheckouts:run_complete",
           debugId,
           stage: "complete",
           processed,
-          candidateDocs: snap.size,
+          candidateDocs: snap.size + singleCandidateCount,
           elapsedMs: Date.now() - runStartMs
         })
       );
@@ -4285,15 +4735,18 @@ exports.reconcilePendingCartCheckouts = onSchedule(
 exports.adminListPrintOrders = onCall({ timeoutSeconds: 120 }, async (request) => {
   assertMemoirAdmin(request);
   const lim = Math.min(250, Math.max(1, parseInt(request.data?.limit, 10) || 200));
-  const usersSnap = await db.collection("users").get();
+  // Collection-group reads include retained orders whose root user document was
+  // intentionally removed during account deletion, and avoid one query per user.
+  const ordersSnap = await db.collectionGroup("orders").get();
   const all = [];
-  for (const userDoc of usersSnap.docs) {
-    const ordersSnap = await userDoc.ref.collection("orders").get();
-    for (const orderDoc of ordersSnap.docs) {
-      const data = orderDoc.data() || {};
-      if (data.isTestOrder) continue;
-      all.push(orderRecordForOpsQueue(orderDoc.id, userDoc.id, data));
-    }
+  const userIds = new Set();
+  for (const orderDoc of ordersSnap.docs) {
+    const data = orderDoc.data() || {};
+    if (data.isTestOrder) continue;
+    const userId = orderDoc.ref.parent.parent?.id || data.userId || "";
+    if (!userId) continue;
+    userIds.add(userId);
+    all.push(orderRecordForOpsQueue(orderDoc.id, userId, data));
   }
   const sortByCreated = (a, b) => {
     const ta = a.createdAt || "";
@@ -4321,7 +4774,7 @@ exports.adminListPrintOrders = onCall({ timeoutSeconds: 120 }, async (request) =
   const slice = (arr) => arr.slice(0, lim);
   return {
     autoFulfillEnabled: isAutoFulfillPaidOrdersEnabled(),
-    userCount: usersSnap.size,
+    userCount: userIds.size,
     stats: {
       totalOrders: all.length,
       needsPrint: pending.length,
@@ -4426,6 +4879,13 @@ exports.adminVerifyOrderPdfs = onCall(
         "failed-precondition",
         "Order is missing PDF storage paths. The book may not have been rendered yet."
       );
+    }
+    try {
+      const expectedPaths = canonicalBookArtifactPaths(targetUserId, orderData.bookVersionId);
+      assertCanonicalBookArtifact(coverStoragePath, expectedPaths.cover, "Cover");
+      assertCanonicalBookArtifact(interiorStoragePath, expectedPaths.interior, "Interior");
+    } catch (_) {
+      throw new HttpsError("failed-precondition", "Order PDF storage paths are invalid.");
     }
 
     // Use the Firebase Storage download URLs already on the order — no signed URLs needed for preview.
@@ -4621,7 +5081,7 @@ exports.onBookVersionDisplayNaming = onDocumentCreated(
 );
 
 exports.onMemoryDisplayNaming = onDocumentCreated(
-  { document: "users/{userId}/memories/{memoryId}" },
+  { document: "users/{userId}/memories/{memoryId}", retry: true },
   async (event) => {
     const snap = event.data;
     if (!snap) return;
@@ -4644,24 +5104,33 @@ exports.onMemoryDisplayNaming = onDocumentCreated(
         .collection("memoryTombstones").doc(memoryId);
       const memoryIndexRef = db.collection("memoryIndex").doc(memoryId);
       await db.runTransaction(async (transaction) => {
-        const [tombstone, currentMemory] = await Promise.all([
+        const [tombstone, currentMemory, currentIndex] = await Promise.all([
           transaction.get(tombstoneRef),
-          transaction.get(snap.ref)
+          transaction.get(snap.ref),
+          transaction.get(memoryIndexRef)
         ]);
         if (tombstone.exists || !currentMemory.exists) {
-          transaction.delete(memoryIndexRef);
+          if (memoryIndexBelongsToUser(currentIndex, userId)) {
+            transaction.delete(memoryIndexRef);
+          }
           return;
         }
-        transaction.set(memoryIndexRef, {
-          ownerId: userId,
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
+        const indexDecision = memoryIndexClaimDecision(currentIndex, userId);
+        if (indexDecision === "claim") {
+          transaction.create(memoryIndexRef, {
+            ownerId: userId,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        }
         if (namingFields && !currentMemory.data()?.memoryDisplayName) {
           transaction.set(snap.ref, namingFields, { merge: true });
         }
       });
     } catch (e) {
       console.error("onMemoryDisplayNaming failed", userId, String(e?.message || e));
+      // The memory index powers QR deep links. Surface the failure so Eventarc
+      // retries instead of permanently losing the index after a transient outage.
+      throw e;
     }
   }
 );
@@ -4672,6 +5141,21 @@ exports.onMemoryIndexCleanup = onDocumentDeleted(
     db,
     bucket,
     serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
+  })
+);
+
+exports.deleteOwnAccount = onCall(
+  {
+    timeoutSeconds: 300,
+    memory: "512MiB",
+    enforceAppCheck: isAppCheckEnforced()
+  },
+  createDeleteOwnAccountHandler({
+    db,
+    bucket,
+    auth: admin.auth(),
+    serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+    HttpsError
   })
 );
 
@@ -4710,6 +5194,20 @@ exports.onOrderMirrorPurchasedBooks = onDocumentWritten(
 );
 
 // Storybook cloud AI generation (Firestore-triggered; secrets OPENAI_API_KEY + GEMINI_API_KEY)
+exports.createStorybookJob = onCall(
+  {
+    timeoutSeconds: 30,
+    memory: "256MiB",
+    enforceAppCheck: isAppCheckEnforced()
+  },
+  createStorybookJobHandler({
+    db,
+    serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+    timestampFromDate: (date) => admin.firestore.Timestamp.fromDate(date),
+    HttpsError
+  })
+);
+
 Object.assign(exports, require("./storybookWorker"));
 
 // Server-side AI proxy callables (onCall; secrets OPENAI_API_KEY + GEMINI_API_KEY) — client never holds provider keys.

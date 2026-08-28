@@ -22,8 +22,6 @@ class GlobalCharacterManager {
     
     /// Find or create a global character by name for a profile
     func findOrCreateGlobalCharacter(name: String, profileID: UUID) -> UUID {
-        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        
         // Try to find existing character
         let request: NSFetchRequest<GlobalCharacter> = GlobalCharacter.fetchRequest()
         request.predicate = NSPredicate(
@@ -48,7 +46,7 @@ class GlobalCharacterManager {
         
         do {
             try context.save()
-            print("✅ Created new global character: \(name) (ID: \(newId.uuidString))")
+            print("Created new global character")
             return newId
         } catch {
             print("❌ Failed to create global character: \(error)")
@@ -158,25 +156,26 @@ class GlobalCharacterManager {
     // MARK: - Migration
     
     /// Migrate existing memories to use global character registry
-    /// Scans ALL memories (including orphaned ones), creates global characters, and links existing character instances
+    /// Scans memories owned by this profile, creates global characters, and links existing character instances.
     func migrateExistingCharacters(for profileID: UUID) {
         print("🔄 Starting character migration for profile: \(profileID.uuidString)")
         
-        // Fetch ALL memories (not filtered by profileID) to catch orphaned memories too
         let memoryRequest: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
-        if let uid = MemoryUserScope.currentFirebaseUserId {
-            memoryRequest.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [
-                NSPredicate(format: "firebaseUserId == %@", uid),
-                NSPredicate(format: "firebaseUserId == nil")
-            ])
+        guard let uid = MemoryUserScope.currentFirebaseUserId else {
+            print("❌ Skipping character migration without an authenticated user")
+            return
         }
+        memoryRequest.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "firebaseUserId == %@", uid),
+            NSPredicate(format: "profileID == %@", profileID as CVarArg)
+        ])
         
         guard let allMemories = try? context.fetch(memoryRequest) else {
             print("❌ Failed to fetch memories for migration")
             return
         }
         
-        print("📊 Found \(allMemories.count) total memories in database")
+        print("📊 Found \(allMemories.count) memories for this profile")
         
         // Count memories with character details
         let memoriesWithCharacters = allMemories.filter { 
@@ -186,15 +185,8 @@ class GlobalCharacterManager {
         
         var updatedCount = 0
         var globalCharactersCreated = 0
-        var orphanedMemoriesFixed = 0
-        
+
         for memory in allMemories {
-            // Fix orphaned memories - reassign to current profile
-            if memory.profileID != profileID {
-                memory.profileID = profileID
-                orphanedMemoriesFixed += 1
-            }
-            
             guard let detailsString = memory.characterDetails,
                   !detailsString.isEmpty,
                   let data = detailsString.data(using: .utf8),
@@ -236,7 +228,7 @@ class GlobalCharacterManager {
                     globalCharactersCreated += 1
                 }
                 
-                print("🔗 Linked character '\(character.name)' to global ID: \(globalId.uuidString)")
+                print("Linked character to global registry")
             }
             
             // Save updated character details if changed
@@ -253,7 +245,6 @@ class GlobalCharacterManager {
         do {
             try context.save()
             print("✅ Migration complete:")
-            print("   - Fixed \(orphanedMemoriesFixed) orphaned memories")
             print("   - Updated \(updatedCount) memories with character links")
             print("   - Created \(globalCharactersCreated) new global characters")
         } catch {

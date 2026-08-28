@@ -14,6 +14,21 @@ import FirebaseStorage
 import FirebaseAppCheck
 #endif
 
+#if canImport(FirebaseAppCheck)
+/// Firebase removed its built-in App Attest factory in favor of app-owned provider factories.
+/// Keep provider selection explicit so device Release builds use App Attest rather than silently
+/// falling back to DeviceCheck.
+final class MemoirAppAttestProviderFactory: NSObject, AppCheckProviderFactory {
+    func createProvider(with app: FirebaseApp) -> AppCheckProvider? {
+        #if targetEnvironment(simulator)
+        DeviceCheckProvider(app: app)
+        #else
+        AppAttestProvider(app: app)
+        #endif
+    }
+}
+#endif
+
 /// Handles Firebase SDK initialization and configuration
 final class FirebaseConfig {
     
@@ -48,7 +63,7 @@ final class FirebaseConfig {
             )
         }
         #else
-        AppCheck.setAppCheckProviderFactory(AppAttestProviderFactory())
+        AppCheck.setAppCheckProviderFactory(MemoirAppAttestProviderFactory())
         print("🔐 App Check (Device): App Attest provider configured.")
         #endif
         #endif

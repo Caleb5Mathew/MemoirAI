@@ -470,6 +470,13 @@ function requireAuth(request) {
   return request.auth.uid;
 }
 
+async function assertAccountActive(uid, database = firestore()) {
+  const deletion = await database.collection("accountDeletionRequests").doc(uid).get();
+  if (deletion.exists) {
+    throw new HttpsError("failed-precondition", "This account is being deleted.");
+  }
+}
+
 /** Rough base64 -> decoded byte size without allocating a Buffer. */
 function decodedByteLength(base64) {
   const s = String(base64 || "");
@@ -672,6 +679,7 @@ exports.aiChatCompletion = onCall(
   },
   async (request) => {
     const uid = requireAuth(request);
+    await assertAccountActive(uid);
     const body = request.data || {};
 
     let provider;
@@ -735,6 +743,7 @@ exports.transcribeMemoryAudio = onCall(
   },
   async (request) => {
     const uid = requireAuth(request);
+    await assertAccountActive(uid);
     const { memoryId, language, glossary } = validateTranscriptionRequest(request.data || {});
     await checkAndIncrementTranscriptionAttempts(uid);
     const memoryRef = firestore().collection("users").doc(uid).collection("memories").doc(memoryId);
@@ -886,6 +895,7 @@ exports.aiGenerateCoverArt = onCall(
   },
   async (request) => {
     const uid = requireAuth(request);
+    await assertAccountActive(uid);
     const body = request.data || {};
 
     let kind;
@@ -975,6 +985,7 @@ exports.aiEditImage = onCall(
   },
   async (request) => {
     const uid = requireAuth(request);
+    await assertAccountActive(uid);
     const body = request.data || {};
 
     const editInstruction = String(body.editInstruction || "").trim();
@@ -1056,6 +1067,7 @@ Object.defineProperty(exports, "_test", {
     transcriptionBudgetDecision,
     transcriptionAttemptBucket,
     transcriptionAttemptDecision,
-    checkAndIncrementTranscriptionAttempts
+    checkAndIncrementTranscriptionAttempts,
+    assertAccountActive
   }
 });

@@ -11,6 +11,13 @@ import FirebaseAuth
 import UIKit
 import CryptoKit
 
+enum StorageOwnershipPolicy {
+    static func audioPath(userID: String, memoryID: String, fileExtension: String) -> String {
+        let normalizedExtension = fileExtension.lowercased() == "m4a" ? "m4a" : "caf"
+        return "users/\(userID)/audio/\(memoryID).\(normalizedExtension)"
+    }
+}
+
 /// Service for uploading and managing files in Firebase Storage
 final class StorageService {
     
@@ -78,20 +85,37 @@ final class StorageService {
     // MARK: - Audio Upload
     
     /// Upload audio data and return the download URL
-    func uploadAudio(_ audioData: Data, memoryId: String, fileExtension: String = "caf") async throws -> String {
-        guard let userId = Auth.auth().currentUser?.uid else {
+    func uploadAudio(
+        _ audioData: Data,
+        memoryId: String,
+        fileExtension: String = "caf",
+        asUserID userID: String
+    ) async throws -> String {
+        guard Auth.auth().currentUser?.uid == userID else {
             throw StorageError.notAuthenticated
         }
         
         let normalizedExtension = fileExtension.lowercased() == "m4a" ? "m4a" : "caf"
-        let path = "users/\(userId)/audio/\(memoryId).\(normalizedExtension)"
+        let path = StorageOwnershipPolicy.audioPath(
+            userID: userID,
+            memoryID: memoryId,
+            fileExtension: normalizedExtension
+        )
         let ref = storage.reference().child(path)
         
         let metadata = StorageMetadata()
         metadata.contentType = normalizedExtension == "m4a" ? "audio/mp4" : "audio/x-caf"
         
         _ = try await ref.putDataAsync(audioData, metadata: metadata)
+        guard Auth.auth().currentUser?.uid == userID else {
+            try? await ref.delete()
+            throw StorageError.uploadFailed("The signed-in account changed during upload.")
+        }
         let downloadURL = try await ref.downloadURL()
+        guard Auth.auth().currentUser?.uid == userID else {
+            try? await ref.delete()
+            throw StorageError.uploadFailed("The signed-in account changed during upload.")
+        }
         await DevCostTelemetryService.shared.logEvent(
             DevCostEvent(
                 timestamp: Date(),
@@ -110,7 +134,7 @@ final class StorageService {
             )
         )
         
-        print("✅ Uploaded audio to: \(downloadURL.absoluteString)")
+        print("Uploaded audio")
         return downloadURL.absoluteString
     }
     
@@ -148,7 +172,7 @@ final class StorageService {
             )
         )
         
-        print("✅ Uploaded image to: \(downloadURL.absoluteString)")
+        print("Uploaded image")
         return downloadURL.absoluteString
     }
     
@@ -194,7 +218,7 @@ final class StorageService {
             )
         )
         
-        print("✅ Uploaded book PDF to: \(downloadURL.absoluteString)")
+        print("Uploaded book PDF")
         return downloadURL.absoluteString
     }
     

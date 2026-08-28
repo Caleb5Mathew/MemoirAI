@@ -5,6 +5,7 @@ import Combine
 import RevenueCat
 import RevenueCatUI
 import CoreData
+import FirebaseAuth
 
 // MARK: - Storybook headshot
 /// The user's home-page profile photo is the default generation headshot; the
@@ -690,6 +691,26 @@ struct StoryPage: View {
     }
         
     private func generateStorybookWithPaywallCheck() {
+        guard let firebaseUserID = Auth.auth().currentUser?.uid else {
+            vm.errorMessage = "Sign in before creating a storybook. Your memories are still saved on this device."
+            return
+        }
+        if !subscriptionManager.isIdentityReady(for: firebaseUserID) {
+            vm.isLoading = true
+            vm.currentStatus = "Verifying subscription…"
+            Task { @MainActor in
+                let ready = await subscriptionManager.identify(firebaseUserID: firebaseUserID)
+                vm.isLoading = false
+                guard ready, Auth.auth().currentUser?.uid == firebaseUserID else {
+                    vm.errorMessage = subscriptionManager.identityErrorMessage
+                        ?? "Subscription verification did not finish. Check your connection and try again."
+                    return
+                }
+                generateStorybookWithPaywallCheck()
+            }
+            return
+        }
+
         var pagesToAttempt = vm.expectedPageCount()
         
         // Debug: Print current free preview status
@@ -1529,7 +1550,7 @@ struct StoryPage: View {
             print("🔍 StoryPage: Found \(all.count) total memories")
             print("🔍 StoryPage: Found \(incompleteCount) unenhanced memories")
             for mem in unenhanced.prefix(5) {
-                print("  - Unenhanced: \(mem.prompt ?? "No prompt") | Text: \(mem.text?.prefix(50) ?? "none")...")
+                print("  - Unenhanced memory detected")
             }
         } else {
             print("❌ StoryPage: Failed to fetch memories")

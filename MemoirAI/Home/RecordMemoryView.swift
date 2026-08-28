@@ -3,6 +3,43 @@ import AVFoundation
 import Speech
 import CoreData
 
+enum PrimaryRecordingControlState: Equatable {
+    case ready
+    case recording
+    case paused
+
+    var accessibilityLabel: String {
+        switch self {
+        case .ready:
+            return "Start recording"
+        case .recording:
+            return "Pause recording"
+        case .paused:
+            return "Resume recording"
+        }
+    }
+
+    var accessibilityValue: String {
+        switch self {
+        case .ready:
+            return "Not recording"
+        case .recording:
+            return "Recording"
+        case .paused:
+            return "Paused"
+        }
+    }
+}
+
+enum PrimaryRecordingControlPolicy {
+    static func state(isRecording: Bool, isPaused: Bool) -> PrimaryRecordingControlState {
+        if isPaused {
+            return .paused
+        }
+        return isRecording ? .recording : .ready
+    }
+}
+
 struct RecordMemoryView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var context
@@ -32,6 +69,7 @@ struct RecordMemoryView: View {
     @State private var recordingTimer: Timer?
     @State private var isKeyboardSavePressed = false
     @State private var showCloudTranscriptionDisclosure = false
+    @State private var saveErrorMessage: String?
     
     // Timeout warning states
     @State private var showTimeoutWarning = false
@@ -42,7 +80,6 @@ struct RecordMemoryView: View {
     @State private var interruptionBannerMessage: String? = nil
     
     // Store picked/cropped images as raw JPEG/PNG data for Core-Data persistence
-    @State private var selectedImagesData: [Data] = []
     
     // Constants
     private let maxRecordingDuration = RecordingDurationPolicy.maximumRecordingDuration
@@ -155,6 +192,10 @@ struct RecordMemoryView: View {
         isRecording && !isPaused && (audioMonitor.isVoiceActive || liveAudioLevel > 0.08)
     }
 
+    private var primaryRecordingControlState: PrimaryRecordingControlState {
+        PrimaryRecordingControlPolicy.state(isRecording: isRecording, isPaused: isPaused)
+    }
+
     private func voiceRing(index: Int) -> some View {
         let ringColor: Color = audioMonitor.isVoiceActive ? accent.opacity(0.2) : micColor.opacity(0.2)
         let side: CGFloat = CGFloat(140 + index * 20)
@@ -217,36 +258,7 @@ struct RecordMemoryView: View {
                     }
                     
                     // Mic Button with enhanced visual feedback
-                    ZStack {
-                        // Rings only appear when actively recording and speech is detected.
-                        if shouldShowVoiceRings {
-                            ForEach(0..<3, id: \.self) { i in
-                                voiceRing(index: i)
-                            }
-                        }
-                        
-                        // Main mic button with level-responsive scaling
-                        Circle()
-                            .fill(
-                                isRecording && !isPaused && audioMonitor.isVoiceActive ?
-                                    accent : micColor
-                            )
-                            .frame(width: 120, height: 120)
-                            .scaleEffect(
-                                isRecording && !isPaused ?
-                                    (1.0 + liveAudioLevel * 0.1) : 1.0
-                            )
-                            .shadow(color: Color.orange.opacity(0.25),
-                                    radius: 10, x: 0, y: 4)
-                            .animation(.easeOut(duration: 0.1), value: liveAudioLevel)
-                            .animation(.easeInOut(duration: 0.3), value: audioMonitor.isVoiceActive)
-                        
-                        // Mic icon
-                        Image(systemName: (isRecording && !isPaused) ? "pause.fill" : "mic.fill")
-                            .font(.system(size: 36))
-                            .foregroundColor(.white)
-                    }
-                    .onTapGesture {
+                    Button {
                         if isRecording && !isPaused {
                             pauseRecording()
                         } else if isPaused {
@@ -254,7 +266,40 @@ struct RecordMemoryView: View {
                         } else {
                             startRecording()
                         }
+                    } label: {
+                        ZStack {
+                            // Rings only appear when actively recording and speech is detected.
+                            if shouldShowVoiceRings {
+                                ForEach(0..<3, id: \.self) { i in
+                                    voiceRing(index: i)
+                                }
+                            }
+
+                            // Main mic button with level-responsive scaling
+                            Circle()
+                                .fill(
+                                    isRecording && !isPaused && audioMonitor.isVoiceActive ?
+                                        accent : micColor
+                                )
+                                .frame(width: 120, height: 120)
+                                .scaleEffect(
+                                    isRecording && !isPaused ?
+                                        (1.0 + liveAudioLevel * 0.1) : 1.0
+                                )
+                                .shadow(color: Color.orange.opacity(0.25),
+                                        radius: 10, x: 0, y: 4)
+                                .animation(.easeOut(duration: 0.1), value: liveAudioLevel)
+                                .animation(.easeInOut(duration: 0.3), value: audioMonitor.isVoiceActive)
+
+                            // Mic icon
+                            Image(systemName: (isRecording && !isPaused) ? "pause.fill" : "mic.fill")
+                                .font(.system(size: 36))
+                                .foregroundColor(.white)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(primaryRecordingControlState.accessibilityLabel)
+                    .accessibilityValue(primaryRecordingControlState.accessibilityValue)
                     
                     // Real-time Waveform Visualization
                     RealTimeWaveformView(
@@ -568,6 +613,17 @@ struct RecordMemoryView: View {
         } message: {
             Text("Saved recordings are uploaded to your private MemoirAI account and sent to OpenAI to create a transcript. You can delete the recording and transcript at any time.")
         }
+        .alert(
+            "Memory Not Saved",
+            isPresented: Binding(
+                get: { saveErrorMessage != nil },
+                set: { if !$0 { saveErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { saveErrorMessage = nil }
+        } message: {
+            Text(saveErrorMessage ?? "Please try again.")
+        }
         .onAppear {
             tutorialCoordinator.setVisibleScreen(.recordMemory)
             answeredPrompts = viewModel.entries.compactMap { $0.prompt }
@@ -585,6 +641,11 @@ struct RecordMemoryView: View {
             configureInterruptionObserver()
         }
         .onDisappear {
+            stopRecording()
+            interruptionObserver.onInterruptionBegan = nil
+            interruptionObserver.onInterruptionEnded = nil
+            interruptionObserver.onRouteChangeDeviceUnavailable = nil
+            interruptionObserver.onAppBackgrounded = nil
             tutorialCoordinator.clearAnchor(.recordingSaveMemory)
             if tutorialCoordinator.visibleScreen == .recordMemory {
                 tutorialCoordinator.setVisibleScreen(.unknown)
@@ -641,11 +702,11 @@ struct RecordMemoryView: View {
     }
     
     func hasUnsavedData() -> Bool {
-        selectedPrompt != nil || !typedText.isEmpty || audioURL != nil || !selectedImagesData.isEmpty
+        selectedPrompt != nil || !typedText.isEmpty || audioURL != nil
     }
     
     func hasMeaningfulData() -> Bool {
-        !typedText.isEmpty || audioURL != nil || !selectedImagesData.isEmpty
+        !typedText.isEmpty || audioURL != nil
     }
     
     // Format time for display (MM:SS)
@@ -846,14 +907,16 @@ struct RecordMemoryView: View {
     // MARK: – Save & Transcribe (ENHANCED VERSION)
     func saveMemory() {
         guard hasUnsavedData(), !isSaving else { return }
+        guard let firebaseUserId = MemoryUserScope.currentFirebaseUserId else {
+            saveErrorMessage = "MemoirAI is still connecting to your private account. Your recording is unchanged; check your connection and try saving again."
+            return
+        }
         isSaving = true
         
         let promptToSave  = selectedPrompt ?? "Untitled Prompt"
         let textToSave    = typedText          // capture before UI reset
         let audioURLToSave = audioURL          // capture
-        let imagesToSave   = selectedImagesData // capture
         let profile = profileVM.selectedProfile
-        let firebaseUserId = MemoryUserScope.currentFirebaseUserId
         
         // 🔥 ENHANCED: Use background context like RecordingView
         let bgContext = PersistenceController.shared.container.newBackgroundContext()
@@ -861,7 +924,10 @@ struct RecordMemoryView: View {
             let audioDataToSave = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
             guard audioURLToSave == nil || audioDataToSave?.isEmpty == false else {
                 print("❌ Could not read the completed recording; memory was not saved")
-                DispatchQueue.main.async { isSaving = false }
+                DispatchQueue.main.async {
+                    isSaving = false
+                    saveErrorMessage = "The completed recording could not be read. Your recording was not deleted; try saving again."
+                }
                 return
             }
 
@@ -878,19 +944,6 @@ struct RecordMemoryView: View {
             newEntry.createdAt    = Date()
             newEntry.profileID    = profile.id
             newEntry.firebaseUserId = firebaseUserId
-            if newEntry.firebaseUserId == nil {
-                print("⚠️ Saving memory without firebaseUserId in RecordMemoryView")
-            }
-            
-            // Photo saving disabled - uncomment below to re-enable
-            /*
-            for data in imagesToSave {
-                let photo = Photo(context: bgContext)
-                photo.id = UUID()
-                photo.data = data
-                photo.memoryEntry = newEntry
-            }
-            */
             
             do {
                 try bgContext.save()
@@ -908,7 +961,10 @@ struct RecordMemoryView: View {
                 }
             } catch {
                 print("❌ Error saving MemoryEntry:", error)
-                DispatchQueue.main.async { isSaving = false }
+                DispatchQueue.main.async {
+                    isSaving = false
+                    saveErrorMessage = "This memory could not be saved on your device. Your draft is unchanged; free some storage and try again."
+                }
                 return
             }
             
@@ -918,8 +974,9 @@ struct RecordMemoryView: View {
                 
                 // If we have text now, generate title immediately
                 if let text = textForTitle, !text.isEmpty {
+                    let entryObjectID = newEntry.objectID
                     Task {
-                        await generateAndUpdateTitle(for: newEntry, text: text, context: bgContext)
+                        await generateAndUpdateTitle(for: entryObjectID, text: text)
                     }
                 } else {
                     // If we're waiting for transcription, title will be generated after transcription completes
@@ -944,15 +1001,25 @@ struct RecordMemoryView: View {
     }
     
     // MARK: - Title Generation Helper
-    private func generateAndUpdateTitle(for entry: MemoryEntry, text: String, context: NSManagedObjectContext) async {
+    private func generateAndUpdateTitle(for objectID: NSManagedObjectID, text: String) async {
         let titleService = MemoryTitleService()
         if let generatedTitle = await titleService.generateTitle(from: text) {
-            // Use performAndWait since we're already in an async context and want to wait for the save
-            context.performAndWait {
+            let context = PersistenceController.shared.container.newBackgroundContext()
+            let saved = await context.perform {
+                guard let entry = try? context.existingObject(with: objectID) as? MemoryEntry else {
+                    return false
+                }
                 entry.prompt = generatedTitle
-                try? context.save()
+                do {
+                    try context.save()
+                    return true
+                } catch {
+                    print("❌ Generated title could not be saved: \(error.localizedDescription)")
+                    return false
+                }
             }
-            
+            guard saved else { return }
+
             // Post notification on main thread after save completes
             await MainActor.run {
                 NotificationCenter.default.post(name: .memorySaved, object: nil)

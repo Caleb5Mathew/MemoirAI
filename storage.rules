@@ -1,8 +1,19 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    function isActiveAuthenticatedUser() {
+      return request.auth != null
+        && !firestore.exists(
+          /databases/(default)/documents/accountDeletionRequests/$(request.auth.uid)
+        );
+    }
+
     function isOwner(userId) {
-      return request.auth != null && request.auth.uid == userId;
+      return isActiveAuthenticatedUser()
+        && request.auth.uid == userId
+        && !firestore.exists(
+          /databases/(default)/documents/accountDeletionRequests/$(userId)
+        );
     }
 
     function isDeletedAudio(userId, audioFile) {
@@ -11,24 +22,122 @@ service firebase.storage {
       );
     }
 
+    function isPaidBookVersion(userId, bookVersionId) {
+      return firestore.exists(
+        /databases/(default)/documents/users/$(userId)/bookVersions/$(bookVersionId)
+      ) && firestore.get(
+        /databases/(default)/documents/users/$(userId)/bookVersions/$(bookVersionId)
+      ).data.get("hasPaidOrder", false) == true;
+    }
+
+    function hasActiveCheckoutLock(userId) {
+      return firestore.exists(
+          /databases/(default)/documents/accountOperationLocks/$(userId)
+        )
+        && firestore.get(
+          /databases/(default)/documents/accountOperationLocks/$(userId)
+        ).data.state == 'checkout'
+        && firestore.get(
+          /databases/(default)/documents/accountOperationLocks/$(userId)
+        ).data.checkoutExpiresAtMillis > request.time.toMillis();
+    }
+
+    // Storage list requests target a prefix rather than an individual object.
+    // The app needs this to remove every artifact for an unpaid book version.
+    match /users/{userId}/bookVersions/{bookVersionId}/{allPaths=**} {
+      allow list: if isOwner(userId);
+    }
+
     // Canonical hybrid artifacts: PNG pages + packaged PDF per book version.
     match /users/{userId}/bookVersions/{bookVersionId}/pages/{pageFile} {
-      allow read, write, delete: if isOwner(userId)
-        && pageFile.matches('page_[0-9]{3}\\.png');
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && !hasActiveCheckoutLock(userId)
+        && (
+          (pageFile.matches('page_[0-9]{3}\\.png')
+            && request.resource.contentType == 'image/png'
+            && request.resource.size > 0
+            && request.resource.size <= 32 * 1024 * 1024)
+          || (pageFile.matches('page_[0-9]{3}\\.jpg')
+            && request.resource.contentType == 'image/jpeg'
+            && request.resource.size > 0
+            && request.resource.size <= 10 * 1024 * 1024)
+        );
+      allow delete: if isOwner(userId)
+        && !hasActiveCheckoutLock(userId)
+        && !isPaidBookVersion(userId, bookVersionId);
     }
 
     match /users/{userId}/bookVersions/{bookVersionId}/book.pdf {
-      allow read, write, delete: if isOwner(userId);
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && !hasActiveCheckoutLock(userId)
+        && request.resource.contentType == 'application/pdf'
+        && request.resource.size > 0
+        && request.resource.size <= 100 * 1024 * 1024;
+      allow delete: if isOwner(userId)
+        && !hasActiveCheckoutLock(userId)
+        && !isPaidBookVersion(userId, bookVersionId);
+    }
+
+    match /users/{userId}/bookVersions/{bookVersionId}/cover.pdf {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && !hasActiveCheckoutLock(userId)
+        && request.resource.contentType == 'application/pdf'
+        && request.resource.size > 0
+        && request.resource.size <= 100 * 1024 * 1024;
+      allow delete: if isOwner(userId)
+        && !hasActiveCheckoutLock(userId)
+        && !isPaidBookVersion(userId, bookVersionId);
+    }
+
+    // The storybook worker creates these intermediate source illustrations with
+    // Admin credentials. Clients only need to read them and clean them up when
+    // deleting an unpaid book; they cannot upload or replace them directly.
+    match /users/{userId}/bookVersions/{bookVersionId}/{illustrationFile} {
+      allow get: if isOwner(userId)
+        && illustrationFile.matches('illustration_[0-9A-Fa-f-]{36}\\.png');
+      allow delete: if isOwner(userId)
+        && illustrationFile.matches('illustration_[0-9A-Fa-f-]{36}\\.png')
+        && !hasActiveCheckoutLock(userId)
+        && !isPaidBookVersion(userId, bookVersionId);
+    }
+
+    match /users/{userId}/profiles/{profileId}/subjectPhoto.jpg {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && profileId.matches('[0-9A-Fa-f-]{36}')
+        && request.resource.contentType == 'image/jpeg'
+        && request.resource.size > 0
+        && request.resource.size <= 5 * 1024 * 1024;
+      allow delete: if isOwner(userId);
     }
 
     // Family and friends: an unrevoked grant unlocks streaming the owner's memory audio.
     // Must precede the catch-all so this read rule wins for audio files.
     match /users/{userId}/audio/{audioFile} {
       allow read: if !isDeletedAudio(userId, audioFile)
+        && !firestore.exists(
+          /databases/(default)/documents/accountDeletionRequests/$(userId)
+        )
         && (isOwner(userId)
-        || (request.auth != null
+        || (isActiveAuthenticatedUser()
             && firestore.exists(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid))
-            && firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.revoked != true));
+            && firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.revoked != true
+            && (
+              firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.get('memoryId', '') + '.m4a' == audioFile
+              || firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.get('memoryId', '') + '.caf' == audioFile
+              || (
+                firestore.get(/databases/(default)/documents/users/$(userId)/accessGrants/$(request.auth.uid)).data.get('memoryId', '') == ''
+                && firestore.exists(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid))
+                && firestore.get(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid)).data.status == 'approved'
+                && (
+                  firestore.get(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid)).data.memoryId + '.m4a' == audioFile
+                  || firestore.get(/databases/(default)/documents/users/$(userId)/accessRequests/$(request.auth.uid)).data.memoryId + '.caf' == audioFile
+                )
+              )
+            )));
       allow create, update: if isOwner(userId)
         && !isDeletedAudio(userId, audioFile)
         && (
@@ -44,10 +153,32 @@ service firebase.storage {
       allow delete: if isOwner(userId);
     }
 
-    // Backward-compatibility paths for older uploads.
-    match /users/{userId}/{allPaths=**} {
-      allow read, write, delete: if isOwner(userId)
-        && !allPaths.matches('audio/.*');
+    match /users/{userId}/images/{imageFile} {
+      allow read, delete: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && imageFile.matches('[0-9A-Fa-f-]{36}_[0-9]+\\.jpg')
+        && request.resource.contentType == 'image/jpeg'
+        && request.resource.size > 0
+        && request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    match /users/{userId}/books/{bookFile} {
+      allow read, delete: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && request.resource.size > 0
+        && request.resource.size <= 100 * 1024 * 1024
+        && bookFile.matches('[A-Za-z0-9_-]+\\.pdf')
+        && request.resource.contentType == 'application/pdf';
+    }
+
+    match /users/{userId}/books/{bookId}/{pageFile} {
+      allow read, delete: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && bookId.matches('[A-Za-z0-9_-]+')
+        && pageFile.matches('page_[0-9]+\\.jpg')
+        && request.resource.contentType == 'image/jpeg'
+        && request.resource.size > 0
+        && request.resource.size <= 10 * 1024 * 1024;
     }
   }
 }

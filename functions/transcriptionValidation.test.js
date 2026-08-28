@@ -4,6 +4,29 @@ const { _test } = aiProxy;
 
 assert.strictEqual(Object.keys(aiProxy).includes("_test"), false);
 
+async function assertAccountDeletionGuard() {
+  const database = {
+    collection(name) {
+      assert.strictEqual(name, "accountDeletionRequests");
+      return {
+        doc(uid) {
+          assert.strictEqual(uid, "user-1");
+          return { async get() { return { exists: true }; } };
+        }
+      };
+    }
+  };
+  await assert.rejects(
+    _test.assertAccountActive("user-1", database),
+    (error) => error.code === "failed-precondition"
+  );
+}
+
+assertAccountDeletionGuard().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
 function assertInvalid(body) {
   assert.throws(() => _test.validateTranscriptionRequest(body), (error) => error.code === "invalid-argument");
 }

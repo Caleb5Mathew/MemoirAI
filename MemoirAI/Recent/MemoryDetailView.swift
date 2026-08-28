@@ -216,11 +216,37 @@ extension MemoryEntry {
     }
 }
 
+struct MemoryEditSaveResolution: Equatable {
+    let persistedText: String?
+    let keepsEditorOpen: Bool
+}
+
+enum MemoryEditSavePolicy {
+    static func resolve(
+        originalText: String?,
+        draftText: String,
+        saveSucceeded: Bool
+    ) -> MemoryEditSaveResolution {
+        MemoryEditSaveResolution(
+            persistedText: saveSucceeded ? draftText : originalText,
+            keepsEditorOpen: !saveSucceeded
+        )
+    }
+}
+
+enum AudioPlaybackCompletionPolicy {
+    static func shouldResetPlayback(
+        completedGeneration: UUID,
+        activeGeneration: UUID
+    ) -> Bool {
+        completedGeneration == activeGeneration
+    }
+}
+
 struct MemoryDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var context
     @EnvironmentObject var profileVM: ProfileViewModel
-    @StateObject private var familyManager = FamilyManager.shared
     @StateObject private var permissionManager = PermissionManager.shared
     let memory: MemoryEntry
 
@@ -228,20 +254,19 @@ struct MemoryDetailView: View {
     @State private var playerNode = AVAudioPlayerNode()
     @State private var eqNode = AVAudioUnitEQ(numberOfBands: 1)
     @State private var isPlaying = false
-
-    @State private var photoItems: [PhotosPickerItem] = []
-    @State private var photoDatas: [Data] = []
-    @State private var images: [UIImage] = []
+    @State private var playbackGeneration = UUID()
 
     @State private var isEditing = false
     @State private var draftText = ""
-    @State private var showFamilyShareSuccess = false
     @State private var showCharacterDetails = false
     @State private var showEnhancementCoordinator = false
     @State private var animateEnhanceGlow = false
     @State private var refreshTrigger = 0
     @State private var lastTitleUpdateTime: Date? = nil
     @State private var titleUpdateTask: Task<Void, Never>? = nil
+    @State private var showEditSaveError = false
+    @State private var audioPlaybackError: String?
+    @State private var editSaveErrorMessage = "Your draft is still here. Try saving it again."
 
     // Batch transcription support
     @StateObject private var transcriptionManager = BatchTranscriptionManager.shared
@@ -617,10 +642,6 @@ struct MemoryDetailView: View {
 
                 memoryPrimaryCard
 
-                if familyManager.currentFamily != nil {
-                    familySharingSection
-                }
-
                 // MARK: - Photo Section (Commented Out)
                 // Photos section has been disabled - uncomment below to re-enable
                 /*
@@ -687,7 +708,6 @@ struct MemoryDetailView: View {
                 Spacer(minLength: 40)
             }
             .frame(maxWidth: .infinity)
-            .onAppear(perform: loadPhotosFromRelationship)
             .id(refreshTrigger)
             }
 
@@ -729,13 +749,6 @@ struct MemoryDetailView: View {
                 .allowsHitTesting(true)
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                if familyManager.currentFamily != nil {
-                    Button(action: shareWithFamily) {
-                        Image(systemName: "person.3.fill")
-                            .foregroundColor(terracotta)
-                    }
-                }
-                
                 Button(action: {
                     let hasCards = memory.parsedCharacterDetails?.characters.isEmpty == false
                     if hasCards {
@@ -763,37 +776,62 @@ struct MemoryDetailView: View {
                 }
                 
                 Button(action: {
+                    guard MemoryUserScope.belongsToCurrentUser(memory) else {
+                        isEditing = false
+                        editSaveErrorMessage = "Your signed-in account changed. Reopen the memory before editing it."
+                        showEditSaveError = true
+                        return
+                    }
                     if isEditing {
                         // Cancel any pending title update
                         titleUpdateTask?.cancel()
                         titleUpdateTask = nil
-                        
+
+                        let originalText = memory.text
+                        let originalEditedText = memory.transcriptionEditedText
                         memory.text = draftText
                         if memory.transcriptionStatus != nil || memory.transcriptionRawText != nil {
                             memory.transcriptionEditedText = draftText
                         }
-                        
-                        // Final title regeneration if needed (after user stops editing)
-                        if !draftText.isEmpty {
-                            Task {
-                                await regenerateTitleIfNeededSync(for: draftText)
-                            }
-                        }
-                        
+
                         do {
                             try context.save()
+                            let resolution = MemoryEditSavePolicy.resolve(
+                                originalText: originalText,
+                                draftText: draftText,
+                                saveSucceeded: true
+                            )
+                            memory.text = resolution.persistedText
+                            isEditing = resolution.keepsEditorOpen
                             FirestoreSyncService.shared.queueMemorySyncWithProfile(
                                 memory,
                                 profile: profileVM.selectedProfile
                             )
                             NotificationCenter.default.post(name: .memorySaved, object: nil)
+
+                            // Title generation can only start after the edited text is durable.
+                            if !draftText.isEmpty {
+                                Task {
+                                    await regenerateTitleIfNeededSync(for: draftText)
+                                }
+                            }
                         } catch {
+                            let resolution = MemoryEditSavePolicy.resolve(
+                                originalText: originalText,
+                                draftText: draftText,
+                                saveSucceeded: false
+                            )
+                            memory.text = resolution.persistedText
+                            memory.transcriptionEditedText = originalEditedText
+                            isEditing = resolution.keepsEditorOpen
+                            editSaveErrorMessage = "Your draft is still here. Try saving it again."
+                            showEditSaveError = true
                             print("Failed to save edited text:", error)
                         }
                     } else {
                         draftText = memory.text ?? ""
+                        isEditing = true
                     }
-                    isEditing.toggle()
                 }) {
                     Image(systemName: isEditing ? "checkmark" : "pencil")
                 }
@@ -806,10 +844,21 @@ struct MemoryDetailView: View {
             }
         }
         .tint(terracotta)
-        .alert("Shared with Family!", isPresented: $showFamilyShareSuccess) {
-            Button("OK") { }
+        .alert("Couldn't Save Changes", isPresented: $showEditSaveError) {
+            Button("OK", role: .cancel) { }
         } message: {
-            Text("Your memory has been shared with \(familyManager.currentFamily?.name ?? "your family"). They can now see and react to it!")
+            Text(editSaveErrorMessage)
+        }
+        .alert(
+            "Couldn’t Play Recording",
+            isPresented: Binding(
+                get: { audioPlaybackError != nil },
+                set: { if !$0 { audioPlaybackError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { audioPlaybackError = nil }
+        } message: {
+            Text(audioPlaybackError ?? "The recording could not be played.")
         }
         .fullScreenCover(isPresented: $showCharacterDetails) {
             CharacterDetailsQuestionView(memory: memory)
@@ -827,13 +876,11 @@ struct MemoryDetailView: View {
             Mixpanel.mainInstance().track(event: "Viewed Memory", properties: [
                 "chapter_title": memory.chapter ?? "",
                 "prompt_text": memory.prompt ?? "",
-                "has_audio": memory.playbackURL != nil,
+                "has_audio": memory.hasAudio,
                 "has_text": !(memory.text?.isEmpty ?? true),
                 "has_photos": !(memory.photos?.allObjects.isEmpty ?? true),
                 "created_at": memory.createdAt?.timeIntervalSince1970 ?? 0
             ])
-            
-            loadPhotosFromRelationship()
         }
         .onReceive(NotificationCenter.default.publisher(for: .memorySaved)) { _ in
             // Refresh the UI when character details are saved
@@ -870,100 +917,6 @@ struct MemoryDetailView: View {
         }
     }
     
-    // MARK: - Family Sharing Section
-    
-    private var familySharingSection: some View {
-        VStack(spacing: 16) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Share with family")
-                        .font(.system(size: 17, weight: .semibold, design: .serif))
-                        .foregroundColor(headerColor)
-
-                    Text("Let \(familyManager.currentFamily?.name ?? "your family") see this memory.")
-                        .font(.system(size: 14))
-                        .foregroundColor(textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 12)
-
-                Button(action: shareWithFamily) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "person.3.fill")
-                        Text("Share")
-                    }
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(terracotta)
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-
-            if !familyManager.familyMembers.isEmpty {
-                HStack(spacing: 10) {
-                    Text("Family")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(textSecondary)
-
-                    ForEach(familyManager.familyMembers.prefix(4)) { member in
-                        Circle()
-                            .fill(terracotta.opacity(0.22))
-                            .frame(width: 28, height: 28)
-                            .overlay(
-                                Text(String(member.name.prefix(1)).uppercased())
-                                    .font(.caption.weight(.bold))
-                                    .foregroundColor(headerColor)
-                            )
-                    }
-
-                    if familyManager.familyMembers.count > 4 {
-                        Text("+\(familyManager.familyMembers.count - 4)")
-                            .font(.caption.weight(.medium))
-                            .foregroundColor(textSecondary)
-                    }
-
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-        .padding(18)
-        .background(cardSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(cardStroke, lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.04), radius: 12, x: 0, y: 4)
-        .padding(.horizontal, 20)
-        .padding(.top, 20)
-    }
-
-    // MARK: - Family Sharing Functions
-    
-    private func shareWithFamily() {
-        guard let familyId = familyManager.currentFamily?.id else { return }
-        
-        let alreadyShared = familyManager.sharedStories.contains { story in
-            story.memoryEntryId == memory.id && story.familyGroupId == familyId
-        }
-        
-        if alreadyShared {
-            return
-        }
-        
-        familyManager.shareStory(memory, with: familyId)
-        showFamilyShareSuccess = true
-        
-        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-        impactFeedback.impactOccurred()
-    }
-
     // MARK: - Existing Functions
 
     // MARK: - Photo Functions (Commented Out)
@@ -1002,16 +955,8 @@ struct MemoryDetailView: View {
     }
     */
     
-    // Stub functions to prevent compile errors
-    private func handlePhotoItemsChange(_ items: [PhotosPickerItem]) {
-        // Photo adding disabled
-    }
-    
-    private func loadPhotosFromRelationship() {
-        // Photo loading disabled
-    }
-
     private func stopPlaybackIfNeeded() {
+        playbackGeneration = UUID()
         if isPlaying {
             playerNode.stop()
             audioEngine.stop()
@@ -1030,6 +975,7 @@ struct MemoryDetailView: View {
             let session = AVAudioSession.sharedInstance()
             try session.overrideOutputAudioPort(.speaker)
             if isPlaying {
+                playbackGeneration = UUID()
                 playerNode.stop()
                 audioEngine.stop()
                 isPlaying = false
@@ -1043,11 +989,33 @@ struct MemoryDetailView: View {
                 }
                 let file = try AVAudioFile(forReading: url)
                 try audioEngine.start()
-                playerNode.scheduleFile(file, at: nil)
-                playerNode.play()
+                let generation = UUID()
+                playbackGeneration = generation
                 isPlaying = true
+                playerNode.scheduleFile(
+                    file,
+                    at: nil,
+                    completionCallbackType: .dataPlayedBack
+                ) { _ in
+                    Task { @MainActor in
+                        guard AudioPlaybackCompletionPolicy.shouldResetPlayback(
+                            completedGeneration: generation,
+                            activeGeneration: playbackGeneration
+                        ) else {
+                            return
+                        }
+                        audioEngine.stop()
+                        isPlaying = false
+                    }
+                }
+                playerNode.play()
             }
         } catch {
+            playbackGeneration = UUID()
+            playerNode.stop()
+            audioEngine.stop()
+            isPlaying = false
+            audioPlaybackError = "The recording is missing, damaged, or temporarily unavailable. Try again after checking your connection."
             print("Engine playback error: \(error)")
         }
     }
@@ -1058,7 +1026,6 @@ struct MemoryDetailView: View {
         if let url = memory.playbackURL {
             items.append(url)
         }
-        items.append(contentsOf: images)
         let av = UIActivityViewController(activityItems: items, applicationActivities: nil)
         if let pop = av.popoverPresentationController,
            let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
@@ -1681,7 +1648,7 @@ struct CharacterDetailsQuestionView: View {
                     profileID: profileID
                 )
                 characterDetails.characters[index].globalCharacterId = globalId
-                print("✅ Linked character '\(character.name)' to global registry (ID: \(globalId.uuidString))")
+                print("Linked character to global registry")
             }
         }
         

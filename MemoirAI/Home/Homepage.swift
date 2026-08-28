@@ -33,9 +33,6 @@ struct HomepageView: View {
     @State private var showProfileEdit = false
     @State private var showProfileSwitcher = false
 
-    @State private var showMemoryRecoveryAlert = false
-    @State private var recoveredMemoryCount = 0
-
     @State private var showMemoirPicker = false
     @State private var pendingNavigateToMemoir = false
     @State private var navigateToMemoir = false
@@ -289,7 +286,7 @@ struct HomepageView: View {
             .onAppear {
                 tutorialCoordinator.setVisibleScreen(.home)
                 resetDailyPromptIfNeeded()
-                checkAndRecoverOrphanedMemories()
+                migrateLegacyUnassignedMemories()
                 fetchEntries()
 
             }
@@ -344,17 +341,6 @@ struct HomepageView: View {
                 ProfileSwitcherView()
                     .environmentObject(profileVM)
             }
-            .alert("Memories Recovered!", isPresented: $showMemoryRecoveryAlert) {
-                Button("Great!") {}
-            } message: {
-                Text("We found and recovered \(recoveredMemoryCount) of your memories that were previously missing.")
-            }
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("MemoriesRecovered"))) { notification in
-                if let count = notification.object as? Int, count > 0 {
-                    recoveredMemoryCount = count
-                    showMemoryRecoveryAlert = true
-                }
-            }
             .toolbar(.hidden, for: .navigationBar)
         }
         .id(tutorialCoordinator.homeNavigationResetToken)
@@ -362,52 +348,39 @@ struct HomepageView: View {
 
     // MARK: – Data Fetching & Helpers
     
-    /// Check for orphaned memories (memories with profileID that doesn't match current profile)
-    /// and reassign them to the current profile
-    private func checkAndRecoverOrphanedMemories() {
+    /// Assigns only pre-profile legacy rows. Existing profile ownership is authoritative.
+    private func migrateLegacyUnassignedMemories() {
         let context = PersistenceController.shared.container.viewContext
         let currentProfileID = profileVM.selectedProfile.id
-        
-        // Fetch ALL memories (no profileID filter)
+
+        guard let uid = MemoryUserScope.currentFirebaseUserId else { return }
+
         let allRequest: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
-        if let uid = MemoryUserScope.currentFirebaseUserId {
-            allRequest.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [
-                NSPredicate(format: "firebaseUserId == %@", uid),
-                NSPredicate(format: "firebaseUserId == nil")
-            ])
+        let predicates: [NSPredicate] = [
+            NSPredicate(format: "profileID == nil"),
+            NSPredicate(format: "firebaseUserId == %@", uid)
+        ]
+        allRequest.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+
+        guard let legacyMemories = try? context.fetch(allRequest), !legacyMemories.isEmpty else {
+            return
         }
-        
-        guard let allMemories = try? context.fetch(allRequest), !allMemories.isEmpty else {
-            return // No memories at all
+
+        for memory in legacyMemories {
+            guard let recoveredProfileID = MemoryProfileRecoveryPolicy.recoveredProfileID(
+                existingProfileID: memory.profileID,
+                selectedProfileID: currentProfileID
+            ) else {
+                continue
+            }
+            memory.profileID = recoveredProfileID
         }
-        
-        // Find memories that don't belong to current profile
-        let orphanedMemories = allMemories.filter { $0.profileID != currentProfileID }
-        
-        if !orphanedMemories.isEmpty {
-            print("🔍 Found \(orphanedMemories.count) orphaned memories. Reassigning to current profile...")
-            
-            // Reassign orphaned memories to current profile
-            for memory in orphanedMemories {
-                memory.profileID = currentProfileID
-                if memory.firebaseUserId == nil {
-                    memory.firebaseUserId = MemoryUserScope.currentFirebaseUserId
-                }
-            }
-            
-            do {
-                try context.save()
-                print("✅ Successfully reassigned \(orphanedMemories.count) memories to profile \(currentProfileID.uuidString)")
-                
-                // Show recovery alert
-                recoveredMemoryCount = orphanedMemories.count
-                showMemoryRecoveryAlert = true
-                
-                // Refresh entries
-                fetchEntries()
-            } catch {
-                print("❌ Failed to save recovered memories: \(error)")
-            }
+
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            print("❌ Failed to migrate legacy unassigned memories: \(error)")
         }
     }
 

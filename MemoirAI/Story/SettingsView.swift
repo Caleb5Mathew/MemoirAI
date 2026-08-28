@@ -104,6 +104,7 @@ struct CircularProgressRing: View {
 }
 
 struct SettingsView: View {
+    @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var subscriptionManager: RCSubscriptionManager
     @EnvironmentObject var profileVM: ProfileViewModel
@@ -123,48 +124,56 @@ struct SettingsView: View {
     
     @State private var sliderPageCount: Double = 2.0
     
-    // Developer Key
+    #if DEBUG
     @State private var devKey: String = ""
     @State private var showDevSheet: Bool = false
     @State private var devResult: DevUnlockResult? = nil
     @State private var devTapCount: Int = 0
+    @State private var showDevDashboard: Bool = false
+    @State private var showDevOpsDashboard: Bool = false
+    #endif
     
     // Paywall
     @State private var showPaywall: Bool = false
     
     // Character Management
     @State private var showCharacterManagement: Bool = false
-    @State private var showDevDashboard: Bool = false
-    @State private var showDevOpsDashboard: Bool = false
     @State private var hasUnseenOrders = false
     @State private var orderBadgeListener: ListenerRegistration?
     @State private var showOrderHistory = false
     @State private var showSupportCopiedAlert = false
     @State private var showAudioPrivacyAlert = false
+    @State private var showDeleteAccountConfirmation = false
+    @State private var isDeletingAccount = false
+    @State private var accountDeletionError: String?
+    @State private var accountDeletionRequiresReauthentication = false
+    @State private var accountLinkError: String?
     
+    #if DEBUG
     private enum DevUnlockResult {
         case success
         case incorrect
     }
+    #endif
     
     private var currentSelectedArtStyle: ArtStyle {
         ArtStyle(rawValue: selectedArtStyleRawValue) ?? .kidsBook
     }
 
-    private var isInternalDeveloperBuild: Bool {
-#if DEBUG
-        return true
-#else
-        return false
-#endif
-    }
-
     private var canAccessDeveloperGeminiToggle: Bool {
-        isInternalDeveloperBuild && subscriptionManager.isDeveloperUnlocked
+        #if DEBUG
+        subscriptionManager.isDeveloperUnlocked
+        #else
+        false
+        #endif
     }
 
     private var canAccessDevDashboard: Bool {
+        #if DEBUG
         subscriptionManager.isDeveloperUnlocked
+        #else
+        false
+        #endif
     }
 
     private var isSubscribed: Bool {
@@ -247,20 +256,41 @@ struct SettingsView: View {
                         // Support Section
                         supportSection
 
-                        // Developer dashboard entry at the very bottom
+                        #if DEBUG
                         if canAccessDevDashboard {
                             devDashboardSection
                             printOpsDashboardSection
                         }
+                        #endif
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
                     .padding(.bottom, 100)
                 }
             }
+
+            if isDeletingAccount {
+                Color.black.opacity(0.18)
+                    .ignoresSafeArea()
+                VStack(spacing: 14) {
+                    ProgressView()
+                        .controlSize(.large)
+                    Text("Deleting your account…")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("Keep MemoirAI open while we remove account data and clear this device.")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(24)
+                .background(.regularMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(32)
+            }
             
         }
         .navigationBarBackButtonHidden(true)
+        .interactiveDismissDisabled(isDeletingAccount)
         .onAppear {
             sliderPageCount = Double(pageCountSetting)
             clampPageCountIfNeeded()
@@ -269,10 +299,11 @@ struct SettingsView: View {
             if !canAccessDeveloperGeminiToggle {
                 geminiModelOverrideRawValue = GeminiImageModelOption.gemini3ProPreview.rawValue
             }
-            // UI tests pass -uitesting; auto-show dev sheet to skip 5-tap
+            #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-uitesting") {
                 showDevSheet = true
             }
+            #endif
             loadOrderBadge()
         }
         .onDisappear {
@@ -281,9 +312,9 @@ struct SettingsView: View {
         .onChange(of: subscriptionManager.hasActiveSubscription) { _, _ in
             clampPageCountIfNeeded()
         }
-        .sheet(isPresented: $showDevSheet) {
-            devUnlockSheet
-        }
+        #if DEBUG
+        .sheet(isPresented: $showDevSheet) { devUnlockSheet }
+        #endif
         .fullScreenCover(isPresented: $showPaywall) {
             PaywallView(displayCloseButton: true)
         }
@@ -291,6 +322,7 @@ struct SettingsView: View {
             CharacterManagementView()
                 .environmentObject(profileVM)
         }
+        #if DEBUG
         .fullScreenCover(isPresented: $showDevDashboard) {
             NavigationStack {
                 DevDashboardView()
@@ -301,6 +333,7 @@ struct SettingsView: View {
                 DevOpsDashboardView()
             }
         }
+        #endif
         .fullScreenCover(isPresented: $showOrderHistory) {
             OrderHistoryView()
         }
@@ -314,8 +347,47 @@ struct SettingsView: View {
         } message: {
             Text("Saved voice memories are uploaded to your private MemoirAI account and sent to OpenAI to create transcripts. You can delete a memory at any time; deletion removes its cloud recording and blocks stale devices from restoring it.")
         }
+        .alert("Delete Account?", isPresented: $showDeleteAccountConfirmation) {
+            Button("Delete Account", role: .destructive) {
+                deleteAccount()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This requests permanent deletion from your MemoirAI account and clears this device. Apple iCloud sync and offline devices may take time to update. Paid order records required for fulfillment or legal retention may remain. Deleting your account does not cancel an App Store subscription.")
+        }
+        .alert(
+            "Account Deletion Failed",
+            isPresented: Binding(
+                get: { accountDeletionError != nil },
+                set: { if !$0 { accountDeletionError = nil } }
+            )
+        ) {
+            if accountDeletionRequiresReauthentication {
+                Button("Sign Out and Sign In Again") {
+                    accountDeletionRequiresReauthentication = false
+                    accountDeletionError = nil
+                    signOut()
+                    dismiss()
+                }
+            }
+            Button("OK", role: .cancel) { accountDeletionError = nil }
+        } message: {
+            Text(accountDeletionError ?? "Please try again.")
+        }
+        .alert(
+            "Account Could Not Be Linked",
+            isPresented: Binding(
+                get: { accountLinkError != nil },
+                set: { if !$0 { accountLinkError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { accountLinkError = nil }
+        } message: {
+            Text(accountLinkError ?? "Please try again.")
+        }
     }
     
+    #if DEBUG
     // MARK: - Dev Unlock Sheet
     private var devUnlockSheet: some View {
         VStack(spacing: 20) {
@@ -387,6 +459,7 @@ struct SettingsView: View {
             devResult = nil
         }
     }
+    #endif
     
     // MARK: - Header
     private var headerView: some View {
@@ -412,6 +485,7 @@ struct SettingsView: View {
             
             Color.clear
                 .frame(width: 40, height: 40)
+                #if DEBUG
                 .contentShape(Rectangle())
                 .onTapGesture {
                     devTapCount += 1
@@ -423,6 +497,7 @@ struct SettingsView: View {
                         if devTapCount < 5 { devTapCount = 0 }
                     }
                 }
+                #endif
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -775,6 +850,38 @@ struct SettingsView: View {
     private var supportSection: some View {
         VStack(spacing: 12) {
             Button {
+                guard let privacyURL = URL(string: "https://memoirai-7db06.web.app/privacy") else { return }
+                openURL(privacyURL)
+            } label: {
+                HStack(spacing: 16) {
+                    ZStack {
+                        Circle()
+                            .fill(terracotta.opacity(0.15))
+                            .frame(width: 44, height: 44)
+                        Image(systemName: "hand.raised.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(terracotta)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Privacy Policy")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(darkText)
+                        Text("How MemoirAI handles your information")
+                            .font(.system(size: 12))
+                            .foregroundColor(.gray)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.gray.opacity(0.5))
+                }
+                .padding(16)
+                .background(Color.white.opacity(0.6))
+                .cornerRadius(16)
+                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+            }
+
+            Button {
                 showAudioPrivacyAlert = true
             } label: {
                 HStack(spacing: 16) {
@@ -891,7 +998,7 @@ struct SettingsView: View {
                             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else { return }
                             Task { await linkAppleAccount(credential: credential) }
                         case .failure(let error):
-                            print("❌ Apple sign-in failed: \(error.localizedDescription)")
+                            accountLinkError = error.localizedDescription
                         }
                     }
                     .signInWithAppleButtonStyle(.black)
@@ -924,7 +1031,9 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.plain)
 
+                    #if DEBUG
                     developerModeRow
+                    #endif
                 } else {
                     // Signed in with Google
                     HStack(spacing: 12) {
@@ -969,8 +1078,29 @@ struct SettingsView: View {
                         .foregroundColor(.red.opacity(0.8))
                     }
                     
+                    #if DEBUG
                     developerModeRow
+                    #endif
                 }
+
+                Divider()
+                    .padding(.vertical, 8)
+
+                Button(role: .destructive) {
+                    showDeleteAccountConfirmation = true
+                } label: {
+                    HStack {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14))
+                        Text("Delete Account")
+                            .font(.system(size: 14, weight: .semibold))
+                        Spacer()
+                    }
+                    .foregroundColor(.red)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isDeletingAccount)
             } else {
                 // Not signed in yet (loading)
                 HStack(spacing: 12) {
@@ -991,6 +1121,7 @@ struct SettingsView: View {
         .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
     }
 
+    #if DEBUG
     private var developerModeRow: some View {
         Button {
             showDevSheet = true
@@ -1083,13 +1214,14 @@ struct SettingsView: View {
         }
         .buttonStyle(PlainButtonStyle())
     }
+    #endif
 
     private func linkGoogleAccount() {
         Task {
             do {
                 try await AuthenticationService.shared.linkGoogleAccount()
             } catch {
-                print("❌ Link failed: \(error)")
+                accountLinkError = error.localizedDescription
             }
         }
     }
@@ -1098,7 +1230,7 @@ struct SettingsView: View {
         do {
             try await AuthenticationService.shared.linkAppleAccount(credential: credential)
         } catch {
-            print("❌ Link Apple failed: \(error)")
+            accountLinkError = error.localizedDescription
         }
     }
     
@@ -1115,6 +1247,31 @@ struct SettingsView: View {
             try AuthenticationService.shared.signOut()
         } catch {
             print("❌ Sign out failed: \(error)")
+        }
+    }
+
+    private func deleteAccount() {
+        guard !isDeletingAccount else { return }
+        guard let deletedUserID = Auth.auth().currentUser?.uid else {
+            accountDeletionError = "You are not signed in."
+            return
+        }
+        isDeletingAccount = true
+        accountDeletionError = nil
+        Task {
+            do {
+                try await AuthenticationService.shared.deleteAccount()
+                profileVM.resetAfterAccountDeletion(userID: deletedUserID)
+                await AuthenticationService.shared.signInAnonymouslyIfNeeded()
+                dismiss()
+            } catch {
+                if let authError = error as? AuthenticationService.AuthError,
+                   case .requiresRecentLogin = authError {
+                    accountDeletionRequiresReauthentication = true
+                }
+                accountDeletionError = error.localizedDescription
+                isDeletingAccount = false
+            }
         }
     }
     

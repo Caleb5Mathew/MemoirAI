@@ -1,12 +1,22 @@
 const assert = require("assert");
 const { createMemoryDeletionCleanupHandler } = require("./memoryDeletionCleanup");
 
-function makeDependencies({ commitError = null, storageErrors = {} } = {}) {
+function makeDependencies({
+  commitError = null,
+  storageErrors = {},
+  memoryIndexOwner = "user-1"
+} = {}) {
   const batchOperations = [];
   const reference = (path) => ({
     path,
     collection(name) { return reference(`${path}/${name}`); },
-    doc(id) { return reference(`${path}/${id}`); }
+    doc(id) { return reference(`${path}/${id}`); },
+    async get() {
+      if (path === "memoryIndex/memory-1" && memoryIndexOwner) {
+        return { exists: true, data: () => ({ ownerId: memoryIndexOwner }) };
+      }
+      return { exists: false, data: () => ({}) };
+    }
   });
   const db = {
     collection(name) { return reference(name); },
@@ -50,6 +60,18 @@ async function run() {
     "users/user-1/audio/memory-1.m4a",
     "users/user-1/audio/memory-1.caf"
   ]);
+
+  const collision = makeDependencies({ memoryIndexOwner: "victim" });
+  await createMemoryDeletionCleanupHandler({
+    db: collision.db,
+    bucket: collision.bucket,
+    serverTimestamp: () => "server-time"
+  })(event);
+  assert.deepStrictEqual(
+    collision.batchOperations.filter(([kind, path]) => kind === "delete" && path.startsWith("memoryIndex/")),
+    [],
+    "deleting an attacker collision must preserve the victim's QR index"
+  );
 
   const commitFailure = new Error("transient Firestore failure");
   const failedCommit = makeDependencies({ commitError: commitFailure });

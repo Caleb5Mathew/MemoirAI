@@ -139,7 +139,7 @@ struct RecentMemoriesView: View {
                             MemoryDetailView(memory: memory)
                                 .environmentObject(profileVM)
                                 .onAppear {
-                                    print("✅ Navigating to MemoryDetailView for memory: \(memory.prompt ?? "Untitled")")
+                                    print("Navigating to memory detail")
                                 }
                         } else {
                             VStack {
@@ -328,18 +328,28 @@ struct RecentMemoriesView: View {
             // Generate title in background
             Task {
                 if let generatedTitle = await titleService.generateTitle(from: text) {
-                    bgContext.performAndWait {
-                        // Fetch the entry in the background context using objectID
-                        let bgEntry = bgContext.object(with: objectID) as! MemoryEntry
-                        bgEntry.prompt = generatedTitle
-                        try? bgContext.save()
-                        
-                        // Refresh the main context
-                        DispatchQueue.main.async {
-                            context.refresh(entry, mergeChanges: true)
-                            NotificationCenter.default.post(name: .memorySaved, object: nil)
-                            print("✅ Generated title for existing memory: '\(generatedTitle)'")
+                    do {
+                        let didSave = try await bgContext.perform {
+                            guard let bgEntry = try bgContext.existingObject(with: objectID) as? MemoryEntry,
+                                  !bgEntry.isDeleted else {
+                                return false
+                            }
+                            bgEntry.prompt = generatedTitle
+                            try bgContext.save()
+                            return true
                         }
+
+                        // The entry may have been deleted while title generation was running.
+                        guard didSave,
+                              let mainEntry = try context.existingObject(with: objectID) as? MemoryEntry,
+                              !mainEntry.isDeleted else {
+                            return
+                        }
+                        context.refresh(mainEntry, mergeChanges: true)
+                        NotificationCenter.default.post(name: .memorySaved, object: nil)
+                        print("✅ Generated title for existing memory: '\(generatedTitle)'")
+                    } catch {
+                        print("❌ Failed to save generated memory title: \(error.localizedDescription)")
                     }
                 }
             }
@@ -347,9 +357,13 @@ struct RecentMemoriesView: View {
     }
 
     private func delete(_ entry: MemoryEntry) {
-        guard let memoryId = entry.id else { return }
+        guard MemoryUserScope.belongsToCurrentUser(entry),
+              let memoryId = entry.id,
+              let firebaseUserId = MemoryUserScope.currentFirebaseUserId else {
+            print("⚠️ Refusing to delete a memory outside the active account")
+            return
+        }
         let profileId = entry.profileID
-        let firebaseUserId = entry.firebaseUserId ?? MemoryUserScope.currentFirebaseUserId
         let localAudioURL = entry.audioFileURL.flatMap(URL.init(string:))
 
         FirestoreSyncService.shared.registerPendingMemoryDeletion(

@@ -2,6 +2,16 @@ import Foundation
 import FirebaseAuth
 import FirebaseFirestore
 
+enum SharedAccessGrantPolicy {
+    static func grantsMemory(
+        grantedMemoryID: String?,
+        requestedMemoryID: UUID,
+        revoked: Bool
+    ) -> Bool {
+        !revoked && grantedMemoryID == requestedMemoryID.uuidString
+    }
+}
+
 /// Family and friends shared access. A scan of someone else's memory QR resolves the
 /// owner through `memoryIndex/{memoryId}`, creates an access request under the owner's
 /// account, and, once the owner approves, reads the shared memory remotely.
@@ -66,13 +76,17 @@ final class SharedAccessService {
 
     // MARK: - Requester side
 
-    func grantStatus(ownerId: String) async -> GrantStatus {
+    func grantStatus(ownerId: String, memoryId: UUID) async -> GrantStatus {
         guard let uid = currentUid else { return .none }
         if uid == ownerId { return .owner }
         do {
             let grant = try await db.collection("users").document(ownerId)
                 .collection("accessGrants").document(uid).getDocument()
-            if grant.exists, (grant.data()?["revoked"] as? Bool) != true {
+            if grant.exists, SharedAccessGrantPolicy.grantsMemory(
+                grantedMemoryID: grant.data()?["memoryId"] as? String,
+                requestedMemoryID: memoryId,
+                revoked: grant.data()?["revoked"] as? Bool ?? false
+            ) {
                 return .granted
             }
         } catch {
@@ -81,6 +95,9 @@ final class SharedAccessService {
         do {
             let request = try await db.collection("users").document(ownerId)
                 .collection("accessRequests").document(uid).getDocument()
+            guard request.data()?["memoryId"] as? String == memoryId.uuidString else {
+                return .none
+            }
             switch request.data()?["status"] as? String {
             case "pending": return .pending
             case "denied": return .denied
@@ -104,11 +121,19 @@ final class SharedAccessService {
     }
 
     /// Live status of my own request under this owner; fires on every change while observed.
-    func observeMyRequestStatus(ownerId: String, onChange: @escaping (GrantStatus) -> Void) -> ListenerRegistration? {
+    func observeMyRequestStatus(
+        ownerId: String,
+        memoryId: UUID,
+        onChange: @escaping (GrantStatus) -> Void
+    ) -> ListenerRegistration? {
         guard let uid = currentUid else { return nil }
         return db.collection("users").document(ownerId)
             .collection("accessRequests").document(uid)
             .addSnapshotListener { snap, _ in
+                guard snap?.data()?["memoryId"] as? String == memoryId.uuidString else {
+                    onChange(.none)
+                    return
+                }
                 switch snap?.data()?["status"] as? String {
                 case "approved": onChange(.granted)
                 case "denied": onChange(.denied)
@@ -140,6 +165,7 @@ final class SharedAccessService {
         let qs = try await db.collection("users").document(uid)
             .collection("accessRequests")
             .whereField("status", isEqualTo: "pending")
+            .limit(to: 100)
             .getDocuments()
         return qs.documents.map { doc in
             let data = doc.data()
@@ -157,13 +183,24 @@ final class SharedAccessService {
     func approve(requesterId: String) async throws {
         guard let uid = currentUid else { throw SharedAccessError.notSignedIn }
         let userRef = db.collection("users").document(uid)
+        let requestRef = userRef.collection("accessRequests").document(requesterId)
+        let requestSnapshot = try await requestRef.getDocument()
+        guard let memoryId = requestSnapshot.data()?["memoryId"] as? String,
+              UUID(uuidString: memoryId) != nil else {
+            throw SharedAccessError.memoryUnavailable
+        }
         let batch = db.batch()
         batch.updateData(
             ["status": "approved", "respondedAt": FieldValue.serverTimestamp()],
-            forDocument: userRef.collection("accessRequests").document(requesterId)
+            forDocument: requestRef
         )
         batch.setData(
-            ["requesterUid": requesterId, "grantedAt": FieldValue.serverTimestamp(), "revoked": false],
+            [
+                "requesterUid": requesterId,
+                "memoryId": memoryId,
+                "grantedAt": FieldValue.serverTimestamp(),
+                "revoked": false
+            ],
             forDocument: userRef.collection("accessGrants").document(requesterId)
         )
         try await batch.commit()

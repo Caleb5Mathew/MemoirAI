@@ -27,10 +27,16 @@ struct SharedMemoryFlowView: View {
         .navigationTitle("Shared Memory")
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            status = await SharedAccessService.shared.grantStatus(ownerId: route.ownerId)
+            status = await SharedAccessService.shared.grantStatus(
+                ownerId: route.ownerId,
+                memoryId: route.memoryId
+            )
             // While the request screen is up, flip to playback the moment the owner approves.
-            if status == .pending || status == .none || status == .denied {
-                requestListener = SharedAccessService.shared.observeMyRequestStatus(ownerId: route.ownerId) { newStatus in
+            if status == .some(.pending) || status == .some(.none) || status == .some(.denied) {
+                requestListener = SharedAccessService.shared.observeMyRequestStatus(
+                    ownerId: route.ownerId,
+                    memoryId: route.memoryId
+                ) { newStatus in
                     if newStatus == .granted {
                         Haptics.success()
                         status = .granted

@@ -7,6 +7,24 @@
 
 import Foundation
 
+enum StorybookStorageScope {
+    static func relativeDirectory(userID: String, profileID: UUID) -> String {
+        "users/\(userID)/\(profileID.uuidString)"
+    }
+
+    static func migrationFlagKey(userID: String, profileID: UUID) -> String {
+        "storybook_localstore_v2_migrated_\(userID)_\(profileID.uuidString)"
+    }
+
+    static func cloudCurrentKey(userID: String, profileID: UUID) -> String {
+        "memoir_storybook_\(userID)_\(profileID.uuidString)"
+    }
+
+    static func cloudHistoryKey(userID: String, profileID: UUID) -> String {
+        "memoir_storybook_history_\(userID)_\(profileID.uuidString)"
+    }
+}
+
 /// Persists encoded storybook `Data` under Application Support to avoid CFPreferences size limits.
 enum StorybookLocalStore {
     private static let rootFolderName = "StorybookCache"
@@ -15,10 +33,6 @@ enum StorybookLocalStore {
     private static let bookExtension = "book"
 
     /// Per-profile flag: legacy UserDefaults → disk migration completed.
-    private static func migrationFlagKey(profileID: UUID) -> String {
-        "storybook_localstore_v1_migrated_\(profileID.uuidString)"
-    }
-
     private static func applicationSupportBase() throws -> URL {
         let url = try FileManager.default.url(
             for: .applicationSupportDirectory,
@@ -34,8 +48,27 @@ enum StorybookLocalStore {
     }
 
     private static func profileDirectory(profileID: UUID) throws -> URL {
+        guard let userID = MemoryUserScope.currentFirebaseUserId else {
+            throw CocoaError(.userCancelled)
+        }
         let base = try applicationSupportBase()
-        let dir = base.appendingPathComponent(profileID.uuidString, isDirectory: true)
+        let dir = base.appendingPathComponent(
+            StorybookStorageScope.relativeDirectory(userID: userID, profileID: profileID),
+            isDirectory: true
+        )
+        let legacyDirectory = base.appendingPathComponent(profileID.uuidString, isDirectory: true)
+        let trustedLegacyOwner = UserDefaults.standard.bool(
+            forKey: "firebase_migration_complete_\(userID)"
+        )
+        if !FileManager.default.fileExists(atPath: dir.path),
+           trustedLegacyOwner,
+           FileManager.default.fileExists(atPath: legacyDirectory.path) {
+            try FileManager.default.createDirectory(
+                at: dir.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.moveItem(at: legacyDirectory, to: dir)
+        }
         if !FileManager.default.fileExists(atPath: dir.path) {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
@@ -66,13 +99,20 @@ enum StorybookLocalStore {
 
     /// One-shot migration from UserDefaults → disk for this profile.
     static func migrateLegacyUserDefaultsIfNeeded(profileID: UUID) {
+        guard let userID = MemoryUserScope.currentFirebaseUserId else { return }
         let defaults = UserDefaults.standard
-        let flagKey = migrationFlagKey(profileID: profileID)
+        let flagKey = StorybookStorageScope.migrationFlagKey(
+            userID: userID,
+            profileID: profileID
+        )
         let currentKey = legacyCurrentKey(profileID: profileID)
         let historyKey = legacyHistoryKey(profileID: profileID)
         let udCurrent = defaults.data(forKey: currentKey)
         let udHistory = defaults.array(forKey: historyKey) as? [Data] ?? []
         let hasLegacyUD = udCurrent != nil || !udHistory.isEmpty
+        let trustedLegacyOwner = defaults.bool(forKey: "firebase_migration_complete_\(userID)")
+
+        guard !hasLegacyUD || trustedLegacyOwner else { return }
 
         // No legacy keys — nothing to migrate (avoid re-scanning disk every time).
         if !hasLegacyUD {

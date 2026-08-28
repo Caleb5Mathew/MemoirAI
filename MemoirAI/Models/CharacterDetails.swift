@@ -1,5 +1,14 @@
 import Foundation
 
+enum MemoryAudioAvailabilityPolicy {
+    static func hasAudio(
+        localFileExists: Bool,
+        embeddedAudioByteCount: Int?
+    ) -> Bool {
+        localFileExists || (embeddedAudioByteCount ?? 0) > 0
+    }
+}
+
 extension MemoryEntry {
     /// Returns playable local audio, recreating a temporary file from Core Data when needed.
     var playbackURL: URL? {
@@ -30,6 +39,17 @@ extension MemoryEntry {
     }
 
     var hasAudio: Bool {
-        playbackURL != nil
+        if let urlString = audioFileURL,
+           let url = URL(string: urlString),
+           url.isFileURL,
+           FileManager.default.fileExists(atPath: url.path) {
+            return true
+        }
+
+        let embeddedAudioByteCount = (value(forKey: "audioData") as? Data)?.count
+        return MemoryAudioAvailabilityPolicy.hasAudio(
+            localFileExists: false,
+            embeddedAudioByteCount: embeddedAudioByteCount
+        )
     }
 }

@@ -2,8 +2,66 @@
 //  ATTHelper.swift
 //  MemoirAI
 //
-//  Created by user941803 on 7/7/25.
-//
 
+import AppTrackingTransparency
+import FBSDKCoreKit
+import SwiftUI
 
-import SwiftUIimport AppTrackingTransparencyimport FBSDKCoreKitclass ATTHelper: ObservableObject {    @Published var trackingStatus: ATTrackingManager.AuthorizationStatus = .notDetermined        static let shared = ATTHelper()        private init() {        trackingStatus = ATTrackingManager.trackingAuthorizationStatus    }        /// Request tracking permission for high-quality Facebook ad attribution    func requestTrackingPermission() {        guard ATTrackingManager.trackingAuthorizationStatus == .notDetermined else {            updateFacebookTracking()            return        }                ATTrackingManager.requestTrackingAuthorization { [weak self] status in            DispatchQueue.main.async {                self?.trackingStatus = status                self?.updateFacebookTracking()            }        }    }        /// Update Facebook SDK tracking based on ATT status    private func updateFacebookTracking() {        let isAuthorized = trackingStatus == .authorized        Settings.shared.isAdvertiserTrackingEnabled = isAuthorized                print("📊 ATT Status: \(trackingStatus.rawValue), FB Tracking: \(isAuthorized)")    }        /// Check if we should show ATT prompt    var shouldShowATTPrompt: Bool {        trackingStatus == .notDetermined    }} 
+final class ATTHelper: ObservableObject {
+    @Published private(set) var trackingStatus: ATTrackingManager.AuthorizationStatus
+
+    static let shared = ATTHelper()
+
+    private init() {
+        trackingStatus = ATTrackingManager.trackingAuthorizationStatus
+    }
+
+    static func advertiserTrackingEnabled(
+        for status: ATTrackingManager.AuthorizationStatus
+    ) -> Bool {
+        status == .authorized
+    }
+
+    /// Applies the persisted ATT choice before Meta's SDK is initialized.
+    static func applyCurrentAuthorizationToFacebook() {
+        let status = ATTrackingManager.trackingAuthorizationStatus
+        applyLegacyFacebookTrackingSetting(for: status)
+    }
+
+    /// Requests permission only while the choice is unresolved, then immediately
+    /// applies the result to Meta's advertiser tracking switch.
+    func requestTrackingPermission() {
+        let currentStatus = ATTrackingManager.trackingAuthorizationStatus
+        guard currentStatus == .notDetermined else {
+            updateFacebookTracking(for: currentStatus)
+            return
+        }
+
+        ATTrackingManager.requestTrackingAuthorization { [weak self] status in
+            DispatchQueue.main.async {
+                self?.updateFacebookTracking(for: status)
+            }
+        }
+    }
+
+    private func updateFacebookTracking(for status: ATTrackingManager.AuthorizationStatus) {
+        trackingStatus = status
+        Self.applyLegacyFacebookTrackingSetting(for: status)
+
+        #if DEBUG
+        print("ATT status: \(status.rawValue), Meta advertiser tracking: \(Self.advertiserTrackingEnabled(for: status))")
+        #endif
+    }
+
+    var shouldShowATTPrompt: Bool {
+        trackingStatus == .notDetermined
+    }
+
+    private static func applyLegacyFacebookTrackingSetting(
+        for status: ATTrackingManager.AuthorizationStatus
+    ) {
+        if #unavailable(iOS 17.0) {
+            Settings.shared.isAdvertiserTrackingEnabled = advertiserTrackingEnabled(for: status)
+        }
+    }
+}

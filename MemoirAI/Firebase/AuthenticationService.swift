@@ -13,6 +13,153 @@ import AuthenticationServices
 import CryptoKit
 import GoogleSignIn
 import FirebaseCore
+import FirebaseFunctions
+import RevenueCat
+import CoreData
+
+enum AccountLocalDataPolicy {
+    private static let exactKeys: Set<String> = [
+        "hasCompletedOnboarding",
+        "hasCompletedOnboarding_local",
+        "profiles",
+        "selectedProfileIndex",
+        "ordersLastViewedAt",
+        "pendingStripeReturnSessionId",
+        "memoirai_cloud_transcription_disclosure_version",
+        "memoirai.storybookCompletedJobsSeen",
+        "current_family_group",
+        "family_members",
+        "shared_stories",
+        "guidedTutorial_lastProfileUUID",
+        "memoirai_pending_syncs",
+        "memoirai_pending_memory_syncs",
+        "memoirai_pending_memory_deletions",
+        "memoirai_renewal_date",
+        "order_last_shipping"
+    ]
+
+    static func shouldRemoveUserDefaultsKey(
+        _ key: String,
+        firebaseUserID: String,
+        memoryIDs: Set<UUID> = [],
+        profileIDs: Set<UUID> = []
+    ) -> Bool {
+        if exactKeys.contains(key) { return true }
+        if key.contains(firebaseUserID) { return true }
+        if memoryIDs.contains(where: { key.hasSuffix($0.uuidString) }) { return true }
+        if profileIDs.contains(where: { key.contains($0.uuidString) }) { return true }
+        return false
+    }
+}
+
+enum AccountLocalDataCleaner {
+    static func clearUserDefaults(
+        firebaseUserID: String,
+        manifest: AccountLocalCleanupManifest,
+        defaults: UserDefaults = .standard
+    ) {
+        for key in defaults.dictionaryRepresentation().keys
+        where AccountLocalDataPolicy.shouldRemoveUserDefaultsKey(
+            key,
+            firebaseUserID: firebaseUserID,
+            memoryIDs: manifest.memoryIDs,
+            profileIDs: manifest.profileIDs
+        ) {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    static func clearUserFiles(
+        firebaseUserID: String,
+        localFileURLs: [URL],
+        fileManager: FileManager = .default
+    ) throws {
+        for url in localFileURLs where url.isFileURL && fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
+
+        if let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let storybookURL = support
+                .appendingPathComponent("StorybookCache", isDirectory: true)
+                .appendingPathComponent("users", isDirectory: true)
+                .appendingPathComponent(firebaseUserID, isDirectory: true)
+            if fileManager.fileExists(atPath: storybookURL.path) {
+                try fileManager.removeItem(at: storybookURL)
+            }
+        }
+
+        if let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let profileURL = documents.appendingPathComponent(
+                ProfileStorageScope.fileName(userID: firebaseUserID)
+            )
+            if fileManager.fileExists(atPath: profileURL.path) {
+                try fileManager.removeItem(at: profileURL)
+            }
+        }
+    }
+}
+
+enum AccountLocalCleanupCoordinator {
+    static let pendingKey = "memoirai_account_cleanup_pending_v1"
+    static let pendingUserIDKey = "memoirai_account_cleanup_pending_uid_v1"
+
+    static func run(
+        firebaseUserID: String,
+        defaults: UserDefaults = .standard,
+        clearPersistence: () async throws -> AccountLocalCleanupManifest,
+        clearFiles: (AccountLocalCleanupManifest) throws -> Void,
+        clearCaches: () -> Void
+    ) async -> Bool {
+        defaults.set(true, forKey: pendingKey)
+        var completed = true
+        var manifest = AccountLocalCleanupManifest.empty
+        do {
+            manifest = try await clearPersistence()
+        } catch {
+            completed = false
+            print("Account deletion: Core Data cleanup failed: \(error.localizedDescription)")
+        }
+        do {
+            try clearFiles(manifest)
+        } catch {
+            completed = false
+            print("Account deletion: local file cleanup failed: \(error.localizedDescription)")
+        }
+        AccountLocalDataCleaner.clearUserDefaults(
+            firebaseUserID: firebaseUserID,
+            manifest: manifest,
+            defaults: defaults
+        )
+        clearCaches()
+        if completed {
+            defaults.removeObject(forKey: pendingKey)
+            defaults.removeObject(forKey: pendingUserIDKey)
+        }
+        return completed
+    }
+}
+
+enum AccountSwitchContentPolicy {
+    static let remoteCollections = [
+        "memories",
+        "profiles",
+        "bookVersions",
+        "storybookJobs",
+        "orders",
+        "pendingCartCheckouts"
+    ]
+
+    static func hasContent(
+        localMemoryCount: () throws -> Int,
+        remoteCollectionHasDocuments: (String) async throws -> Bool
+    ) async throws -> Bool {
+        if try localMemoryCount() > 0 { return true }
+        for collection in remoteCollections {
+            if try await remoteCollectionHasDocuments(collection) { return true }
+        }
+        return false
+    }
+}
 
 /// Observable service for managing user authentication state
 @MainActor
@@ -23,12 +170,44 @@ final class AuthenticationService: ObservableObject {
     @Published var user: User?
     @Published var isSignedIn: Bool = false
     @Published var isLoading: Bool = false
+    @Published private(set) var isDeletingAccount: Bool = false
     @Published var errorMessage: String?
     
     // For Apple Sign In nonce
     private var currentNonce: String?
     
     private init() {
+        if UserDefaults.standard.bool(forKey: AccountLocalCleanupCoordinator.pendingKey) {
+            Task { [weak self] in
+                guard let firebaseUserID = UserDefaults.standard.string(
+                    forKey: AccountLocalCleanupCoordinator.pendingUserIDKey
+                ) ?? Auth.auth().currentUser?.uid else {
+                    print("Account cleanup pending without an owner UID; anonymous sign-in remains paused")
+                    return
+                }
+                let completed = await AccountLocalCleanupCoordinator.run(
+                    firebaseUserID: firebaseUserID,
+                    clearPersistence: {
+                        try await PersistenceController.shared.deleteUserData(
+                            firebaseUserId: firebaseUserID
+                        )
+                    },
+                    clearFiles: { manifest in
+                        try AccountLocalDataCleaner.clearUserFiles(
+                            firebaseUserID: firebaseUserID,
+                            localFileURLs: manifest.localFileURLs
+                        )
+                    },
+                    clearCaches: {
+                        self?.clearLocalCaches()
+                    }
+                )
+                if completed {
+                    await self?.signInAnonymouslyIfNeeded()
+                }
+            }
+        }
+
         // Listen for auth state changes
         Auth.auth().addStateDidChangeListener { [weak self] _, user in
             Task { @MainActor in
@@ -36,13 +215,15 @@ final class AuthenticationService: ObservableObject {
                 self?.isSignedIn = user != nil
                 
                 if let user = user {
-                    print("✅ Auth state changed: signed in as \(user.email ?? user.uid)")
+                    print("Auth state changed: signed in")
                     if !user.isAnonymous {
                         UserDefaults.standard.removeObject(forKey: MemoirPersistenceUserDefaults.suggestAccountLinkAfterBook)
                     }
+                    await RCSubscriptionManager.shared.identify(firebaseUserID: user.uid)
                     // Ensure user document exists in Firestore
                     await self?.createOrUpdateUserDocument()
                 } else {
+                    RCSubscriptionManager.shared.clearIdentityState()
                     print("ℹ️ Auth state changed: signed out")
                 }
             }
@@ -81,101 +262,23 @@ final class AuthenticationService: ObservableObject {
         return sha256(nonce)
     }
     
-    /// Handle Apple Sign In credential
-    func signInWithApple(credential: ASAuthorizationAppleIDCredential) async throws {
-        guard let nonce = currentNonce else {
-            throw AuthError.missingNonce
-        }
-        
-        guard let appleIDToken = credential.identityToken,
-              let idTokenString = String(data: appleIDToken, encoding: .utf8) else {
-            throw AuthError.invalidCredential
-        }
-        
-        isLoading = true
-        errorMessage = nil
-        
-        defer { isLoading = false }
-        
-        let firebaseCredential = OAuthProvider.appleCredential(
-            withIDToken: idTokenString,
-            rawNonce: nonce,
-            fullName: credential.fullName
-        )
-        
-        do {
-            let result = try await Auth.auth().signIn(with: firebaseCredential)
-            print("✅ Signed in with Apple: \(result.user.uid)")
-            
-            // Save display name if provided (only available on first sign in)
-            if let fullName = credential.fullName,
-               let givenName = fullName.givenName {
-                let displayName = [givenName, fullName.familyName].compactMap { $0 }.joined(separator: " ")
-                let changeRequest = result.user.createProfileChangeRequest()
-                changeRequest.displayName = displayName
-                try await changeRequest.commitChanges()
-            }
-            
-        } catch {
-            errorMessage = error.localizedDescription
-            throw error
-        }
-    }
-    
-    // MARK: - Sign In with Google
-    
-    func signInWithGoogle() async throws {
-        guard let clientID = FirebaseApp.app()?.options.clientID else {
-            throw AuthError.missingClientID
-        }
-        
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let rootViewController = windowScene.windows.first?.rootViewController else {
-            throw AuthError.noRootViewController
-        }
-        
-        isLoading = true
-        errorMessage = nil
-        
-        defer { isLoading = false }
-        
-        let config = GIDConfiguration(clientID: clientID)
-        GIDSignIn.sharedInstance.configuration = config
-        
-        do {
-            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: rootViewController)
-            
-            guard let idToken = result.user.idToken?.tokenString else {
-                throw AuthError.invalidCredential
-            }
-            
-            let credential = GoogleAuthProvider.credential(
-                withIDToken: idToken,
-                accessToken: result.user.accessToken.tokenString
-            )
-            
-            let authResult = try await Auth.auth().signIn(with: credential)
-            print("✅ Signed in with Google: \(authResult.user.uid)")
-            
-        } catch {
-            errorMessage = error.localizedDescription
-            throw error
-        }
-    }
-    
     // MARK: - Anonymous Sign In
     
     /// Sign in anonymously - call this on app launch for automatic Firebase sync
     func signInAnonymouslyIfNeeded() async {
+        guard !UserDefaults.standard.bool(forKey: AccountLocalCleanupCoordinator.pendingKey) else {
+            print("Account cleanup pending; anonymous sign-in is paused")
+            return
+        }
         // Already signed in (anonymous or with provider)
         if Auth.auth().currentUser != nil {
-            print("✅ Already signed in: \(Auth.auth().currentUser?.uid ?? "unknown")")
+            print("Already signed in")
             return
         }
         
         do {
-            let result = try await Auth.auth().signInAnonymously()
-            print("✅ Signed in anonymously: \(result.user.uid)")
+            _ = try await Auth.auth().signInAnonymously()
+            print("Signed in anonymously")
         } catch {
             print("❌ Anonymous sign-in failed: \(error.localizedDescription)")
         }
@@ -228,6 +331,9 @@ final class AuthenticationService: ObservableObject {
             let nsError = error as NSError
             if nsError.code == AuthErrorCode.credentialAlreadyInUse.rawValue,
                let updatedCredential = nsError.userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential {
+                guard try await canReplaceAnonymousAccount(currentUser) else {
+                    throw AuthError.accountMergeRequired
+                }
                 _ = try await Auth.auth().signIn(with: updatedCredential)
                 return .signedInExistingAccount
             }
@@ -249,7 +355,9 @@ final class AuthenticationService: ObservableObject {
 
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+        }
 
         let firebaseCredential = OAuthProvider.appleCredential(
             withIDToken: idTokenString,
@@ -372,13 +480,37 @@ final class AuthenticationService: ObservableObject {
         defer { isLoading = false }
 
         do {
-            let result = try await Auth.auth().signIn(withEmail: email, password: password)
-            print("✅ Signed in with email: \(result.user.uid)")
+            if let currentUser = Auth.auth().currentUser, currentUser.isAnonymous {
+                guard try await canReplaceAnonymousAccount(currentUser) else {
+                    throw AuthError.accountMergeRequired
+                }
+            }
+            _ = try await Auth.auth().signIn(withEmail: email, password: password)
+            print("Signed in with email")
         } catch {
             let mapped = Self.mapEmailAuthError(error)
             errorMessage = mapped.errorDescription
             throw mapped
         }
+    }
+
+    private func canReplaceAnonymousAccount(_ user: User) async throws -> Bool {
+        let userID = user.uid
+        let context = PersistenceController.shared.container.viewContext
+        let userRef = Firestore.firestore().collection("users").document(userID)
+        let hasContent = try await AccountSwitchContentPolicy.hasContent(
+            localMemoryCount: {
+                let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
+                request.predicate = NSPredicate(format: "firebaseUserId == %@", userID)
+                request.fetchLimit = 1
+                return try context.count(for: request)
+            },
+            remoteCollectionHasDocuments: { collection in
+                let snapshot = try await userRef.collection(collection).limit(to: 1).getDocuments()
+                return !snapshot.documents.isEmpty
+            }
+        )
+        return !hasContent
     }
 
     /// Sends a password reset email. Errors are mapped the same way as sign-in/create.
@@ -387,7 +519,7 @@ final class AuthenticationService: ObservableObject {
 
         do {
             try await Auth.auth().sendPasswordReset(withEmail: email)
-            print("✅ Sent password reset email to \(email)")
+            print("Sent password reset email")
         } catch {
             let mapped = Self.mapEmailAuthError(error)
             errorMessage = mapped.errorDescription
@@ -421,51 +553,90 @@ final class AuthenticationService: ObservableObject {
 
     // MARK: - Delete Account
 
-    /// Permanently deletes the current user's account (Apple App Store requires in-app
-    /// deletion for any app that supports account creation). Deletes the `users/{uid}` root
-    /// Firestore document, then deletes the Firebase Auth user, then falls back to a fresh
-    /// anonymous session so the app doesn't dead-end on a signed-out state.
-    ///
-    /// Caller is responsible for confirming intent with the user before invoking this.
-    ///
-    /// NOTE: This does not cascade-delete subcollections (`memories`, `books`, Storage
-    /// assets, etc.) — that cleanup is future server-side work (a Cloud Function trigger
-    /// on Auth user deletion). Deleting only the root doc removes the primary record and
-    /// disables the account; full data purge is tracked as follow-up.
+    /// Deletes the authenticated MemoirAI account through the trusted server, then
+    /// clears this device and requests deletion of the CloudKit-backed local replica.
+    /// Paid order records and their fulfillment PDFs may be retained.
     func deleteAccount() async throws {
         guard let user = Auth.auth().currentUser else {
             throw AuthError.notSignedIn
         }
+        UserDefaults.standard.set(
+            user.uid,
+            forKey: AccountLocalCleanupCoordinator.pendingUserIDKey
+        )
 
         isLoading = true
+        isDeletingAccount = true
         errorMessage = nil
-        defer { isLoading = false }
-
-        let uid = user.uid
-
-        do {
-            try await Firestore.firestore().collection("users").document(uid).delete()
-        } catch {
-            // Non-fatal: the Auth user deletion below is what satisfies Apple's requirement
-            // (no way to sign back into this account). We log rather than block on a
-            // Firestore doc delete failure (e.g. transient offline error).
-            print("⚠️ Failed to delete users/\(uid) Firestore doc before account deletion: \(error)")
+        defer {
+            isLoading = false
+            isDeletingAccount = false
         }
 
         do {
-            try await user.delete()
-            print("✅ Deleted Firebase Auth user \(uid)")
-        } catch {
-            let nsError = error as NSError
-            if nsError.code == AuthErrorCode.requiresRecentLogin.rawValue {
-                errorMessage = AuthError.requiresRecentLogin.errorDescription
-                throw AuthError.requiresRecentLogin
+            let callable = Functions.functions().httpsCallable("deleteOwnAccount")
+            callable.timeoutInterval = 330
+            let result = try await callable.call()
+            guard let payload = result.data as? [String: Any],
+                  payload["status"] as? String == "complete" else {
+                throw AuthError.invalidDeletionResponse
             }
-            errorMessage = error.localizedDescription
-            throw error
+
+            // Arm the cross-device barrier before any throwable local cleanup. A stale
+            // device must not be able to restore profile or onboarding KVS payloads.
+            iCloudManager.shared.resetAfterAccountDeletion(userID: user.uid)
+            let localCleanupComplete = await AccountLocalCleanupCoordinator.run(
+                firebaseUserID: user.uid,
+                clearPersistence: {
+                    try await PersistenceController.shared.deleteUserData(
+                        firebaseUserId: user.uid
+                    )
+                },
+                clearFiles: { manifest in
+                    try AccountLocalDataCleaner.clearUserFiles(
+                        firebaseUserID: user.uid,
+                        localFileURLs: manifest.localFileURLs
+                    )
+                },
+                clearCaches: { [weak self] in
+                    self?.clearLocalCaches()
+                }
+            )
+
+            if Purchases.isConfigured {
+                do {
+                    _ = try await Purchases.shared.logOut()
+                } catch {
+                    print("Account deletion: RevenueCat logout failed: \(error.localizedDescription)")
+                }
+            }
+            if Auth.auth().currentUser != nil {
+                try Auth.auth().signOut()
+            }
+            guard localCleanupComplete else {
+                throw AuthError.localCleanupPending
+            }
+            print("Deleted account and local user data")
+        } catch {
+            let mappedError = Self.mapAccountDeletionError(error)
+            errorMessage = mappedError.localizedDescription
+            throw mappedError
         }
 
-        await signInAnonymouslyIfNeeded()
+    }
+
+    static func mapAccountDeletionError(_ error: Error) -> Error {
+        let nsError = error as NSError
+        if nsError.domain == FunctionsErrorDomain,
+           nsError.code == FunctionsErrorCode.failedPrecondition.rawValue {
+            if let details = nsError.userInfo[FunctionsErrorDetailsKey] as? [String: Any],
+               let reason = details["reason"] as? String {
+                if reason == "active-checkout" { return AuthError.activeCheckout }
+                if reason == "active-storybook" { return AuthError.activeStorybook }
+            }
+            return AuthError.requiresRecentLogin
+        }
+        return error
     }
 
     // MARK: - Sign Out
@@ -474,9 +645,7 @@ final class AuthenticationService: ObservableObject {
         do {
             try Auth.auth().signOut()
             GIDSignIn.sharedInstance.signOut()
-            PDFThumbnailCache.shared.removeAll()
-            PDFThumbnailDiskCache.shared.removeAll()
-            IllustrationImageDiskCache.shared.removeAll()
+            clearLocalCaches()
             print("✅ Signed out successfully")
             
             // Sign back in anonymously so data keeps syncing
@@ -487,6 +656,12 @@ final class AuthenticationService: ObservableObject {
             errorMessage = error.localizedDescription
             throw error
         }
+    }
+
+    private func clearLocalCaches() {
+        PDFThumbnailCache.shared.removeAll()
+        PDFThumbnailDiskCache.shared.removeAll()
+        IllustrationImageDiskCache.shared.removeAll()
     }
     
     // MARK: - User Document Management
@@ -528,7 +703,7 @@ final class AuthenticationService: ObservableObject {
                 ]
                 deviceFields.forEach { userData[$0.key] = $0.value }
                 try await userRef.setData(userData)
-                print("✅ Created user document for \(user.uid)")
+                print("Created user document")
             }
         } catch {
             print("❌ Error managing user document: \(error)")
@@ -575,6 +750,11 @@ final class AuthenticationService: ObservableObject {
         case userNotFound
         case tooManyRequests
         case requiresRecentLogin
+        case activeCheckout
+        case activeStorybook
+        case accountMergeRequired
+        case localCleanupPending
+        case invalidDeletionResponse
         case underlying(String)
 
         var errorDescription: String? {
@@ -603,6 +783,16 @@ final class AuthenticationService: ObservableObject {
                 return "Too many attempts. Please wait a moment and try again."
             case .requiresRecentLogin:
                 return "Please sign in again, then retry deleting your account."
+            case .activeCheckout:
+                return "Finish or cancel your open book checkout before deleting your account."
+            case .activeStorybook:
+                return "Wait for your storybook to finish before deleting your account."
+            case .accountMergeRequired:
+                return "This device has memories in its guest account. Create a new login for this guest account before signing in to a different account."
+            case .localCleanupPending:
+                return "Your online account was deleted, but this device could not finish removing its local data. Keep the app installed and reopen it to retry cleanup."
+            case .invalidDeletionResponse:
+                return "The deletion service returned an invalid response. Please try again."
             case .underlying(let message):
                 return message
             }

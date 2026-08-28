@@ -113,7 +113,7 @@ final class RealTimeTranscriptionManager: ObservableObject {
             }
         }
         
-        guard let recognitionRequest = recognitionRequest else {
+        guard recognitionRequest != nil else {
             transcriptionError = "Failed to create recognition request"
             return
         }
@@ -235,4 +235,4 @@ final class RealTimeTranscriptionManager: ObservableObject {
         - Interleaved: \(format.isInterleaved)
         """
     }
-} 
+}

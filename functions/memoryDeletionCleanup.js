@@ -1,20 +1,29 @@
+const { memoryIndexBelongsToUser } = require("./memoryIndexOwnership");
+
 function createMemoryDeletionCleanupHandler({ db, bucket, serverTimestamp }) {
   return async (event) => {
     const { userId, memoryId } = event.params;
     try {
       const userRef = db.collection("users").doc(userId);
+      const accountDeletion = await db.collection("accountDeletionRequests").doc(userId).get();
+      const memoryIndexRef = db.collection("memoryIndex").doc(memoryId);
+      const memoryIndex = await memoryIndexRef.get();
       const batch = db.batch();
-      batch.set(userRef.collection("memoryTombstones").doc(memoryId), {
-        deletedAt: serverTimestamp(),
-        schemaVersion: 1
-      }, { merge: true });
-      for (const extension of ["m4a", "caf"]) {
-        batch.set(userRef.collection("memoryAudioTombstones").doc(`${memoryId}.${extension}`), {
+      if (!accountDeletion.exists) {
+        batch.set(userRef.collection("memoryTombstones").doc(memoryId), {
           deletedAt: serverTimestamp(),
           schemaVersion: 1
         }, { merge: true });
+        for (const extension of ["m4a", "caf"]) {
+          batch.set(userRef.collection("memoryAudioTombstones").doc(`${memoryId}.${extension}`), {
+            deletedAt: serverTimestamp(),
+            schemaVersion: 1
+          }, { merge: true });
+        }
       }
-      batch.delete(db.collection("memoryIndex").doc(memoryId));
+      if (memoryIndexBelongsToUser(memoryIndex, userId)) {
+        batch.delete(memoryIndexRef);
+      }
       batch.delete(userRef.collection("memories").doc(memoryId));
       await batch.commit();
 

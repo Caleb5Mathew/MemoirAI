@@ -65,13 +65,13 @@
 	<key>FacebookDisplayName</key>
 	<string>Memoir</string>
 	<key>FacebookAutoInitEnabled</key>
-	<true/>
+	<false/>
 	<key>FacebookAutoLogAppEventsEnabled</key>
 	<true/>
 	<key>FacebookClientToken</key>
 	<string>dcad7977ac077cde6b61dc6c218c29a3</string>
 	<key>FacebookAdvertiserIDCollectionEnabled</key>
-	<true/>
+	<false/>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>fbapi</string>
