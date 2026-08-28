@@ -216,32 +216,147 @@ extension MemoryEntry {
     }
 }
 
+struct MemoryEditSaveResolution: Equatable {
+    let persistedText: String?
+    let keepsEditorOpen: Bool
+}
+
+enum MemoryEditSavePolicy {
+    static func resolve(
+        originalText: String?,
+        draftText: String,
+        saveSucceeded: Bool
+    ) -> MemoryEditSaveResolution {
+        MemoryEditSaveResolution(
+            persistedText: saveSucceeded ? draftText : originalText,
+            keepsEditorOpen: !saveSucceeded
+        )
+    }
+}
+
+enum AudioPlaybackCompletionPolicy {
+    static func shouldResetPlayback(
+        completedGeneration: UUID,
+        activeGeneration: UUID
+    ) -> Bool {
+        completedGeneration == activeGeneration
+    }
+}
+
+struct MemoryShareRequest: Equatable {
+    let text: String?
+    let localAudioURL: URL?
+    let remoteAudioURL: URL?
+
+    var hasContent: Bool {
+        text != nil || localAudioURL != nil || remoteAudioURL != nil
+    }
+}
+
+struct MemoryShareContext: Equatable {
+    let memoryID: UUID
+    let ownerID: String
+    let textReference: String?
+    let audioReference: String?
+}
+
+enum MemorySharePreparationPolicy {
+    static func request(
+        text: String?,
+        localAudioURL: URL?,
+        storedAudioURL: String?
+    ) -> MemoryShareRequest {
+        let normalizedText = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shareableText = normalizedText?.isEmpty == false ? normalizedText : nil
+        let shareableLocalURL = localAudioURL?.isFileURL == true ? localAudioURL : nil
+
+        let remoteURL: URL?
+        if shareableLocalURL == nil,
+           let storedAudioURL,
+           let candidate = URL(string: storedAudioURL),
+           candidate.scheme?.lowercased() == "https" {
+            remoteURL = candidate
+        } else {
+            remoteURL = nil
+        }
+
+        return MemoryShareRequest(
+            text: shareableText,
+            localAudioURL: shareableLocalURL,
+            remoteAudioURL: remoteURL
+        )
+    }
+
+    static func context(
+        memoryID: UUID?,
+        ownerID: String?,
+        textReference: String?,
+        audioReference: String?
+    ) -> MemoryShareContext? {
+        guard let memoryID,
+              let ownerID = MemoryOwnershipPolicy.normalizedUserID(ownerID) else {
+            return nil
+        }
+        return MemoryShareContext(
+            memoryID: memoryID,
+            ownerID: ownerID,
+            textReference: textReference,
+            audioReference: audioReference
+        )
+    }
+
+    static func isCurrent(
+        expected: MemoryShareContext,
+        memoryID: UUID?,
+        ownerID: String?,
+        textReference: String?,
+        audioReference: String?,
+        currentUserID: String?
+    ) -> Bool {
+        guard let current = context(
+            memoryID: memoryID,
+            ownerID: ownerID,
+            textReference: textReference,
+            audioReference: audioReference
+        ),
+        let currentUserID = MemoryOwnershipPolicy.normalizedUserID(currentUserID) else {
+            return false
+        }
+        return current == expected && current.ownerID == currentUserID
+    }
+}
+
 struct MemoryDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var context
     @EnvironmentObject var profileVM: ProfileViewModel
-    @StateObject private var familyManager = FamilyManager.shared
     @StateObject private var permissionManager = PermissionManager.shared
     let memory: MemoryEntry
 
     @State private var audioEngine = AVAudioEngine()
     @State private var playerNode = AVAudioPlayerNode()
     @State private var eqNode = AVAudioUnitEQ(numberOfBands: 1)
+    @State private var remotePlayer: AVPlayer?
+    @State private var remotePlaybackObserver: NSObjectProtocol?
     @State private var isPlaying = false
-
-    @State private var photoItems: [PhotosPickerItem] = []
-    @State private var photoDatas: [Data] = []
-    @State private var images: [UIImage] = []
+    @State private var playbackGeneration = UUID()
 
     @State private var isEditing = false
     @State private var draftText = ""
-    @State private var showFamilyShareSuccess = false
     @State private var showCharacterDetails = false
     @State private var showEnhancementCoordinator = false
     @State private var animateEnhanceGlow = false
     @State private var refreshTrigger = 0
     @State private var lastTitleUpdateTime: Date? = nil
     @State private var titleUpdateTask: Task<Void, Never>? = nil
+    @State private var showEditSaveError = false
+    @State private var audioPlaybackError: String?
+    @State private var editSaveErrorMessage = "Your draft is still here. Try saving it again."
+    @State private var isPreparingShare = false
+    @State private var shareErrorMessage: String?
+    @State private var sharePreparationTask: Task<Void, Never>?
+    @State private var temporarySharedAudioURL: URL?
+    @State private var isShareSheetPresented = false
 
     // Batch transcription support
     @StateObject private var transcriptionManager = BatchTranscriptionManager.shared
@@ -336,6 +451,10 @@ struct MemoryDetailView: View {
     private var memoryVoiceSection: some View {
         if let url = memory.playbackURL {
             memoryAudioRow(url: url)
+        } else if let urlString = memory.audioFileURL,
+                  let remoteURL = URL(string: urlString),
+                  remoteURL.scheme?.lowercased() == "https" {
+            memoryAudioRow(url: remoteURL)
         }
     }
 
@@ -474,6 +593,24 @@ struct MemoryDetailView: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            if memory.transcriptionStatus == "failed" || memory.transcriptionStatus == "needsRerecording" {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundColor(terracotta)
+                    Text(memory.transcriptionStatus == "needsRerecording" ?
+                         "This audio can't be transcribed. Record it again." :
+                         "Audio transcript failed.")
+                        .font(.system(size: 14, weight: .medium, design: .serif))
+                        .foregroundColor(textSecondary)
+                    Spacer(minLength: 0)
+                    if memory.transcriptionStatus == "failed" {
+                        Button("Retry", action: retryCloudTranscription)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(terracotta)
+                    }
+                }
+            }
         }
     }
 
@@ -483,10 +620,32 @@ struct MemoryDetailView: View {
     @ViewBuilder
     private var memoryTranscriptionStatusBlock: some View {
         HStack(spacing: 10) {
-            if isTranscribingNow {
+            if memory.transcriptionStatus == "failed" || memory.transcriptionStatus == "needsRerecording" {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(terracotta)
+                Text(memory.transcriptionStatus == "needsRerecording" ?
+                     "This recording needs to be recorded again." :
+                     "We couldn't create the transcript.")
+                    .font(.system(size: 15, weight: .medium, design: .serif))
+                    .foregroundColor(textSecondary)
+                Spacer(minLength: 0)
+                if memory.transcriptionStatus == "failed" {
+                    Button("Retry", action: retryCloudTranscription)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(terracotta)
+                }
+            } else if isTranscribingNow {
                 ProgressView()
                     .tint(terracotta)
                 Text("Transcribing…")
+                    .font(.system(size: 15, weight: .medium, design: .serif))
+                    .foregroundColor(textSecondary)
+            } else if isLegacyRecording {
+                Image(systemName: "mic.badge.plus")
+                    .font(.system(size: 18))
+                    .foregroundColor(terracotta.opacity(0.7))
+                Text("Re-record this older audio to create a new transcript.")
                     .font(.system(size: 15, weight: .medium, design: .serif))
                     .foregroundColor(textSecondary)
             } else {
@@ -504,8 +663,31 @@ struct MemoryDetailView: View {
 
     /// True while this memory's audio is actively being transcribed right now.
     private var isTranscribingNow: Bool {
+        if memory.transcriptionStatus == "queued" || memory.transcriptionStatus == "processing" {
+            return true
+        }
         guard let id = memory.id else { return false }
         return transcriptionManager.isInFlight(id)
+    }
+
+    private var isLegacyRecording: Bool {
+        guard memory.transcriptionStatus == nil else { return false }
+        return URL(string: memory.audioFileURL ?? "")?.pathExtension.lowercased() != "m4a"
+    }
+
+    private func retryCloudTranscription() {
+        memory.transcriptionStatus = "queued"
+        memory.transcriptionUpdatedAt = Date()
+        do {
+            try context.save()
+            FirestoreSyncService.shared.queueMemorySyncWithProfile(
+                memory,
+                profile: profileVM.selectedProfile
+            )
+            NotificationCenter.default.post(name: .memorySaved, object: nil)
+        } catch {
+            print("Failed to queue transcription retry: \(error.localizedDescription)")
+        }
     }
 
     private var memoryEditBlock: some View {
@@ -553,10 +735,6 @@ struct MemoryDetailView: View {
                     .padding(.bottom, 20)
 
                 memoryPrimaryCard
-
-                if familyManager.currentFamily != nil {
-                    familySharingSection
-                }
 
                 // MARK: - Photo Section (Commented Out)
                 // Photos section has been disabled - uncomment below to re-enable
@@ -624,13 +802,34 @@ struct MemoryDetailView: View {
                 Spacer(minLength: 40)
             }
             .frame(maxWidth: .infinity)
-            .onAppear(perform: loadPhotosFromRelationship)
             .id(refreshTrigger)
             }
 
             if showReRecordConfirm {
                 reRecordConfirmationOverlay
                     .zIndex(60)
+            }
+
+            if isPreparingShare {
+                Color.black.opacity(0.18)
+                    .ignoresSafeArea()
+                    .zIndex(70)
+
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .tint(terracotta)
+                    Text("Preparing your memory to share…")
+                        .font(.system(size: 15, weight: .semibold, design: .serif))
+                        .foregroundColor(headerColor)
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                .background(cardSurface)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .shadow(color: .black.opacity(0.15), radius: 18, x: 0, y: 8)
+                .zIndex(71)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Preparing your memory to share")
             }
         }
         .background(backgroundColor.ignoresSafeArea())
@@ -666,13 +865,6 @@ struct MemoryDetailView: View {
                 .allowsHitTesting(true)
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                if familyManager.currentFamily != nil {
-                    Button(action: shareWithFamily) {
-                        Image(systemName: "person.3.fill")
-                            .foregroundColor(terracotta)
-                    }
-                }
-                
                 Button(action: {
                     let hasCards = memory.parsedCharacterDetails?.characters.isEmpty == false
                     if hasCards {
@@ -696,34 +888,72 @@ struct MemoryDetailView: View {
                 }
                 
                 Button(action: shareMemory) {
-                    Image(systemName: "square.and.arrow.up")
+                    if isPreparingShare {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "square.and.arrow.up")
+                    }
                 }
+                .disabled(isPreparingShare)
+                .accessibilityLabel(isPreparingShare ? "Preparing memory to share" : "Share memory")
                 
                 Button(action: {
+                    guard MemoryUserScope.belongsToCurrentUser(memory) else {
+                        isEditing = false
+                        editSaveErrorMessage = "Your signed-in account changed. Reopen the memory before editing it."
+                        showEditSaveError = true
+                        return
+                    }
                     if isEditing {
                         // Cancel any pending title update
                         titleUpdateTask?.cancel()
                         titleUpdateTask = nil
-                        
+
+                        let originalText = memory.text
+                        let originalEditedText = memory.transcriptionEditedText
                         memory.text = draftText
-                        
-                        // Final title regeneration if needed (after user stops editing)
-                        if !draftText.isEmpty {
-                            Task {
-                                await regenerateTitleIfNeededSync(for: draftText)
-                            }
+                        if memory.transcriptionStatus != nil || memory.transcriptionRawText != nil {
+                            memory.transcriptionEditedText = draftText
                         }
-                        
+
                         do {
                             try context.save()
+                            let resolution = MemoryEditSavePolicy.resolve(
+                                originalText: originalText,
+                                draftText: draftText,
+                                saveSucceeded: true
+                            )
+                            memory.text = resolution.persistedText
+                            isEditing = resolution.keepsEditorOpen
+                            FirestoreSyncService.shared.queueMemorySyncWithProfile(
+                                memory,
+                                profile: profileVM.selectedProfile
+                            )
                             NotificationCenter.default.post(name: .memorySaved, object: nil)
+
+                            // Title generation can only start after the edited text is durable.
+                            if !draftText.isEmpty {
+                                Task {
+                                    await regenerateTitleIfNeededSync(for: draftText)
+                                }
+                            }
                         } catch {
+                            let resolution = MemoryEditSavePolicy.resolve(
+                                originalText: originalText,
+                                draftText: draftText,
+                                saveSucceeded: false
+                            )
+                            memory.text = resolution.persistedText
+                            memory.transcriptionEditedText = originalEditedText
+                            isEditing = resolution.keepsEditorOpen
+                            editSaveErrorMessage = "Your draft is still here. Try saving it again."
+                            showEditSaveError = true
                             print("Failed to save edited text:", error)
                         }
                     } else {
                         draftText = memory.text ?? ""
+                        isEditing = true
                     }
-                    isEditing.toggle()
                 }) {
                     Image(systemName: isEditing ? "checkmark" : "pencil")
                 }
@@ -736,10 +966,32 @@ struct MemoryDetailView: View {
             }
         }
         .tint(terracotta)
-        .alert("Shared with Family!", isPresented: $showFamilyShareSuccess) {
-            Button("OK") { }
+        .alert("Couldn't Save Changes", isPresented: $showEditSaveError) {
+            Button("OK", role: .cancel) { }
         } message: {
-            Text("Your memory has been shared with \(familyManager.currentFamily?.name ?? "your family"). They can now see and react to it!")
+            Text(editSaveErrorMessage)
+        }
+        .alert(
+            "Couldn’t Play Recording",
+            isPresented: Binding(
+                get: { audioPlaybackError != nil },
+                set: { if !$0 { audioPlaybackError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { audioPlaybackError = nil }
+        } message: {
+            Text(audioPlaybackError ?? "The recording could not be played.")
+        }
+        .alert(
+            "Couldn’t Share Memory",
+            isPresented: Binding(
+                get: { shareErrorMessage != nil },
+                set: { if !$0 { shareErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { shareErrorMessage = nil }
+        } message: {
+            Text(shareErrorMessage ?? "The memory could not be shared.")
         }
         .fullScreenCover(isPresented: $showCharacterDetails) {
             CharacterDetailsQuestionView(memory: memory)
@@ -754,16 +1006,24 @@ struct MemoryDetailView: View {
                 .environmentObject(profileVM)
         }
         .onAppear {
-            Mixpanel.mainInstance().track(event: "Viewed Memory", properties: [
-                "chapter_title": memory.chapter ?? "",
-                "prompt_text": memory.prompt ?? "",
-                "has_audio": memory.playbackURL != nil,
-                "has_text": !(memory.text?.isEmpty ?? true),
-                "has_photos": !(memory.photos?.allObjects.isEmpty ?? true),
-                "created_at": memory.createdAt?.timeIntervalSince1970 ?? 0
-            ])
-            
-            loadPhotosFromRelationship()
+            Mixpanel.mainInstance().track(
+                event: "Viewed Memory",
+                properties: AnalyticsPrivacyPolicy.sanitized([
+                    "has_audio": memory.hasAudio,
+                    "has_text": !(memory.text?.isEmpty ?? true),
+                    "has_photos": !(memory.photos?.allObjects.isEmpty ?? true)
+                ])
+            )
+        }
+        .onDisappear {
+            stopPlaybackIfNeeded()
+            sharePreparationTask?.cancel()
+            sharePreparationTask = nil
+            isPreparingShare = false
+            if !isShareSheetPresented, let temporarySharedAudioURL {
+                try? FileManager.default.removeItem(at: temporarySharedAudioURL)
+                self.temporarySharedAudioURL = nil
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .memorySaved)) { _ in
             // Refresh the UI when character details are saved
@@ -800,100 +1060,6 @@ struct MemoryDetailView: View {
         }
     }
     
-    // MARK: - Family Sharing Section
-    
-    private var familySharingSection: some View {
-        VStack(spacing: 16) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Share with family")
-                        .font(.system(size: 17, weight: .semibold, design: .serif))
-                        .foregroundColor(headerColor)
-
-                    Text("Let \(familyManager.currentFamily?.name ?? "your family") see this memory.")
-                        .font(.system(size: 14))
-                        .foregroundColor(textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 12)
-
-                Button(action: shareWithFamily) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "person.3.fill")
-                        Text("Share")
-                    }
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(terracotta)
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-
-            if !familyManager.familyMembers.isEmpty {
-                HStack(spacing: 10) {
-                    Text("Family")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(textSecondary)
-
-                    ForEach(familyManager.familyMembers.prefix(4)) { member in
-                        Circle()
-                            .fill(terracotta.opacity(0.22))
-                            .frame(width: 28, height: 28)
-                            .overlay(
-                                Text(String(member.name.prefix(1)).uppercased())
-                                    .font(.caption.weight(.bold))
-                                    .foregroundColor(headerColor)
-                            )
-                    }
-
-                    if familyManager.familyMembers.count > 4 {
-                        Text("+\(familyManager.familyMembers.count - 4)")
-                            .font(.caption.weight(.medium))
-                            .foregroundColor(textSecondary)
-                    }
-
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-        .padding(18)
-        .background(cardSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(cardStroke, lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.04), radius: 12, x: 0, y: 4)
-        .padding(.horizontal, 20)
-        .padding(.top, 20)
-    }
-
-    // MARK: - Family Sharing Functions
-    
-    private func shareWithFamily() {
-        guard let familyId = familyManager.currentFamily?.id else { return }
-        
-        let alreadyShared = familyManager.sharedStories.contains { story in
-            story.memoryEntryId == memory.id && story.familyGroupId == familyId
-        }
-        
-        if alreadyShared {
-            return
-        }
-        
-        familyManager.shareStory(memory, with: familyId)
-        showFamilyShareSuccess = true
-        
-        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-        impactFeedback.impactOccurred()
-    }
-
     // MARK: - Existing Functions
 
     // MARK: - Photo Functions (Commented Out)
@@ -932,16 +1098,14 @@ struct MemoryDetailView: View {
     }
     */
     
-    // Stub functions to prevent compile errors
-    private func handlePhotoItemsChange(_ items: [PhotosPickerItem]) {
-        // Photo adding disabled
-    }
-    
-    private func loadPhotosFromRelationship() {
-        // Photo loading disabled
-    }
-
     private func stopPlaybackIfNeeded() {
+        playbackGeneration = UUID()
+        remotePlayer?.pause()
+        remotePlayer = nil
+        if let remotePlaybackObserver {
+            NotificationCenter.default.removeObserver(remotePlaybackObserver)
+            self.remotePlaybackObserver = nil
+        }
         if isPlaying {
             playerNode.stop()
             audioEngine.stop()
@@ -949,36 +1113,43 @@ struct MemoryDetailView: View {
         }
     }
 
-    private func deleteAudioFileOnDiskIfPresent() {
-        guard let urlString = memory.audioFileURL,
-              let url = URL(string: urlString),
-              url.isFileURL,
-              FileManager.default.fileExists(atPath: url.path) else { return }
-        try? FileManager.default.removeItem(at: url)
-    }
-
     private func confirmClearAudioAndOpenRecorder() {
         showReRecordConfirm = false
         stopPlaybackIfNeeded()
-        deleteAudioFileOnDiskIfPresent()
-        memory.audioData = nil
-        memory.audioFileURL = nil
-        do {
-            try context.save()
-            FirestoreSyncService.shared.queueMemorySyncWithProfile(memory, profile: profileVM.selectedProfile)
-            NotificationCenter.default.post(name: .memorySaved, object: nil)
-            refreshTrigger += 1
-        } catch {
-            print("Failed to clear audio for re-record: \(error)")
-        }
         showReRecordSheet = true
     }
 
     private func togglePlayback(url: URL) {
+        if !url.isFileURL {
+            if isPlaying {
+                stopPlaybackIfNeeded()
+            } else {
+                let player = AVPlayer(url: url)
+                remotePlayer = player
+                remotePlaybackObserver = NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemDidPlayToEndTime,
+                    object: player.currentItem,
+                    queue: .main
+                ) { _ in
+                    Task { @MainActor in
+                        if let remotePlaybackObserver {
+                            NotificationCenter.default.removeObserver(remotePlaybackObserver)
+                        }
+                        remotePlayer = nil
+                        remotePlaybackObserver = nil
+                        isPlaying = false
+                    }
+                }
+                player.play()
+                isPlaying = true
+            }
+            return
+        }
         do {
             let session = AVAudioSession.sharedInstance()
             try session.overrideOutputAudioPort(.speaker)
             if isPlaying {
+                playbackGeneration = UUID()
                 playerNode.stop()
                 audioEngine.stop()
                 isPlaying = false
@@ -992,33 +1163,203 @@ struct MemoryDetailView: View {
                 }
                 let file = try AVAudioFile(forReading: url)
                 try audioEngine.start()
-                playerNode.scheduleFile(file, at: nil)
-                playerNode.play()
+                let generation = UUID()
+                playbackGeneration = generation
                 isPlaying = true
+                playerNode.scheduleFile(
+                    file,
+                    at: nil,
+                    completionCallbackType: .dataPlayedBack
+                ) { _ in
+                    Task { @MainActor in
+                        guard AudioPlaybackCompletionPolicy.shouldResetPlayback(
+                            completedGeneration: generation,
+                            activeGeneration: playbackGeneration
+                        ) else {
+                            return
+                        }
+                        audioEngine.stop()
+                        isPlaying = false
+                    }
+                }
+                playerNode.play()
             }
         } catch {
+            playbackGeneration = UUID()
+            playerNode.stop()
+            audioEngine.stop()
+            isPlaying = false
+            audioPlaybackError = "The recording is missing, damaged, or temporarily unavailable. Try again after checking your connection."
             print("Engine playback error: \(error)")
         }
     }
 
     private func shareMemory() {
-        var items: [Any] = []
-        if let text = memory.text { items.append(text) }
-        if let url = memory.playbackURL {
-            items.append(url)
+        guard !isPreparingShare else { return }
+        guard MemoryUserScope.belongsToCurrentUser(memory),
+              let expectedContext = MemorySharePreparationPolicy.context(
+                memoryID: memory.id,
+                ownerID: memory.firebaseUserId,
+                textReference: memory.text,
+                audioReference: memory.audioFileURL
+              ) else {
+            shareErrorMessage = "Your signed-in account changed. Reopen the memory before sharing it."
+            return
         }
-        items.append(contentsOf: images)
-        let av = UIActivityViewController(activityItems: items, applicationActivities: nil)
-        if let pop = av.popoverPresentationController,
-           let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let root = scene.windows.first?.rootViewController {
-            pop.sourceView = root.view
-            pop.sourceRect = CGRect(x: root.view.bounds.midX, y: root.view.bounds.midY, width: 0, height: 0)
-            pop.permittedArrowDirections = []
+
+        let request = MemorySharePreparationPolicy.request(
+            text: memory.text,
+            localAudioURL: memory.playbackURL,
+            storedAudioURL: memory.audioFileURL
+        )
+        guard request.hasContent else {
+            shareErrorMessage = "This memory doesn’t have any text or audio to share yet."
+            return
         }
-        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let root = scene.windows.first?.rootViewController {
-            root.present(av, animated: true)
+
+        sharePreparationTask?.cancel()
+        isPreparingShare = true
+        shareErrorMessage = nil
+        sharePreparationTask = Task { @MainActor in
+            var downloadedAudioURL: URL?
+            var transientDownloadURL: URL?
+            do {
+                if let remoteURL = request.remoteAudioURL {
+                    let (downloadURL, response) = try await URLSession.shared.download(from: remoteURL)
+                    transientDownloadURL = downloadURL
+                    guard let httpResponse = response as? HTTPURLResponse,
+                          (200..<300).contains(httpResponse.statusCode) else {
+                        try? FileManager.default.removeItem(at: downloadURL)
+                        throw URLError(.badServerResponse)
+                    }
+
+                    let maximumAudioBytes: Int64 = 300 * 1_024 * 1_024
+                    if response.expectedContentLength > maximumAudioBytes {
+                        try? FileManager.default.removeItem(at: downloadURL)
+                        throw URLError(.dataLengthExceedsMaximum)
+                    }
+
+                    let supportedExtensions = ["m4a", "caf", "mp3", "wav", "aac"]
+                    let remoteExtension = remoteURL.pathExtension.lowercased()
+                    let fileExtension = supportedExtensions.contains(remoteExtension) ? remoteExtension : "m4a"
+                    let destinationURL = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("memoir-share-\(UUID().uuidString).\(fileExtension)")
+                    try FileManager.default.moveItem(at: downloadURL, to: destinationURL)
+                    transientDownloadURL = nil
+                    downloadedAudioURL = destinationURL
+
+                    let downloadedByteCount = try destinationURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                    guard downloadedByteCount > 0 else {
+                        throw URLError(.zeroByteResource)
+                    }
+                    guard Int64(downloadedByteCount) <= maximumAudioBytes else {
+                        throw URLError(.dataLengthExceedsMaximum)
+                    }
+                    try Task.checkCancellation()
+                }
+
+                guard MemorySharePreparationPolicy.isCurrent(
+                    expected: expectedContext,
+                    memoryID: memory.id,
+                    ownerID: memory.firebaseUserId,
+                    textReference: memory.text,
+                    audioReference: memory.audioFileURL,
+                    currentUserID: MemoryUserScope.currentFirebaseUserId
+                ), !memory.isDeleted else {
+                    if let downloadedAudioURL {
+                        try? FileManager.default.removeItem(at: downloadedAudioURL)
+                    }
+                    isPreparingShare = false
+                    sharePreparationTask = nil
+                    shareErrorMessage = "The account or memory changed while the recording was downloading. Reopen it and try again."
+                    return
+                }
+
+                var items: [Any] = []
+                if let text = request.text {
+                    items.append(text)
+                }
+                if let localAudioURL = request.localAudioURL {
+                    items.append(localAudioURL)
+                } else if let downloadedAudioURL {
+                    items.append(downloadedAudioURL)
+                }
+                guard !items.isEmpty else {
+                    if let downloadedAudioURL {
+                        try? FileManager.default.removeItem(at: downloadedAudioURL)
+                    }
+                    isPreparingShare = false
+                    sharePreparationTask = nil
+                    shareErrorMessage = "This memory doesn’t have any text or audio to share yet."
+                    return
+                }
+
+                guard let scene = UIApplication.shared.connectedScenes
+                    .compactMap({ $0 as? UIWindowScene })
+                    .first(where: { $0.activationState == .foregroundActive }),
+                      let window = scene.windows.first(where: \.isKeyWindow) ?? scene.windows.first,
+                      let root = window.rootViewController else {
+                    if let downloadedAudioURL {
+                        try? FileManager.default.removeItem(at: downloadedAudioURL)
+                    }
+                    isPreparingShare = false
+                    sharePreparationTask = nil
+                    shareErrorMessage = "The share sheet isn’t available right now. Try again in a moment."
+                    return
+                }
+
+                let activityViewController = UIActivityViewController(
+                    activityItems: items,
+                    applicationActivities: nil
+                )
+                activityViewController.completionWithItemsHandler = { _, _, _, _ in
+                    Task { @MainActor in
+                        if let downloadedAudioURL {
+                            try? FileManager.default.removeItem(at: downloadedAudioURL)
+                        }
+                        if temporarySharedAudioURL == downloadedAudioURL {
+                            temporarySharedAudioURL = nil
+                        }
+                        isShareSheetPresented = false
+                    }
+                }
+                if let popover = activityViewController.popoverPresentationController {
+                    popover.sourceView = window
+                    popover.sourceRect = CGRect(
+                        x: window.bounds.midX,
+                        y: window.bounds.midY,
+                        width: 0,
+                        height: 0
+                    )
+                    popover.permittedArrowDirections = []
+                }
+
+                temporarySharedAudioURL = downloadedAudioURL
+                isShareSheetPresented = true
+                isPreparingShare = false
+                sharePreparationTask = nil
+                root.present(activityViewController, animated: true)
+            } catch is CancellationError {
+                if let transientDownloadURL {
+                    try? FileManager.default.removeItem(at: transientDownloadURL)
+                }
+                if let downloadedAudioURL {
+                    try? FileManager.default.removeItem(at: downloadedAudioURL)
+                }
+                isPreparingShare = false
+                sharePreparationTask = nil
+            } catch {
+                if let transientDownloadURL {
+                    try? FileManager.default.removeItem(at: transientDownloadURL)
+                }
+                if let downloadedAudioURL {
+                    try? FileManager.default.removeItem(at: downloadedAudioURL)
+                }
+                isPreparingShare = false
+                sharePreparationTask = nil
+                shareErrorMessage = "The recording couldn’t be downloaded. Check your connection and try again."
+                print("Failed to prepare memory share: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -1221,7 +1562,7 @@ struct MemoryDetailView: View {
                 do {
                     try context.save()
                     NotificationCenter.default.post(name: .memorySaved, object: nil)
-                    print("✅ Title regenerated: '\(generatedTitle)'")
+                    print("✅ Memory title regenerated")
                 } catch {
                     print("❌ Failed to save regenerated title: \(error)")
                 }
@@ -1625,12 +1966,12 @@ struct CharacterDetailsQuestionView: View {
             
             // If character has a name but no globalCharacterId, create/find global character
             if !character.name.isEmpty && character.globalCharacterId == nil {
-                let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
+                guard let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
                     name: character.name,
                     profileID: profileID
-                )
+                ) else { continue }
                 characterDetails.characters[index].globalCharacterId = globalId
-                print("✅ Linked character '\(character.name)' to global registry (ID: \(globalId.uuidString))")
+                print("Linked character to global registry")
             }
         }
         
@@ -1645,7 +1986,7 @@ struct CharacterDetailsQuestionView: View {
             if let encoded = try? JSONEncoder().encode(characterDetails),
                let jsonString = String(data: encoded, encoding: .utf8) {
                 memory.setValue(jsonString, forKey: "characterDetails")
-                print("✅ Character details encoded and saved using KVC: \(jsonString.prefix(50))...")
+                print("✅ Character details encoded and saved using KVC (\(jsonString.count) characters)")
             }
             
             // 2. Backup: Save to UserDefaults as failsafe
@@ -1732,7 +2073,7 @@ struct CharacterDetailsQuestionView: View {
     /// Copies from most recent appearance as starting point
     private func addExistingCharacter(_ character: CharacterDetails.Character) {
         guard !isCharacterAlreadyAdded(character) else {
-            print("⚠️ Character '\(character.name)' already added")
+            print("⚠️ Character already added")
             return
         }
         
@@ -1746,10 +2087,10 @@ struct CharacterDetailsQuestionView: View {
         } else if !character.name.isEmpty {
             // If no global ID but has name, find or create global character
             let profileID = profileVM.selectedProfile.id
-            let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
+            guard let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
                 name: character.name,
                 profileID: profileID
-            )
+            ) else { return }
             newCharacter.globalCharacterId = globalId
         }
         
@@ -1757,7 +2098,7 @@ struct CharacterDetailsQuestionView: View {
             characterDetails.characters.append(newCharacter)
         }
         
-        print("✅ Added existing character: \(character.name) (can edit appearance for this memory)")
+        print("✅ Added existing character (appearance remains editable for this memory)")
     }
 }
 
@@ -2593,5 +2934,3 @@ struct MemoryDetailView_Previews: PreviewProvider {
         }
     }
 }
-
-

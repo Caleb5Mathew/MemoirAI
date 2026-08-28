@@ -2,14 +2,7 @@
 // MemoirAI
 
 import SwiftUI
-import PhotosUI
 import CoreData
-
-// Wrapper to allow Data to be used with .sheet(item:)
-struct IdentifiableData: Identifiable {
-    let id = UUID()
-    let data: Data
-}
 
 struct HomepageView: View {
     // MARK: – Environment & Context
@@ -23,18 +16,10 @@ struct HomepageView: View {
     @State private var promptCompleted: Bool = false
 
     @State private var entries: [MemoryEntry] = []
-    private var totalChapters: Int { activeChapters.count }
-
-    @State private var isShowingPhotoPicker = false
-    @State private var photoSelection: PhotosPickerItem? = nil
-    @State private var selectedPhotoData: IdentifiableData? = nil
 
     @State private var showingAddProfile = false
     @State private var showProfileEdit = false
     @State private var showProfileSwitcher = false
-
-    @State private var showMemoryRecoveryAlert = false
-    @State private var recoveredMemoryCount = 0
 
     @State private var showMemoirPicker = false
     @State private var pendingNavigateToMemoir = false
@@ -46,23 +31,6 @@ struct HomepageView: View {
 
     // MARK: – Computed Properties
 
-    /// How many full chapters have been completed?
-    private func completedChaptersCount() -> Int {
-        activeChapters.filter { chapter in
-            filledPromptSlotsForChapter(entries: entries, chapter: chapter) >= chapter.prompts.count
-        }.count
-    }
-
-    /// The text to show under "Continue Your Memoir"
-    private var progressText: String {
-        let done = completedChaptersCount()
-        if done == 0 {
-            return "No chapters completed yet"
-        } else {
-            return "\(done) of \(totalChapters) chapters completed"
-        }
-    }
-    
     /// Total memories completed (across all chapters)
     private var completedMemoriesCount: Int {
         entries.filter { entry in
@@ -134,24 +102,7 @@ struct HomepageView: View {
                                 .padding(.horizontal)
                         }
 
-                        // START RECORDING
-                        NavigationLink(destination: RecordMemoryView()
-                            .environmentObject(profileVM)
-                            .environmentObject(tutorialCoordinator)) {
-                            Text("Start Recording")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundColor(.white)
-                                .padding(.vertical, 14)
-                                .frame(maxWidth: .infinity)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 24)
-                                        .fill(Color(red: 0.83, green: 0.45, blue: 0.14))
-                                )
-                                .padding(.horizontal)
-                                .shadow(color: Color.orange.opacity(0.25), radius: 6, x: 0, y: 3)
-                        }
-
-                        // CONTINUE YOUR MEMOIR
+                        // CONTINUE YOUR MEMORIES
                         Button {
                             if hasChosenMemoirMode {
                                 navigateToMemoir = true
@@ -160,28 +111,25 @@ struct HomepageView: View {
                             }
                         } label: {
                             HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Continue Your Memoir")
-                                        .font(.footnote)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.black)
-                                    Text(progressText)
-                                        .font(.subheadline)
-                                        .foregroundColor(.black.opacity(0.7))
-                                }
+                                Text("Continue Your Memories")
+                                    .font(.system(size: 18, weight: .semibold))
                                 Spacer()
                                 HStack(spacing: 8) {
                                     Text("\(completionPercentage)%")
                                         .font(.system(size: 16, weight: .bold))
-                                        .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
+                                        .foregroundColor(.white)
                                     Image(systemName: "chevron.right")
-                                        .foregroundColor(.gray)
+                                        .foregroundColor(.white.opacity(0.85))
                                 }
                             }
-                            .padding()
-                            .background(Color(red: 0.98, green: 0.93, blue: 0.80))
-                            .cornerRadius(16)
-                            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 22)
+                            .padding(.vertical, 14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 24)
+                                    .fill(Color(red: 0.83, green: 0.45, blue: 0.14))
+                            )
+                            .shadow(color: Color.orange.opacity(0.25), radius: 6, x: 0, y: 3)
                             .padding(.horizontal)
                         }
                         .buttonStyle(.plain)
@@ -194,31 +142,6 @@ struct HomepageView: View {
                             }
                         )
                         .accessibilityIdentifier("tutorialContinueYourMemoir")
-
-                        // RECORD MEMORIES
-                        NavigationLink(destination: RecordMemoryView()
-                            .environmentObject(profileVM)
-                            .environmentObject(tutorialCoordinator)) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Record Memories")
-                                        .font(.footnote)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.black)
-                                    Text("Share stories in your own voice")
-                                        .font(.subheadline)
-                                        .foregroundColor(.black.opacity(0.7))
-                                }
-                                Spacer()
-                                Image(systemName: "mic.fill")
-                                    .foregroundColor(Color(red: 0.83, green: 0.45, blue: 0.14))
-                            }
-                            .padding()
-                            .background(Color(red: 0.98, green: 0.93, blue: 0.80))
-                            .cornerRadius(16)
-                            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
-                            .padding(.horizontal)
-                        }
                         
                         // YOUR BOOK (Premium Gradient Outline)
                         NavigationLink(destination: StoryPage()
@@ -289,7 +212,7 @@ struct HomepageView: View {
             .onAppear {
                 tutorialCoordinator.setVisibleScreen(.home)
                 resetDailyPromptIfNeeded()
-                checkAndRecoverOrphanedMemories()
+                migrateLegacyUnassignedMemories()
                 fetchEntries()
 
             }
@@ -326,34 +249,12 @@ struct HomepageView: View {
                 AddProfileView()
                     .environmentObject(profileVM)
             }
-            .photosPicker(isPresented: $isShowingPhotoPicker, selection: $photoSelection, matching: .images)
-            .onChange(of: photoSelection) { newItem in
-                if let newItem = newItem {
-                    loadPhotoData(newItem)
-                }
-            }
-            .sheet(item: $selectedPhotoData) { wrapper in
-                CropSheetView(photoData: wrapper.data) { croppedData in
-                    // profileVM.addProfile(...) as needed
-                }
-            }
             .fullScreenCover(isPresented: $showProfileEdit) {
                 ProfileEditView(profileVM: profileVM)
             }
             .sheet(isPresented: $showProfileSwitcher) {
                 ProfileSwitcherView()
                     .environmentObject(profileVM)
-            }
-            .alert("Memories Recovered!", isPresented: $showMemoryRecoveryAlert) {
-                Button("Great!") {}
-            } message: {
-                Text("We found and recovered \(recoveredMemoryCount) of your memories that were previously missing.")
-            }
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("MemoriesRecovered"))) { notification in
-                if let count = notification.object as? Int, count > 0 {
-                    recoveredMemoryCount = count
-                    showMemoryRecoveryAlert = true
-                }
             }
             .toolbar(.hidden, for: .navigationBar)
         }
@@ -362,52 +263,39 @@ struct HomepageView: View {
 
     // MARK: – Data Fetching & Helpers
     
-    /// Check for orphaned memories (memories with profileID that doesn't match current profile)
-    /// and reassign them to the current profile
-    private func checkAndRecoverOrphanedMemories() {
+    /// Assigns only pre-profile legacy rows. Existing profile ownership is authoritative.
+    private func migrateLegacyUnassignedMemories() {
         let context = PersistenceController.shared.container.viewContext
         let currentProfileID = profileVM.selectedProfile.id
-        
-        // Fetch ALL memories (no profileID filter)
+
+        guard let uid = MemoryUserScope.currentFirebaseUserId else { return }
+
         let allRequest: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
-        if let uid = MemoryUserScope.currentFirebaseUserId {
-            allRequest.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [
-                NSPredicate(format: "firebaseUserId == %@", uid),
-                NSPredicate(format: "firebaseUserId == nil")
-            ])
+        let predicates: [NSPredicate] = [
+            NSPredicate(format: "profileID == nil"),
+            NSPredicate(format: "firebaseUserId == %@", uid)
+        ]
+        allRequest.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+
+        guard let legacyMemories = try? context.fetch(allRequest), !legacyMemories.isEmpty else {
+            return
         }
-        
-        guard let allMemories = try? context.fetch(allRequest), !allMemories.isEmpty else {
-            return // No memories at all
+
+        for memory in legacyMemories {
+            guard let recoveredProfileID = MemoryProfileRecoveryPolicy.recoveredProfileID(
+                existingProfileID: memory.profileID,
+                selectedProfileID: currentProfileID
+            ) else {
+                continue
+            }
+            memory.profileID = recoveredProfileID
         }
-        
-        // Find memories that don't belong to current profile
-        let orphanedMemories = allMemories.filter { $0.profileID != currentProfileID }
-        
-        if !orphanedMemories.isEmpty {
-            print("🔍 Found \(orphanedMemories.count) orphaned memories. Reassigning to current profile...")
-            
-            // Reassign orphaned memories to current profile
-            for memory in orphanedMemories {
-                memory.profileID = currentProfileID
-                if memory.firebaseUserId == nil {
-                    memory.firebaseUserId = MemoryUserScope.currentFirebaseUserId
-                }
-            }
-            
-            do {
-                try context.save()
-                print("✅ Successfully reassigned \(orphanedMemories.count) memories to profile \(currentProfileID.uuidString)")
-                
-                // Show recovery alert
-                recoveredMemoryCount = orphanedMemories.count
-                showMemoryRecoveryAlert = true
-                
-                // Refresh entries
-                fetchEntries()
-            } catch {
-                print("❌ Failed to save recovered memories: \(error)")
-            }
+
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            print("❌ Failed to migrate legacy unassigned memories: \(error)")
         }
     }
 
@@ -422,25 +310,13 @@ struct HomepageView: View {
         
         do {
             entries = try context.fetch(request)
-            print("📊 Homepage fetched \(entries.count) entries for profile \(profileVM.selectedProfile.name)")
+            print("📊 Homepage fetched \(entries.count) entries for active profile")
             
             // Debug: log how many have chapters
             let withChapter = entries.filter { $0.chapter != nil && !($0.chapter?.isEmpty ?? true) }
             print("📊 Entries with chapter: \(withChapter.count)")
         } catch {
             print("Failed to fetch entries:", error)
-        }
-    }
-
-    private func loadPhotoData(_ newItem: PhotosPickerItem) {
-        Task {
-            do {
-                if let data = try await newItem.loadTransferable(type: Data.self) {
-                    selectedPhotoData = IdentifiableData(data: data)
-                }
-            } catch {
-                print("Failed to load data:", error)
-            }
         }
     }
 

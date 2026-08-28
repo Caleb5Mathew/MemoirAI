@@ -14,6 +14,8 @@ struct ProfilePhotoView: View {
 
     @State private var showingLibraryPicker = false
     @State private var showingCamera = false
+    @State private var showDeleteProfileConfirmation = false
+    @State private var profileDeletionMessage: String?
 
     private let switchButtonInset: CGFloat = 40
 
@@ -75,6 +77,36 @@ struct ProfilePhotoView: View {
         } message: {
             Text("Enter a new name for this profile.")
         }
+        .alert("Delete Profile?", isPresented: $showDeleteProfileConfirmation) {
+            Button("Delete Profile", role: .destructive) {
+                Task { @MainActor in
+                    switch await viewModel.deleteSelectedProfile() {
+                    case .deleted:
+                        break
+                    case .hasContent:
+                        profileDeletionMessage = "Move or delete this profile's memories and books before deleting the profile. Nothing was changed."
+                    case .lastProfile:
+                        profileDeletionMessage = "MemoirAI needs at least one profile."
+                    case .verificationFailed:
+                        profileDeletionMessage = "MemoirAI could not verify that this profile is empty. Check your connection and try again."
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This deletes the empty profile from this device and your MemoirAI account.")
+        }
+        .alert(
+            "Profile Not Deleted",
+            isPresented: Binding(
+                get: { profileDeletionMessage != nil },
+                set: { if !$0 { profileDeletionMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { profileDeletionMessage = nil }
+        } message: {
+            Text(profileDeletionMessage ?? "Nothing was changed.")
+        }
     }
 
     private var profileImageBox: some View {
@@ -128,7 +160,7 @@ struct ProfilePhotoView: View {
                     }
                     if viewModel.profiles.count > 1 {
                         Button("Delete Profile", role: .destructive) {
-                            viewModel.deleteSelectedProfile()
+                            showDeleteProfileConfirmation = true
                         }
                     }
                 } label: {

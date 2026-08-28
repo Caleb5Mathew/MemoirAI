@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.24</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -41,11 +41,11 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>We need to record your voice so you can capture your memory as audio.</string>
+	<string>MemoirAI uses your microphone to record voice memories. Saved recordings are uploaded to your private account and sent to our transcription provider to create text.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>We need camera access so you can take a head-shot photo for more accurate portraits in your storybook.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -53,7 +53,7 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>We need permission to save your book pages as images to your photo library.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>We need to transcribe your audio recordings into text for you to read later.</string>
+	<string>MemoirAI uses Apple Speech Recognition to show optional live captions while you record.</string>
 	<key>NSUserTrackingUsageDescription</key>
 	<string>This allows us to provide you with better ads and understand which ads lead to subscriptions, helping us improve our service.</string>
 	<key>BOOK_RENDER_FUNCTION_URL</key>
@@ -65,13 +65,13 @@
 	<key>FacebookDisplayName</key>
 	<string>Memoir</string>
 	<key>FacebookAutoInitEnabled</key>
-	<true/>
+	<false/>
 	<key>FacebookAutoLogAppEventsEnabled</key>
 	<true/>
 	<key>FacebookClientToken</key>
 	<string>dcad7977ac077cde6b61dc6c218c29a3</string>
 	<key>FacebookAdvertiserIDCollectionEnabled</key>
-	<true/>
+	<false/>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>fbapi</string>
@@ -269,7 +269,7 @@
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
+		<false/>
 		<key>UISceneConfigurations</key>
 		<dict>
 			<key>UIWindowSceneSessionRoleApplication</key>
@@ -305,5 +305,7 @@
 	<string>MemoirAI</string>
 	<key>NSUbiquitousContainerSupportedFolderLevels</key>
 	<string>None</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

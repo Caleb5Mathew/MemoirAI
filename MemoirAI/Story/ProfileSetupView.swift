@@ -34,10 +34,11 @@ fileprivate enum GenderOption: String, CaseIterable, Identifiable {
 /// Bottom sheet for headshot source: always shows camera + library; camera tap shows an alert when unavailable (e.g. Simulator).
 private struct HeadshotPhotoSourceSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var showImagePicker = false
+    @State private var showCameraUnavailableAlert = false
+    @State private var pickerSource: UIImagePickerController.SourceType = .photoLibrary
 
-    let onLibrary: () -> Void
-    let onCamera: () -> Void
-    let onCameraUnavailable: () -> Void
+    let onImagePicked: (UIImage) -> Void
 
     var body: some View {
         VStack(spacing: 16) {
@@ -47,10 +48,10 @@ private struct HeadshotPhotoSourceSheet: View {
 
             Button {
                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    onCamera()
-                    dismiss()
+                    pickerSource = .camera
+                    showImagePicker = true
                 } else {
-                    onCameraUnavailable()
+                    showCameraUnavailableAlert = true
                 }
             } label: {
                 Label("Take Photo", systemImage: "camera.fill")
@@ -61,8 +62,8 @@ private struct HeadshotPhotoSourceSheet: View {
             .tint(LocalColors.terracotta)
 
             Button {
-                onLibrary()
-                dismiss()
+                pickerSource = .photoLibrary
+                showImagePicker = true
             } label: {
                 Label("Choose from Library", systemImage: "photo.on.rectangle.angled")
                     .frame(maxWidth: .infinity)
@@ -78,6 +79,18 @@ private struct HeadshotPhotoSourceSheet: View {
         .padding(.horizontal, 24)
         .presentationDetents([.height(320)])
         .presentationDragIndicator(.visible)
+        .fullScreenCover(isPresented: $showImagePicker) {
+            ImagePicker(source: pickerSource, allowsCropping: true) { image in
+                onImagePicked(image)
+                showImagePicker = false
+                dismiss()
+            }
+        }
+        .alert("Camera Not Available", isPresented: $showCameraUnavailableAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Taking a photo requires a camera. Choose a photo from your library, or try again on a physical iPhone.")
+        }
     }
 }
 
@@ -120,12 +133,7 @@ struct ProfileSetupView: View {
     
     // Pick / crop state
     @State private var showSourceChooser = false
-    @State private var showImagePicker   = false
     @State private var showCropper       = false
-    @State private var pickerSource: UIImagePickerController.SourceType = .photoLibrary
-    /// Set before closing the source sheet; consumed in `onDismiss` to present the image picker (avoids stacked-sheet issues).
-    @State private var pendingPickerSourceAfterSourceSheet: UIImagePickerController.SourceType?
-    @State private var showCameraUnavailableAlert = false
     
     // Track if user has added/modified photo in this session
     @State private var hasUserAddedPhoto = false
@@ -317,24 +325,13 @@ struct ProfileSetupView: View {
             }
         }
         // ── Pick / crop modals ─────────────────────────────
-        .sheet(isPresented: $showSourceChooser, onDismiss: {
-            if let source = pendingPickerSourceAfterSourceSheet {
-                pendingPickerSourceAfterSourceSheet = nil
-                pickerSource = source
-                showImagePicker = true
-            }
-        }) {
+        .sheet(isPresented: $showSourceChooser) {
             HeadshotPhotoSourceSheet(
-                onLibrary: { pendingPickerSourceAfterSourceSheet = .photoLibrary },
-                onCamera: { pendingPickerSourceAfterSourceSheet = .camera },
-                onCameraUnavailable: { showCameraUnavailableAlert = true }
+                onImagePicked: { image in
+                    headshotImage = image
+                    hasUserAddedPhoto = true
+                }
             )
-        }
-        .sheet(isPresented: $showImagePicker) {
-            ImagePicker(source: pickerSource, allowsCropping: true) { img in
-                headshotImage = img
-                hasUserAddedPhoto = true // Mark that user has added a photo
-            }
         }
         .sheet(isPresented: $showCropper) {
             if let current = headshotImage {
@@ -353,11 +350,6 @@ struct ProfileSetupView: View {
             })
             .environmentObject(profileVM)
             .environmentObject(subscriptionManager)
-        }
-        .alert("Camera Not Available", isPresented: $showCameraUnavailableAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Taking a photo requires a camera. Use “Choose from Library” here, or try again on a physical iPhone.")
         }
         .onAppear {
             let profile = profileVM.selectedProfile
@@ -431,6 +423,7 @@ struct ProfileSetupView: View {
             createdAt: profile.createdAt,
             updatedAt: Date(),
             childNames: profile.childNames,
+            transcriptionGlossary: profile.transcriptionGlossary,
             faceDescription: profile.faceDescription,
             faceDescriptionPhotoHash: profile.faceDescriptionPhotoHash
         )
@@ -450,6 +443,7 @@ struct ProfileSetupView: View {
             createdAt: profile.createdAt,
             updatedAt: Date(),
             childNames: profile.childNames,
+            transcriptionGlossary: profile.transcriptionGlossary,
             faceDescription: profile.faceDescription,
             faceDescriptionPhotoHash: profile.faceDescriptionPhotoHash
         )
@@ -596,7 +590,9 @@ struct ProfileSetupView_Previews: PreviewProvider {
                          race: $race,
                          gender: $gender, // Pass binding
                          onGenerate: {
-            print("Generate button tapped with name: \(name), race: \(race), gender: \(gender)")
+            #if DEBUG
+            print("Generate button tapped with profile fields present: name=\(!name.isEmpty), race=\(!race.isEmpty), gender=\(!gender.isEmpty)")
+            #endif
         })
     }
 }

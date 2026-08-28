@@ -176,7 +176,7 @@ struct StorybookGalleryView: View {
         .animation(.easeInOut(duration: 0.2), value: isOpeningSelection)
         .navigationBarHidden(true)
         .onAppear {
-            print("🧭 Gallery[\(debugSessionID)] onAppear; profile=\(profileVM.selectedProfile.id.uuidString)")
+            print("🧭 Gallery[\(debugSessionID)] onAppear; profile=\(profileVM.selectedProfile.id.uuidString.prefix(8))…")
             Task {
                 await loadBooks()
             }
@@ -214,11 +214,21 @@ struct StorybookGalleryView: View {
                         allBooks.removeAll { $0.bookVersionId == b.bookVersionId }
                         legacyBooksById[b.bookVersionId] = nil
                         legacyCoverByBookId[b.bookVersionId] = nil
-                        StorybookLocalStore.removeHistoryFiles(matchingBookCreatedAt: createdAt, profileID: profileID)
+                        StorybookLocalStore.removeHistoryFile(
+                            bookVersionID: b.bookVersionId,
+                            fallbackCreatedAt: createdAt,
+                            profileID: profileID
+                        )
+                        StorybookLocalStore.removeCloudCache(
+                            bookVersionID: b.bookVersionId,
+                            fallbackCreatedAt: createdAt,
+                            profileID: profileID
+                        )
                         if let data = StorybookLocalStore.readCurrentBookData(profileID: profileID),
                            let p = try? JSONDecoder().decode(PersistableStorybook.self, from: data),
                            p.profileID == profileID,
-                           Int(p.createdAt.timeIntervalSince1970) == Int(createdAt.timeIntervalSince1970) {
+                           (p.bookVersionID == b.bookVersionId
+                            || (p.bookVersionID == nil && abs(p.createdAt.timeIntervalSince(createdAt)) < 0.001)) {
                             StorybookLocalStore.removeCurrentBook(profileID: profileID)
                         }
                     case .blockedBecauseOrderExists:
@@ -425,17 +435,21 @@ struct StorybookGalleryView: View {
                 initialBooks: cloudBooks
             )
             if pruned.count != cloudBooks.count {
-                print("🧹 Gallery: duplicate book cleanup pruned \(cloudBooks.count - pruned.count) doc(s) for profile=\(profileID.uuidString)")
+                print("🧹 Gallery: duplicate book cleanup pruned \(cloudBooks.count - pruned.count) doc(s) for profile=\(profileID.uuidString.prefix(8))…")
             }
             cloudBooks = pruned
             FirestoreSyncService.shared.markDuplicateBookCleanupDone(profileID: profileID)
         }
-        print("🧭 Gallery[\(debugSessionID)] loadBooks profile=\(profileID.uuidString), cloudCount=\(cloudBooks.count)")
+        print("🧭 Gallery[\(debugSessionID)] loadBooks profile=\(profileID.uuidString.prefix(8))…, cloudCount=\(cloudBooks.count)")
         
         // Always load local PersistableStorybooks for imageData fallback (file-backed + legacy migration)
-        let localHistory = StorybookLocalStore.readHistoryDataArray(profileID: profileID)
-        let decoder = JSONDecoder()
-        let localBooks = localHistory.compactMap { try? decoder.decode(PersistableStorybook.self, from: $0) }
+        let localBooks = await Task.detached(priority: .utility) {
+            let localHistory = StorybookLocalStore.readHistoryDataArray(profileID: profileID)
+            let decoder = JSONDecoder()
+            return localHistory.compactMap {
+                try? decoder.decode(PersistableStorybook.self, from: $0)
+            }
+        }.value
         var localByTimestamp: [Int: PersistableStorybook] = [:]
         for book in localBooks {
             localByTimestamp[Int(book.createdAt.timeIntervalSince1970)] = book
@@ -1224,4 +1238,4 @@ private struct StorybookReaderView: View, Identifiable {
 // Identifiable conformance so we can use sheet(item:)
 extension PersistableStorybook: Identifiable {
     public var id: Date { createdAt }
-} 
+}

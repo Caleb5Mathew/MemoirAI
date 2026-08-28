@@ -65,7 +65,51 @@ struct BookVersionPageRecord: Codable, Identifiable {
     let renderedPixelHeight: Int?
     let renderedChecksum: String?
     let renderedBytes: Int?
+    let freeformDocumentStoragePath: String?
+    let freeformDocumentURL: String?
     let createdAt: Date
+
+    init(
+        pageIndex: Int,
+        type: String,
+        memoryId: String?,
+        memoryCreatedAt: Date?,
+        title: String?,
+        subtitle: String?,
+        textContent: String?,
+        imageStoragePath: String?,
+        imageURL: String?,
+        renderedPageStoragePath: String?,
+        renderedPageURL: String?,
+        renderedPageFormat: String?,
+        renderedPixelWidth: Int?,
+        renderedPixelHeight: Int?,
+        renderedChecksum: String?,
+        renderedBytes: Int?,
+        freeformDocumentStoragePath: String? = nil,
+        freeformDocumentURL: String? = nil,
+        createdAt: Date
+    ) {
+        self.pageIndex = pageIndex
+        self.type = type
+        self.memoryId = memoryId
+        self.memoryCreatedAt = memoryCreatedAt
+        self.title = title
+        self.subtitle = subtitle
+        self.textContent = textContent
+        self.imageStoragePath = imageStoragePath
+        self.imageURL = imageURL
+        self.renderedPageStoragePath = renderedPageStoragePath
+        self.renderedPageURL = renderedPageURL
+        self.renderedPageFormat = renderedPageFormat
+        self.renderedPixelWidth = renderedPixelWidth
+        self.renderedPixelHeight = renderedPixelHeight
+        self.renderedChecksum = renderedChecksum
+        self.renderedBytes = renderedBytes
+        self.freeformDocumentStoragePath = freeformDocumentStoragePath
+        self.freeformDocumentURL = freeformDocumentURL
+        self.createdAt = createdAt
+    }
 
     var id: String { "page_\(pageIndex)" }
 
@@ -89,6 +133,8 @@ struct BookVersionPageRecord: Codable, Identifiable {
         if let renderedPixelHeight { data["renderedPixelHeight"] = renderedPixelHeight }
         if let renderedChecksum { data["renderedChecksum"] = renderedChecksum }
         if let renderedBytes { data["renderedBytes"] = renderedBytes }
+        if let freeformDocumentStoragePath { data["freeformDocumentStoragePath"] = freeformDocumentStoragePath }
+        if let freeformDocumentURL { data["freeformDocumentURL"] = freeformDocumentURL }
         return data
     }
 
@@ -118,6 +164,8 @@ struct BookVersionPageRecord: Codable, Identifiable {
             renderedPixelHeight: data["renderedPixelHeight"] as? Int,
             renderedChecksum: data["renderedChecksum"] as? String,
             renderedBytes: data["renderedBytes"] as? Int,
+            freeformDocumentStoragePath: data["freeformDocumentStoragePath"] as? String,
+            freeformDocumentURL: data["freeformDocumentURL"] as? String,
             createdAt: createdAt
         )
     }
@@ -447,4 +495,3 @@ extension BookVersionRecord {
         return nil
     }
 }
-

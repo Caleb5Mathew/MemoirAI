@@ -159,6 +159,7 @@ extension OrderService {
     /// `userInfo` dictionary and any `NSUnderlyingErrorKey` chain. Server-side, prefer non-`internal`
     /// `HttpsError` codes and put diagnostics in the top-level message when possible.
     static func printCallableDiagnostics(_ error: Error, context: String) {
+        #if DEBUG
         var lines: [String] = []
         lines.append("📛 Callable error — \(context)")
         if isBareInternalCallableErrorLikelyDroppedConnection(error) {
@@ -204,6 +205,10 @@ extension OrderService {
         }
 
         print(lines.joined(separator: "\n"))
+        #else
+        let ns = error as NSError
+        print("📛 Callable error — \(context), domain=\(ns.domain), code=\(ns.code)")
+        #endif
     }
 
     #if DEBUG
@@ -406,6 +411,29 @@ final class OrderService {
     private let db = Firestore.firestore()
 
     private init() {}
+
+    func verifyCheckoutReturn(sessionId: String) async throws -> CheckoutReturnVerification {
+        guard Auth.auth().currentUser != nil else {
+            throw OrderError.notAuthenticated
+        }
+        guard let normalized = CheckoutReturnPolicy.normalizeSessionID(sessionId) else {
+            throw OrderError.badResponse
+        }
+        let callable = Functions.functions().httpsCallable("verifyCheckoutReturn")
+        callable.timeoutInterval = 30
+        let result = try await callable.call(["sessionId": normalized])
+        guard let response = result.data as? [String: Any],
+              let verified = response["verified"] as? Bool,
+              let paymentConfirmed = response["paymentConfirmed"] as? Bool,
+              let orderRecorded = response["orderRecorded"] as? Bool else {
+            throw OrderError.badResponse
+        }
+        return CheckoutReturnVerification(
+            verified: verified,
+            paymentConfirmed: paymentConfirmed,
+            orderRecorded: orderRecorded
+        )
+    }
 
     func estimateCheckoutPricing(
         bookVersionId: String,
@@ -974,6 +1002,32 @@ final class OrderService {
             guard let updated = order.updatedAt else { return false }
             return updated > lastViewed && order.status != OrderStatus.paid.rawValue
         }
+    }
+}
+
+enum CheckoutReturnPolicy {
+    static let pendingSessionDefaultsKey = "pendingStripeReturnSessionId"
+
+    static func normalizeSessionID(_ raw: String?) -> String? {
+        guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              value.count <= 208,
+              value.range(
+                of: #"^cs_(?:test|live)_[A-Za-z0-9]{8,200}$"#,
+                options: .regularExpression
+              ) != nil else {
+            return nil
+        }
+        return value
+    }
+}
+
+struct CheckoutReturnVerification: Equatable {
+    let verified: Bool
+    let paymentConfirmed: Bool
+    let orderRecorded: Bool
+
+    var isFinalizingPaidOrder: Bool {
+        paymentConfirmed && !orderRecorded
     }
 }
 

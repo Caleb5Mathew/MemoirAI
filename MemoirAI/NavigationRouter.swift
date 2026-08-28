@@ -32,12 +32,12 @@ final class NavigationRouter: ObservableObject {
 
     /// Call from deep-link handler (e.g., QR code scan).
     func showMemoryDetail(id: UUID) {
-        print("🔗 NavigationRouter: Showing memory detail for \(id.uuidString)")
+        print("🔗 NavigationRouter: Showing memory detail for \(id.uuidString.prefix(8))…")
         selectedMemoryID = id
     }
 
     func showSharedMemory(ownerId: String, memoryId: UUID) {
-        print("🔗 NavigationRouter: Showing shared memory \(memoryId.uuidString) owner=\(ownerId.prefix(8))…")
+        print("🔗 NavigationRouter: Showing shared memory \(memoryId.uuidString.prefix(8))… owner=\(ownerId.prefix(8))…")
         sharedMemoryRoute = SharedMemoryRoute(ownerId: ownerId, memoryId: memoryId)
     }
 

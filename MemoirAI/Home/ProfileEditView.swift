@@ -30,6 +30,7 @@ struct ProfileEditView: View {
     @State private var selectedBirthdate: Date?
     @State private var ethnicity: String
     @State private var gender: String
+    @State private var transcriptionTerms: String
     @State private var currentPhoto: UIImage?
 
     @State private var showBirthdayPicker = false
@@ -49,7 +50,7 @@ struct ProfileEditView: View {
     }
 
     enum Field: Hashable {
-        case name, ethnicity
+        case name, ethnicity, transcriptionTerms
     }
 
     private let profile: Profile
@@ -63,6 +64,7 @@ struct ProfileEditView: View {
         self._selectedBirthdate = State(initialValue: resolvedProfile.birthdate)
         self._ethnicity = State(initialValue: resolvedProfile.ethnicity ?? "")
         self._gender = State(initialValue: resolvedProfile.gender ?? "Male")
+        self._transcriptionTerms = State(initialValue: resolvedProfile.transcriptionGlossary.joined(separator: ", "))
         self._currentPhoto = State(initialValue: resolvedProfile.uiImage)
 
         if let initialGender = resolvedProfile.gender {
@@ -167,13 +169,54 @@ struct ProfileEditView: View {
                 personalDetailsCard
                     .staggerIn(appeared: appeared, delay: 0.08)
 
-                developerOptionsEntry
+                transcriptionCard
                     .staggerIn(appeared: appeared, delay: 0.10)
+
+                developerOptionsEntry
+                    .staggerIn(appeared: appeared, delay: 0.12)
 
                 Spacer(minLength: 80)
             }
             .padding(.horizontal, 20)
         }
+    }
+
+    private var transcriptionCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Names & Places")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(DS.textPrimary)
+
+            Text("Add uncommon names or places, separated by commas, to improve voice transcripts.")
+                .font(.system(size: 13))
+                .foregroundColor(DS.textSecondary)
+
+            TextField("e.g. Rosalie, Chautauqua, St. Louis", text: $transcriptionTerms, axis: .vertical)
+                .lineLimit(2...4)
+                .font(.system(size: 16))
+                .foregroundColor(DS.textPrimary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(DS.fieldBg)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(focusedField == .transcriptionTerms ? DS.accent.opacity(0.5) : Color.clear, lineWidth: 1.5)
+                )
+                .focused($focusedField, equals: .transcriptionTerms)
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: DS.cardRadius, style: .continuous)
+                .fill(DS.card)
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.cardRadius, style: .continuous)
+                        .stroke(DS.stroke, lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.06), radius: 12, y: 4)
+        )
     }
 
     // MARK: - Avatar
@@ -533,6 +576,10 @@ struct ProfileEditView: View {
     // MARK: - Save
     private func saveProfile() {
         let photoData = currentPhoto?.jpegData(compressionQuality: 0.8)
+        let glossary = transcriptionTerms
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
 
         let updatedProfile = Profile(
             id: profile.id,
@@ -544,6 +591,7 @@ struct ProfileEditView: View {
             createdAt: profile.createdAt,
             updatedAt: Date(),
             childNames: profile.childNames,
+            transcriptionGlossary: Array(glossary.prefix(40)),
             faceDescription: profile.faceDescription,
             faceDescriptionPhotoHash: profile.faceDescriptionPhotoHash
         )

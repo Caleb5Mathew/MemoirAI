@@ -101,7 +101,7 @@ struct FreePreviewConfig {
         UserDefaults.standard.set(count, forKey: countKey)
         UserDefaults.standard.synchronize()
 
-        print("FreePreviewConfig: Updated free images used to \(count) (uid: \(uid))")
+        print("FreePreviewConfig: Updated free images used to \(count) (uid: \(uid.prefix(8))…)")
     }
 
     // MARK: - Increment Used Count

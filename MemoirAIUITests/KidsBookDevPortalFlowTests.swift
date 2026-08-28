@@ -17,6 +17,11 @@ final class KidsBookDevPortalFlowTests: XCTestCase {
     /// Full flow: Home → Your Book → Settings → Dev portal unlock → Kid's Book + Normal → Create My Storybook → ProfileSetup (ethnicity Indian)
     @MainActor
     func testKidsBookDevPortalFlow() throws {
+        guard let developerPassword = ProcessInfo.processInfo.environment["MEMOIRAI_UI_TEST_DEV_PASSWORD"],
+              !developerPassword.isEmpty else {
+            throw XCTSkip("Set MEMOIRAI_UI_TEST_DEV_PASSWORD to run the Debug-only developer flow.")
+        }
+
         let app = XCUIApplication()
         app.launchArguments = ["-uitesting"]
         app.launch()
@@ -52,7 +57,7 @@ final class KidsBookDevPortalFlowTests: XCTestCase {
         }
         XCTAssertTrue(passwordField.waitForExistence(timeout: 3), "Dev password field should appear. Tap Settings header 5-7 times to open dev portal.")
         passwordField.tap()
-        passwordField.typeText("Apologist123!")
+        passwordField.typeText(developerPassword)
 
         let unlockButton = app.buttons["devUnlockButton"]
         XCTAssertTrue(unlockButton.waitForExistence(timeout: 2))

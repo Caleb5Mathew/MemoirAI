@@ -5,6 +5,7 @@ import Combine
 import RevenueCat
 import RevenueCatUI
 import CoreData
+import FirebaseAuth
 
 // MARK: - Storybook headshot
 /// The user's home-page profile photo is the default generation headshot; the
@@ -331,15 +332,24 @@ struct StoryPage: View {
         bookFrameWidth: CGFloat,
         bookContentHeightInsideFrame: CGFloat
     ) -> some View {
+        let hasLoadedBook = StorybookPagePresentationPolicy.shouldShowLoadedBook(
+            hasGeneratedStorybook: vm.hasGeneratedStorybook,
+            pageCount: vm.pageItems.count
+        )
         if vm.isLoading {
             makeLoadingView()
         } else if vm.isLoadingGalleryBook {
             makeOpeningLibraryBookView()
-        } else if hasRequestedGeneration && !vm.pageItems.isEmpty && vm.requiresVisualReadyGate && !vm.isVisualBookReady {
+        } else if StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
+            isLoadingProfileBook: vm.isLoadingProfileBook,
+            hasLoadedBook: hasLoadedBook
+        ) {
+            makeOpeningLibraryBookView()
+        } else if hasLoadedBook && vm.requiresVisualReadyGate && !vm.isVisualBookReady {
             makeFinalizingAssetsView()
         } else if let error = vm.errorMessage {
             makeErrorView(error: error)
-        } else if hasRequestedGeneration && !vm.pageItems.isEmpty {
+        } else if hasLoadedBook {
             makeBookContent(bookFrameWidth: bookFrameWidth, bookContentHeightInsideFrame: bookContentHeightInsideFrame)
         } else {
             makeEmptyStateView()
@@ -510,7 +520,7 @@ struct StoryPage: View {
         printSpec: BookPrintSpec
     ) -> some View {
         TabView(selection: $currentPageIndex) {
-            ForEach(Array(vm.pageItems.enumerated()), id: \.element.id) { idx, item in
+            ForEach(Array(vm.pageItems.enumerated()), id: \.offset) { idx, item in
                 let renderScale = min(
                     contentWidth / max(printSpec.widthPt, 1),
                     contentHeight / max(printSpec.heightPt, 1)
@@ -690,6 +700,26 @@ struct StoryPage: View {
     }
         
     private func generateStorybookWithPaywallCheck() {
+        guard let firebaseUserID = Auth.auth().currentUser?.uid else {
+            vm.errorMessage = "Sign in before creating a storybook. Your memories are still saved on this device."
+            return
+        }
+        if !subscriptionManager.isIdentityReady(for: firebaseUserID) {
+            vm.isLoading = true
+            vm.currentStatus = "Verifying subscription…"
+            Task { @MainActor in
+                let ready = await subscriptionManager.identify(firebaseUserID: firebaseUserID)
+                vm.isLoading = false
+                guard ready, Auth.auth().currentUser?.uid == firebaseUserID else {
+                    vm.errorMessage = subscriptionManager.identityErrorMessage
+                        ?? "Subscription verification did not finish. Check your connection and try again."
+                    return
+                }
+                generateStorybookWithPaywallCheck()
+            }
+            return
+        }
+
         var pagesToAttempt = vm.expectedPageCount()
         
         // Debug: Print current free preview status
@@ -1084,10 +1114,15 @@ struct StoryPage: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Print order and cart")
+        .disabled(isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud)
+        .opacity((isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud) ? 0.55 : 1)
     }
 
     private var hasGeneratedStorybook: Bool {
-        hasRequestedGeneration && !vm.pageItems.isEmpty
+        StorybookPagePresentationPolicy.shouldShowLoadedBook(
+            hasGeneratedStorybook: vm.hasGeneratedStorybook,
+            pageCount: vm.pageItems.count
+        )
     }
     
     @ViewBuilder
@@ -1294,8 +1329,8 @@ struct StoryPage: View {
                         .cornerRadius(12)
                     }
                     .accessibilityLabel("Order")
-                    .disabled(isOrderPreparing)
-                    .opacity(isOrderPreparing ? 0.7 : 1.0)
+                    .disabled(isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud || vm.hasUnpublishedBookChanges)
+                    .opacity((isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud || vm.hasUnpublishedBookChanges) ? 0.7 : 1.0)
                 }
                 .frame(maxWidth: 360)
                 .frame(maxWidth: .infinity)
@@ -1307,7 +1342,13 @@ struct StoryPage: View {
     }
 
     private func orderBookTapped() {
-        guard !isOrderPreparing else { return }
+        guard !isOrderPreparing, !vm.isSavingBookRevision, !vm.isUploadingToCloud else { return }
+        guard !vm.hasUnpublishedBookChanges else {
+            orderNotReadyAlertTitle = "Unsaved Book Changes"
+            orderNotReadyAlertMessage = "Your latest edit has not synced yet. Check your connection, save it again, and then order."
+            orderNotReadyAlert = true
+            return
+        }
         isOrderPreparing = true
         Task {
             _ = await vm.fetchCurrentBookVersionRecord()
@@ -1449,6 +1490,7 @@ struct StoryPage: View {
                 let activityVC = UIActivityViewController(activityItems: [pdfURL], applicationActivities: nil)
 
                 activityVC.completionWithItemsHandler = { _, completed, _, _ in
+                    try? FileManager.default.removeItem(at: pdfURL)
                     self.isDownloading = false
                     if completed {
                         self.showDownloadSuccess = true
@@ -1468,6 +1510,7 @@ struct StoryPage: View {
                     }
                     rootVC.present(activityVC, animated: true)
                 } else {
+                    try? FileManager.default.removeItem(at: pdfURL)
                     self.isDownloading = false
                 }
             }
@@ -1529,7 +1572,7 @@ struct StoryPage: View {
             print("🔍 StoryPage: Found \(all.count) total memories")
             print("🔍 StoryPage: Found \(incompleteCount) unenhanced memories")
             for mem in unenhanced.prefix(5) {
-                print("  - Unenhanced: \(mem.prompt ?? "No prompt") | Text: \(mem.text?.prefix(50) ?? "none")...")
+                print("  - Unenhanced memory detected")
             }
         } else {
             print("❌ StoryPage: Failed to fetch memories")
@@ -1652,7 +1695,13 @@ extension StoryPage {
     @ViewBuilder
     private func pageView(for item: StoryPageViewModel.PageItem, at index: Int, frameWidth: CGFloat, frameHeight: CGFloat) -> some View {
         let isKidsBook = vm.currentArtStyle == .kidsBook
-        
+        if let freeformPage = vm.freeformPageView(
+            at: index,
+            frameWidth: frameWidth,
+            frameHeight: frameHeight
+        ) {
+            freeformPage
+        } else {
         switch item {
         case .illustration(let image, let memoryID, let title):
             makeIllustrationPage(
@@ -1678,6 +1727,7 @@ extension StoryPage {
                 frameHeight: frameHeight,
                 isKidsBook: isKidsBook
             )
+        }
         }
     }
     
@@ -1957,6 +2007,8 @@ struct StorybookCoverEditorSheet: View {
 
     @State private var titleDraft: String = ""
     @State private var pitchDraft: String = ""
+    @State private var isSaving = false
+    @State private var saveError: String?
 
     var body: some View {
         NavigationStack {
@@ -1976,15 +2028,39 @@ struct StorybookCoverEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        vm.bookDisplayTitle = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        vm.backCoverPitch = pitchDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        dismiss()
+                        isSaving = true
+                        Task {
+                            let succeeded = await vm.updateCoverCopy(
+                                title: titleDraft,
+                                backCoverPitch: pitchDraft
+                            )
+                            isSaving = false
+                            if succeeded {
+                                dismiss()
+                            } else {
+                                saveError = "The cover changes could not be published. Check your connection and try again."
+                            }
+                        }
                     }
+                    .disabled(isSaving)
                 }
             }
+        }
+        .interactiveDismissDisabled(isSaving)
+        .alert(
+            "Couldn’t Save Cover",
+            isPresented: Binding(
+                get: { saveError != nil },
+                set: { if !$0 { saveError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { saveError = nil }
+        } message: {
+            Text(saveError ?? "The cover changes could not be saved.")
         }
         .onAppear {
             titleDraft = vm.bookDisplayTitle
@@ -2743,7 +2819,7 @@ extension View {
     ) -> some View {
         self
             .onAppear {
-                print("🧭 StoryPage lifecycle onAppear; profile=\(profileVM.selectedProfile.id.uuidString), hasGenerated=\(vm.hasGeneratedStorybook), hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count), entry=\(storybookScreenEntry)")
+                print("🧭 StoryPage lifecycle onAppear; profile=\(profileVM.selectedProfile.id.uuidString.prefix(8))…, hasGenerated=\(vm.hasGeneratedStorybook), hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count), entry=\(storybookScreenEntry)")
                 StorybookSeenTracker.shared.setStoryPageVisible(true)
                 StorybookSeenTracker.shared.consumePendingRouteAsSeen()
                 if let bookId = vm.currentBookVersionRecord?.bookVersionId {
@@ -2797,8 +2873,13 @@ extension View {
                     StorybookSeenTracker.shared.markCompletedSeen(jobId: newBookId)
                 }
             }
+            .onChange(of: vm.hasGeneratedStorybook) { _, hasGenerated in
+                if hasGenerated {
+                    hasRequestedGeneration.wrappedValue = true
+                }
+            }
             .onChange(of: profileVM.selectedProfile.id) { _, newProfileID in
-                print("🧭 StoryPage profile changed to \(newProfileID.uuidString); reloading storybook")
+                print("🧭 StoryPage profile changed to \(newProfileID.uuidString.prefix(8))…; reloading storybook")
                 Task { @MainActor in
                     let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
                         profileID: profileVM.selectedProfile.id,

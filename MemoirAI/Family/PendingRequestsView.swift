@@ -3,6 +3,7 @@ import SwiftUI
 /// Owner-side list of pending family and friends access requests, with approve/deny.
 struct PendingRequestsView: View {
     @State private var requests: [SharedAccessService.MemoryAccessRequest] = []
+    @State private var grants: [SharedAccessService.MemoryAccessGrant] = []
     @State private var isLoading = true
     @State private var actingOn: Set<String> = []
     @State private var errorMessage: String? = nil
@@ -16,7 +17,7 @@ struct PendingRequestsView: View {
             cream.ignoresSafeArea()
             if isLoading {
                 ProgressView("Loading requests…")
-            } else if requests.isEmpty {
+            } else if requests.isEmpty && grants.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "person.2")
                         .font(.system(size: 40))
@@ -41,6 +42,15 @@ struct PendingRequestsView: View {
                         ForEach(requests) { request in
                             requestRow(request)
                         }
+                        if !grants.isEmpty {
+                            Text("Currently shared")
+                                .font(.system(size: 16, weight: .semibold, design: .serif))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, 8)
+                            ForEach(grants) { grant in
+                                grantRow(grant)
+                            }
+                        }
                     }
                     .padding(16)
                 }
@@ -50,6 +60,26 @@ struct PendingRequestsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await refresh() }
         .refreshable { await refresh() }
+    }
+
+    private func grantRow(_ grant: SharedAccessService.MemoryAccessGrant) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Shared memory")
+                .font(.system(size: 16, weight: .semibold, design: .serif))
+                .foregroundColor(darkText)
+            Text("Recipient \(grant.requesterId.prefix(8))… · Memory \(grant.memoryId.prefix(8))…")
+                .font(.system(size: 12))
+                .foregroundColor(darkText.opacity(0.6))
+            Button(role: .destructive) {
+                revoke(grant)
+            } label: {
+                Text("Revoke access")
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            .disabled(actingOn.contains(grant.id))
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 16))
     }
 
     private func requestRow(_ request: SharedAccessService.MemoryAccessRequest) -> some View {
@@ -94,7 +124,10 @@ struct PendingRequestsView: View {
 
     private func refresh() async {
         do {
-            requests = try await SharedAccessService.shared.fetchPendingRequests()
+            async let pending = SharedAccessService.shared.fetchPendingRequests()
+            async let active = SharedAccessService.shared.fetchActiveGrants()
+            requests = try await pending
+            grants = try await active
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -107,10 +140,10 @@ struct PendingRequestsView: View {
         Task {
             do {
                 if approve {
-                    try await SharedAccessService.shared.approve(requesterId: request.id)
+                    try await SharedAccessService.shared.approve(requestDocumentId: request.id)
                     Haptics.success()
                 } else {
-                    try await SharedAccessService.shared.deny(requesterId: request.id)
+                    try await SharedAccessService.shared.deny(requestDocumentId: request.id)
                     Haptics.selection()
                 }
                 requests.removeAll { $0.id == request.id }
@@ -118,6 +151,20 @@ struct PendingRequestsView: View {
                 errorMessage = error.localizedDescription
             }
             actingOn.remove(request.id)
+        }
+    }
+
+    private func revoke(_ grant: SharedAccessService.MemoryAccessGrant) {
+        actingOn.insert(grant.id)
+        Task {
+            do {
+                try await SharedAccessService.shared.revoke(grant: grant)
+                grants.removeAll { $0.id == grant.id }
+                Haptics.selection()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            actingOn.remove(grant.id)
         }
     }
 }

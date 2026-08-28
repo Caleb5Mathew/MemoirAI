@@ -2,17 +2,20 @@ import SwiftUI
 import AuthenticationServices
 
 struct MainTabView: View {
+    @Environment(\.openURL) private var openURL
     @Binding var path: NavigationPath
     @AppStorage("memoirai.lastTab") private var selectedTab = 0
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
-    @StateObject private var familyManager = FamilyManager.shared
     @ObservedObject private var authService = AuthenticationService.shared
+    @ObservedObject private var notificationManager = NotificationManager.shared
     @AppStorage(MemoirPersistenceUserDefaults.suggestAccountLinkAfterBook) private var suggestBookBackup = false
+    @AppStorage("memoirai.notificationPromptDismissed") private var notificationPromptDismissed = false
     @State private var bookBackupBannerDismissed = false
     @State private var showEmailBackupSheet = false
     @State private var pendingAccessRequestCount = 0
     @State private var showAccessRequests = false
+    @State private var accountLinkError: String?
 
     private var showBookBackupNudge: Bool {
         suggestBookBackup && authService.isAnonymous && !bookBackupBannerDismissed
@@ -47,22 +50,6 @@ struct MainTabView: View {
                         .onAppear {
                             UITabBar.appearance().isHidden = false
                         }
-
-                    // MARK: - Family Tab (Commented out for development)
-                    // TODO: Uncomment when family features are ready for production
-                    /*
-                    FamilyView()
-                        .environmentObject(profileVM)
-                        .environmentObject(familyManager)
-                        .tabItem {
-                            Image(systemName: "person.3.fill")
-                            Text("Family")
-                        }
-                        .tag(2)
-                        .onAppear {
-                            UITabBar.appearance().isHidden = false
-                        }
-                    */
                 }
                 .ignoresSafeArea(edges: .bottom)
                 .accentColor(.black)
@@ -87,6 +74,10 @@ struct MainTabView: View {
                 }
                 .overlay(alignment: .top) {
                     VStack(spacing: 8) {
+                        if !notificationPromptDismissed,
+                           NotificationPermissionPolicy.action(for: notificationManager.authorizationStatus) != .none {
+                            notificationPermissionBanner
+                        }
                         if showBookBackupNudge {
                             bookBackupBanner
                         }
@@ -105,16 +96,73 @@ struct MainTabView: View {
                     }
                 }
                 .task {
+                    notificationManager.refreshAuthorizationStatus()
                     await refreshPendingAccessRequestCount()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    notificationManager.refreshAuthorizationStatus()
                     Task { await refreshPendingAccessRequestCount() }
                 }
             }
         }
         .navigationBarHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        .alert(
+            "Account Could Not Be Linked",
+            isPresented: Binding(
+                get: { accountLinkError != nil },
+                set: { if !$0 { accountLinkError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { accountLinkError = nil }
+        } message: {
+            Text(accountLinkError ?? "Please try again.")
+        }
         // (Onboarding overlay removed – handled globally)
+    }
+
+    private var notificationPermissionBanner: some View {
+        let action = NotificationPermissionPolicy.action(for: notificationManager.authorizationStatus)
+        let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "bell.badge.fill")
+                    .foregroundColor(terracotta)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Don’t miss family requests")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Get notified when someone asks to hear a memory you shared.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                Spacer(minLength: 8)
+                Button {
+                    notificationPromptDismissed = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button(action == .openSettings ? "Open Notification Settings" : "Enable Notifications") {
+                switch action {
+                case .request:
+                    notificationManager.requestPermission()
+                case .openSettings:
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    openURL(url)
+                case .none:
+                    break
+                }
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundColor(terracotta)
+        }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.black.opacity(0.06), lineWidth: 1))
     }
 
     private var accessRequestsBanner: some View {
@@ -190,11 +238,11 @@ struct MainTabView: View {
                         do {
                             try await AuthenticationService.shared.linkAppleAccount(credential: credential)
                         } catch {
-                            print("❌ Link Apple failed: \(error.localizedDescription)")
+                            accountLinkError = error.localizedDescription
                         }
                     }
                 case .failure(let error):
-                    print("❌ Apple sign-in failed: \(error.localizedDescription)")
+                    accountLinkError = error.localizedDescription
                 }
             }
             .signInWithAppleButtonStyle(.black)
@@ -207,7 +255,7 @@ struct MainTabView: View {
                     do {
                         try await AuthenticationService.shared.linkGoogleAccount()
                     } catch {
-                        print("❌ Link Google failed: \(error.localizedDescription)")
+                        accountLinkError = error.localizedDescription
                     }
                 }
             } label: {

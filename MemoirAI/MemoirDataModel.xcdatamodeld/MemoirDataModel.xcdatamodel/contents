@@ -11,6 +11,13 @@
         <attribute name="profileID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="prompt" optional="YES" attributeType="String"/>
         <attribute name="text" optional="YES" attributeType="String"/>
+        <attribute name="transcriptionEditedText" optional="YES" attributeType="String"/>
+        <attribute name="transcriptionLanguage" optional="YES" attributeType="String"/>
+        <attribute name="transcriptionModel" optional="YES" attributeType="String"/>
+        <attribute name="transcriptionRawText" optional="YES" attributeType="String"/>
+        <attribute name="transcriptionStatus" optional="YES" attributeType="String"/>
+        <attribute name="transcriptionUpdatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="transcriptionVersion" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
         <relationship name="photos" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Photo" inverseName="memoryEntry" inverseEntity="Photo"/>
     </entity>
     <entity name="Photo" representedClassName="Photo" syncable="YES" codeGenerationType="class">
@@ -21,6 +28,7 @@
     <entity name="GlobalCharacter" representedClassName="GlobalCharacter" syncable="YES" codeGenerationType="class">
         <attribute name="canonicalName" optional="YES" attributeType="String"/>
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="firebaseUserId" optional="YES" attributeType="String"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="profileID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
     </entity>

@@ -4,9 +4,10 @@
 //
 
 import SwiftUI
+import CoreData
 import RevenueCat
 import Mixpanel
-import FBSDKCoreKit            // ← 1. add import
+import FBSDKCoreKit
 import FirebaseCore
 import FirebaseMessaging
 import GoogleSignIn
@@ -30,15 +31,17 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
         UNUserNotificationCenter.current().delegate = self
         application.registerForRemoteNotifications()
 
-        // 2. Boot the Facebook SDK
+        // The Info.plist defaults keep Meta auto-init and advertiser ID collection off.
+        // Apply the current ATT decision before manually starting the SDK so a first
+        // launch can never collect advertising identifiers before consent.
+        ATTHelper.applyCurrentAuthorizationToFacebook()
         ApplicationDelegate.shared.application(
             application,
             didFinishLaunchingWithOptions: launchOptions
         )
 
-        // 3. Initialize Facebook tracking (will be updated by ATT helper)
+        // ATT controls whether Facebook may use advertising identifiers.
         Settings.shared.isAutoLogAppEventsEnabled = true
-        // Note: isAdvertiserTrackingEnabled now managed by ATTHelper
 
         print("✅ FBSDK version:", Settings.shared.sdkVersion)
         return true
@@ -67,15 +70,16 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
         if url.scheme == "memoirai" {
             if url.host == "order-complete" {
                 let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                let sessionId = components?.queryItems?.first(where: { $0.name == "session_id" })?.value
-                if let sessionId = sessionId {
-                    print("[Order] Stripe return — session_id: \(sessionId)")
-                    UserDefaults.standard.set(sessionId, forKey: "lastCompletedStripeSessionId")
+                let rawSessionId = components?.queryItems?.first(where: { $0.name == "session_id" })?.value
+                if let sessionId = CheckoutReturnPolicy.normalizeSessionID(rawSessionId) {
+                    print("[Order] Stripe checkout return received")
+                    UserDefaults.standard.set(sessionId, forKey: CheckoutReturnPolicy.pendingSessionDefaultsKey)
+                    NotificationCenter.default.post(
+                        name: .orderCheckoutReturnReceived,
+                        object: nil,
+                        userInfo: ["sessionId": sessionId]
+                    )
                 }
-                Task { @MainActor in
-                    OrderCartStore.shared.clear()
-                }
-                NotificationCenter.default.post(name: .orderComplete, object: nil, userInfo: ["url": url, "sessionId": sessionId as Any])
                 return true
             }
             if url.host == "order-cancelled" {
@@ -85,7 +89,7 @@ final class FBAppDelegate: NSObject, UIApplicationDelegate {
             if url.host == "memory" {
                 let trimmed = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
                 if UUID(uuidString: trimmed) != nil {
-                    print("[QRDeepLink] AppDelegate forwarding memory url=\(url.absoluteString)")
+                    print("[QRDeepLink] AppDelegate forwarding valid memory link")
                     NotificationCenter.default.post(
                         name: .memoirOpenMemoryDeepLink,
                         object: nil,
@@ -122,6 +126,9 @@ extension FBAppDelegate: UNUserNotificationCenterDelegate {
 }
 
 extension Notification.Name {
+    static let orderCheckoutReturnReceived = Notification.Name("orderCheckoutReturnReceived")
+    static let orderCheckoutVerificationFailed = Notification.Name("orderCheckoutVerificationFailed")
+    static let orderCheckoutFinalizing = Notification.Name("orderCheckoutFinalizing")
     static let orderComplete = Notification.Name("orderComplete")
     static let orderCancelled = Notification.Name("orderCancelled")
     static let bookCoverBackfillComplete = Notification.Name("bookCoverBackfillComplete")
@@ -141,14 +148,14 @@ extension Notification.Name {
 @main
 struct MemoirAIApp: App {
     @StateObject private var profileVM = ProfileViewModel()
+    @StateObject private var persistenceLoadMonitor = PersistenceLoadMonitor.shared
+    @State private var checkoutSessionBeingVerified: String?
     
     let persistenceController = PersistenceController.shared
 
-    // 4. Tell SwiftUI to install the delegate
     @UIApplicationDelegateAdaptor(FBAppDelegate.self) var fbDelegate
 
     init() {
-        //  ❇️  Always give RevenueCat a stable user-ID so Meta gets `app_user_id`
         let rcUserDefaultsKey = "memoirai_rc_user_id"
         let uuid = UserDefaults.standard.string(forKey: rcUserDefaultsKey) ?? {
             let newID = UUID().uuidString
@@ -156,24 +163,19 @@ struct MemoirAIApp: App {
             return newID
         }()
 
-        // Configure RevenueCat FIRST – before any subscription manager access
+        #if DEBUG
         Purchases.logLevel = .debug
+        #else
+        Purchases.logLevel = .warn
+        #endif
         if let apiKey = Bundle.main.object(forInfoDictionaryKey: "RevenueCatAPIKey") as? String,
            !apiKey.isEmpty {
             Purchases.configure(withAPIKey: apiKey, appUserID: uuid)
-            print("✅ RevenueCat configured with API key: \(apiKey) • userID: \(uuid)")
+            print("RevenueCat configured")
 
-            // Restore receipt-backed entitlements, then refresh RCSubscriptionManager so UI gates update
-            // (RCManager’s own init Task may race; this sequence runs on the main actor after configure).
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 guard Purchases.isConfigured else { return }
-                do {
-                    _ = try await Purchases.shared.restorePurchases()
-                    print("✅ RevenueCat restorePurchases completed on launch")
-                } catch {
-                    print("⚠️ RevenueCat restorePurchases on launch failed: \(error.localizedDescription)")
-                }
                 await RCSubscriptionManager.shared.refreshCustomerInfo()
             }
         } else {
@@ -183,6 +185,7 @@ struct MemoirAIApp: App {
         // ─ Mixpanel ───────────────────────────────────────────────
         Mixpanel.initialize(token: "6437139af64d0541c2a8a8e5157ae72f",
                             trackAutomaticEvents: true)
+        Mixpanel.mainInstance().useIPAddressForGeoLocation = false
         Mixpanel.mainInstance().track(event: "App Launched")
 
         if !UserDefaults.standard.bool(forKey: "hasLaunchedBefore") {
@@ -193,7 +196,33 @@ struct MemoirAIApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                switch persistenceLoadMonitor.state {
+                case .loading:
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("Opening your memoir…")
+                            .foregroundStyle(.secondary)
+                    }
+                case .failed(let recoveryMessage):
+                    VStack(spacing: 20) {
+                        Image(systemName: "externaldrive.badge.exclamationmark")
+                            .font(.system(size: 44, weight: .semibold))
+                        Text("Local Data Needs Attention")
+                            .font(.title2.bold())
+                        Text(recoveryMessage)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.secondary)
+                        Text("MemoirAI is read-only until you close and reopen the app after resolving the storage issue.")
+                            .font(.footnote)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(32)
+                case .ready:
+                    ContentView()
+                }
+            }
                 .environmentObject(profileVM)
                 .environmentObject(iCloudManager.shared)
                 .environmentObject(RCSubscriptionManager.shared)
@@ -201,20 +230,94 @@ struct MemoirAIApp: App {
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 // Our custom UI uses light backgrounds; force a light appearance so dynamic text stays dark
                 .preferredColorScheme(.light)
-                .onAppear {
+                .task(id: persistenceLoadMonitor.state) {
+                    guard PersistenceConfigurationPolicy.allowsApplicationContent(
+                        state: persistenceLoadMonitor.state
+                    ) else { return }
                     GenerationProgressMarker.clearStaleOnLaunchIfNeeded()
                     Haptics.warmUp()
+                    let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
+                    let referencedAudio = Set(
+                        ((try? persistenceController.container.viewContext.fetch(request)) ?? [])
+                            .compactMap(\.audioFileURL)
+                            .compactMap(URL.init(string:))
+                            .filter(\.isFileURL)
+                    )
+                    if let documents = FileManager.default.urls(
+                        for: .documentDirectory,
+                        in: .userDomainMask
+                    ).first {
+                        _ = RecordingOrphanCleanup.removeStaleRecordings(
+                            in: documents,
+                            referencedFileURLs: referencedAudio,
+                            now: Date()
+                        )
+                    }
+                    await verifyPendingCheckoutReturnIfNeeded()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .orderCheckoutReturnReceived)) { notification in
+                    guard PersistenceConfigurationPolicy.allowsApplicationContent(
+                        state: persistenceLoadMonitor.state
+                    ) else { return }
+                    guard let sessionId = notification.userInfo?["sessionId"] as? String else { return }
+                    Task { await verifyCheckoutReturn(sessionId: sessionId) }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    guard PersistenceConfigurationPolicy.allowsApplicationContent(
+                        state: persistenceLoadMonitor.state
+                    ) else { return }
                     PermissionManager.shared.handleAppDidBecomeActive()
                     Task { @MainActor in
                         guard Purchases.isConfigured else { return }
                         await RCSubscriptionManager.shared.refreshCustomerInfo()
                     }
                     Task {
+                        await profileVM.retryPendingProfileMutations()
                         await FirestoreSyncService.shared.retryPendingSyncs(for: profileVM.selectedProfile.id)
+                        await verifyPendingCheckoutReturnIfNeeded()
                     }
                 }
+        }
+    }
+
+    @MainActor
+    private func verifyPendingCheckoutReturnIfNeeded() async {
+        guard let sessionId = UserDefaults.standard.string(
+            forKey: CheckoutReturnPolicy.pendingSessionDefaultsKey
+        ) else { return }
+        await verifyCheckoutReturn(sessionId: sessionId)
+    }
+
+    @MainActor
+    private func verifyCheckoutReturn(sessionId: String) async {
+        guard let normalized = CheckoutReturnPolicy.normalizeSessionID(sessionId) else {
+            UserDefaults.standard.removeObject(forKey: CheckoutReturnPolicy.pendingSessionDefaultsKey)
+            NotificationCenter.default.post(name: .orderCheckoutVerificationFailed, object: nil)
+            return
+        }
+        guard checkoutSessionBeingVerified != normalized else { return }
+        checkoutSessionBeingVerified = normalized
+        defer { checkoutSessionBeingVerified = nil }
+
+        do {
+            let verification = try await OrderService.shared.verifyCheckoutReturn(sessionId: normalized)
+            guard verification.verified else {
+                if verification.isFinalizingPaidOrder {
+                    NotificationCenter.default.post(name: .orderCheckoutFinalizing, object: nil)
+                    return
+                }
+                NotificationCenter.default.post(name: .orderCheckoutVerificationFailed, object: nil)
+                return
+            }
+            UserDefaults.standard.removeObject(forKey: CheckoutReturnPolicy.pendingSessionDefaultsKey)
+            OrderCartStore.shared.clear()
+            NotificationCenter.default.post(
+                name: .orderComplete,
+                object: nil,
+                userInfo: ["sessionId": normalized]
+            )
+        } catch {
+            NotificationCenter.default.post(name: .orderCheckoutVerificationFailed, object: nil)
         }
     }
 }

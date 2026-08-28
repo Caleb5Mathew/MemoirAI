@@ -67,7 +67,7 @@ struct OrderBookView: View {
     @State private var showStripeCheckout = false
     @State private var checkoutURL: URL?
     @State private var lastCheckoutAttempt: Date?
-    /// Shown after a successful Stripe return instead of silently dismissing (see `.orderComplete`).
+    /// Shown only after the backend verifies the returned Stripe session belongs to this user and is paid.
     @State private var showOrderConfirmation = false
     /// Session-only dismissal for the anonymous-account purchase-protection nudge on the review step.
     @State private var accountLinkBannerDismissed = false
@@ -327,9 +327,21 @@ struct OrderBookView: View {
             .onReceive(NotificationCenter.default.publisher(for: .orderComplete)) { _ in
                 showStripeCheckout = false
                 checkoutURL = nil
+                isSubmitting = false
                 fastCheckoutInstanceId = nil
-                orderCart.clear()
                 showOrderConfirmation = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .orderCheckoutVerificationFailed)) { _ in
+                showStripeCheckout = false
+                checkoutURL = nil
+                isSubmitting = false
+                errorMessage = "We couldn't verify the payment yet. Your cart is still saved; try again shortly."
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .orderCheckoutFinalizing)) { _ in
+                showStripeCheckout = false
+                checkoutURL = nil
+                isSubmitting = false
+                errorMessage = "Payment received. We're finalizing your order now; your cart will stay saved until it appears in My Orders."
             }
             .onReceive(NotificationCenter.default.publisher(for: .orderCancelled)) { _ in
                 showStripeCheckout = false

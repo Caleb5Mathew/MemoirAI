@@ -24,6 +24,9 @@ struct Profile: Identifiable, Codable, Equatable {
     /// Empty for non-parent modes or parents who haven't entered names yet.
     var childNames: [String]
 
+    /// User-confirmed terms which guide transcription for this profile.
+    var transcriptionGlossary: [String]
+
     /// Short vision-derived likeness line for cloud interior prompts (optional).
     var faceDescription: String?
     /// Cache key: hex SHA256 of photo bytes + ethnicity/gender — invalidates when inputs change.
@@ -39,6 +42,7 @@ struct Profile: Identifiable, Codable, Equatable {
          createdAt: Date? = nil,
          updatedAt: Date? = nil,
          childNames: [String] = [],
+         transcriptionGlossary: [String] = [],
          faceDescription: String? = nil,
          faceDescriptionPhotoHash: String? = nil) {
         self.id = id
@@ -50,6 +54,7 @@ struct Profile: Identifiable, Codable, Equatable {
         self.createdAt = createdAt ?? Date()
         self.updatedAt = updatedAt ?? Date()
         self.childNames = childNames
+        self.transcriptionGlossary = transcriptionGlossary
         self.faceDescription = faceDescription
         self.faceDescriptionPhotoHash = faceDescriptionPhotoHash
     }
@@ -68,12 +73,13 @@ struct Profile: Identifiable, Codable, Equatable {
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         childNames = try container.decodeIfPresent([String].self, forKey: .childNames) ?? []
+        transcriptionGlossary = try container.decodeIfPresent([String].self, forKey: .transcriptionGlossary) ?? []
         faceDescription = try container.decodeIfPresent(String.self, forKey: .faceDescription)
         faceDescriptionPhotoHash = try container.decodeIfPresent(String.self, forKey: .faceDescriptionPhotoHash)
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, photoData, birthdate, ethnicity, gender, createdAt, updatedAt, childNames
+        case id, name, photoData, birthdate, ethnicity, gender, createdAt, updatedAt, childNames, transcriptionGlossary
         case faceDescription, faceDescriptionPhotoHash
     }
 

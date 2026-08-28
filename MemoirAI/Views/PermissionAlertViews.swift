@@ -43,13 +43,13 @@ struct SpeechRecognitionPermissionAlert: View {
                 
                 // Description
                 VStack(spacing: 12) {
-                    Text("To transcribe your voice memories into text, we need permission to access speech recognition.")
+                    Text("Speech Recognition provides live captions while you record.")
                         .font(.custom("Georgia", size: 16))
                         .foregroundColor(.black.opacity(0.8))
                         .multilineTextAlignment(.center)
                         .lineSpacing(4)
                     
-                    Text("This helps you read and search through your memories later.")
+                    Text("Your saved recording can still be transcribed after upload when live captions are off.")
                         .font(.custom("Georgia", size: 14))
                         .foregroundColor(.gray)
                         .multilineTextAlignment(.center)
@@ -180,7 +180,7 @@ struct MicrophonePermissionAlert: View {
                         .multilineTextAlignment(.center)
                         .lineSpacing(4)
                     
-                    Text("Your recordings are stored locally and never shared without your permission.")
+                    Text("Recordings are uploaded to your private account and sent to our transcription provider to create text. You can delete them at any time.")
                         .font(.custom("Georgia", size: 14))
                         .foregroundColor(.gray)
                         .multilineTextAlignment(.center)
@@ -360,4 +360,4 @@ struct PermissionAlertViews_Previews: PreviewProvider {
         }
         .background(Color(red: 1.0, green: 0.96, blue: 0.89))
     }
-} 
+}

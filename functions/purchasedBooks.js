@@ -52,15 +52,20 @@ function createOrderMirrorHandler(db, bucket) {
     }
     const userId = event.params.userId;
     const orderId = event.params.orderId;
+    const deletionMarker = await db.collection("accountDeletionRequests").doc(userId).get();
+    if (deletionMarker.exists) {
+      return;
+    }
     const bookVersionId = after.bookVersionId != null ? String(after.bookVersionId).trim() : "";
     if (!bookVersionId) {
       return;
     }
 
+    let validatedArtifacts = null;
     try {
-      await ensureBookVersionArtifactUrls(db, bucket, userId, bookVersionId);
+      validatedArtifacts = await ensureBookVersionArtifactUrls(db, bucket, userId, bookVersionId);
     } catch (e) {
-      console.warn("purchasedBooks mirror: ensureBookVersionArtifactUrls failed", userId, bookVersionId, e);
+      console.warn("purchasedBooks mirror: book artifact validation failed");
     }
 
     const bvSnap = await db
@@ -75,10 +80,10 @@ function createOrderMirrorHandler(db, bucket) {
     const existingSnap = await purchaseRef.get();
     const ex = existingSnap.exists ? existingSnap.data() || {} : {};
 
-    const coverURL = after.coverURL || bv.coverURL || null;
-    const pdfURL = after.pdfURL || bv.pdfURL || null;
-    const coverStoragePath = after.coverPdfStoragePath || bv.coverStoragePath || null;
-    const pdfStoragePath = after.interiorPdfStoragePath || bv.pdfStoragePath || null;
+    const coverURL = validatedArtifacts?.coverURL || null;
+    const pdfURL = validatedArtifacts?.pdfURL || null;
+    const coverStoragePath = validatedArtifacts?.coverStoragePath || null;
+    const pdfStoragePath = validatedArtifacts?.pdfStoragePath || null;
 
     /** @type {Record<string, any>} */
     const updates = {

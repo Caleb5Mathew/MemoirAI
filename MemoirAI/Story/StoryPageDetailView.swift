@@ -98,6 +98,16 @@ struct StoryPageDetailView: View {
     @State private var coverArtEditPanel: BookCoverFlatPanel = .front
     @State private var coverArtRevisionText = ""
     @State private var showTitleBlurbEditor = false
+    @State private var showFreeformEditor = false
+    @State private var freeformDraft = BookPageDocument()
+    @State private var isPreparingFreeformEditor = false
+    @State private var isImportingFreeformPhotos = false
+    @State private var isSavingFreeformPage = false
+    @State private var isSavingTextEdits = false
+    @State private var freeformEditingPageID: String?
+    @State private var showFreeformResetConfirmation = false
+    @State private var freeformEditorError: String?
+    @State private var imageEditTask: Task<Void, Never>?
     
     @FocusState private var imageRevisionFieldFocused: Bool
     
@@ -112,6 +122,12 @@ struct StoryPageDetailView: View {
     private var currentItem: StoryPageViewModel.PageItem? {
         guard currentPageIndex >= 0, currentPageIndex < vm.pageItems.count else { return nil }
         return vm.pageItems[currentPageIndex]
+    }
+
+    private var canAIEditCurrentIllustration: Bool {
+        guard case .illustration? = currentItem else { return false }
+        guard let document = vm.freeformDocument(at: currentPageIndex) else { return true }
+        return document.containsImage(from: .aiGenerated)
     }
     
     var body: some View {
@@ -132,6 +148,8 @@ struct StoryPageDetailView: View {
             
             bottomChrome
         }
+        .allowsHitTesting(!isSavingTextEdits)
+        .interactiveDismissDisabled(isSavingTextEdits)
         .sheet(isPresented: $showCoverArtEditSheet) {
             StoryPage.CoverArtEditSheet(
                 panel: coverArtEditPanel,
@@ -154,6 +172,100 @@ struct StoryPageDetailView: View {
         .sheet(isPresented: $showTitleBlurbEditor) {
             StorybookCoverEditorSheet(vm: vm)
         }
+        .fullScreenCover(isPresented: $showFreeformEditor) {
+            NavigationStack {
+                FreeformBookPageEditor(
+                    document: $freeformDraft,
+                    isImportingPhotos: $isImportingFreeformPhotos
+                )
+                    .allowsHitTesting(!isSavingFreeformPage)
+                    .overlay {
+                        if isSavingFreeformPage {
+                            ProgressView("Saving page")
+                                .padding(18)
+                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        }
+                    }
+                    .navigationTitle("Arrange Page")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { showFreeformEditor = false }
+                                .disabled(isSavingFreeformPage)
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Save") {
+                                guard let pageID = freeformEditingPageID else { return }
+                                isSavingFreeformPage = true
+                                Task {
+                                    defer { isSavingFreeformPage = false }
+                                    do {
+                                        try await vm.applyFreeformDocument(freeformDraft, pageID: pageID)
+                                        showFreeformEditor = false
+                                    } catch {
+                                        freeformEditorError = error.localizedDescription
+                                    }
+                                }
+                            }
+                            .fontWeight(.semibold)
+                            .disabled(isSavingFreeformPage || isImportingFreeformPhotos)
+                        }
+                        if vm.freeformDocument(at: currentPageIndex) != nil {
+                            ToolbarItem(placement: .bottomBar) {
+                                Button("Reset to Original", role: .destructive) {
+                                    showFreeformResetConfirmation = true
+                                }
+                                .disabled(isSavingFreeformPage || isImportingFreeformPhotos)
+                            }
+                        }
+                    }
+            }
+            .interactiveDismissDisabled()
+            .confirmationDialog(
+                "Reset this page to its original layout?",
+                isPresented: $showFreeformResetConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Reset Page", role: .destructive) {
+                    guard let pageID = freeformEditingPageID else { return }
+                    isSavingFreeformPage = true
+                    Task {
+                        defer { isSavingFreeformPage = false }
+                        do {
+                            try await vm.removeFreeformDocument(pageID: pageID)
+                            showFreeformEditor = false
+                        } catch {
+                            freeformEditorError = error.localizedDescription
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Your custom text and photos on this page will be removed.")
+            }
+        }
+        .alert(
+            "Page Editor",
+            isPresented: Binding(
+                get: { freeformEditorError != nil },
+                set: { if !$0 { freeformEditorError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { freeformEditorError = nil }
+        } message: {
+            Text(freeformEditorError ?? "The page could not be prepared for editing.")
+        }
+        .alert(
+            "Book Editor",
+            isPresented: Binding(
+                get: { vm.errorMessage != nil },
+                set: { if !$0 { vm.errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { vm.errorMessage = nil }
+        } message: {
+            Text(vm.errorMessage ?? "The edit could not be completed.")
+        }
         .onChange(of: vm.coverPanelEditing) { oldVal, newVal in
             if oldVal != nil && newVal == nil && showCoverArtEditSheet {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -167,7 +279,9 @@ struct StoryPageDetailView: View {
             currentPageIndex = min(max(0, initialPageIndex), lastIndex)
             syncEditedFieldsFromCurrentPage()
             if startEditingOnAppear {
-                if case .illustration = currentItem {
+                if vm.freeformDocument(at: currentPageIndex) != nil {
+                    beginFreeformEditing()
+                } else if case .illustration = currentItem {
                     beginInlineImageEdit()
                 } else if case .textPage(_, _, _, _, _, let memoryID) = currentItem,
                           (memoryID == BookInteriorAnchor.titlePageMemoryId || memoryID == BookInteriorAnchor.closingPageMemoryId),
@@ -185,6 +299,10 @@ struct StoryPageDetailView: View {
             isEditingImageInline = false
             imageRevisionText = ""
             imageRevisionFieldFocused = false
+        }
+        .onDisappear {
+            imageEditTask?.cancel()
+            imageEditTask = nil
         }
     }
     
@@ -239,6 +357,7 @@ struct StoryPageDetailView: View {
                         .overlay(Circle().strokeBorder(Color.white.opacity(0.20), lineWidth: 0.8))
                 }
                 .frame(width: slotWidth, alignment: .leading)
+                .disabled(isSavingTextEdits)
                 
                 Spacer(minLength: 8)
                 
@@ -259,13 +378,27 @@ struct StoryPageDetailView: View {
                 
                 HStack(spacing: 8) {
                     if isEditing {
-                        actionPill(
-                            title: "Save",
-                            systemImage: "checkmark",
-                            isProminent: true
-                        ) {
-                            saveEdits()
-                            isEditing = false
+                        if isSavingTextEdits {
+                            ProgressView()
+                                .tint(.white)
+                                .frame(width: 44, height: 36)
+                        } else {
+                            actionPill(
+                                title: "Save",
+                                systemImage: "checkmark",
+                                isProminent: true
+                            ) {
+                                isSavingTextEdits = true
+                                Task {
+                                    defer { isSavingTextEdits = false }
+                                    do {
+                                        try await saveEdits()
+                                        isEditing = false
+                                    } catch {
+                                        freeformEditorError = error.localizedDescription
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -382,7 +515,7 @@ struct StoryPageDetailView: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         let payload = trimmed
         imageRevisionText = ""
-        Task {
+        imageEditTask = Task {
             await vm.editImage(at: currentPageIndex, revisionPrompt: payload)
         }
     }
@@ -405,7 +538,11 @@ struct StoryPageDetailView: View {
         isEditingImageInline = false
         imageRevisionText = ""
         imageRevisionFieldFocused = false
-        isEditing = true
+        if vm.freeformDocument(at: currentPageIndex) != nil {
+            beginFreeformEditing()
+        } else {
+            isEditing = true
+        }
     }
     
     /// Expanded bottom card for illustration image prompts (hybrid chrome).
@@ -466,13 +603,43 @@ struct StoryPageDetailView: View {
     private var bottomChrome: some View {
         if !isBottomToolbarVisible {
             EmptyView()
+        } else if vm.isFreeformLayoutUnavailable(at: currentPageIndex) {
+            compactFloatingEditPill(
+                title: isSavingFreeformPage ? "Restoring…" : "Restore Original Page",
+                systemImage: "arrow.counterclockwise"
+            ) {
+                guard let pageID = vm.pageID(at: currentPageIndex),
+                      !isSavingFreeformPage else { return }
+                isSavingFreeformPage = true
+                Task {
+                    defer { isSavingFreeformPage = false }
+                    do {
+                        try await vm.removeFreeformDocument(pageID: pageID)
+                    } catch {
+                        freeformEditorError = error.localizedDescription
+                    }
+                }
+            }
         } else if case .illustration = currentItem {
             if isEditingImageInline {
                 expandedIllustrationEditChrome
             } else {
-                compactFloatingEditPill(title: "Edit Image", systemImage: "wand.and.stars") {
-                    beginInlineImageEdit()
+                HStack(spacing: 10) {
+                    if canAIEditCurrentIllustration {
+                        actionPill(title: "AI Edit", systemImage: "wand.and.stars", isProminent: false) {
+                            beginInlineImageEdit()
+                        }
+                    }
+                    actionPill(
+                        title: isPreparingFreeformEditor ? "Opening…" : "Arrange Page",
+                        systemImage: "square.on.square",
+                        isProminent: true
+                    ) {
+                        beginFreeformEditing()
+                    }
                 }
+                .padding(.horizontal, 18)
+                .padding(.bottom, 12)
             }
         } else if case .textPage(_, _, _, _, _, let memoryID) = currentItem,
                   memoryID == BookInteriorAnchor.titlePageMemoryId || memoryID == BookInteriorAnchor.closingPageMemoryId {
@@ -501,9 +668,22 @@ struct StoryPageDetailView: View {
                 }
             }
         } else if case .textPage = currentItem {
-            compactFloatingEditPill(title: "Edit", systemImage: "pencil") {
-                isEditing = true
+            HStack(spacing: 10) {
+                if vm.canInlineEditText(at: currentPageIndex) {
+                    actionPill(title: "Edit Text", systemImage: "pencil", isProminent: false) {
+                        isEditing = true
+                    }
+                }
+                actionPill(
+                    title: isPreparingFreeformEditor ? "Opening…" : "Arrange Page",
+                    systemImage: "square.on.square",
+                    isProminent: true
+                ) {
+                    beginFreeformEditing()
+                }
             }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 12)
         } else {
             EmptyView()
         }
@@ -547,11 +727,19 @@ struct StoryPageDetailView: View {
     @ViewBuilder
     private func displayPageContent(item: StoryPageViewModel.PageItem, frameWidth: CGFloat, frameHeight: CGFloat) -> some View {
         Group {
+            if let freeformPage = vm.freeformPageView(
+                at: currentPageIndex,
+                frameWidth: frameWidth,
+                frameHeight: frameHeight
+            ) {
+                freeformPage
+            } else {
             switch item {
             case .illustration(let image, let memoryID, let title):
                 illustrationPageView(image: image, memoryID: memoryID, title: title, frameWidth: frameWidth, frameHeight: frameHeight)
             case .textPage(let pageIndex, let total, let text, let title, let subtitle, let memoryID):
                 textPageView(pageIndex: pageIndex, total: total, text: text, title: title, subtitle: subtitle, memoryID: memoryID, frameWidth: frameWidth, frameHeight: frameHeight)
+            }
             }
         }
         .frame(width: frameWidth, height: frameHeight)
@@ -917,6 +1105,11 @@ struct StoryPageDetailView: View {
         .onChange(of: editedSubtitle) { newValue in
             if newValue.count > subtitleCharLimit { editedSubtitle = String(newValue.prefix(subtitleCharLimit)) }
         }
+        .onChange(of: editedBody) { newValue in
+            guard !InlineBookTextEditPolicy.accepts(characterCount: newValue.count) else { return }
+            editedBody = String(newValue.prefix(InlineBookTextEditPolicy.maximumMemoryCharacterCount))
+            freeformEditorError = BookPageEditorPersistenceError.textTooLong.localizedDescription
+        }
     }
     
     private var shouldShowChevronNavigation: Bool {
@@ -998,14 +1191,43 @@ struct StoryPageDetailView: View {
         }
     }
     
-    private func saveEdits() {
+    private func saveEdits() async throws {
         switch currentItem {
         case .illustration:
-            vm.updatePageIllustrationTitle(at: currentPageIndex, title: editedTitle.isEmpty ? nil : editedTitle)
+            try await vm.updatePageIllustrationTitle(
+                at: currentPageIndex,
+                title: editedTitle.isEmpty ? nil : editedTitle
+            )
         case .textPage:
-            vm.updatePageText(at: currentPageIndex, title: editedTitle.isEmpty ? nil : editedTitle, body: editedBody, subtitle: editedSubtitle.isEmpty ? nil : editedSubtitle)
+            try await vm.updatePageText(
+                at: currentPageIndex,
+                title: editedTitle.isEmpty ? nil : editedTitle,
+                body: editedBody,
+                subtitle: editedSubtitle.isEmpty ? nil : editedSubtitle
+            )
         case .none:
             break
+        }
+    }
+
+    private func beginFreeformEditing() {
+        guard !isPreparingFreeformEditor else { return }
+        let pageIndex = currentPageIndex
+        guard let pageID = vm.pageID(at: pageIndex) else { return }
+        isPreparingFreeformEditor = true
+        Task {
+            defer { isPreparingFreeformEditor = false }
+            do {
+                let draft = try await vm.makeEditableFreeformDocument(at: pageIndex)
+                guard vm.pageID(at: pageIndex) == pageID else {
+                    throw BookPageEditorPersistenceError.pageChanged
+                }
+                freeformDraft = draft
+                freeformEditingPageID = pageID
+                showFreeformEditor = true
+            } catch {
+                freeformEditorError = error.localizedDescription
+            }
         }
     }
     

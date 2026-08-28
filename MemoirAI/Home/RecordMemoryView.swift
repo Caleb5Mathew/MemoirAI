@@ -3,6 +3,43 @@ import AVFoundation
 import Speech
 import CoreData
 
+enum PrimaryRecordingControlState: Equatable {
+    case ready
+    case recording
+    case paused
+
+    var accessibilityLabel: String {
+        switch self {
+        case .ready:
+            return "Start recording"
+        case .recording:
+            return "Pause recording"
+        case .paused:
+            return "Resume recording"
+        }
+    }
+
+    var accessibilityValue: String {
+        switch self {
+        case .ready:
+            return "Not recording"
+        case .recording:
+            return "Recording"
+        case .paused:
+            return "Paused"
+        }
+    }
+}
+
+enum PrimaryRecordingControlPolicy {
+    static func state(isRecording: Bool, isPaused: Bool) -> PrimaryRecordingControlState {
+        if isPaused {
+            return .paused
+        }
+        return isRecording ? .recording : .ready
+    }
+}
+
 struct RecordMemoryView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var context
@@ -23,15 +60,17 @@ struct RecordMemoryView: View {
     @State private var audioRecorder: AVAudioRecorder?
     @State private var audioURL: URL?
     @State private var showExitConfirm = false
+    @State private var isSaving = false
+    @State private var shouldDismissAfterSave = false
     @FocusState private var isTextFocused: Bool
     @State private var answeredPrompts: [String] = []
     @State private var suggestionPool: [String] = []
     @State private var recordingTime: TimeInterval = 0
     @State private var recordingTimer: Timer?
-    @State private var checkpointTimer: Timer?
-    @State private var checkpointFiles: [URL] = []
-    @State private var lastCheckpointTime: TimeInterval = 0
     @State private var isKeyboardSavePressed = false
+    @State private var showCloudTranscriptionDisclosure = false
+    @State private var recordingStartErrorMessage: String?
+    @State private var saveErrorMessage: String?
     
     // Timeout warning states
     @State private var showTimeoutWarning = false
@@ -42,13 +81,11 @@ struct RecordMemoryView: View {
     @State private var interruptionBannerMessage: String? = nil
     
     // Store picked/cropped images as raw JPEG/PNG data for Core-Data persistence
-    @State private var selectedImagesData: [Data] = []
     
     // Constants
-    private let maxRecordingDuration: TimeInterval = 3600 // 60 minutes in seconds
-    private let checkpointInterval: TimeInterval = 600 // 10 minutes in seconds
-    private let warningThreshold: TimeInterval = 3570 // 59:30 (30 seconds before limit)
-    private let countdownStart: TimeInterval = 3597 // 59:57 (3 seconds before limit)
+    private let maxRecordingDuration = RecordingDurationPolicy.maximumRecordingDuration
+    private let warningThreshold = RecordingDurationPolicy.warningThreshold
+    private let countdownStart = RecordingDurationPolicy.countdownStart
     
     private let passedPrompt: String?
     private let promptKey = "PromptOfTheDayCompleted"
@@ -156,6 +193,10 @@ struct RecordMemoryView: View {
         isRecording && !isPaused && (audioMonitor.isVoiceActive || liveAudioLevel > 0.08)
     }
 
+    private var primaryRecordingControlState: PrimaryRecordingControlState {
+        PrimaryRecordingControlPolicy.state(isRecording: isRecording, isPaused: isPaused)
+    }
+
     private func voiceRing(index: Int) -> some View {
         let ringColor: Color = audioMonitor.isVoiceActive ? accent.opacity(0.2) : micColor.opacity(0.2)
         let side: CGFloat = CGFloat(140 + index * 20)
@@ -176,6 +217,7 @@ struct RecordMemoryView: View {
                     // Custom Back Button
                     HStack {
                         Button(action: {
+                            guard !isSaving else { return }
                             if isRecording || isPaused {
                                 stopRecording()
                             } else if hasMeaningfulData() {
@@ -217,36 +259,7 @@ struct RecordMemoryView: View {
                     }
                     
                     // Mic Button with enhanced visual feedback
-                    ZStack {
-                        // Rings only appear when actively recording and speech is detected.
-                        if shouldShowVoiceRings {
-                            ForEach(0..<3, id: \.self) { i in
-                                voiceRing(index: i)
-                            }
-                        }
-                        
-                        // Main mic button with level-responsive scaling
-                        Circle()
-                            .fill(
-                                isRecording && !isPaused && audioMonitor.isVoiceActive ?
-                                    accent : micColor
-                            )
-                            .frame(width: 120, height: 120)
-                            .scaleEffect(
-                                isRecording && !isPaused ?
-                                    (1.0 + liveAudioLevel * 0.1) : 1.0
-                            )
-                            .shadow(color: Color.orange.opacity(0.25),
-                                    radius: 10, x: 0, y: 4)
-                            .animation(.easeOut(duration: 0.1), value: liveAudioLevel)
-                            .animation(.easeInOut(duration: 0.3), value: audioMonitor.isVoiceActive)
-                        
-                        // Mic icon
-                        Image(systemName: (isRecording && !isPaused) ? "pause.fill" : "mic.fill")
-                            .font(.system(size: 36))
-                            .foregroundColor(.white)
-                    }
-                    .onTapGesture {
+                    Button {
                         if isRecording && !isPaused {
                             pauseRecording()
                         } else if isPaused {
@@ -254,7 +267,40 @@ struct RecordMemoryView: View {
                         } else {
                             startRecording()
                         }
+                    } label: {
+                        ZStack {
+                            // Rings only appear when actively recording and speech is detected.
+                            if shouldShowVoiceRings {
+                                ForEach(0..<3, id: \.self) { i in
+                                    voiceRing(index: i)
+                                }
+                            }
+
+                            // Main mic button with level-responsive scaling
+                            Circle()
+                                .fill(
+                                    isRecording && !isPaused && audioMonitor.isVoiceActive ?
+                                        accent : micColor
+                                )
+                                .frame(width: 120, height: 120)
+                                .scaleEffect(
+                                    isRecording && !isPaused ?
+                                        (1.0 + liveAudioLevel * 0.1) : 1.0
+                                )
+                                .shadow(color: Color.orange.opacity(0.25),
+                                        radius: 10, x: 0, y: 4)
+                                .animation(.easeOut(duration: 0.1), value: liveAudioLevel)
+                                .animation(.easeInOut(duration: 0.3), value: audioMonitor.isVoiceActive)
+
+                            // Mic icon
+                            Image(systemName: (isRecording && !isPaused) ? "pause.fill" : "mic.fill")
+                                .font(.system(size: 36))
+                                .foregroundColor(.white)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(primaryRecordingControlState.accessibilityLabel)
+                    .accessibilityValue(primaryRecordingControlState.accessibilityValue)
                     
                     // Real-time Waveform Visualization
                     RealTimeWaveformView(
@@ -512,7 +558,7 @@ struct RecordMemoryView: View {
                     .animation(.spring(response: 0.22, dampingFraction: 0.72), value: isKeyboardSavePressed)
                     .animation(.easeInOut(duration: 0.15), value: hasUnsavedData())
                 }
-                .disabled(!hasUnsavedData())
+                .disabled(!hasUnsavedData() || isSaving)
                 .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity, pressing: { pressing in
                     isKeyboardSavePressed = pressing
                 }, perform: {})
@@ -528,13 +574,67 @@ struct RecordMemoryView: View {
                 .foregroundColor(accent)
             }
         }
+        .allowsHitTesting(!isSaving)
+        .fullScreenCover(isPresented: $isSaving, onDismiss: {
+            guard shouldDismissAfterSave else { return }
+            shouldDismissAfterSave = false
+            dismiss()
+        }) {
+            ZStack {
+                Color(red: 1.0, green: 0.96, blue: 0.89)
+                    .ignoresSafeArea()
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(accent)
+                    Text("Saving your memory…")
+                        .font(.headline)
+                        .foregroundColor(accent)
+                }
+            }
+            .interactiveDismissDisabled()
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Saving your memory")
+        }
         .alert("Exit without saving?", isPresented: $showExitConfirm) {
             Button("Discard and Exit", role: .destructive) {
+                clearRecording()
                 dismiss()
             }
             Button("Keep Editing", role: .cancel) { }
         } message: {
             Text("You have an unsaved memory in progress. If you exit now, your current recording and text will be lost.")
+        }
+        .alert("Private Cloud Transcription", isPresented: $showCloudTranscriptionDisclosure) {
+            Button("Not Now", role: .cancel) { }
+            Button("Continue") {
+                CloudTranscriptionDisclosure.accept()
+                startRecording()
+            }
+        } message: {
+            Text("Saved recordings are uploaded to your private MemoirAI account and sent to OpenAI to create a transcript. You can delete the recording and transcript at any time.")
+        }
+        .alert(
+            "Recording Unavailable",
+            isPresented: Binding(
+                get: { recordingStartErrorMessage != nil },
+                set: { if !$0 { recordingStartErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { recordingStartErrorMessage = nil }
+        } message: {
+            Text(recordingStartErrorMessage ?? "Please check your connection and try again.")
+        }
+        .alert(
+            "Memory Not Saved",
+            isPresented: Binding(
+                get: { saveErrorMessage != nil },
+                set: { if !$0 { saveErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { saveErrorMessage = nil }
+        } message: {
+            Text(saveErrorMessage ?? "Please try again.")
         }
         .onAppear {
             tutorialCoordinator.setVisibleScreen(.recordMemory)
@@ -545,11 +645,6 @@ struct RecordMemoryView: View {
             showExitConfirm = false
             tutorialCoordinator.onRecordMemoryViewAppeared(profileID: profileVM.selectedProfile.id)
             
-            // Request microphone permission if not already granted
-            if !permissionManager.isMicrophoneAuthorized {
-                permissionManager.requestMicrophonePermission()
-            }
-
             // Ensure speech recognition permission is requested up-front
             SFSpeechRecognizer.requestAuthorization { status in
                 print("🔑 Speech auth status (RecordMemoryView):", status.rawValue)
@@ -558,6 +653,15 @@ struct RecordMemoryView: View {
             configureInterruptionObserver()
         }
         .onDisappear {
+            stopRecording()
+            if !isSaving, let audioURL, audioURL.isFileURL {
+                try? FileManager.default.removeItem(at: audioURL)
+                self.audioURL = nil
+            }
+            interruptionObserver.onInterruptionBegan = nil
+            interruptionObserver.onInterruptionEnded = nil
+            interruptionObserver.onRouteChangeDeviceUnavailable = nil
+            interruptionObserver.onAppBackgrounded = nil
             tutorialCoordinator.clearAnchor(.recordingSaveMemory)
             if tutorialCoordinator.visibleScreen == .recordMemory {
                 tutorialCoordinator.setVisibleScreen(.unknown)
@@ -590,6 +694,7 @@ struct RecordMemoryView: View {
             .cornerRadius(12)
             .shadow(color: .black.opacity(0.06), radius: 4, x: 0, y: 2)
         }
+        .disabled(isSaving)
     }
 
     
@@ -613,11 +718,11 @@ struct RecordMemoryView: View {
     }
     
     func hasUnsavedData() -> Bool {
-        selectedPrompt != nil || !typedText.isEmpty || audioURL != nil || !selectedImagesData.isEmpty
+        selectedPrompt != nil || !typedText.isEmpty || audioURL != nil
     }
     
     func hasMeaningfulData() -> Bool {
-        !typedText.isEmpty || audioURL != nil || !selectedImagesData.isEmpty
+        !typedText.isEmpty || audioURL != nil
     }
     
     // Format time for display (MM:SS)
@@ -628,50 +733,28 @@ struct RecordMemoryView: View {
     }
     
     // Start recording timer
-    func startRecordingTimer() {
-        recordingTime = 0
-        checkpointFiles.removeAll()
-        lastCheckpointTime = 0
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [self] _ in
-            recordingTime += 1
+    func startRecordingTimer(resetElapsedTime: Bool = true) {
+        if resetElapsedTime {
+            recordingTime = 0
+        }
+        stopRecordingTimer()
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [self] _ in
+            guard let recorder = audioRecorder else { return }
+            recordingTime = recorder.currentTime
             
             // Check for timeout warnings
             if recordingTime >= countdownStart && recordingTime < maxRecordingDuration {
                 // Start 3-second countdown
-                let remaining = Int(maxRecordingDuration - recordingTime)
+                let remaining = Int(ceil(maxRecordingDuration - recordingTime))
                 finalCountdown = remaining
             } else if recordingTime >= warningThreshold && recordingTime < countdownStart {
                 // Show warning overlay (30 seconds before limit)
                 showTimeoutWarning = true
-            } else if recordingTime >= maxRecordingDuration {
+            } else if recordingTime >= maxRecordingDuration || !recorder.isRecording {
                 // Auto-stop and save
                 stopRecording()
                 saveMemory()
             }
-            
-            // Checkpoint every 10 minutes (only trigger once per interval)
-            if recordingTime - lastCheckpointTime >= checkpointInterval && recordingTime > 0 {
-                saveCheckpoint()
-                lastCheckpointTime = recordingTime
-            }
-        }
-    }
-    
-    // Save checkpoint (every 10 minutes)
-    func saveCheckpoint() {
-        guard let currentURL = audioURL else { return }
-        
-        // Copy current file as checkpoint
-        let checkpointURL = FileManager.default
-            .urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("checkpoint_\(UUID().uuidString).caf")
-        
-        do {
-            try FileManager.default.copyItem(at: currentURL, to: checkpointURL)
-            checkpointFiles.append(checkpointURL)
-            print("✅ Checkpoint saved at \(formatTime(recordingTime))")
-        } catch {
-            print("❌ Failed to save checkpoint: \(error)")
         }
     }
     
@@ -683,9 +766,21 @@ struct RecordMemoryView: View {
     
     // MARK: - Recording
     func startRecording() {
+        if let failureMessage = MemoryUserScope.recordingStartFailureMessage(
+            firebaseUserID: MemoryUserScope.currentFirebaseUserId
+        ) {
+            recordingStartErrorMessage = failureMessage
+            return
+        }
+        guard CloudTranscriptionDisclosure.isAccepted() else {
+            showCloudTranscriptionDisclosure = true
+            return
+        }
         // Check microphone permission before starting
         guard permissionManager.isMicrophoneAuthorized else {
-            permissionManager.requestMicrophonePermission()
+            permissionManager.requestMicrophonePermission {
+                startRecording()
+            }
             return
         }
         
@@ -702,26 +797,30 @@ struct RecordMemoryView: View {
             print("🔴 Enhanced audio session setup error: \(error.localizedDescription)")
         }
         
-        let fileName = UUID().uuidString + ".caf"
+        let fileName = UUID().uuidString + ".m4a"
         let fileURL = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(fileName)
         
         // Use optimal recording format for speech recognition
         let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 44_100,
             AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 32, // Use 32-bit for better quality
-            AVLinearPCMIsFloatKey: true, // Use float for better precision
-            AVLinearPCMIsBigEndianKey: false
+            AVEncoderBitRateKey: 48_000,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
         
         do {
-            audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
-            audioRecorder?.isMeteringEnabled = true
-            audioRecorder?.prepareToRecord()
-            audioRecorder?.record()
+            let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
+            recorder.isMeteringEnabled = true
+            recorder.prepareToRecord()
+            guard recorder.record(forDuration: RecordingDurationPolicy.maximumRecordingDuration) else {
+                print("❌ Recorder refused to start")
+                try? FileManager.default.removeItem(at: fileURL)
+                return
+            }
+            audioRecorder = recorder
             Haptics.tap()
             audioURL = fileURL
             isRecording = true
@@ -737,6 +836,7 @@ struct RecordMemoryView: View {
             
             startRecordingTimer()
         } catch {
+            try? FileManager.default.removeItem(at: fileURL)
             print("❌ Failed to start recording: \(error.localizedDescription)")
         }
     }
@@ -756,17 +856,20 @@ struct RecordMemoryView: View {
 
     func resumeRecording() {
         Haptics.selection()
-        audioRecorder?.record()
+        guard let recorder = audioRecorder else { return }
+        let remaining = RecordingDurationPolicy.remainingDuration(after: recorder.currentTime)
+        guard remaining > 0, recorder.record(forDuration: remaining) else {
+            stopRecording()
+            saveMemory()
+            return
+        }
         isPaused = false
         interruptionBannerMessage = nil
 
         // Resume real-time transcription
         realTimeTranscription.resumeTranscription()
 
-        // Resume timer from current time
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            recordingTime += 1
-        }
+        startRecordingTimer(resetElapsedTime: false)
     }
 
     func stopRecording() {
@@ -776,10 +879,6 @@ struct RecordMemoryView: View {
         interruptionBannerMessage = nil
         stopRecordingTimer() // Stop the timer
 
-        // Stop checkpoint timer
-        checkpointTimer?.invalidate()
-        checkpointTimer = nil
-
         // Hide timeout warning
         showTimeoutWarning = false
         finalCountdown = nil
@@ -787,26 +886,19 @@ struct RecordMemoryView: View {
         // Stop audio level monitoring
         audioMonitor.stopMonitoring()
 
-        // Stop real-time transcription and get final transcript
+        // Live text is only a recording aid. The saved memoir is transcribed
+        // from the complete audio file after it has uploaded.
         realTimeTranscription.stopTranscription()
-        let realTimeTranscript = realTimeTranscription.getFinalTranscript()
-        if !realTimeTranscript.isEmpty {
-            typedText = realTimeTranscript
-        }
+        _ = realTimeTranscription.getFinalTranscript()
     }
 
     func clearRecording() {
         stopRecording()
+        if let audioURL, audioURL.isFileURL {
+            try? FileManager.default.removeItem(at: audioURL)
+        }
         audioURL = nil
         recordingTime = 0 // Reset timer
-
-        // Clean up checkpoint files
-        for checkpointURL in checkpointFiles {
-            try? FileManager.default.removeItem(at: checkpointURL)
-        }
-        checkpointFiles.removeAll()
-
-        // Audio monitor is already stopped in stopRecording()
     }
 
     // MARK: - Interruption / Backgrounding
@@ -840,42 +932,53 @@ struct RecordMemoryView: View {
     }
     // MARK: – Save & Transcribe (ENHANCED VERSION)
     func saveMemory() {
-        guard hasUnsavedData() else { return }
+        guard hasUnsavedData(), !isSaving else { return }
+        guard let firebaseUserId = MemoryUserScope.currentFirebaseUserId else {
+            saveErrorMessage = "MemoirAI is still connecting to your private account. Your recording is unchanged; check your connection and try saving again."
+            return
+        }
+        isSaving = true
         
         let promptToSave  = selectedPrompt ?? "Untitled Prompt"
         let textToSave    = typedText          // capture before UI reset
         let audioURLToSave = audioURL          // capture
-        let imagesToSave   = selectedImagesData // capture
+        let profile = profileVM.selectedProfile
         
         // 🔥 ENHANCED: Use background context like RecordingView
         let bgContext = PersistenceController.shared.container.newBackgroundContext()
         bgContext.perform {
+            let audioFileSize = audioURLToSave.flatMap {
+                (try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? NSNumber)?.int64Value
+            }
+            guard audioURLToSave == nil || (audioFileSize ?? 0) > 0 else {
+                print("❌ Could not read the completed recording; memory was not saved")
+                DispatchQueue.main.async {
+                    isSaving = false
+                    saveErrorMessage = "The completed recording could not be read. Your recording was not deleted; try saving again."
+                }
+                return
+            }
+
             // 1️⃣ Create & save the entry in background context
             let newEntry = MemoryEntry(context: bgContext)
             newEntry.id           = UUID()
             newEntry.prompt       = promptToSave
             newEntry.text         = textToSave.isEmpty ? nil : textToSave
             newEntry.audioFileURL = audioURLToSave?.absoluteString
-            newEntry.audioData    = audioURLToSave.flatMap { try? Data(contentsOf: $0) }
+            newEntry.transcriptionEditedText = audioURLToSave == nil || textToSave.isEmpty ? nil : textToSave
+            newEntry.transcriptionStatus = audioURLToSave == nil ? nil : "queued"
+            newEntry.transcriptionLanguage = "en"
+            newEntry.audioData    = nil
             newEntry.createdAt    = Date()
-            newEntry.profileID    = profileVM.selectedProfile.id
-            newEntry.firebaseUserId = MemoryUserScope.currentFirebaseUserId
-            if newEntry.firebaseUserId == nil {
-                print("⚠️ Saving memory without firebaseUserId in RecordMemoryView")
-            }
-            
-            // Photo saving disabled - uncomment below to re-enable
-            /*
-            for data in imagesToSave {
-                let photo = Photo(context: bgContext)
-                photo.id = UUID()
-                photo.data = data
-                photo.memoryEntry = newEntry
-            }
-            */
+            newEntry.profileID    = profile.id
+            newEntry.firebaseUserId = firebaseUserId
             
             do {
                 try bgContext.save()
+                FirestoreSyncService.shared.queueMemorySyncWithProfile(
+                    newEntry,
+                    profile: profile
+                )
                 
                 // 2️⃣ Notify on main thread immediately
                 DispatchQueue.main.async {
@@ -886,6 +989,11 @@ struct RecordMemoryView: View {
                 }
             } catch {
                 print("❌ Error saving MemoryEntry:", error)
+                DispatchQueue.main.async {
+                    isSaving = false
+                    saveErrorMessage = "This memory could not be saved on your device. Your draft is unchanged; free some storage and try again."
+                }
+                return
             }
             
             // 3️⃣ Generate title if needed (if prompt is "Untitled Prompt" and we have text)
@@ -894,88 +1002,61 @@ struct RecordMemoryView: View {
                 
                 // If we have text now, generate title immediately
                 if let text = textForTitle, !text.isEmpty {
+                    let entryObjectID = newEntry.objectID
                     Task {
-                        await generateAndUpdateTitle(for: newEntry, text: text, context: bgContext)
+                        await generateAndUpdateTitle(for: entryObjectID, text: text, profile: profile)
                     }
                 } else {
                     // If we're waiting for transcription, title will be generated after transcription completes
                 }
             }
-            
-            // 4️⃣ Start transcription using same background context
-            if let urlString = newEntry.audioFileURL,
-               let fileURL = URL(string: urlString) {
-                let entryID = newEntry.id
-                if let entryID {
-                    BatchTranscriptionManager.shared.markInFlight(entryID)
-                }
-                // Use enhanced transcription with better accuracy
-                SpeechTranscriber.shared.transcribe(url: fileURL) { result in
-                    switch result {
-                    case .success(let transcript):
-                        bgContext.perform {
-                            newEntry.text = transcript
+            DispatchQueue.main.async {
+                typedText = ""
+                selectedPrompt = nil
+                audioURL = nil
+                isRecording = false
+                isPaused = false
+                showExitConfirm = false
+                showTextEntry = false
+                shouldDismissAfterSave = true
+                isSaving = false
 
-                            // Generate title if prompt is still "Untitled Prompt"
-                            if newEntry.prompt == "Untitled Prompt" || newEntry.prompt == "Untitled" {
-                                Task {
-                                    await generateAndUpdateTitle(for: newEntry, text: transcript, context: bgContext)
-                                }
-                            }
-
-                            try? bgContext.save()
-
-                            DispatchQueue.main.async {
-                                NotificationCenter.default.post(name: .memorySaved, object: nil)
-                                print("✅ Enhanced transcription completed: \(transcript.prefix(50))...")
-                            }
-                        }
-                    case .failure(let error):
-                        // Leave newEntry.text unset so BatchTranscriptionManager's
-                        // "needs transcription" predicate still matches and retries later.
-                        print("❌ Enhanced transcription failed: \(error.localizedDescription)")
-                    }
-                    if let entryID {
-                        BatchTranscriptionManager.shared.markComplete(entryID)
-                    }
+                if promptToSave == passedPrompt {
+                    UserDefaults.standard.set(true, forKey: promptKey)
                 }
             }
-        }
-        
-        // 4️⃣ Reset UI immediately on main thread (but don't dismiss yet)
-        typedText       = ""
-        selectedPrompt  = nil
-        audioURL        = nil
-        isRecording     = false
-        isPaused        = false
-        showExitConfirm = false
-        showTextEntry   = false
-        
-        // Persist prompt‐of‐the‐day if needed
-        if promptToSave == passedPrompt {
-            UserDefaults.standard.set(true, forKey: promptKey)
-        }
-        
-        // 🔥 ENHANCED: Brief delay to allow transcription to start, then dismiss
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            dismiss()
         }
     }
     
     // MARK: - Title Generation Helper
-    private func generateAndUpdateTitle(for entry: MemoryEntry, text: String, context: NSManagedObjectContext) async {
+    private func generateAndUpdateTitle(
+        for objectID: NSManagedObjectID,
+        text: String,
+        profile: Profile
+    ) async {
         let titleService = MemoryTitleService()
         if let generatedTitle = await titleService.generateTitle(from: text) {
-            // Use performAndWait since we're already in an async context and want to wait for the save
-            context.performAndWait {
+            let context = PersistenceController.shared.container.newBackgroundContext()
+            let saved = await context.perform {
+                guard let entry = try? context.existingObject(with: objectID) as? MemoryEntry else {
+                    return false
+                }
                 entry.prompt = generatedTitle
-                try? context.save()
+                do {
+                    try context.save()
+                    FirestoreSyncService.shared.queueMemorySyncWithProfile(entry, profile: profile)
+                    return true
+                } catch {
+                    print("❌ Generated title could not be saved: \(error.localizedDescription)")
+                    return false
+                }
             }
-            
+            guard saved else { return }
+
             // Post notification on main thread after save completes
             await MainActor.run {
                 NotificationCenter.default.post(name: .memorySaved, object: nil)
-                print("✅ Title generated and updated: '\(generatedTitle)'")
+                print("✅ Title generated and updated")
             }
         }
     }

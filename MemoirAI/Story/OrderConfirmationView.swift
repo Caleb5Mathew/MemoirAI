@@ -37,12 +37,12 @@ struct OrderConfirmationView: View {
                     .onAppear { Haptics.success() }
 
                 VStack(spacing: 10) {
-                    Text("Your book is on its way to the printer!")
+                    Text("Your payment is confirmed")
                         .font(serifFont(size: 24, weight: .bold))
                         .foregroundColor(darkText)
                         .multilineTextAlignment(.center)
 
-                    Text("You'll get a receipt by email from our payment processor.")
+                    Text("We're preparing your order for printing. You'll get a receipt by email from Stripe.")
                         .font(serifFont(size: 15))
                         .foregroundColor(darkText.opacity(0.7))
                         .multilineTextAlignment(.center)

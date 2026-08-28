@@ -133,10 +133,12 @@ struct MemoryEnhancementCoordinatorView: View {
             }
         }
         .onAppear {
-            Mixpanel.mainInstance().track(event: "Memory Enhancement Flow Opened", properties: [
-                "voice_available": voiceAvailable,
-                "memory_id": memory.id?.uuidString ?? ""
-            ])
+            Mixpanel.mainInstance().track(
+                event: "Memory Enhancement Flow Opened",
+                properties: AnalyticsPrivacyPolicy.sanitized([
+                    "voice_available": voiceAvailable
+                ])
+            )
         }
     }
 }
@@ -212,10 +214,12 @@ private struct MemoryEnhancementAutoSaveSuccessView: View {
                 profile: profileVM.selectedProfile,
                 mergeWithExisting: false
             )
-            Mixpanel.mainInstance().track(event: "Memory Enhancement Auto Saved", properties: [
-                "memory_id": memory.id?.uuidString ?? "",
-                "characters_saved": characterCount
-            ])
+            Mixpanel.mainInstance().track(
+                event: "Memory Enhancement Auto Saved",
+                properties: AnalyticsPrivacyPolicy.sanitized([
+                    "characters_saved": characterCount
+                ])
+            )
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 onFinished()
             }
@@ -245,10 +249,10 @@ private func persistExtractedCharacterDetails(
     for index in details.characters.indices {
         let character = details.characters[index]
         if !character.name.isEmpty && character.globalCharacterId == nil {
-            let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
+            guard let globalId = GlobalCharacterManager.shared.findOrCreateGlobalCharacter(
                 name: character.name,
                 profileID: profileID
-            )
+            ) else { continue }
             details.characters[index].globalCharacterId = globalId
         }
     }

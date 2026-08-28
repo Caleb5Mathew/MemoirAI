@@ -9,6 +9,19 @@ import Foundation
 import Speech
 import AVFoundation
 
+final class OneShotCompletionGate {
+    private let lock = NSLock()
+    private var hasCompleted = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !hasCompleted else { return false }
+        hasCompleted = true
+        return true
+    }
+}
+
 /// Enhanced speech transcriber implementing Apple's accuracy checklist
 final class SpeechTranscriber {
     static let shared = SpeechTranscriber()
@@ -95,16 +108,20 @@ final class SpeechTranscriber {
         request.shouldReportPartialResults = true
         
         var finalTranscript = ""
-        var isFinal = false
         var task: SFSpeechRecognitionTask?
+        let completionGate = OneShotCompletionGate()
+
+        let finish: (Result<String, Error>) -> Void = { result in
+            guard completionGate.claim() else { return }
+            task?.cancel()
+            DispatchQueue.main.async {
+                completion(result)
+            }
+        }
         
         task = recognizer.recognitionTask(with: request) { result, error in
             if let error = error {
-                // Clean shutdown on errors
-                task?.cancel()
-                DispatchQueue.main.async {
-                    completion(.failure(error))
-                }
+                finish(.failure(error))
                 return
             }
             
@@ -113,13 +130,7 @@ final class SpeechTranscriber {
             // Handle partial results
             if result.isFinal {
                 finalTranscript = result.bestTranscription.formattedString
-                isFinal = true
-                
-                // Clean shutdown on completion
-                task?.cancel()
-                DispatchQueue.main.async {
-                    completion(.success(finalTranscript))
-                }
+                finish(.success(finalTranscript))
             } else {
                 // Update partial transcript
                 finalTranscript = result.bestTranscription.formattedString
@@ -128,10 +139,7 @@ final class SpeechTranscriber {
         
         // Set dynamic timeout based on audio duration
         DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
-            if !isFinal {
-                task?.cancel()
-                completion(.failure(SpeechTranscriberError.timeout))
-            }
+            finish(.failure(SpeechTranscriberError.timeout))
         }
     }
     

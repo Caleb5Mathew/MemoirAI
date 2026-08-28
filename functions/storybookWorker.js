@@ -6,10 +6,32 @@ const admin = require("firebase-admin");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const pLimit = require("p-limit");
+const { sanitizeStorybookFailure } = require("./storybookFailureSanitizer");
+const {
+  boundedRetryDelayMs,
+  canStartProviderAttempt,
+  isRetryableProviderError
+} = require("./retryDeadlinePolicy");
 const { createStorybookAI, normalizeArtStyleKey, uploadPngWithDownloadURL } = require("./storybookAI");
+const {
+  admitLegacyStorybookJob,
+  claimStorybookWorkerJob,
+  isAdmittedStorybookJob,
+  releaseStorybookActiveLease,
+  settleStorybookReservation,
+  validateSubjectPhotoPathForWorker,
+  validateSubjectPhotoForWorker
+} = require("./storybookAdmission");
+const { assertAccountNotDeleting } = require("./accountStateGuards");
+const {
+  privacySafeLogDetails,
+  safeErrorMetadata,
+  safeLogIdentifier
+} = require("./privacyLogging");
 
 /** Bump when job payload / worker contract changes; older clients get a clear failure instead of obscure promptAssembly errors. */
 const STORYBOOK_WORKER_MIN_CLIENT_VERSION = 2;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const openaiSecret = defineSecret("OPENAI_API_KEY");
 const geminiSecret = defineSecret("GEMINI_API_KEY");
@@ -80,30 +102,47 @@ function parseRetryAfterMs(errorMsg) {
  *   isImageCall=true uses more attempts and a longer starting delay to handle
  *   the Gemini image model's 20 RPM quota gracefully.
  */
-async function withRetries(fn, { maxAttempts = 5, isImageCall = false } = {}) {
-  const attempts = isImageCall ? 10 : maxAttempts;
+async function withRetries(fn, {
+  maxAttempts = 5,
+  isImageCall = false,
+  deadlineAtMs = Date.now() + 180_000,
+  beforeAttempt = null
+} = {}) {
+  const attempts = isImageCall ? 6 : maxAttempts;
   let delay = isImageCall ? 15000 : 250;
   let lastErr;
   for (let i = 0; i < attempts; i += 1) {
+    if (beforeAttempt) await beforeAttempt();
+    const minimumExecutionMs = isImageCall ? 120_000 : 15_000;
+    if (!canStartProviderAttempt({
+      nowMs: Date.now(),
+      deadlineMs: deadlineAtMs,
+      minimumExecutionMs
+    })) {
+      if (lastErr) throw lastErr;
+      const deadlineError = new Error("Worker deadline does not allow another provider attempt.");
+      deadlineError.code = "worker-deadline";
+      throw deadlineError;
+    }
     try {
       return await fn();
     } catch (e) {
       lastErr = e;
-      const status = e?.status || e?.statusCode || e?.response?.status;
       const msg = String(e?.message || e);
-      const retryable =
-        status === 429 ||
-        status === 503 ||
-        msg.includes("RESOURCE_EXHAUSTED") ||
-        msg.includes("429") ||
-        msg.includes("ECONNRESET");
+      const retryable = isRetryableProviderError(e);
       if (!retryable || i === attempts - 1) throw e;
       // Honour the server's own retry-after suggestion first, then fall back to
       // exponential backoff.  Add ±20% jitter to spread thundering-herd retries.
       const serverMs = parseRetryAfterMs(msg);
-      const base = serverMs != null ? Math.max(serverMs, delay) : delay;
-      const jitter = Math.floor(base * 0.2 * Math.random());
-      await sleep(base + jitter);
+      const boundedDelay = boundedRetryDelayMs({
+        baseDelayMs: delay,
+        serverDelayMs: serverMs,
+        jitterFraction: 0.2 * Math.random(),
+        nowMs: Date.now(),
+        deadlineMs: deadlineAtMs
+      });
+      if (boundedDelay == null) throw e;
+      await sleep(boundedDelay);
       delay = Math.min(delay * 2, isImageCall ? 60000 : 8000);
     }
   }
@@ -113,12 +152,24 @@ async function withRetries(fn, { maxAttempts = 5, isImageCall = false } = {}) {
 function createWriteQueue() {
   let chain = Promise.resolve();
   return (fn) => {
-    const next = chain.then(fn).catch((e) => {
-      console.error("writeQueue task failed", e);
+    const next = chain.then(fn);
+    chain = next.catch((e) => {
+      console.error("writeQueue task failed", safeErrorMetadata(e));
     });
-    chain = next;
     return next;
   };
+}
+
+async function releaseActiveStorybookLease(userId, jobId) {
+  try {
+    await releaseStorybookActiveLease({ db: firestore(), userId, jobId });
+  } catch (error) {
+    console.error("storybook active lease release failed", {
+      userIdHash: safeLogIdentifier(userId),
+      jobIdHash: safeLogIdentifier(jobId),
+      ...safeErrorMetadata(error)
+    });
+  }
 }
 
 exports.processStorybookJob = onDocumentCreated(
@@ -127,22 +178,34 @@ exports.processStorybookJob = onDocumentCreated(
     secrets: [openaiSecret, geminiSecret],
     timeoutSeconds: 540,
     memory: "2GiB",
-    region: "us-central1"
+    region: "us-central1",
+    concurrency: 1,
+    maxInstances: 1,
+    retry: true
   },
   async (event) => {
-    const snap = event.data;
-    if (!snap) return;
     const { userId, jobId } = event.params;
+    const snap = event.data;
+    if (!snap) {
+      await releaseActiveStorybookLease(userId, jobId);
+      return;
+    }
     const ref = snap.ref;
-    const data = snap.data() || {};
+    const workerDeadlineAtMs = Date.now() + 500_000;
+    let data = snap.data() || {};
 
     const logJob = (kind, extra) => {
       try {
         console.log(
-          JSON.stringify({ kind, jobId, userId, ...(extra || {}) })
+          JSON.stringify({
+            kind,
+            jobIdHash: safeLogIdentifier(jobId),
+            userIdHash: safeLogIdentifier(userId),
+            ...privacySafeLogDetails(extra)
+          })
         );
       } catch (_) {
-        console.log(`[storybookWorker.job] ${kind} ${jobId}`);
+        console.log(`[storybookWorker.job] ${kind}`);
       }
     };
 
@@ -153,71 +216,122 @@ exports.processStorybookJob = onDocumentCreated(
       artStyleIn: data.artStyle,
       artStyleResolved: normalizeArtStyleKey(data.artStyle),
       hasSubjectPhoto: !!data.subjectPhotoStoragePath,
-      subjectPhotoPath: data.subjectPhotoStoragePath || null,
-      profileName: data.profileName || null,
-      profileEthnicity: data.profileEthnicity || null,
-      gender: data.gender || null,
       otherDetailsLen: String(data.otherDetails || "").length,
       faceDescriptionLen: String(data.faceDescription || "").length,
       customArtStyleLen: String(data.customArtStyleText || "").length,
       styleReferencePreset: data.styleReferencePreset || null,
-      faceDescriptionHead: String(data.faceDescription || "").slice(0, 240),
-      otherDetailsHead: String(data.otherDetails || "").slice(0, 240),
-      customArtStyleHead: String(data.customArtStyleText || "").slice(0, 240),
       clientVersion: data.clientVersion != null ? data.clientVersion : null
     });
 
-    if (["running", "aiComplete", "complete", "failed"].includes(data.status)) {
-      logJob("storybook.skipAlreadyStarted", { status: data.status });
-      return;
+    if (!isAdmittedStorybookJob(data)) {
+      try {
+        const admission = await admitLegacyStorybookJob({
+          db: firestore(),
+          jobRef: ref,
+          userId,
+          jobId,
+          serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+          timestampFromDate: (date) => admin.firestore.Timestamp.fromDate(date),
+          minimumClientVersion: STORYBOOK_WORKER_MIN_CLIENT_VERSION
+        });
+        if (admission.status === "missing") return;
+        const admittedSnapshot = await ref.get();
+        data = admittedSnapshot.data() || {};
+        logJob("storybook.legacyJobAdmitted", { status: admission.status });
+      } catch (error) {
+        if (!error?.permanent) throw error;
+        const safeFailure = sanitizeStorybookFailure(error);
+        await ref.update({
+          status: "failed",
+          error: safeFailure.message,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        logJob("storybook.legacyAdmissionRejected", { code: safeFailure.code });
+        return;
+      }
     }
 
-    const openaiApiKey = String(openaiSecret.value() || "").trim();
-    const geminiApiKey = String(geminiSecret.value() || "").trim();
-    if (!openaiApiKey || !geminiApiKey) {
-      logJob("storybook.missingSecrets", { hasOpenAI: !!openaiApiKey, hasGemini: !!geminiApiKey });
-      await ref.update({
-        status: "failed",
-        error: "Missing OPENAI_API_KEY or GEMINI_API_KEY secrets",
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    let workerClaim;
+    try {
+      workerClaim = await claimStorybookWorkerJob({
+        db: firestore(),
+        jobRef: ref,
+        userId,
+        jobId,
+        serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+        timestampFromDate: (date) => admin.firestore.Timestamp.fromDate(date)
       });
-      return;
+    } catch (error) {
+      logJob("storybook.workerClaimFailed", { code: String(error?.code || "unknown") });
+      throw error;
     }
 
-    const ai = createStorybookAI(openaiApiKey, geminiApiKey);
-    const enqueueWrite = createWriteQueue();
+    if (workerClaim.action === "retry_later") {
+      const retryError = new Error("storybook worker lease is still fresh");
+      retryError.code = "retry-later";
+      throw retryError;
+    }
 
-    const clientVersion = parseInt(String(data.clientVersion ?? "0"), 10) || 0;
-    if (clientVersion < STORYBOOK_WORKER_MIN_CLIENT_VERSION) {
-      logJob("storybook.clientVersionRejected", {
-        clientVersion,
-        requiredMin: STORYBOOK_WORKER_MIN_CLIENT_VERSION
+    if (workerClaim.action !== "claimed") {
+      logJob("storybook.skipWorkerClaim", {
+        action: workerClaim.action,
+        status: workerClaim.status || null
       });
-      await ref.update({
-        status: "failed",
-        error:
-          "This storybook job was created with an older app version than this server supports. Please update MemoirAI from the App Store (or reinstall the latest build) and start a new generation.",
-        "progress.currentStatus": "Please update the app and retry.",
-        lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
+      if (
+        workerClaim.action === "missing" ||
+        workerClaim.action === "account_deleting" ||
+        workerClaim.action === "rejected" ||
+        workerClaim.action === "attempts_exhausted" ||
+        ["aiComplete", "complete", "failed", "dismissedFailed"].includes(workerClaim.status)
+      ) {
+        await releaseActiveStorybookLease(userId, jobId);
+      }
       return;
     }
+    data = workerClaim.data;
+
+    let releaseLeaseWhenDone = true;
+    try {
+      await assertAccountNotDeleting(firestore(), userId);
+      const openaiApiKey = String(openaiSecret.value() || "").trim();
+      const geminiApiKey = String(geminiSecret.value() || "").trim();
+      if (!openaiApiKey || !geminiApiKey) {
+        logJob("storybook.missingSecrets", { hasOpenAI: !!openaiApiKey, hasGemini: !!geminiApiKey });
+        await ref.update({
+          status: "failed",
+          error: "Missing OPENAI_API_KEY or GEMINI_API_KEY secrets",
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        return;
+      }
+
+      const ai = createStorybookAI(openaiApiKey, geminiApiKey);
+      const enqueueWrite = createWriteQueue();
+
+      const clientVersion = parseInt(String(data.clientVersion ?? "0"), 10) || 0;
+      if (clientVersion < STORYBOOK_WORKER_MIN_CLIENT_VERSION) {
+        logJob("storybook.clientVersionRejected", {
+          clientVersion,
+          requiredMin: STORYBOOK_WORKER_MIN_CLIENT_VERSION
+        });
+        await ref.update({
+          status: "failed",
+          error:
+            "This storybook job was created with an older app version than this server supports. Please update MemoirAI from the App Store (or reinstall the latest build) and start a new generation.",
+          "progress.currentStatus": "Please update the app and retry.",
+          lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        return;
+      }
+
+      try {
+        await dismissPriorFailedStorybookJobs(userId, String(data.profileId || ""), jobId);
+      } catch (e) {
+        console.warn("[storybookWorker] dismissPriorFailedStorybookJobs", safeErrorMetadata(e));
+      }
 
     try {
-      await dismissPriorFailedStorybookJobs(userId, String(data.profileId || ""), jobId);
-    } catch (e) {
-      console.warn("[storybookWorker] dismissPriorFailedStorybookJobs", e);
-    }
-
-    try {
-      await ref.update({
-        status: "ranking",
-        rankingStartedAt: admin.firestore.FieldValue.serverTimestamp(),
-        lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-
       const profileId = String(data.profileId || "");
       const pageCountTarget = Math.max(1, parseInt(String(data.pageCountTarget || "1"), 10) || 1);
       const artStyle = normalizeArtStyleKey(data.artStyle);
@@ -231,85 +345,72 @@ exports.processStorybookJob = onDocumentCreated(
         faceDescription: data.faceDescription || "",
         customArtStyleText: data.customArtStyleText || ""
       };
+      const pinnedRaw = data.pinnedMemoryIds;
+      const pinnedIds = Array.isArray(pinnedRaw)
+        ? pinnedRaw.map((x) => String(x || "").trim()).filter(Boolean)
+        : [];
 
-      const memSnap = await firestore().collection("users").doc(userId).collection("memories").get();
+      const profileIdVariants = Array.from(new Set([
+        profileId,
+        profileId.toLowerCase(),
+        profileId.toUpperCase()
+      ]));
+      const memSnap = await firestore()
+        .collection("users")
+        .doc(userId)
+        .collection("memories")
+        .where("profileID", "in", profileIdVariants)
+        .limit(200)
+        .get();
+      const memoriesCollection = firestore().collection("users").doc(userId).collection("memories");
+      const pinnedSnapshots = pinnedIds.length > 0
+        ? await firestore().getAll(...pinnedIds.map((id) => memoriesCollection.doc(id)))
+        : [];
+      const candidateDocuments = new Map(memSnap.docs.map((document) => [document.id, document]));
+      for (const document of pinnedSnapshots) {
+        if (document.exists) candidateDocuments.set(document.id, document);
+      }
       const profileIdNorm = String(profileId || "").toLowerCase();
-      const memories = memSnap.docs
+      const memories = Array.from(candidateDocuments.values())
+        .filter((document) => UUID_PATTERN.test(document.id))
         .map((d) => {
           const x = d.data();
           return {
             id: d.id,
             profileID: String(x.profileID || ""),
-            transcription: String(x.transcription || ""),
-            prompt: String(x.prompt || ""),
-            characterDetails: x.characterDetails != null ? String(x.characterDetails) : "",
-            chapter: x.chapter != null ? String(x.chapter) : ""
+            transcription: String(x.transcription || "").slice(0, 50_000),
+            prompt: String(x.prompt || "").slice(0, 2_000),
+            characterDetails: x.characterDetails != null ? String(x.characterDetails).slice(0, 20_000) : "",
+            chapter: x.chapter != null ? String(x.chapter).slice(0, 500) : ""
           };
         })
         .filter((m) => m.profileID.toLowerCase() === profileIdNorm);
 
-      // Surface the per-doc profileID values (truncated) so we can spot
-      // case/format mismatches between the storybookJob's profileId and the
-      // memories' profileID field.
-      const sampleProfileIds = memSnap.docs
-        .map((d) => String(d.data().profileID || ""))
-        .filter(Boolean)
-        .slice(0, 10);
       logJob("storybook.fetchedMemories", {
-        totalInUser: memSnap.docs.length,
+        candidateCount: candidateDocuments.size,
         forProfile: memories.length,
-        nonEmptyTranscriptions: memories.filter((m) => m.transcription.trim().length > 0).length,
-        wantedProfileId: profileIdNorm,
-        sampleProfileIdsSeen: sampleProfileIds
+        nonEmptyTranscriptions: memories.filter((m) => m.transcription.trim().length > 0).length
       });
 
-      // Per-memory snapshot so we can reconstruct exactly what the worker saw.
-      // Cloud Logging supports ~256KB per entry; transcripts of 0–10k chars fit.
-      // characterDetails JSON is dumped wholesale so we can match traits in postmortems.
       for (const m of memories) {
         logJob("storybook.memorySnapshot", {
           memoryId: m.id,
-          profileID: m.profileID,
-          chapter: m.chapter || null,
-          prompt: m.prompt || null,
           transcriptionLen: m.transcription.length,
-          characterDetailsLen: m.characterDetails.length,
-          transcription: m.transcription,
-          characterDetails: m.characterDetails
+          characterDetailsLen: m.characterDetails.length
         });
       }
 
       if (memories.length === 0) {
-        // Distinguish "zero memories synced for this user at all" from
-        // "memories exist but none match the profile we're generating for".
-        if (memSnap.docs.length === 0) {
-          await ref.update({
-            status: "failed",
-            error:
-              "No memories have synced to the cloud yet. Open a memory on this device and tap save once to trigger sync, then try again.",
-            "progress.currentStatus": "No cloud memories.",
-            lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp()
-          });
-          return;
-        }
-        // Memories exist but none have matching profileID — almost always a
-        // case/format mismatch or memories assigned to a different profile.
-        const distinct = Array.from(new Set(sampleProfileIds));
         await ref.update({
           status: "failed",
-          error: `Found ${memSnap.docs.length} memories on the cloud, but none match this profile (${profileIdNorm}). Memories are tagged with profile IDs: ${distinct.join(", ") || "(none set)"}.`,
-          "progress.currentStatus": "Profile ID mismatch.",
+          error: "No synced memories match this profile yet. Save a memory for this person, then try again.",
+          "progress.currentStatus": "No cloud memories for this profile.",
           lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
         return;
       }
 
-      const pinnedRaw = data.pinnedMemoryIds;
-      const pinnedIds = Array.isArray(pinnedRaw)
-        ? pinnedRaw.map((x) => String(x || "").trim()).filter(Boolean)
-        : [];
       const memById = new Map(memories.map((m) => [String(m.id || "").toLowerCase(), m]));
 
       let ranked;
@@ -328,27 +429,54 @@ exports.processStorybookJob = onDocumentCreated(
           input: memories.length,
           target: pageCountTarget,
           mode: "pinnedPlusRank",
-          pinnedCount: pinnedOrdered.length,
-          pinnedIds: pinnedOrdered.map((m) => m.id)
+          pinnedCount: pinnedOrdered.length
         });
         if (pinnedOrdered.length > pageCountTarget) {
-          ranked = await ai.rankMemoriesWithLLM(pinnedOrdered, pageCountTarget);
+          await assertAccountNotDeleting(firestore(), userId);
+          ranked = await ai.rankMemoriesWithLLM(
+            pinnedOrdered,
+            pageCountTarget,
+            { deadlineAtMs: workerDeadlineAtMs }
+          );
         } else {
           const needed = pageCountTarget - pinnedOrdered.length;
           const rest = memories.filter((m) => !pinSet.has(String(m.id || "").toLowerCase()));
-          const rankedRest = needed > 0 ? await ai.rankMemoriesWithLLM(rest, needed) : [];
+          if (needed > 0) await assertAccountNotDeleting(firestore(), userId);
+          const rankedRest = needed > 0
+            ? await ai.rankMemoriesWithLLM(rest, needed, { deadlineAtMs: workerDeadlineAtMs })
+            : [];
           ranked = pinnedOrdered.concat(rankedRest);
         }
       } else {
         logJob("storybook.rankingStart", { input: memories.length, target: pageCountTarget, mode: "rankAll" });
-        ranked = await ai.rankMemoriesWithLLM(memories, pageCountTarget);
+        await assertAccountNotDeleting(firestore(), userId);
+        ranked = await ai.rankMemoriesWithLLM(
+          memories,
+          pageCountTarget,
+          { deadlineAtMs: workerDeadlineAtMs }
+        );
       }
       logJob("storybook.rankingDone", {
-        ranked: ranked.length,
-        rankedIds: ranked.map((m) => m.id)
+        ranked: ranked.length
       });
-      const ages = await Promise.all(
-        ranked.map((m) => ai.extractAge(String(m.transcription || ""), String(m.characterDetails || "")))
+      const ageLimit = pLimit(12);
+      await assertAccountNotDeleting(firestore(), userId);
+      const ageSettlements = await Promise.allSettled(
+        ranked.map((m) => ageLimit(async () => {
+          await assertAccountNotDeleting(firestore(), userId);
+          return ai.extractAge(
+            String(m.transcription || ""),
+            String(m.characterDetails || ""),
+            { deadlineAtMs: workerDeadlineAtMs }
+          );
+        }))
+      );
+      const ageDeletionRejection = ageSettlements.find(
+        (result) => result.status === "rejected" && result.reason?.accountDeletionRequested
+      );
+      if (ageDeletionRejection) throw ageDeletionRejection.reason;
+      const ages = ageSettlements.map((result) =>
+        result.status === "fulfilled" ? result.value : 999
       );
       const ordered = ranked
         .map((m, i) => ({ m, age: ages[i] ?? 999 }))
@@ -357,26 +485,11 @@ exports.processStorybookJob = onDocumentCreated(
 
       const orderedMemoryIds = ordered.map((m) => m.id);
       logJob("storybook.orderedMemories", {
-        orderedIds: orderedMemoryIds,
-        ages: ranked.map((m, i) => ({ id: m.id, age: ages[i] ?? null }))
+        count: orderedMemoryIds.length
       });
 
       const castCanon = ai.buildCastCanon(ordered, job);
-      // Strip private debug fields (`_sources`, `ambiguous` markers) but keep the row shape so we can
-      // verify cross-memory continuity decisions in production.
-      const sanitizedCanon = (castCanon.rows || []).map((r) => ({
-        nameToken: r.nameToken,
-        displayLabel: r.displayLabel || null,
-        canonAmbiguous: !!r.canonAmbiguous,
-        ethnicity: r.ethnicity || null,
-        gender: r.gender || null,
-        age: r.age || null,
-        hairAndFeatures: r.hairAndFeatures || null,
-        clothing: r.clothing || null,
-        relationshipToNarrator: r.relationshipToNarrator || null,
-        memoryIds: r.memoryIds || null
-      }));
-      logJob("storybook.castCanon", { count: sanitizedCanon.length, rows: sanitizedCanon });
+      logJob("storybook.castCanon", { count: (castCanon.rows || []).length });
 
       await ref.update({
         status: "running",
@@ -396,19 +509,33 @@ exports.processStorybookJob = onDocumentCreated(
       const photoPath = data.subjectPhotoStoragePath;
       if (photoPath && typeof photoPath === "string") {
         try {
-          const [buf] = await storageBucket().file(photoPath).download();
+          validateSubjectPhotoPathForWorker({ userId, profileId, storagePath: photoPath });
+          const photoFile = storageBucket().file(photoPath);
+          const [metadata] = await photoFile.getMetadata();
+          const validatedPhoto = validateSubjectPhotoForWorker({
+            userId,
+            profileId,
+            storagePath: photoPath,
+            metadata
+          });
+          const [buf] = await storageBucket()
+            .file(photoPath, { generation: validatedPhoto.generation })
+            .download();
+          if (buf.length !== validatedPhoto.size) {
+            throw new Error("subject photo changed after metadata validation");
+          }
           headshotBuf = buf;
-          logJob("storybook.headshotDownloaded", { path: photoPath, bytes: buf.length });
+          logJob("storybook.headshotDownloaded", { bytes: buf.length });
         } catch (e) {
           logJob("storybook.headshotDownloadFailed", {
-            path: photoPath,
-            message: String(e?.message || e)
+            code: String(e?.code || "unknown")
           });
         }
       } else {
         logJob("storybook.noHeadshotConfigured");
       }
       job._hasHeadshot = !!headshotBuf;
+      const verifyAccountAvailable = () => assertAccountNotDeleting(firestore(), userId);
 
       const styleRefBuf = artStyle === "kidsBook" ? ai.loadStyleReferencePng(stylePreset) : null;
       logJob("storybook.styleReference", {
@@ -422,12 +549,11 @@ exports.processStorybookJob = onDocumentCreated(
         Math.min(parseInt(process.env.STORYBOOK_MAX_PARALLEL || "12", 10) || 12, 24)
       );
       const limit = pLimit(maxParallel);
-      // Gemini image model hard quota: 20 RPM.  Each image takes ~8-15s, so
-      // at most 3 concurrent calls keeps us well under the limit regardless of
-      // how high maxParallel is set.
+      // Two concurrent starts stay within the image model's 20 RPM quota even
+      // at the fast end of observed provider latency.
       const imageParallel = Math.max(
         1,
-        Math.min(parseInt(process.env.STORYBOOK_IMAGE_PARALLEL || "3", 10) || 3, 5)
+        Math.min(parseInt(process.env.STORYBOOK_IMAGE_PARALLEL || "2", 10) || 2, 2)
       );
       const imageLimit = pLimit(imageParallel);
 
@@ -438,19 +564,20 @@ exports.processStorybookJob = onDocumentCreated(
           console.log(
             JSON.stringify({
               kind: "storybook.phase",
-              jobId,
-              userId,
-              memoryId: mid,
+              jobIdHash: safeLogIdentifier(jobId),
+              userIdHash: safeLogIdentifier(userId),
+              memoryIdHash: safeLogIdentifier(mid),
               stage,
               ...(extra || {})
             })
           );
         } catch (_) {
-          console.log(`[storybookWorker.phase] ${mid} ${stage}`);
+          console.log(`[storybookWorker.phase] ${stage}`);
         }
       };
 
       const processOne = async (entry) => {
+        await assertAccountNotDeleting(firestore(), userId);
         const jr = await ref.get();
         const jd = jr.data() || {};
         const existing = jd.memoryResults && jd.memoryResults[entry.id];
@@ -492,31 +619,49 @@ exports.processStorybookJob = onDocumentCreated(
             transcriptLen: raw.length,
             characterDetailsInLen: String(entry.characterDetails || "").length,
             characterDetailsEnrichedLen: enrichedDetailsStr.length,
-            characterDetailsEnriched: enrichedDetailsStr,
-            characterContextLen: String(characterContext || "").length,
-            characterContext: String(characterContext || "")
+            characterContextLen: String(characterContext || "").length
           });
-          let sceneDescription = await withRetries(() => ai.extractVisualScene(raw, characterContext));
+          await assertAccountNotDeleting(firestore(), userId);
+          let sceneDescription = await withRetries(
+            () => ai.extractVisualScene(raw, characterContext, { deadlineAtMs: workerDeadlineAtMs }),
+            {
+              deadlineAtMs: workerDeadlineAtMs,
+              beforeAttempt: verifyAccountAvailable
+            }
+          );
           const COLLECTIVE_RE =
             /\b(?:the group of (?:friends|kids|boys|girls)|the (?:kids|team|boys|girls|family))\b/i;
           if (COLLECTIVE_RE.test(sceneDescription)) {
-            logJob("storybook.sceneCollectiveDetected", { memoryId: entry.id, sceneDescription });
-            sceneDescription = await withRetries(() =>
-              ai.extractVisualScene(
+            logJob("storybook.sceneCollectiveDetected", { memoryId: entry.id });
+            await assertAccountNotDeleting(firestore(), userId);
+            sceneDescription = await withRetries(
+              () => ai.extractVisualScene(
                 raw,
-                `${characterContext}\n\nIMPORTANT: Name every listed person by their exact display names in your paragraph. Do NOT use collective phrases like "the group of friends" or "the kids".`
-              )
+                `${characterContext}\n\nIMPORTANT: Name every listed person by their exact display names in your paragraph. Do NOT use collective phrases like "the group of friends" or "the kids".`,
+                { deadlineAtMs: workerDeadlineAtMs }
+              ),
+              {
+                deadlineAtMs: workerDeadlineAtMs,
+                beforeAttempt: verifyAccountAvailable
+              }
             );
           }
-          logJob("storybook.scene", { memoryId: entry.id, sceneLen: sceneDescription.length, sceneDescription });
+          logJob("storybook.scene", { memoryId: entry.id, sceneLen: sceneDescription.length });
 
           stage = "title";
           phaseLog(entry.id, stage);
-          const extracted = await withRetries(() => ai.extractTitleAndCharacters(raw, characterContext));
+          await assertAccountNotDeleting(firestore(), userId);
+          const extracted = await withRetries(
+            () => ai.extractTitleAndCharacters(raw, characterContext, { deadlineAtMs: workerDeadlineAtMs }),
+            {
+              deadlineAtMs: workerDeadlineAtMs,
+              beforeAttempt: verifyAccountAvailable
+            }
+          );
           logJob("storybook.title", {
             memoryId: entry.id,
-            extractedTitle: extracted.title,
-            featuring: extracted.featuring || ""
+            titleLen: String(extracted.title || "").length,
+            featuringCount: String(extracted.featuring || "").split(",").filter(Boolean).length
           });
 
           stage = "narrator";
@@ -535,7 +680,6 @@ exports.processStorybookJob = onDocumentCreated(
           logJob("storybook.narrator", {
             memoryId: entry.id,
             narratorPresence: narrator.presence,
-            narratorReason: narrator.reason || null,
             narratorConfidenceScore: narrator.confidenceScore != null ? narrator.confidenceScore : null,
             narratorFirstPersonDetected: !!narrator.firstPersonDetected,
             attachHeadshot,
@@ -575,31 +719,8 @@ exports.processStorybookJob = onDocumentCreated(
             refs: referenceImageOrder,
             canonLineCount: canonLines.length,
             characterListLen: String(characterList || "").length,
-            characterList: String(characterList || ""),
-            canonLines,
-            styleParagraph: ai.artStyleMemoryIllustrationStyleDescription(artStyle, job.customArtStyleText),
             promptLen: assembled.length
           });
-          // Full assembled prompt — chunked across multiple log lines because Cloud Logging
-          // entries are capped (~256KB) and the Firebase console truncates very long values.
-          // Disable by setting `STORYBOOK_LOG_FULL_PROMPT=false` in the function env.
-          if (process.env.STORYBOOK_LOG_FULL_PROMPT !== "false") {
-            const PROMPT_CHUNK = 3500;
-            const total = assembled.length;
-            const chunkCount = Math.ceil(total / PROMPT_CHUNK);
-            for (let i = 0; i < chunkCount; i += 1) {
-              const start = i * PROMPT_CHUNK;
-              const end = Math.min(start + PROMPT_CHUNK, total);
-              logJob("storybook.assembledFull", {
-                memoryId: entry.id,
-                part: i + 1,
-                totalParts: chunkCount,
-                offset: start,
-                total,
-                chunk: assembled.slice(start, end)
-              });
-            }
-          }
 
           const refs = [];
           if (styleRefBuf) refs.push(styleRefBuf);
@@ -617,15 +738,28 @@ exports.processStorybookJob = onDocumentCreated(
           });
           const geminiSize = artStyle === "kidsBook" ? "4:3" : "1792x1024";
           const imageStartMs = Date.now();
+          await assertAccountNotDeleting(firestore(), userId);
           // imageLimit caps concurrent Gemini image calls; isImageCall enables
           // the longer backoff + more retries tuned for 429 RESOURCE_EXHAUSTED.
           const imageBuf = await imageLimit(() =>
             withRetries(
               () =>
-                ai.generateIllustrationBufferGuarded(geminiApiKey, assembled, geminiSize, refs, (event, details) =>
-                  logJob(event, { memoryId: entry.id, ...details })
+                ai.generateIllustrationBufferGuarded(
+                  geminiApiKey,
+                  assembled,
+                  geminiSize,
+                  refs,
+                  (event, details) => logJob(event, { memoryId: entry.id, ...details }),
+                  {
+                    deadlineAtMs: workerDeadlineAtMs,
+                    beforeAttempt: verifyAccountAvailable
+                  }
                 ),
-              { isImageCall: true }
+              {
+                isImageCall: true,
+                deadlineAtMs: workerDeadlineAtMs,
+                beforeAttempt: verifyAccountAvailable
+              }
             )
           );
           if (!imageBuf || !imageBuf.length) {
@@ -647,8 +781,19 @@ exports.processStorybookJob = onDocumentCreated(
 
           stage = "upload";
           phaseLog(entry.id, stage);
+          await assertAccountNotDeleting(firestore(), userId);
           const storagePath = `users/${userId}/bookVersions/${jobId}/illustration_${entry.id}.png`;
           const { url } = await uploadPngWithDownloadURL(storagePath, imageBuf);
+          try {
+            await assertAccountNotDeleting(firestore(), userId);
+          } catch (error) {
+            try {
+              await storageBucket().file(storagePath).delete();
+            } catch (deleteError) {
+              if (Number(deleteError?.code || 0) !== 404) throw deleteError;
+            }
+            throw error;
+          }
 
           stage = "persist";
           const questionDriven = ai.isQuestionDrivenMemory(entry);
@@ -690,33 +835,20 @@ exports.processStorybookJob = onDocumentCreated(
           phaseLog(entry.id, "ok");
           return { id: entry.id, ok: true };
         } catch (e) {
-          // Capture every diagnostic field we can pull off the error so we
-          // never have to guess again why a memory failed.  Anything that
-          // can't be serialised is dropped.
-          const httpStatus = e?.status || e?.statusCode || e?.response?.status || null;
-          const failure = {
+          if (e?.accountDeletionRequested) throw e;
+          const failure = sanitizeStorybookFailure(
+            e,
             stage,
-            message: String(e?.message || e).slice(0, 1000),
-            httpStatus,
-            geminiFinishReason: e?.geminiFinishReason || null,
-            geminiBlockReason: e?.geminiBlockReason || null,
-            geminiTextResponse: e?.geminiTextResponse || null,
-            noImageBytes: !!e?.noImageBytes,
-            errorName: e?.name || null,
-            at: admin.firestore.Timestamp.now()
-          };
-          // Strip null fields so the doc stays compact and predictable.
-          for (const k of Object.keys(failure)) {
-            if (failure[k] === null || failure[k] === undefined) delete failure[k];
-          }
+            admin.firestore.Timestamp.now()
+          );
           console.error(
             JSON.stringify({
               kind: "storybook.memoryFailed",
-              jobId,
-              userId,
-              memoryId: entry.id,
-              ...failure,
-              stack: e?.stack ? String(e.stack).slice(0, 2000) : undefined
+              jobIdHash: safeLogIdentifier(jobId),
+              memoryIdHash: safeLogIdentifier(entry.id),
+              stage: failure.stage,
+              httpStatus: failure.httpStatus || null,
+              errorName: failure.errorName || null
             })
           );
           await enqueueWrite(() =>
@@ -732,7 +864,13 @@ exports.processStorybookJob = onDocumentCreated(
         }
       };
 
-      await Promise.all(ordered.map((entry) => limit(() => processOne(entry))));
+      const memorySettlements = await Promise.allSettled(
+        ordered.map((entry) => limit(() => processOne(entry)))
+      );
+      const deletionRejection = memorySettlements.find(
+        (result) => result.status === "rejected" && result.reason?.accountDeletionRequested
+      );
+      if (deletionRejection) throw deletionRejection.reason;
 
       // Re-read job doc to count how many memories actually produced an
       // illustration.  If none did, mark the job as failed so the client
@@ -770,8 +908,7 @@ exports.processStorybookJob = onDocumentCreated(
         console.error(
           JSON.stringify({
             kind: "storybook.allFailed",
-            jobId,
-            userId,
+            jobIdHash: safeLogIdentifier(jobId),
             failureCount: failureList.length,
             groups
           })
@@ -793,27 +930,23 @@ exports.processStorybookJob = onDocumentCreated(
       const bookTitle = String(data.bookDisplayTitle || data.profileName || "Memoir").trim();
       const pitchPrompt = `You are a book jacket copywriter. Write a short warm back-cover blurb (3-5 sentences) for a printed memoir titled "${bookTitle}" using this excerpt:\n\n${excerpt}`;
       let pitch = "";
+      await assertAccountNotDeleting(firestore(), userId);
       try {
-        pitch = (await ai.generateBackCoverPitch(pitchPrompt)) || "";
+        pitch = (await ai.generateBackCoverPitch(
+          pitchPrompt,
+          { deadlineAtMs: workerDeadlineAtMs }
+        )) || "";
       } catch (pitchErr) {
         console.error(
           JSON.stringify({
             kind: "storybook.backCoverPitchFailed",
-            jobId,
-            userId,
-            message: String(pitchErr?.message || pitchErr)
+            jobIdHash: safeLogIdentifier(jobId),
+            errorName: String(pitchErr?.name || "Error").slice(0, 80)
           })
         );
       }
-      if (!String(pitch || "").trim()) {
-        const themeHints = ordered
-          .map((m) => String(m.prompt || "").trim())
-          .filter(Boolean)
-          .slice(0, 5)
-          .join("; ");
-        pitch = themeHints
-          ? `A warm collection of life moments — including ${themeHints}. Perfect for family to read together.`
-          : "A warm collection of life moments captured as a keepsake memoir — perfect for family to read together.";
+      if (!ai.isUsableBackCoverPitch(pitch)) {
+        pitch = ai.fallbackBackCoverPitch(job.profileName);
       }
 
       const profileTok = (() => {
@@ -834,6 +967,7 @@ exports.processStorybookJob = onDocumentCreated(
         pitchLen: (pitch || "").length
       });
 
+      await assertAccountNotDeleting(firestore(), userId);
       await ref.update({
         status: "aiComplete",
         backCoverPitch: pitch,
@@ -843,21 +977,28 @@ exports.processStorybookJob = onDocumentCreated(
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
     } catch (e) {
+      if (e?.accountDeletionRequested) {
+        console.log(JSON.stringify({ kind: "storybook.cancelledForAccountDeletion" }));
+        return;
+      }
       console.error(
         JSON.stringify({
           kind: "storybook.fatal",
-          jobId,
-          userId,
-          message: String(e?.message || e),
-          stack: e?.stack ? String(e.stack).slice(0, 2000) : null
+          jobIdHash: safeLogIdentifier(jobId),
+          errorName: String(e?.name || "Error").slice(0, 80)
         })
       );
+      releaseLeaseWhenDone = false;
       await ref.update({
-        status: "failed",
-        error: `Cloud worker crashed: ${String(e?.message || e).slice(0, 500)}`,
-        lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
+        "progress.currentStatus": "Cloud generation was interrupted. Retrying…",
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
+      }).catch(() => {});
+      throw e;
+    }
+    } finally {
+      if (releaseLeaseWhenDone) {
+        await releaseActiveStorybookLease(userId, jobId);
+      }
     }
   }
 );
@@ -873,6 +1014,39 @@ exports.continueStorybookJob = onDocumentUpdated(
   async (event) => {
     const after = event.data.after.data();
     if (!after || after.status !== "running_continue") return;
-    console.log("[storybookWorker] continueStorybookJob: running_continue (v1 no-op)", event.params.jobId);
+    console.log("[storybookWorker] continueStorybookJob: running_continue (v1 no-op)", {
+      jobIdHash: safeLogIdentifier(event.params.jobId)
+    });
+  }
+);
+
+// Kept separate from the generation worker so it can be deployed alongside
+// admission while the previous production worker drains older client jobs.
+exports.settleStorybookJobReservation = onDocumentUpdated(
+  {
+    document: "users/{userId}/storybookJobs/{jobId}",
+    timeoutSeconds: 60,
+    memory: "256MiB",
+    region: "us-central1",
+    retry: true
+  },
+  async (event) => {
+    const beforeStatus = event.data?.before?.data()?.status;
+    const afterStatus = event.data?.after?.data()?.status;
+    if (beforeStatus === afterStatus) return;
+    if (!["aiComplete", "complete", "failed", "dismissedFailed"].includes(afterStatus)) return;
+    const snapshot = event.data?.after;
+    if (!snapshot) return;
+    await settleStorybookReservation({
+      db: firestore(),
+      jobRef: snapshot.ref,
+      userId: event.params.userId,
+      serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
+    });
+    await releaseStorybookActiveLease({
+      db: firestore(),
+      userId: event.params.userId,
+      jobId: event.params.jobId
+    });
   }
 );

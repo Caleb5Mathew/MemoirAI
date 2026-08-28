@@ -113,7 +113,7 @@ final class RealTimeTranscriptionManager: ObservableObject {
             }
         }
         
-        guard let recognitionRequest = recognitionRequest else {
+        guard recognitionRequest != nil else {
             transcriptionError = "Failed to create recognition request"
             return
         }
@@ -176,7 +176,7 @@ final class RealTimeTranscriptionManager: ObservableObject {
         // Deactivate audio session
         try? AVAudioSession.sharedInstance().setActive(false)
         
-        print("⏸️ Transcription paused (saved: \(savedTranscript.prefix(30))...)")
+        print("⏸️ Transcription paused (saved characters: \(savedTranscript.count))")
     }
     
     /// Resume transcription - restarts with saved transcript
@@ -192,7 +192,7 @@ final class RealTimeTranscriptionManager: ObservableObject {
             currentTranscript = savedTranscript + " "
         }
         
-        print("▶️ Transcription resumed (prepending: \(savedTranscript.prefix(30))...)")
+        print("▶️ Transcription resumed (restored characters: \(savedTranscript.count))")
     }
     
     /// Get final transcript and reset
@@ -235,4 +235,4 @@ final class RealTimeTranscriptionManager: ObservableObject {
         - Interleaved: \(format.isInterleaved)
         """
     }
-} 
+}

@@ -3,6 +3,17 @@ import PhotosUI
 import RevenueCat
 import RevenueCatUI
 
+enum OnboardingCompletionPolicy {
+    enum Event {
+        case finalContinueTapped
+        case paywallDismissed
+    }
+
+    static func shouldComplete(after event: Event) -> Bool {
+        event == .paywallDismissed
+    }
+}
+
 struct OnboardingColorTheme {
     let softCream = Color(red: 253/255, green: 234/255, blue: 198/255)
     let terracotta = Color(red: 210/255, green: 112/255, blue: 45/255)
@@ -81,11 +92,7 @@ struct OnboardingFlow: View {
             }
         }
         .fullScreenCover(isPresented: $showPaywall, onDismiss: {
-            // Mark locally and in Cloud when paywall closes
-            UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding_local")
-            UserDefaults.standard.synchronize()
-            iCloudManager.completeOnboarding()
-            dismiss()
+            finishOnboardingAfterPaywallDismissal()
         }) {
             Group {
                 if RCSubscriptionManager.shared.offerings?.current?.availablePackages.isEmpty == false {
@@ -506,9 +513,6 @@ struct OnboardingFlow: View {
                 
                 // Continue button
                 Button(action: {
-                    // Complete onboarding and go to the app
-                    completeOnboarding()
-                    
                     // 🎯 Track onboarding completion for Facebook
                     FacebookAnalytics.logOnboardingCompleted()
                     
@@ -705,11 +709,6 @@ struct OnboardingFlow: View {
             modernContinueButton(
                 title: screen5ButtonTitle,
                 action: {
-                    // Mark onboarding complete immediately so next launch skips it
-                    UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding_local")
-                    UserDefaults.standard.synchronize()
-                    completeOnboarding()
-                    
                     // 🎯 Track onboarding completion for Facebook
                     FacebookAnalytics.logOnboardingCompleted()
                     
@@ -870,8 +869,10 @@ struct OnboardingFlow: View {
         }
     }
     
-    private func completeOnboarding() {
+    private func finishOnboardingAfterPaywallDismissal() {
+        guard OnboardingCompletionPolicy.shouldComplete(after: .paywallDismissed) else { return }
         iCloudManager.completeOnboarding()
+        dismiss()
     }
 }
 
@@ -881,8 +882,6 @@ struct OnboardingFlow: View {
         .environmentObject(ProfileViewModel())
         .environmentObject(iCloudManager.shared)
         .onTapGesture(count: 3) {
-            // Triple tap to reset onboarding for testing
-            UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
-            print("🔄 Onboarding reset for testing")
+            iCloudManager.shared.resetOnboardingForDebug()
         }
 }

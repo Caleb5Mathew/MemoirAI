@@ -22,8 +22,9 @@ extension MemoryEntry {
         }
         // 2️⃣ Fallback: write audioData (if any) to a temp file
         if let data = value(forKey: "audioData") as? Data {
+            let fileExtension = URL(string: audioFileURL ?? "")?.pathExtension.lowercased() == "m4a" ? "m4a" : "caf"
             let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent((id?.uuidString ?? UUID().uuidString) + ".caf")
+                .appendingPathComponent((id?.uuidString ?? UUID().uuidString) + ".\(fileExtension)")
             // Write once – if it already exists, skip write to save IO
             if !FileManager.default.fileExists(atPath: tempURL.path) {
                 do { try data.write(to: tempURL, options: .atomic) } catch {
@@ -41,4 +42,4 @@ extension MemoryEntry {
         }
         return false
     }
-} 
+}

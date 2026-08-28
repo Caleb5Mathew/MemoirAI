@@ -341,6 +341,9 @@ struct DevOpsDashboardView: View {
                 if order.fulfillmentHold {
                     FlagBadgeView(text: "HOLD", color: .orange)
                 }
+                if order.isFulfillmentIncident {
+                    FlagBadgeView(text: "INCIDENT", color: .red)
+                }
             }
 
             Text("#\(DevOpsDashboardViewModel.shortId(order.orderId))… · \(order.createdAt.map { Self.dateFormatter.string(from: $0) } ?? "Unknown date")")

@@ -139,7 +139,7 @@ struct RecentMemoriesView: View {
                             MemoryDetailView(memory: memory)
                                 .environmentObject(profileVM)
                                 .onAppear {
-                                    print("✅ Navigating to MemoryDetailView for memory: \(memory.prompt ?? "Untitled")")
+                                    print("Navigating to memory detail")
                                 }
                         } else {
                             VStack {
@@ -150,8 +150,8 @@ struct RecentMemoriesView: View {
                                     .foregroundColor(.gray)
                             }
                             .onAppear {
-                                print("❌ Memory not found for ID: \(memoryID.uuidString)")
-                                print("📋 Available memory IDs: \(entries.compactMap { $0.id?.uuidString })")
+                                print("❌ Memory not found for ID: \(memoryID.uuidString.prefix(8))…")
+                                print("📋 Available memory count: \(entries.count)")
                             }
                         }
                     }
@@ -162,7 +162,7 @@ struct RecentMemoriesView: View {
                     checkPermissionsAndTranscribe()
                 }
                 .onChange(of: profileVM.selectedProfile.id) { newID in
-                    print("🔄 Switched to profile: \(profileVM.selectedProfile.name ?? "Unnamed") (ID: \(newID))")
+                    print("🔄 Switched profile (ID: \(newID.uuidString.prefix(8))…)")
                     fetchEntries(for: newID)
                     // Check permissions again when switching profiles
                     checkPermissionsAndTranscribe()
@@ -303,7 +303,7 @@ struct RecentMemoriesView: View {
 
         do {
             entries = try context.fetch(request)
-            print("📂 Fetched \(entries.count) memories for profile \(profileVM.selectedProfile.name ?? "Unnamed")")
+            print("📂 Fetched \(entries.count) memories for active profile")
             
             // Generate titles for existing memories that still have "Untitled Prompt"
             generateTitlesForUntitledMemories()
@@ -328,18 +328,28 @@ struct RecentMemoriesView: View {
             // Generate title in background
             Task {
                 if let generatedTitle = await titleService.generateTitle(from: text) {
-                    bgContext.performAndWait {
-                        // Fetch the entry in the background context using objectID
-                        let bgEntry = bgContext.object(with: objectID) as! MemoryEntry
-                        bgEntry.prompt = generatedTitle
-                        try? bgContext.save()
-                        
-                        // Refresh the main context
-                        DispatchQueue.main.async {
-                            context.refresh(entry, mergeChanges: true)
-                            NotificationCenter.default.post(name: .memorySaved, object: nil)
-                            print("✅ Generated title for existing memory: '\(generatedTitle)'")
+                    do {
+                        let didSave = try await bgContext.perform {
+                            guard let bgEntry = try bgContext.existingObject(with: objectID) as? MemoryEntry,
+                                  !bgEntry.isDeleted else {
+                                return false
+                            }
+                            bgEntry.prompt = generatedTitle
+                            try bgContext.save()
+                            return true
                         }
+
+                        // The entry may have been deleted while title generation was running.
+                        guard didSave,
+                              let mainEntry = try context.existingObject(with: objectID) as? MemoryEntry,
+                              !mainEntry.isDeleted else {
+                            return
+                        }
+                        context.refresh(mainEntry, mergeChanges: true)
+                        NotificationCenter.default.post(name: .memorySaved, object: nil)
+                        print("✅ Generated title for existing memory")
+                    } catch {
+                        print("❌ Failed to save generated memory title: \(error.localizedDescription)")
                     }
                 }
             }
@@ -347,12 +357,53 @@ struct RecentMemoriesView: View {
     }
 
     private func delete(_ entry: MemoryEntry) {
-        let memoryId = entry.id
+        guard MemoryUserScope.belongsToCurrentUser(entry),
+              let memoryId = entry.id,
+              let firebaseUserId = MemoryUserScope.currentFirebaseUserId else {
+            print("⚠️ Refusing to delete a memory outside the active account")
+            return
+        }
+        let profileId = entry.profileID
+        let localAudioURL = entry.audioFileURL.flatMap(URL.init(string:))
+
+        FirestoreSyncService.shared.registerPendingMemoryDeletion(
+            memoryId: memoryId,
+            profileId: profileId,
+            firebaseUserId: firebaseUserId
+        )
         context.delete(entry)
-        try? context.save()
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            FirestoreSyncService.shared.cancelPendingMemoryDeletion(
+                memoryId: memoryId,
+                firebaseUserId: firebaseUserId
+            )
+            print("❌ Failed to delete local memory: \(error.localizedDescription)")
+            return
+        }
+
+        EnhancementSessionDraft.clear(memoryId: memoryId)
+        UserDefaults.standard.removeObject(forKey: "characterDetails_\(memoryId.uuidString)")
+        if let localAudioURL, localAudioURL.isFileURL,
+           let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+           localAudioURL.standardizedFileURL.path.hasPrefix(documentsURL.standardizedFileURL.path + "/") {
+            do {
+                try FileManager.default.removeItem(at: localAudioURL)
+            } catch {
+                if (error as NSError).code != NSFileNoSuchFileError {
+                    print("⚠️ Failed to remove local memory audio: \(error.localizedDescription)")
+                }
+            }
+        }
         fetchEntries(for: profileVM.selectedProfile.id)
-        if let id = memoryId {
-            Task { await FirestoreSyncService.shared.deleteMemory(memoryId: id) }
+        Task {
+            await FirestoreSyncService.shared.deleteMemory(
+                memoryId: memoryId,
+                profileId: profileId,
+                firebaseUserId: firebaseUserId
+            )
         }
     }
     
@@ -456,6 +507,9 @@ struct MemoryCard: View {
     /// True while this specific memory's audio is actively being transcribed
     /// (either by the record flow that created it or a batch retry).
     private var isTranscribingNow: Bool {
+        if entry.transcriptionStatus == "queued" || entry.transcriptionStatus == "processing" {
+            return true
+        }
         guard entry.hasAudio, let id = entry.id else { return false }
         return transcriptionManager.isInFlight(id)
     }
@@ -484,10 +538,10 @@ struct MemoryCard: View {
     
     var body: some View {
         Button(action: {
-            print("🔵 MemoryCard tapped - Memory ID: \(entry.id?.uuidString ?? "nil")")
+            print("🔵 MemoryCard tapped - Memory ID: \(entry.id?.uuidString.prefix(8) ?? "nil")…")
             if let id = entry.id {
                 selectedMemoryID = id
-                print("🔵 Set selectedMemoryID to: \(id.uuidString)")
+                print("🔵 Set selectedMemoryID to: \(id.uuidString.prefix(8))…")
             } else {
                 print("❌ Memory entry has no ID!")
             }
@@ -658,6 +712,23 @@ struct MemoryCard: View {
                                 .scaleEffect(0.75)
                             Text("Transcribing…")
                                 .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(colors.textSecondary)
+                        } else if entry.transcriptionStatus == "failed" || entry.transcriptionStatus == "needsRerecording" {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.system(size: 18))
+                                .foregroundColor(colors.terracotta.opacity(0.8))
+                            Text(entry.transcriptionStatus == "needsRerecording" ?
+                                 "This audio needs to be recorded again." :
+                                 "Transcript failed. Open this memory to retry.")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(colors.textSecondary)
+                        } else if entry.transcriptionStatus == nil,
+                                  URL(string: entry.audioFileURL ?? "")?.pathExtension.lowercased() != "m4a" {
+                            Image(systemName: "mic.badge.plus")
+                                .font(.system(size: 18))
+                                .foregroundColor(colors.terracotta.opacity(0.7))
+                            Text("Re-record this older audio to create a transcript.")
+                                .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(colors.textSecondary)
                         } else if entry.hasAudio {
                             Image(systemName: "waveform.circle.fill")

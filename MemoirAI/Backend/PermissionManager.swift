@@ -77,13 +77,12 @@ final class PermissionManager: ObservableObject {
     }
     
     /// Request microphone permission
-    func requestMicrophonePermission() {
+    func requestMicrophonePermission(onGranted: @escaping () -> Void = {}) {
         let status = AVAudioSession.sharedInstance().recordPermission
         
         switch status {
         case .granted:
-            // Already granted
-            break
+            onGranted()
             
         case .denied:
             // Permission denied - show settings alert
@@ -93,7 +92,9 @@ final class PermissionManager: ObservableObject {
             // First time request
             AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
                 DispatchQueue.main.async {
-                    if !granted {
+                    if granted {
+                        onGranted()
+                    } else {
                         self?.showMicrophonePermissionAlert = true
                     }
                 }
@@ -142,4 +143,4 @@ final class PermissionManager: ObservableObject {
 extension Notification.Name {
     static let permissionStatusChanged = Notification.Name("permissionStatusChanged")
     static let transcriptionCompleted = Notification.Name("transcriptionCompleted")
-} 
+}

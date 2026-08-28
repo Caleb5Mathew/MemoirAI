@@ -19,6 +19,7 @@ struct MemoryEnhancementGuidedSessionView: View {
     @State private var audioRecorder: AVAudioRecorder?
     @State private var audioURL: URL?
     @State private var isRecording = false
+    @State private var recordingTimer: Timer?
 
     /// After Stop: review transcript before submitting to the session.
     @State private var showReviewSheet = false
@@ -491,6 +492,8 @@ struct MemoryEnhancementGuidedSessionView: View {
     }
 
     private func stopRecordingAndPresentReview() {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
         audioRecorder?.stop()
         isRecording = false
         audioMonitor.stopMonitoring()
@@ -566,6 +569,8 @@ struct MemoryEnhancementGuidedSessionView: View {
     }
 
     private func cleanupRecording() {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
         if isRecording {
             audioRecorder?.stop()
         }
@@ -587,28 +592,35 @@ struct MemoryEnhancementGuidedSessionView: View {
             return
         }
         pendingTranscript = ""
-        let filename = UUID().uuidString + ".caf"
+        let filename = UUID().uuidString + ".m4a"
         let fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(filename)
         let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 44_100,
             AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsFloatKey: true,
-            AVLinearPCMIsBigEndianKey: false
+            AVEncoderBitRateKey: 48_000,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
         do {
-            audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
-            audioRecorder?.isMeteringEnabled = true
-            audioRecorder?.prepareToRecord()
-            audioRecorder?.record()
+            let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
+            recorder.isMeteringEnabled = true
+            recorder.prepareToRecord()
+            guard recorder.record(forDuration: RecordingDurationPolicy.maximumRecordingDuration) else {
+                print("Guided session recorder refused to start")
+                return
+            }
+            audioRecorder = recorder
             audioURL = fileURL
             isRecording = true
-            if let recorder = audioRecorder {
-                audioMonitor.startMonitoring(recorder: recorder)
-            }
+            audioMonitor.startMonitoring(recorder: recorder)
             realTimeTranscription.startTranscription()
+            recordingTimer?.invalidate()
+            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+                if RecordingDurationPolicy.shouldStop(elapsed: recorder.currentTime) || !recorder.isRecording {
+                    stopRecordingAndPresentReview()
+                }
+            }
             try? AVAudioSession.sharedInstance().setActive(true)
         } catch {
             print("Guided session recorder: \(error)")

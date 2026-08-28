@@ -32,6 +32,7 @@ struct RelationshipJourneyView: View {
     @State private var animatedProgress: CGFloat = 0
 
     private let deepGreen = Color(red: 39/255, green: 60/255, blue: 34/255)
+    private let headerSurface = Color(red: 1.0, green: 0.97, blue: 0.90)
 
     private var waypoints: [(CGFloat, CGFloat)] { RelationshipJourneyMapConstants.waypoints }
     private var scrollHeight: CGFloat { RelationshipJourneyMapConstants.scrollContentHeight }
@@ -488,7 +489,7 @@ struct RelationshipJourneyView: View {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(Color.white.opacity(0.42))
+                        .fill(deepGreen.opacity(0.14))
                     Capsule()
                         .fill(
                             LinearGradient(
@@ -510,9 +511,9 @@ struct RelationshipJourneyView: View {
         .padding(.vertical, 14)
         .frame(maxWidth: contentWidth - 32)
         .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.12), radius: 14, x: 0, y: 5)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(headerSurface.opacity(0.96))
+                .shadow(color: .black.opacity(0.16), radius: 12, x: 0, y: 5)
         )
         .padding(.top, 8)
     }
@@ -527,8 +528,8 @@ struct RelationshipJourneyView: View {
                 .frame(width: 44, height: 44)
                 .background(
                     Circle()
-                        .fill(.ultraThinMaterial)
-                        .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 2)
+                        .fill(headerSurface.opacity(0.96))
+                        .shadow(color: .black.opacity(0.16), radius: 8, x: 0, y: 3)
                 )
         }
         .padding(.leading, 12)
@@ -552,13 +553,14 @@ struct RelationshipJourneyView: View {
                 }
             }
         } else {
-            Mixpanel.mainInstance().track(event: "Opened Prompt", properties: [
-                "chapter_number": chapter.number,
-                "chapter_title": chapter.title,
-                "prompt_text": prompt.text,
-                "is_completed": isCompleted,
-                "memoir_mode": "relationships"
-            ])
+            Mixpanel.mainInstance().track(
+                event: "Opened Prompt",
+                properties: AnalyticsPrivacyPolicy.sanitized([
+                    "chapter_number": chapter.number,
+                    "is_completed": isCompleted,
+                    "memoir_mode": "relationships"
+                ])
+            )
             selectedPrompt = prompt
         }
     }

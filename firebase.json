@@ -31,10 +31,17 @@
           { "key": "Content-Type", "value": "application/json" },
           { "key": "Cache-Control", "value": "max-age=3600" }
         ]
+      },
+      {
+        "source": "/privacy/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=3600" }
+        ]
       }
     ],
     "rewrites": [
       { "source": "/ops", "destination": "/ops/index.html" },
+      { "source": "/privacy", "destination": "/privacy/index.html" },
       { "source": "/memory/**", "destination": "/memory/index.html" }
     ]
   },

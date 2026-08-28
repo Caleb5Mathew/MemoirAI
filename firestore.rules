@@ -1,16 +1,63 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isActiveAuthenticatedUser() {
+      return request.auth != null
+        && !exists(/databases/$(database)/documents/accountDeletionRequests/$(request.auth.uid));
+    }
+
     function isOwner(userId) {
-      return request.auth != null && request.auth.uid == userId;
+      return isActiveAuthenticatedUser()
+        && request.auth.uid == userId
+        && !exists(/databases/$(database)/documents/accountDeletionRequests/$(userId));
+    }
+
+    function hasActiveCheckoutLock(userId) {
+      return exists(/databases/$(database)/documents/accountOperationLocks/$(userId))
+        && get(/databases/$(database)/documents/accountOperationLocks/$(userId)).data.state == "checkout"
+        && get(/databases/$(database)/documents/accountOperationLocks/$(userId)).data.checkoutExpiresAtMillis > request.time.toMillis();
     }
 
     // Family and friends shared access: an unrevoked grant doc under the owner
     // unlocks read access to that owner's memories for the requesting user.
-    function hasApprovedGrant(ownerId) {
-      return request.auth != null
+    function hasApprovedGrant(ownerId, memoryId) {
+      return isActiveAuthenticatedUser()
+        && !exists(/databases/$(database)/documents/accountDeletionRequests/$(ownerId))
+        && (
+          (exists(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(memoryId + "__" + request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(memoryId + "__" + request.auth.uid)).data.requesterUid == request.auth.uid
+            && get(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(memoryId + "__" + request.auth.uid)).data.memoryId == memoryId
+            && get(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(memoryId + "__" + request.auth.uid)).data.revoked != true)
+          || (
+            exists(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(request.auth.uid)).data.revoked != true
+            && (
+              get(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(request.auth.uid)).data.get("memoryId", "") == memoryId
+              || (
+                get(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(request.auth.uid)).data.get("memoryId", "") == ""
+                && exists(/databases/$(database)/documents/users/$(ownerId)/accessRequests/$(request.auth.uid))
+                && get(/databases/$(database)/documents/users/$(ownerId)/accessRequests/$(request.auth.uid)).data.status == "approved"
+                && get(/databases/$(database)/documents/users/$(ownerId)/accessRequests/$(request.auth.uid)).data.memoryId == memoryId
+              )
+            )
+          )
+        );
+    }
+
+    function hasLegacyApprovedGrant(ownerId, memoryId) {
+      return isActiveAuthenticatedUser()
+        && !exists(/databases/$(database)/documents/accountDeletionRequests/$(ownerId))
         && exists(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(request.auth.uid)).data.revoked != true;
+        && get(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(request.auth.uid)).data.revoked != true
+        && (
+          get(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(request.auth.uid)).data.get("memoryId", "") == memoryId
+          || (
+            get(/databases/$(database)/documents/users/$(ownerId)/accessGrants/$(request.auth.uid)).data.get("memoryId", "") == ""
+            && exists(/databases/$(database)/documents/users/$(ownerId)/accessRequests/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(ownerId)/accessRequests/$(request.auth.uid)).data.status == "approved"
+            && get(/databases/$(database)/documents/users/$(ownerId)/accessRequests/$(request.auth.uid)).data.memoryId == memoryId
+          )
+        );
     }
 
     function renderedBookFieldsUnchanged() {
@@ -29,39 +76,210 @@ service cloud.firestore {
     }
 
     function canUpdateBookVersion() {
-      return !(resource.data.renderStatus == "rendered") || renderedBookFieldsUnchanged();
+      return resource.data.get("hasPaidOrder", false) != true
+        && (!(resource.data.renderStatus == "rendered") || renderedBookFieldsUnchanged());
+    }
+
+    function canFinalizeStorybookJob() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return resource.data.admissionVersion == 1
+        && resource.data.status == "aiComplete"
+        && request.resource.data.updatedAt == request.time
+        && (
+          (request.resource.data.status == "complete"
+            && changed.hasOnly(["status", "updatedAt"]))
+          || (request.resource.data.status == "failed"
+            && request.resource.data.error is string
+            && request.resource.data.error.size() > 0
+            && request.resource.data.error.size() <= 500
+            && changed.hasOnly(["status", "error", "updatedAt"]))
+        );
     }
 
     // All user content remains namespaced under users/{uid}/...
     match /users/{userId} {
-      allow read, write: if isOwner(userId);
+      allow read: if isOwner(userId);
+      allow delete: if false;
+      allow create: if isOwner(userId)
+        && (!request.resource.data.keys().hasAny(["rcUserId"])
+          || (request.resource.data.rcUserId is string
+            && request.resource.data.rcUserId.matches('[0-9A-Fa-f-]{36}')));
+      allow update: if isOwner(userId)
+        && (
+          (!resource.data.keys().hasAny(["rcUserId"])
+            && (!request.resource.data.keys().hasAny(["rcUserId"])
+              || (request.resource.data.rcUserId is string
+                && request.resource.data.rcUserId.matches('[0-9A-Fa-f-]{36}'))))
+          || (resource.data.keys().hasAny(["rcUserId"])
+            && request.resource.data.rcUserId == resource.data.rcUserId)
+        );
 
       match /memories/{memoryId} {
-        allow read: if isOwner(userId) || hasApprovedGrant(userId);
-        allow write: if isOwner(userId);
+        allow read: if isOwner(userId) || hasLegacyApprovedGrant(userId, memoryId);
+        allow create, update: if isOwner(userId)
+          && !exists(/databases/$(database)/documents/users/$(userId)/memoryTombstones/$(memoryId));
+        allow delete: if isOwner(userId);
       }
 
-      // Family and friends: requesters create their own request doc (doc id = their
-      // uid, so one request per person); only the owner resolves it.
-      match /accessRequests/{requesterId} {
-        allow read: if isOwner(userId) || (request.auth != null && request.auth.uid == requesterId);
-        allow create: if request.auth != null
-          && request.auth.uid == requesterId
+      // Redacted sharing projection. It intentionally never contains the
+      // permanent Firebase download URL stored by legacy memory sync.
+      match /sharedMemories/{memoryId} {
+        allow read: if isOwner(userId) || hasApprovedGrant(userId, memoryId);
+        allow create, update: if isOwner(userId)
+          && request.resource.data.keys().hasOnly([
+            "memoryId", "prompt", "transcription", "profileName",
+            "createdAt", "audioStoragePath", "updatedAt"
+          ])
+          && request.resource.data.memoryId == memoryId
+          && request.resource.data.updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId)/memories/$(memoryId));
+        allow delete: if isOwner(userId);
+      }
+
+      // Permanent deletion markers block stale app instances from recreating a
+      // deleted memory or uploading its old audio again.
+      match /memoryTombstones/{memoryId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && request.resource.data.schemaVersion == 1
+          && request.resource.data.keys().hasOnly(["deletedAt", "schemaVersion", "profileId"]);
+        allow delete: if false;
+      }
+
+      match /memoryAudioTombstones/{audioFile} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && request.resource.data.schemaVersion == 1
+          && request.resource.data.keys().hasOnly(["deletedAt", "schemaVersion"]);
+        allow delete: if false;
+      }
+
+      // New request IDs are memoryId__requesterUid, allowing one person to
+      // request multiple memories. Legacy requesterUid IDs remain readable.
+      match /accessRequests/{requestId} {
+        allow read: if isOwner(userId)
+          || (isActiveAuthenticatedUser()
+            && resource.data.get("requesterUid", requestId) == request.auth.uid);
+        allow create: if isActiveAuthenticatedUser()
           && request.auth.uid != userId
+          && (
+            (request.resource.data.keys().hasOnly([
+                "requesterUid", "requesterDisplayName", "status", "memoryId", "createdAt"
+              ])
+              && request.resource.data.requesterUid == request.auth.uid
+              && requestId == request.resource.data.memoryId + "__" + request.auth.uid)
+            || (requestId == request.auth.uid
+              && request.resource.data.keys().hasOnly([
+                "requesterDisplayName", "status", "memoryId", "createdAt"
+              ]))
+          )
           && request.resource.data.status == "pending"
           && request.resource.data.requesterDisplayName is string
           && request.resource.data.requesterDisplayName.size() > 0
-          && request.resource.data.requesterDisplayName.size() <= 80;
-        allow update: if isOwner(userId)
-          && request.resource.data.status in ["approved", "denied"];
+          && request.resource.data.requesterDisplayName.size() <= 80
+          && request.resource.data.memoryId is string
+          && request.resource.data.memoryId.size() == 36
+          && request.resource.data.createdAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId)/memories/$(request.resource.data.memoryId));
+        allow update: if (isOwner(userId)
+          && resource.data.status == "pending"
+          && request.resource.data.status in ["approved", "denied"]
+          && request.resource.data.respondedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "status", "respondedAt"
+          ]))
+          || (isActiveAuthenticatedUser()
+            && request.auth.uid != userId
+            && resource.data.get("requesterUid", requestId) == request.auth.uid
+            && resource.data.status in ["denied", "approved"]
+            && (
+              (request.resource.data.keys().hasOnly([
+                  "requesterUid", "requesterDisplayName", "status", "memoryId", "createdAt"
+                ])
+                && request.resource.data.requesterUid == request.auth.uid
+                && requestId == request.resource.data.memoryId + "__" + request.auth.uid)
+              || (requestId == request.auth.uid
+                && request.resource.data.keys().hasOnly([
+                  "requesterDisplayName", "status", "memoryId", "createdAt"
+                ]))
+            )
+            && request.resource.data.status == "pending"
+            && request.resource.data.requesterDisplayName is string
+            && request.resource.data.requesterDisplayName.size() > 0
+            && request.resource.data.requesterDisplayName.size() <= 80
+            && request.resource.data.memoryId is string
+            && request.resource.data.memoryId.size() == 36
+            && request.resource.data.createdAt == request.time
+            && exists(/databases/$(database)/documents/users/$(userId)/memories/$(request.resource.data.memoryId)));
         allow delete: if false;
       }
 
-      // Grants are owner-written only (approve/revoke); the requester may read their own.
-      match /accessGrants/{requesterId} {
-        allow read: if isOwner(userId) || (request.auth != null && request.auth.uid == requesterId);
-        allow create, update: if isOwner(userId);
+      // Composite grant IDs preserve independent access to multiple memories.
+      // Revocation is server-only so the callable can also invalidate old
+      // bearer download tokens before access is reported revoked.
+      match /accessGrants/{grantId} {
+        allow read: if isOwner(userId)
+          || (isActiveAuthenticatedUser()
+            && resource.data.requesterUid == request.auth.uid);
+        allow create: if isOwner(userId)
+          && request.resource.data.requesterUid is string
+          && request.resource.data.memoryId is string
+          && (
+            grantId == request.resource.data.memoryId + "__" + request.resource.data.requesterUid
+            || grantId == request.resource.data.requesterUid
+          )
+          && request.resource.data.grantedAt == request.time
+          && request.resource.data.revoked == false
+          && (
+            (request.resource.data.keys().hasOnly([
+                "requesterUid", "memoryId", "grantedAt", "revoked"
+              ])
+              && request.resource.data.memoryId is string
+              && request.resource.data.memoryId.size() == 36
+              && exists(/databases/$(database)/documents/users/$(userId)/memories/$(request.resource.data.memoryId)))
+            || (request.resource.data.keys().hasOnly([
+                "requesterUid", "grantedAt", "revoked"
+              ])
+              && existsAfter(/databases/$(database)/documents/users/$(userId)/accessRequests/$(request.resource.data.requesterUid))
+              && getAfter(/databases/$(database)/documents/users/$(userId)/accessRequests/$(request.resource.data.requesterUid)).data.status == "approved"
+              && getAfter(/databases/$(database)/documents/users/$(userId)/accessRequests/$(request.resource.data.requesterUid)).data.memoryId is string
+              && getAfter(/databases/$(database)/documents/users/$(userId)/accessRequests/$(request.resource.data.requesterUid)).data.memoryId.size() == 36
+              && exists(/databases/$(database)/documents/users/$(userId)/memories/$(getAfter(/databases/$(database)/documents/users/$(userId)/accessRequests/$(request.resource.data.requesterUid)).data.memoryId)))
+          );
+        allow update: if isOwner(userId)
+          && resource.data.revoked != true
+          && request.resource.data.revoked == false
+          && request.resource.data.requesterUid == resource.data.requesterUid
+          && request.resource.data.memoryId == resource.data.memoryId
+          && request.resource.data.grantedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["grantedAt"]);
         allow delete: if false;
+      }
+
+      // Exact audio-file grant mirror used by Storage rules. The owner creates
+      // it in the same approval batch; only the backend revocation callable may
+      // change it afterward because revocation also rotates bearer tokens.
+      match /sharedAudioAccess/{accessId} {
+        allow read: if false;
+        allow create: if isOwner(userId)
+          && request.resource.data.keys().hasOnly([
+            "requesterUid", "memoryId", "audioFile", "grantedAt", "revoked"
+          ])
+          && request.resource.data.requesterUid is string
+          && request.resource.data.memoryId is string
+          && request.resource.data.memoryId.size() == 36
+          && request.resource.data.audioFile is string
+          && (
+            request.resource.data.audioFile == request.resource.data.memoryId + ".m4a"
+            || request.resource.data.audioFile == request.resource.data.memoryId + ".caf"
+          )
+          && accessId == request.resource.data.audioFile + "__" + request.resource.data.requesterUid
+          && request.resource.data.grantedAt == request.time
+          && request.resource.data.revoked == false
+          && exists(/databases/$(database)/documents/users/$(userId)/memories/$(request.resource.data.memoryId))
+          && existsAfter(/databases/$(database)/documents/users/$(userId)/accessGrants/$(request.resource.data.memoryId + "__" + request.resource.data.requesterUid))
+          && getAfter(/databases/$(database)/documents/users/$(userId)/accessGrants/$(request.resource.data.memoryId + "__" + request.resource.data.requesterUid)).data.revoked == false;
+        allow update, delete: if false;
       }
 
       match /books/{bookId} {
@@ -69,11 +287,26 @@ service cloud.firestore {
       }
 
       match /profiles/{profileId} {
-        allow read, write: if isOwner(userId);
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && !existsAfter(/databases/$(database)/documents/users/$(userId)/profileTombstones/$(profileId));
+      }
+
+      match /profileTombstones/{profileId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && request.resource.data.schemaVersion == 1
+          && request.resource.data.keys().hasOnly(["deletedAt", "schemaVersion"]);
+        allow delete: if false;
       }
 
       // Per-user dev cost rollups (DevCostTelemetryService) — YYYY-MM-dd doc ids.
       match /apiTelemetry/{dayKey} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Per-user manual billing reconciliation entries (DevBillingStore).
+      match /devBilling/{dayKey} {
         allow read, write: if isOwner(userId);
       }
 
@@ -86,13 +319,27 @@ service cloud.firestore {
       match /bookVersions/{bookVersionId} {
         allow read: if isOwner(userId);
         allow create: if isOwner(userId);
-        allow delete: if isOwner(userId);
-        allow update: if isOwner(userId) && canUpdateBookVersion();
+        allow delete: if isOwner(userId)
+          && resource.data.get("hasPaidOrder", false) != true
+          && !hasActiveCheckoutLock(userId);
+        allow update: if isOwner(userId)
+          && !hasActiveCheckoutLock(userId)
+          && canUpdateBookVersion();
       }
 
-      // Cloud storybook AI jobs (client creates; Cloud Function updates; client marks complete).
+      // Storybook creation and worker fields are server-only. The client may only
+      // finalize an admitted AI-complete job after local book persistence succeeds/fails.
+      // Transitional exception: the currently installed App Store binary writes
+      // unadmitted jobs directly. Keep only those legacy jobs client-writable until
+      // adoption of the callable-based binary is high enough to deploy worker v2.
       match /storybookJobs/{jobId} {
-        allow read, create, update, delete: if isOwner(userId);
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId)
+          && request.resource.data.get("admissionVersion", 0) != 1;
+        allow update: if isOwner(userId)
+          && (canFinalizeStorybookJob() || resource.data.get("admissionVersion", 0) != 1);
+        allow delete: if isOwner(userId)
+          && resource.data.get("admissionVersion", 0) != 1;
       }
 
       match /orders/{orderId} {
@@ -107,49 +354,55 @@ service cloud.firestore {
     }
 
     match /config/pricing {
-      allow read: if request.auth != null;
+      allow read: if isActiveAuthenticatedUser();
       allow write: if false;
+    }
+
+    // Server-owned markers immediately freeze an account while its deletion
+    // job removes Firestore, Storage, Auth, local, and CloudKit-backed data.
+    match /accountDeletionRequests/{userId} {
+      allow read, write: if false;
+    }
+
+    match /accountOperationLocks/{userId} {
+      allow read, write: if false;
+    }
+
+    // Server-owned Stripe session ledger used to interlock checkout completion
+    // with irreversible account deletion.
+    match /pendingSingleCheckouts/{sessionId} {
+      allow read, write: if false;
+    }
+
+    // Durable paid-checkout remediation queue. Only trusted backend/admin
+    // callables may create or inspect incidents.
+    match /fulfillmentIncidents/{incidentId} {
+      allow read, write: if false;
     }
 
     // memoryId → ownerId lookup for scanned QR codes. Server-maintained (Cloud
     // Function trigger + backfill script); contains no memory content.
     match /memoryIndex/{memoryId} {
-      allow read: if request.auth != null;
+      allow get: if isActiveAuthenticatedUser();
+      allow list: if false;
       allow write: if false;
     }
 
-    // Global developer telemetry aggregates across all users.
-    // Dashboard reads from these docs; DevCostTelemetryService (iOS) increments them client-side
-    // via merge-set with FieldValue.increment on a fixed field set — writes are scoped to that
-    // known schema so an authenticated client can't inject unrelated top-level fields into a
-    // doc shared across every user. This does not bound the *values* an authenticated client can
-    // increment by (Firestore rules only see the post-increment result) — the real fix is moving
-    // these writes server-side; tracked as a follow-up, not implemented here.
+    // Global developer telemetry aggregates are server-owned. Clients retain
+    // per-user diagnostics but cannot poison shared cost totals.
     match /globalApiTelemetry/{dayKey} {
-      allow read: if request.auth != null;
-      allow create, update: if request.auth != null
-        && request.resource.data.keys().hasOnly([
-          "dayKey", "dateStart", "totalRequests", "successfulRequests", "failedRequests",
-          "totalDurationMs", "totalPromptCharacters", "totalInputTokens", "totalOutputTokens",
-          "totalInputImages", "totalOutputImages", "totalUploadedBytes",
-          "estimatedCostLow", "estimatedCostBase", "estimatedCostHigh", "confidenceWeightedSum",
-          "providerCounts", "providerCostBase", "modelCounts", "modelCostBase",
-          "lastUpdated", "lastUserId"
-        ]);
-      allow delete: if false;
+      allow read: if false;
+      allow write: if false;
     }
 
     match /globalApiTelemetryTotals/{docId} {
-      allow read: if request.auth != null;
-      allow create, update: if request.auth != null
-        && request.resource.data.keys().hasOnly([
-          "totalRequests", "successfulRequests", "failedRequests",
-          "estimatedCostLow", "estimatedCostBase", "estimatedCostHigh",
-          "providerCounts", "providerCostBase", "modelCounts", "modelCostBase",
-          "totalOutputImages", "totalInputImages", "totalUploadedBytes",
-          "lastUpdated", "lastUserId"
-        ]);
-      allow delete: if false;
+      allow read: if false;
+      allow write: if false;
+    }
+
+    // Server-only global AI budget breaker counters.
+    match /globalAIUsage/{usageId} {
+      allow read, write: if false;
     }
   }
 }

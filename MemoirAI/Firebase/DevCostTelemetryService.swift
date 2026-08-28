@@ -8,8 +8,6 @@ actor DevCostTelemetryService {
     private let db = Firestore.firestore()
     private let userTelemetryCollection = "apiTelemetry"
     private let globalTelemetryCollection = "globalApiTelemetry"
-    private let globalTotalsCollection = "globalApiTelemetryTotals"
-    private let globalLifetimeDocument = "lifetime"
     private let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
@@ -56,39 +54,12 @@ actor DevCostTelemetryService {
             "lastUpdated": FieldValue.serverTimestamp()
         ]
 
-        let globalPayload: [String: Any] = payload.merging([
-            "lastUserId": userId
-        ]) { _, new in new }
-
-        let lifetimePayload: [String: Any] = [
-            "totalRequests": FieldValue.increment(Int64(1)),
-            "successfulRequests": FieldValue.increment(Int64(event.success ? 1 : 0)),
-            "failedRequests": FieldValue.increment(Int64(event.success ? 0 : 1)),
-            "estimatedCostLow": FieldValue.increment(estimate.low),
-            "estimatedCostBase": FieldValue.increment(estimate.base),
-            "estimatedCostHigh": FieldValue.increment(estimate.high),
-            "providerCounts.\(providerKey)": FieldValue.increment(Int64(1)),
-            "providerCostBase.\(providerKey)": FieldValue.increment(estimate.base),
-            "modelCounts.\(modelKey)": FieldValue.increment(Int64(1)),
-            "modelCostBase.\(modelKey)": FieldValue.increment(estimate.base),
-            "totalOutputImages": FieldValue.increment(Int64(event.outputImageCount)),
-            "totalInputImages": FieldValue.increment(Int64(event.inputImageCount)),
-            "totalUploadedBytes": FieldValue.increment(Int64(event.uploadedBytes)),
-            "lastUpdated": FieldValue.serverTimestamp(),
-            "lastUserId": userId
-        ]
-
         let userDayRef = db.collection("users").document(userId)
             .collection(userTelemetryCollection)
             .document(dayKey)
-        let globalDayRef = db.collection(globalTelemetryCollection).document(dayKey)
-        let globalLifetimeRef = db.collection(globalTotalsCollection).document(globalLifetimeDocument)
 
         do {
-            async let userWrite = userDayRef.setData(payload, merge: true)
-            async let globalWrite = globalDayRef.setData(globalPayload, merge: true)
-            async let lifetimeWrite = globalLifetimeRef.setData(lifetimePayload, merge: true)
-            _ = try await (userWrite, globalWrite, lifetimeWrite)
+            try await userDayRef.setData(payload, merge: true)
         } catch {
             print("⚠️ DevCostTelemetryService log failed: \(error.localizedDescription)")
             let ns = error as NSError
