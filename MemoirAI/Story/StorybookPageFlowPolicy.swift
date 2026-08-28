@@ -4,6 +4,21 @@ enum StorybookPagePresentationPolicy {
     static func shouldShowLoadedBook(hasGeneratedStorybook: Bool, pageCount: Int) -> Bool {
         hasGeneratedStorybook && pageCount > 0
     }
+
+    static func shouldShowProfileLoadingOverlay(isLoadingProfileBook: Bool, hasLoadedBook: Bool) -> Bool {
+        isLoadingProfileBook && !hasLoadedBook
+    }
+}
+
+enum StorybookJobFinalizationPolicy {
+    static func isCompletionSatisfied(status: String?) -> Bool {
+        status == "complete"
+    }
+
+    static func isFailureFinalizationSatisfied(status: String?) -> Bool {
+        guard let status else { return false }
+        return ["complete", "failed", "dismissedFailed"].contains(status)
+    }
 }
 
 enum StorybookGenerationBatchPolicy {

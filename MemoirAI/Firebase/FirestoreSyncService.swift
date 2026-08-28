@@ -2837,13 +2837,30 @@ extension FirestoreSyncService {
 
     func markStorybookJobComplete(jobId: String) async throws {
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        try await db.collection("users").document(uid).collection("storybookJobs").document(jobId).setData(
-            [
-                "status": "complete",
-                "updatedAt": FieldValue.serverTimestamp()
-            ],
-            merge: true
-        )
+        let ref = db.collection("users").document(uid).collection("storybookJobs").document(jobId)
+        let snapshot = try await ref.getDocument()
+        if StorybookJobFinalizationPolicy.isCompletionSatisfied(
+            status: snapshot.data()?["status"] as? String
+        ) {
+            return
+        }
+        do {
+            try await ref.setData(
+                [
+                    "status": "complete",
+                    "updatedAt": FieldValue.serverTimestamp()
+                ],
+                merge: true
+            )
+        } catch {
+            let latest = try? await ref.getDocument()
+            if StorybookJobFinalizationPolicy.isCompletionSatisfied(
+                status: latest?.data()?["status"] as? String
+            ) {
+                return
+            }
+            throw error
+        }
     }
 
     /// Marks a stuck/broken cloud job as failed so the auto-resume listener
@@ -2852,13 +2869,30 @@ extension FirestoreSyncService {
     /// failed server-side before the failure check was deployed).
     func markStorybookJobFailed(jobId: String, reason: String) async throws {
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        try await db.collection("users").document(uid).collection("storybookJobs").document(jobId).setData(
-            [
-                "status": "failed",
-                "error": reason,
-                "updatedAt": FieldValue.serverTimestamp()
-            ],
-            merge: true
-        )
+        let ref = db.collection("users").document(uid).collection("storybookJobs").document(jobId)
+        let snapshot = try await ref.getDocument()
+        if StorybookJobFinalizationPolicy.isFailureFinalizationSatisfied(
+            status: snapshot.data()?["status"] as? String
+        ) {
+            return
+        }
+        do {
+            try await ref.setData(
+                [
+                    "status": "failed",
+                    "error": reason,
+                    "updatedAt": FieldValue.serverTimestamp()
+                ],
+                merge: true
+            )
+        } catch {
+            let latest = try? await ref.getDocument()
+            if StorybookJobFinalizationPolicy.isFailureFinalizationSatisfied(
+                status: latest?.data()?["status"] as? String
+            ) {
+                return
+            }
+            throw error
+        }
     }
 }

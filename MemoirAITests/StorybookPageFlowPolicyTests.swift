@@ -18,6 +18,30 @@ struct StorybookPageFlowPolicyTests {
         ))
     }
 
+    @Test func localBookRemainsVisibleDuringProfileCloudReconciliation() {
+        #expect(!StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
+            isLoadingProfileBook: true,
+            hasLoadedBook: true
+        ))
+        #expect(StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
+            isLoadingProfileBook: true,
+            hasLoadedBook: false
+        ))
+        #expect(!StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
+            isLoadingProfileBook: false,
+            hasLoadedBook: false
+        ))
+    }
+
+    @Test func duplicateStorybookFinalizationTreatsTerminalJobsAsSuccess() {
+        #expect(StorybookJobFinalizationPolicy.isCompletionSatisfied(status: "complete"))
+        #expect(!StorybookJobFinalizationPolicy.isCompletionSatisfied(status: "aiComplete"))
+        #expect(StorybookJobFinalizationPolicy.isFailureFinalizationSatisfied(status: "complete"))
+        #expect(StorybookJobFinalizationPolicy.isFailureFinalizationSatisfied(status: "failed"))
+        #expect(StorybookJobFinalizationPolicy.isFailureFinalizationSatisfied(status: "dismissedFailed"))
+        #expect(!StorybookJobFinalizationPolicy.isFailureFinalizationSatisfied(status: "aiComplete"))
+    }
+
     @Test func generationBatchCapsOneBookWithoutChangingMonthlyAllowance() {
         #expect(StorybookGenerationBatchPolicy.maximumSelectablePages(remainingAllowance: 100) == 9)
         #expect(StorybookGenerationBatchPolicy.maximumSelectablePages(remainingAllowance: 4) == 4)

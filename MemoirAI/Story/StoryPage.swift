@@ -340,7 +340,10 @@ struct StoryPage: View {
             makeLoadingView()
         } else if vm.isLoadingGalleryBook {
             makeOpeningLibraryBookView()
-        } else if vm.isLoadingProfileBook {
+        } else if StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
+            isLoadingProfileBook: vm.isLoadingProfileBook,
+            hasLoadedBook: hasLoadedBook
+        ) {
             makeOpeningLibraryBookView()
         } else if hasLoadedBook && vm.requiresVisualReadyGate && !vm.isVisualBookReady {
             makeFinalizingAssetsView()
