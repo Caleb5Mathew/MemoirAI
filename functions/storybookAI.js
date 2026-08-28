@@ -457,12 +457,32 @@ function autoDetectNamesInTranscript(memoryText) {
     "with",
     "of",
     "middle",
+    "market",
+    "store",
+    "shop",
+    "restaurant",
+    "cafe",
+    "school",
+    "hospital",
+    "church",
     "park",
     "woods",
     "creek",
     "all",
     "once",
     "then",
+    "when",
+    "while",
+    "after",
+    "before",
+    "because",
+    "although",
+    "every",
+    "each",
+    "this",
+    "that",
+    "these",
+    "those",
     "later",
     "today",
     "yesterday",
@@ -484,6 +504,10 @@ function autoDetectNamesInTranscript(memoryText) {
     const raw = m[0].trim();
     const ft = normalizedFirstToken(raw);
     if (!ft || stopWords.has(ft) || LIKELY_NOT_NAME_TOKENS.has(ft)) continue;
+    const suffix = text.slice(re.lastIndex);
+    if (/^[’']s\s+(?:market|store|shop|restaurant|cafe|school|hospital|church|park|road|street|avenue)\b/i.test(suffix)) {
+      continue;
+    }
     const key = raw.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -2419,7 +2443,7 @@ CRITICAL RULES:
 4. **No Redundant Descriptions**: Do not describe physical appearance (hair, skin, etc.) as that is handled separately. Just use names.
 5. **Direct Style**: Use simple, factual sentences.
 6. **Body Position Accuracy**: Preserve the EXACT body positions described in the memory (sitting, standing, laying, kneeling, running, etc.). If the memory says "sitting", the scene MUST describe them sitting. If "laying down", they MUST be laying down. Never change or omit described postures.
-7. **Narration words are NOT names**: Capitalized sentence starters like "All", "Once", "Then", "Today", "Yesterday" are narration — never treat them as a person's name or invent a character called that.
+7. **Narration words and places are NOT names**: Capitalized sentence starters like "All", "Once", "Then", "When", "While", "After", "Before", "Today", and "Yesterday" are narration — never treat them as a person's name. Possessive business or place names such as "Miller's Market" identify the setting, not a person, unless the memory explicitly describes that person participating.
 8. **Memoir narrator mapping**: The memoir speaker ("I", "me", "my", "we" when meaning the speaker's group) maps to the FIRST character in CHARACTER INFORMATION whose line includes the phrase "memoir narrator". Use that person's exact listed NAME in your paragraph for every first-person reference. Never rename them to a different listed character.
 9. **Use names, never collective phrases.** Refer to people by their listed display names. Never write "the group of friends", "the kids", "the boys", "the girls", "the team", "the family", "everyone", or similar collective stand-ins for individually listed people. If five people are listed, write all five names. If you genuinely do not know a name, write "another friend".
 10. **Pronoun discipline:** When the listed gender for the memoir narrator (or any listed person) is empty, do NOT invent he/she/his/her for that person. Repeat their exact listed display name or use singular they/them/their. Never swap pronouns between two different listed people.
@@ -2521,6 +2545,7 @@ module.exports = {
   aspectRatioFromSize,
   loadStyleReferencePng,
   isQuestionDrivenMemory,
+  autoDetectNamesInTranscript,
   buildCastCanon,
   enrichEntryCharacterDetailsFromCanon,
   filterCanonRowsForEntry,

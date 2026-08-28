@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   assembleFinalPrompt,
+  autoDetectNamesInTranscript,
   createStorybookAI,
   explicitAge
 } = require("./storybookAI");
@@ -109,4 +110,18 @@ test("locks singular props to one coherent instant", () => {
 
   assert.match(prompt, /Singular-object lock/);
   assert.match(prompt, /render exactly one object/);
+});
+
+test("does not turn sentence starters or business names into people", () => {
+  const names = autoDetectNamesInTranscript(
+    "When I arrived at Miller's Market, Dad was waiting while Mara waved."
+  );
+
+  assert.deepEqual(names, ["Dad", "Mara"]);
+});
+
+test("keeps possessive names when they do not identify a business or place", () => {
+  const names = autoDetectNamesInTranscript("Mara's smile made Daniel laugh.");
+
+  assert.deepEqual(names, ["Mara", "Daniel"]);
 });
