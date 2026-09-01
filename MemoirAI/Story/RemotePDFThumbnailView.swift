@@ -282,7 +282,7 @@ struct RemotePDFThumbnailView<Placeholder: View>: View {
             if let image {
                 Image(uiImage: image)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
             } else {
                 ZStack {
                     placeholder()

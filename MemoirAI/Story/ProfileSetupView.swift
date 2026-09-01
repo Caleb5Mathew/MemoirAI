@@ -77,7 +77,7 @@ private struct HeadshotPhotoSourceSheet: View {
             .padding(.bottom, 8)
         }
         .padding(.horizontal, 24)
-        .presentationDetents([.height(320)])
+        .adaptiveSheetDetents(preferredHeight: 320)
         .presentationDragIndicator(.visible)
         .fullScreenCover(isPresented: $showImagePicker) {
             ImagePicker(source: pickerSource, allowsCropping: true) { image in
@@ -315,6 +315,7 @@ struct ProfileSetupView: View {
                     .padding(.horizontal, 40)
                     .padding(.vertical, 30)
                 }
+                .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
             }
         }
         // ── Pick / crop modals ─────────────────────────────

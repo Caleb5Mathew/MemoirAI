@@ -89,8 +89,9 @@ struct RecordingView: View {
                 .ignoresSafeArea()
                 overlayBlack.ignoresSafeArea()
 
-                VStack(spacing: 24) {
-                    Spacer(minLength: geo.size.height * 0.08)
+                ScrollView {
+                    VStack(spacing: 24) {
+                        Spacer(minLength: max(72, geo.size.height * 0.08))
 
                     // Prompt & audio controls
                     VStack(spacing: 12) {
@@ -231,25 +232,9 @@ struct RecordingView: View {
 
                         // Recording Controls (only show when recording or paused or has audio)
                         if isRecording || isPaused || audioURL != nil {
-                            HStack(spacing: 40) {
-                                controlButton(icon: "arrow.counterclockwise", label: "Clear") {
-                                    triggerHaptic(.impact(.medium))
-                                    clearRecording()
-                                }
-                                
-                                if isRecording || isPaused {
-                                    controlButton(icon: isPaused ? "play.fill" : "pause.fill",
-                                                  label: isPaused ? "Resume" : "Pause") {
-                                        triggerHaptic(.impact(.light))
-                                        isPaused ? resumeRecording() : pauseRecording()
-                                    }
-                                }
-                                
-                                controlButton(icon: "checkmark.circle.fill", label: "Save") {
-                                    triggerHaptic(.impact(.heavy))
-                                    stopRecording()
-                                    saveMemory()
-                                }
+                            ViewThatFits(in: .horizontal) {
+                                recordingControls(spacing: 40)
+                                recordingControls(spacing: 14)
                             }
                         }
                     }
@@ -308,18 +293,21 @@ struct RecordingView: View {
                         .transition(.opacity)
                     }
 
-                    Spacer()
-                }
-                .tutorialAnchor(.recordingSaveMemory)
-                .background(
-                    GeometryReader { inner in
-                        Color.clear
-                            .onAppear { tutorialCoordinator.reportAnchor(.recordingSaveMemory, rect: inner.frame(in: .global)) }
-                            .onChange(of: inner.frame(in: .global)) { _, f in tutorialCoordinator.reportAnchor(.recordingSaveMemory, rect: f) }
+                        Spacer(minLength: 24)
                     }
-                )
-                .frame(maxWidth: geo.size.width)
-                .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    .frame(minHeight: geo.size.height)
+                    .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
+                    .tutorialAnchor(.recordingSaveMemory)
+                    .background(
+                        GeometryReader { inner in
+                            Color.clear
+                                .onAppear { tutorialCoordinator.reportAnchor(.recordingSaveMemory, rect: inner.frame(in: .global)) }
+                                .onChange(of: inner.frame(in: .global)) { _, f in tutorialCoordinator.reportAnchor(.recordingSaveMemory, rect: f) }
+                        }
+                    )
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .scrollBounceBehavior(.basedOnSize)
 
                 // Back button
                 VStack {
@@ -456,6 +444,32 @@ struct RecordingView: View {
     }
 
     // MARK: - Control Button Helper
+    @ViewBuilder
+    private func recordingControls(spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            controlButton(icon: "arrow.counterclockwise", label: "Clear") {
+                triggerHaptic(.impact(.medium))
+                clearRecording()
+            }
+
+            if isRecording || isPaused {
+                controlButton(
+                    icon: isPaused ? "play.fill" : "pause.fill",
+                    label: isPaused ? "Resume" : "Pause"
+                ) {
+                    triggerHaptic(.impact(.light))
+                    isPaused ? resumeRecording() : pauseRecording()
+                }
+            }
+
+            controlButton(icon: "checkmark.circle.fill", label: "Save") {
+                triggerHaptic(.impact(.heavy))
+                stopRecording()
+                saveMemory()
+            }
+        }
+    }
+
     func controlButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
         VStack(spacing: 6) {
             Button(action: action) {

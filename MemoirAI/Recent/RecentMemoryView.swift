@@ -128,6 +128,7 @@ struct RecentMemoriesView: View {
                         .padding(.horizontal, 24)
                         .padding(.bottom, 24)
                 }
+                .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
                 .navigationBarHidden(true)
                 .navigationDestination(isPresented: $showCreateMemory) {
                     RecordMemoryView()

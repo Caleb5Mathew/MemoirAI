@@ -22,13 +22,17 @@ struct WelcomeAuthView: View {
     let onFinished: () -> Void
 
     private let colors = OnboardingColorTheme()
+    @ScaledMetric(relativeTo: .largeTitle) private var titleFontSize: CGFloat = 30
+    @ScaledMetric(relativeTo: .body) private var authButtonHeight: CGFloat = 50
 
     var body: some View {
         ZStack {
             colors.beige.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                Spacer(minLength: 48)
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(spacing: 0) {
+                    Spacer(minLength: 48)
 
                 VStack(spacing: 14) {
                     Image(systemName: "book.closed.fill")
@@ -36,7 +40,7 @@ struct WelcomeAuthView: View {
                         .foregroundColor(colors.orange)
 
                     Text("Welcome to Memoir")
-                        .font(.customSerifFallback(size: 30))
+                        .font(.customSerifFallback(size: titleFontSize))
                         .fontWeight(.bold)
                         .foregroundColor(colors.deepGreen)
                         .multilineTextAlignment(.center)
@@ -75,7 +79,7 @@ struct WelcomeAuthView: View {
                         }
                     }
                     .signInWithAppleButtonStyle(.black)
-                    .frame(height: 50)
+                    .frame(minHeight: authButtonHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                     Button(action: handleGoogle) {
@@ -92,7 +96,7 @@ struct WelcomeAuthView: View {
                                 .font(.system(size: 16, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
-                        .frame(height: 50)
+                        .frame(minHeight: authButtonHeight)
                         .background(Color.white)
                         .foregroundColor(.black.opacity(0.75))
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -113,7 +117,7 @@ struct WelcomeAuthView: View {
                                 .font(.system(size: 16, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
-                        .frame(height: 50)
+                        .frame(minHeight: authButtonHeight)
                         .background(colors.orange)
                         .foregroundColor(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -129,12 +133,17 @@ struct WelcomeAuthView: View {
 
                 Spacer(minLength: 20)
 
-                Button("Skip for now") {
-                    onFinished()
+                    Button("Skip for now") {
+                        onFinished()
+                    }
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(colors.deepGreen.opacity(0.6))
+                    .padding(.bottom, 28)
+                    }
+                    .frame(minHeight: geometry.size.height)
+                    .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
                 }
-                .font(.system(size: 15, weight: .medium))
-                .foregroundColor(colors.deepGreen.opacity(0.6))
-                .padding(.bottom, 28)
+                .scrollBounceBehavior(.basedOnSize)
             }
         }
         .sheet(isPresented: $showEmailSheet) {

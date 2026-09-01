@@ -29,6 +29,18 @@ struct OnboardingColorTheme {
     let overlay = Color.black.opacity(0.3)
 }
 
+private struct AdaptiveOnboardingScreenModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        GeometryReader { geometry in
+            ScrollView {
+                content
+                    .frame(minHeight: geometry.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+}
+
 struct OnboardingFlow: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var notificationManager = NotificationManager.shared
@@ -219,7 +231,9 @@ struct OnboardingFlow: View {
                 .padding(.horizontal, 24)
             }
             .padding(.bottom, 50)
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
         }
+        .modifier(AdaptiveOnboardingScreenModifier())
         // The background is applied using a modifier
         .background(
             ZStack {
@@ -298,7 +312,9 @@ struct OnboardingFlow: View {
                 .padding(.horizontal, 24)
             }
             .padding(.bottom, 50)
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
         }
+        .modifier(AdaptiveOnboardingScreenModifier())
         // The background is applied using a modifier
         .background(
             ZStack {
@@ -377,7 +393,9 @@ struct OnboardingFlow: View {
                 .padding(.horizontal, 24)
             }
             .padding(.bottom, 50)
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
         }
+        .modifier(AdaptiveOnboardingScreenModifier())
         // The background is applied using a modifier
         .background(
             ZStack {
@@ -456,7 +474,9 @@ struct OnboardingFlow: View {
                 .padding(.horizontal, 24)
             }
             .padding(.bottom, 50)
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
         }
+        .modifier(AdaptiveOnboardingScreenModifier())
         // The background is applied using a modifier
         .background(
             ZStack {
@@ -545,7 +565,9 @@ struct OnboardingFlow: View {
                 .padding(.horizontal, 24)
             }
             .padding(.bottom, 50)
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
         }
+        .modifier(AdaptiveOnboardingScreenModifier())
         // The background is applied using a modifier
         .background(
             ZStack {

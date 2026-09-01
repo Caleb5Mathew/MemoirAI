@@ -208,6 +208,7 @@ struct HomepageView: View {
                     .padding(.top, 24)
                 }
             }
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
             .background(Color(red: 0.98, green: 0.94, blue: 0.86).ignoresSafeArea(.all))
             .onAppear {
                 tutorialCoordinator.setVisibleScreen(.home)

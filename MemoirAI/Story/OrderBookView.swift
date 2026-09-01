@@ -157,6 +157,19 @@ struct OrderBookView: View {
     private var accentColor: Color { Color(red: 0.17, green: 0.42, blue: 0.78) }
     private var mutedTextColor: Color { Color.secondary.opacity(0.9) }
     private var isLandscapeBook: Bool { book.pageWidth > book.pageHeight }
+    private var coverAspectRatio: CGFloat {
+        AdaptiveLayoutPolicy.validatedAspectRatio(
+            width: book.pageWidth,
+            height: book.pageHeight,
+            fallback: isLandscapeBook ? 11 / 8.5 : 8.5 / 11
+        )
+    }
+    private var coverThumbnailSize: CGSize {
+        AdaptiveLayoutPolicy.aspectFitSize(
+            aspectRatio: coverAspectRatio,
+            inside: CGSize(width: 80, height: 64)
+        )
+    }
 
     private var productOptions: [PrintProductOption] {
         Self.printProductOptions(isLandscape: isLandscapeBook)
@@ -242,6 +255,7 @@ struct OrderBookView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
+                .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth, alignment: .leading)
             }
             .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -250,6 +264,7 @@ struct OrderBookView: View {
                     .padding(.top, 10)
                     .padding(.bottom, 12)
                     .frame(maxWidth: .infinity)
+                    .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth)
                     .background(
                         Color(UIColor.systemGroupedBackground)
                             .ignoresSafeArea(edges: .bottom)
@@ -793,12 +808,13 @@ struct OrderBookView: View {
             ) {
                 orderCoverPlaceholder
             }
-            .frame(width: 80, height: 64)
+            .frame(width: coverThumbnailSize.width, height: coverThumbnailSize.height)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.gray.opacity(0.2), lineWidth: 1)
             )
+            .frame(width: 80, height: 64)
         } else if urls.isEmpty {
             orderCoverPlaceholder
         } else {
@@ -809,7 +825,7 @@ struct OrderBookView: View {
                 case .success(let image):
                     image
                         .resizable()
-                        .scaledToFill()
+                        .scaledToFit()
                 case .empty:
                     ZStack {
                         Color(UIColor.tertiarySystemFill)
@@ -826,12 +842,13 @@ struct OrderBookView: View {
                     Color(UIColor.tertiarySystemFill)
                 }
             }
-            .frame(width: 80, height: 64)
+            .frame(width: coverThumbnailSize.width, height: coverThumbnailSize.height)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.gray.opacity(0.2), lineWidth: 1)
             )
+            .frame(width: 80, height: 64)
         }
     }
 
@@ -847,7 +864,7 @@ struct OrderBookView: View {
                     endPoint: .bottomTrailing
                 )
             )
-            .frame(width: 80, height: 64)
+            .frame(width: coverThumbnailSize.width, height: coverThumbnailSize.height)
             .overlay(
                 Image(systemName: "book.closed.fill")
                     .font(.system(size: 28))
@@ -857,6 +874,7 @@ struct OrderBookView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.gray.opacity(0.15), lineWidth: 1)
             )
+            .frame(width: 80, height: 64)
     }
 
     private var productDetailsSection: some View {
@@ -1050,6 +1068,11 @@ struct OrderBookView: View {
     private func cartLineThumbnail(item: OrderCartItem) -> some View {
         let pdfURL = remotePDFURL(from: item.coverPDFURL ?? item.coverURL)
         let urls = cartThumbnailImageURLs(for: item)
+        let aspectRatio: CGFloat = item.isLandscape ? 11 / 8.5 : 8.5 / 11
+        let thumbnailSize = AdaptiveLayoutPolicy.aspectFitSize(
+            aspectRatio: aspectRatio,
+            inside: CGSize(width: 56, height: 56)
+        )
         if let pdfURL {
             let layout: BookCoverFlatLayoutKind = item.isLandscape
                 ? .kidsBook(pageCount: max(1, item.snapshotPageCount))
@@ -1065,17 +1088,18 @@ struct OrderBookView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(UIColor.tertiarySystemFill))
             }
-            .frame(width: 44, height: 56)
+            .frame(width: thumbnailSize.width, height: thumbnailSize.height)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.gray.opacity(0.2), lineWidth: 1)
             )
+            .frame(width: 56, height: 56)
         } else if let u = urls.first {
             AsyncImage(url: u) { phase in
                 switch phase {
                 case .success(let image):
-                    image.resizable().scaledToFill()
+                    image.resizable().scaledToFit()
                 case .empty:
                     ZStack {
                         Color(UIColor.tertiarySystemFill)
@@ -1091,20 +1115,22 @@ struct OrderBookView: View {
                     Color(UIColor.tertiarySystemFill)
                 }
             }
-            .frame(width: 44, height: 56)
+            .frame(width: thumbnailSize.width, height: thumbnailSize.height)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.gray.opacity(0.2), lineWidth: 1)
             )
+            .frame(width: 56, height: 56)
         } else {
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color(UIColor.tertiarySystemFill))
-                .frame(width: 44, height: 56)
+                .frame(width: thumbnailSize.width, height: thumbnailSize.height)
                 .overlay(
-                    Image(systemName: "book.closed.fill")
-                        .foregroundStyle(.secondary)
+                        Image(systemName: "book.closed.fill")
+                            .foregroundStyle(.secondary)
                 )
+                .frame(width: 56, height: 56)
         }
     }
 

@@ -27,6 +27,7 @@ struct EmailAuthSheet: View {
     @State private var password: String = ""
     @State private var displayedError: String?
     @State private var resetConfirmation: String?
+    @ScaledMetric(relativeTo: .body) private var submitButtonHeight: CGFloat = 50
     @State private var isSubmitting = false
 
     /// Called after a successful create/sign-in with the resulting account outcome, right
@@ -52,7 +53,9 @@ struct EmailAuthSheet: View {
             ZStack {
                 colors.beige.ignoresSafeArea()
 
-                VStack(alignment: .leading, spacing: 18) {
+                GeometryReader { geometry in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
                     Picker("Mode", selection: $mode) {
                         ForEach(Mode.allCases, id: \.self) { option in
                             Text(option.rawValue).tag(option)
@@ -121,7 +124,7 @@ struct EmailAuthSheet: View {
                                 .font(.system(size: 16, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
-                        .frame(height: 50)
+                        .frame(minHeight: submitButtonHeight)
                         .background(canSubmit ? colors.orange : colors.fadedGray)
                         .foregroundColor(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -129,9 +132,14 @@ struct EmailAuthSheet: View {
                     .buttonStyle(.plain)
                     .disabled(!canSubmit)
 
-                    Spacer()
+                        Spacer(minLength: 24)
+                        }
+                        .frame(minHeight: geometry.size.height, alignment: .top)
+                        .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth, alignment: .leading)
+                        .padding(.horizontal, 24)
+                    }
+                    .scrollDismissesKeyboard(.interactively)
                 }
-                .padding(.horizontal, 24)
             }
             .navigationTitle(mode == .createAccount ? "Create Account" : "Sign In")
             .navigationBarTitleDisplayMode(.inline)

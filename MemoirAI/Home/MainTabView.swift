@@ -85,6 +85,7 @@ struct MainTabView: View {
                             accessRequestsBanner
                         }
                     }
+                    .adaptiveContentWidth(AdaptiveLayoutPolicy.bannerMaxWidth)
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
                 }

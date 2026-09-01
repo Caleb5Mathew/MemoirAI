@@ -103,7 +103,19 @@ struct ChapterJourneyView: View {
         GeometryReader { geo in
             ZStack {
                 backgroundImageView
-                promptNodesView(geo: geo)
+
+                ZStack {
+                    chapterArtwork
+
+                    GeometryReader { canvas in
+                        promptNodesView(geo: canvas)
+                    }
+                }
+                .frame(
+                    width: min(geo.size.width, AdaptiveLayoutPolicy.readableMaxWidth),
+                    height: min(geo.size.height, 1_024)
+                )
+                .clipped()
                 floatingQuoteView
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -178,6 +190,11 @@ struct ChapterJourneyView: View {
     // MARK: - View Components
 
     private var backgroundImageView: some View {
+        chapterArtwork
+            .ignoresSafeArea()
+    }
+
+    private var chapterArtwork: some View {
         Group {
             let assetName = chapterImageAssetName(for: chapter.title)
             #if canImport(UIKit)
@@ -194,7 +211,6 @@ struct ChapterJourneyView: View {
                 .scaledToFill()
             #endif
         }
-        .ignoresSafeArea()
     }
 
     private func promptNodesView(geo: GeometryProxy) -> some View {
