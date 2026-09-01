@@ -404,14 +404,14 @@ class StoryPageViewModel: ObservableObject {
         return !hasUnpublishedBookChanges
             && r.renderStatus == BookRenderStatus.rendered.rawValue
             && r.pdfURL != nil
-            && r.coverURL != nil
+            && StorybookCloudApplyPolicy.hasPrintCoverArtifact(r)
     }
     private func canonicalVisualReadiness(for record: BookVersionRecord?) -> Bool {
         guard let record else { return false }
         // Require cover so the gallery cell stays unavailable until the full artifact set is ready.
         return record.renderStatus == BookRenderStatus.rendered.rawValue
             && record.pdfURL != nil
-            && record.coverURL != nil
+            && StorybookCloudApplyPolicy.hasPrintCoverArtifact(record)
     }
     var currentPrintSpec: BookPrintSpec { resolvedPrintSpec() }
 
@@ -2011,7 +2011,7 @@ class StoryPageViewModel: ObservableObject {
     }
 
     /// New book version (first full generation only): appends local + iCloud history, registers pending sync, queues a cloud sync.
-    private func persistStorybook(for profileID: UUID, reservedCreatedAt: Date? = nil, reservedBookVersionId: String? = nil) {
+    private func persistStorybook(for profileID: UUID, reservedCreatedAt: Date? = nil, reservedBookVersionId: String? = nil) async -> Bool {
         let createdAt = reservedCreatedAt ?? Date()
         let bookVersionId: String
         if let b = reservedBookVersionId, let t = reservedCreatedAt {
@@ -2035,7 +2035,7 @@ class StoryPageViewModel: ObservableObject {
             profileID: profileID,
             createdAt: createdAt,
             bookVersionID: bookVersionId
-        ) else { return }
+        ) else { return false }
         do {
             try writeStorybookToLocalAndICloudCaches(storybookData, profileID: profileID, appendToHistory: true)
         } catch {
@@ -2055,7 +2055,19 @@ class StoryPageViewModel: ObservableObject {
         let freeformSnapshot = freeformPageDocuments
         let coverInputs = makeCoverInputsIfAvailable()
         FirestoreSyncService.shared.registerPendingBookSyncForProfile(bookId: bookVersionId, profileId: profileID)
-        FirestoreSyncService.shared.queueBookSync(
+        NotificationCenter.default.post(
+            name: .storybookCloudUploadActivity,
+            object: nil,
+            userInfo: ["bookSyncCountDelta": 1]
+        )
+        defer {
+            NotificationCenter.default.post(
+                name: .storybookCloudUploadActivity,
+                object: nil,
+                userInfo: ["bookSyncCountDelta": -1]
+            )
+        }
+        let synced = await FirestoreSyncService.shared.syncBook(
             storybookData,
             bookId: bookVersionId,
             renderedPageProvider: { [self] index in
@@ -2071,7 +2083,10 @@ class StoryPageViewModel: ObservableObject {
             },
             coverInputs: coverInputs
         )
-        print("✅ Storybook persisted for profile: \(profileID) (\(pageItems.count) pages → Firebase)")
+        if synced {
+            print("✅ Storybook persisted for profile: \(profileID) (\(pageItems.count) pages → Firebase)")
+        }
+        return synced
     }
     
     private func loadPersistedStorybook(for profileID: UUID) {
@@ -2227,7 +2242,17 @@ class StoryPageViewModel: ObservableObject {
         loadToken: UInt64,
         expectedUserID: String?
     ) async -> Bool {
-        guard let record = await FirestoreSyncService.shared.fetchLatestBookVersion(profileID: profileID) else {
+        var fetchedRecord: BookVersionRecord?
+        for attempt in 0..<3 {
+            fetchedRecord = await FirestoreSyncService.shared.fetchLatestBookVersion(profileID: profileID)
+            if fetchedRecord != nil { break }
+            guard attempt < 2,
+                  loadToken == profileLoadGeneration,
+                  currentProfileID == profileID,
+                  Auth.auth().currentUser?.uid == expectedUserID else { break }
+            try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 750_000_000)
+        }
+        guard let record = fetchedRecord else {
             print("[StorybookLoad] fetchLatestBookVersion → nil")
             return false
         }
@@ -5038,8 +5063,18 @@ class StoryPageViewModel: ObservableObject {
     func resumeInProgressGenerationIfMarkerExists(
         profileID: UUID,
         profileName: String?,
-        profileEthnicity: String?
+        profileEthnicity: String?,
+        routedJobID: String? = nil
     ) async -> Bool {
+        if let routedJobID {
+            await attachToCloudStorybookJob(
+                jobId: routedJobID,
+                profileID: profileID,
+                profileName: profileName,
+                profileEthnicity: profileEthnicity
+            )
+            return true
+        }
         if let job = try? await FirestoreSyncService.shared.fetchLatestActiveStorybookJob(profileId: profileID) {
             await attachToCloudStorybookJob(
                 jobId: job.jobId,
@@ -5082,12 +5117,13 @@ class StoryPageViewModel: ObservableObject {
 
     /// - Parameter succeeded: a finished run pins the bar to 100% and feeds its observed
     ///   timings back into the calibration used for the next run's estimates.
-    private func stopProgressTracking(succeeded: Bool) {
+    private func stopProgressTracking(succeeded: Bool, recordsCalibration: Bool = true) {
         progressTickTimer?.invalidate()
         progressTickTimer = nil
         if succeeded {
             progressEstimator?.noteDone()
-            if let observed = progressEstimator?.observedTimingsForCalibration() {
+            if recordsCalibration,
+               let observed = progressEstimator?.observedTimingsForCalibration() {
                 StorybookProgressEstimator.Calibration.record(
                     observedPerMemory: observed.perMemory,
                     observedRanking: observed.ranking,
@@ -5237,7 +5273,22 @@ class StoryPageViewModel: ObservableObject {
             .collection("users").document(uid)
             .collection("storybookJobs").document(jobId)
         storybookCloudJobListener = ref.addSnapshotListener { [weak self] snap, err in
-            guard let self, err == nil, let snap, snap.exists else { return }
+            guard let self else { return }
+            if let err {
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          thisRun == self.storybookGenerationCounter,
+                          self.currentProfileID == profileID else { return }
+                    self.errorMessage = "The generation status couldn’t be loaded. Check your connection and try again.\n\n\(err.localizedDescription)"
+                    self.stopStorybookCloudJobListener()
+                    self.stopProgressTracking(succeeded: false)
+                    self.isFinalizingAssets = false
+                    self.isLoading = false
+                    self.requiresVisualReadyGate = false
+                }
+                return
+            }
+            guard let snap, snap.exists else { return }
             Task { @MainActor in
                 guard thisRun == self.storybookGenerationCounter,
                       self.currentProfileID == profileID,
@@ -5348,11 +5399,68 @@ class StoryPageViewModel: ObservableObject {
             return
         }
 
-        if status == "aiComplete" {
+        if StorybookCloudJobResumeAction.action(for: status) == .loadCompletedBook {
+            if cloudStorybookFinalizeStarted { return }
+            cloudStorybookFinalizeStarted = true
+            var completedRecord = await FirestoreSyncService.shared.fetchBookVersion(bookVersionId: jobId)
+            if let record = completedRecord,
+               !StorybookCloudApplyPolicy.hasPrintCoverArtifact(record) {
+                _ = await FirestoreSyncService.shared.ensureCoverDesignExistsIfMissing(
+                    bookVersionId: jobId,
+                    respectSessionBudget: false
+                )
+                completedRecord = await FirestoreSyncService.shared.fetchBookVersion(bookVersionId: jobId)
+            }
+            if let record = completedRecord,
+               StorybookCloudApplyPolicy.isPrintReady(record),
+               await applyBookVersionRecord(record) {
+                stopStorybookCloudJobListener()
+                stopProgressTracking(succeeded: true, recordsCalibration: false)
+                StorybookSeenTracker.shared.markCompletedSeen(jobId: jobId)
+                isFinalizingAssets = false
+                isLoading = false
+                isVisualBookReady = true
+                requiresVisualReadyGate = false
+                GenerationProgressMarker.clear(for: profileID)
+                return
+            }
+
+            // A terminal job without a readable canonical record is recoverable: rebuild
+            // from its persisted cloud results using the same idempotent finalization path.
+            guard let reservedAt = lastPersistedBookCreatedAt else {
+                cloudStorybookFinalizeStarted = false
+                errorMessage = "Your finished book couldn’t be opened. Please try creating it again."
+                stopStorybookCloudJobListener()
+                stopProgressTracking(succeeded: false)
+                isLoading = false
+                requiresVisualReadyGate = false
+                return
+            }
+            await runFinalizeAfterCloudAI(
+                jobId: jobId,
+                profileID: profileID,
+                userID: userID,
+                jobData: data,
+                reservedCreatedAt: reservedAt,
+                thisRun: thisRun
+            )
+            return
+        }
+
+        if StorybookCloudJobResumeAction.action(for: status) == .finalizeCloudResults {
             if cloudStorybookFinalizeStarted { return }
             cloudStorybookFinalizeStarted = true
             Self.dumpCloudJobAuditTrail(jobId: jobId, data: data)
-            guard let reservedAt = lastPersistedBookCreatedAt else { return }
+            guard let reservedAt = lastPersistedBookCreatedAt else {
+                cloudStorybookFinalizeStarted = false
+                errorMessage = "Your finished book couldn’t be resumed. Please try creating it again."
+                stopStorybookCloudJobListener()
+                stopProgressTracking(succeeded: false)
+                isFinalizingAssets = false
+                isLoading = false
+                requiresVisualReadyGate = false
+                return
+            }
             await runFinalizeAfterCloudAI(
                 jobId: jobId,
                 profileID: profileID,
@@ -5505,7 +5613,18 @@ class StoryPageViewModel: ObservableObject {
             publishProgressSnapshot()
             await preparePrintPackagingBeforePersist(existingBackCoverPitchFromCloud: cloudPitch)
             guard isCurrentRun() else { return }
-            persistStorybook(for: profileID, reservedCreatedAt: reservedCreatedAt, reservedBookVersionId: jobId)
+            let persisted = await persistStorybook(
+                for: profileID,
+                reservedCreatedAt: reservedCreatedAt,
+                reservedBookVersionId: jobId
+            )
+            guard persisted else {
+                throw NSError(
+                    domain: "MemoirAI",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "Your book could not finish saving its print cover. Check your connection and try again."]
+                )
+            }
             currentStatus = "Finalizing cover and print assets…"
             progressEstimator?.noteFinalizeStep(.coverAndPrint)
             publishProgressSnapshot()
@@ -5514,7 +5633,11 @@ class StoryPageViewModel: ObservableObject {
                 let ready = await waitForCanonicalBookReadiness(bookVersionId: bookVersionId, timeoutSeconds: readinessTimeout)
                 guard isCurrentRun() else { return }
                 if !ready {
-                    isVisualBookReady = !pageItems.isEmpty
+                    throw NSError(
+                        domain: "MemoirAI",
+                        code: 4,
+                        userInfo: [NSLocalizedDescriptionKey: "Your print-ready book is still finalizing. Please try again shortly."]
+                    )
                 }
             }
             if let bookId = lastSyncedBookVersionId {

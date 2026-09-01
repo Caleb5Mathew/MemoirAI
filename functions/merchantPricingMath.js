@@ -62,8 +62,19 @@ function sumCartLineShippingCents(lineShippingCentsList) {
   }, 0);
 }
 
+function unavailablePrintFormatReason(optionId) {
+  if (optionId === "kids_coil_bound") {
+    return "Coil binding is temporarily unavailable while we finalize cover templates for Lulu.";
+  }
+  if (optionId === "kids_paperback_perfect") {
+    return "Paperback is temporarily unavailable while we add its Lulu-specific cover template.";
+  }
+  return null;
+}
+
 module.exports = {
   clampPrintQuantityForPricing,
   computeBookBaseCentsFromLuluLineMake,
-  sumCartLineShippingCents
+  sumCartLineShippingCents,
+  unavailablePrintFormatReason
 };

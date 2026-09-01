@@ -801,7 +801,7 @@ struct MemoryDetailView: View {
 
                 Spacer(minLength: 40)
             }
-            .frame(maxWidth: .infinity)
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
             .id(refreshTrigger)
             }
 

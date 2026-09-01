@@ -37,6 +37,99 @@ enum PendingStorybookMatchPolicy {
     }
 }
 
+enum PendingBookSyncRetryPolicy {
+    enum RecoveryAction: Equatable {
+        case acceptCloudCompletion
+        case deferMutations
+        case attemptMutations
+    }
+
+    static func delay(forRetryCount retryCount: Int) -> TimeInterval {
+        switch retryCount {
+        case ...0: 0
+        case 1: 15 * 60
+        case 2: 60 * 60
+        case 3: 6 * 60 * 60
+        default: 24 * 60 * 60
+        }
+    }
+
+    static func shouldRetry(
+        retryCount: Int,
+        lastAttemptAt: Date?,
+        now: Date = Date()
+    ) -> Bool {
+        guard let lastAttemptAt else { return true }
+        return now.timeIntervalSince(lastAttemptAt) >= delay(forRetryCount: retryCount)
+    }
+
+    static func recoveryAction(
+        cloudIsPrintReady: Bool,
+        retryCount: Int,
+        lastAttemptAt: Date?,
+        now: Date = Date()
+    ) -> RecoveryAction {
+        if cloudIsPrintReady {
+            return .acceptCloudCompletion
+        }
+        return shouldRetry(retryCount: retryCount, lastAttemptAt: lastAttemptAt, now: now)
+            ? .attemptMutations
+            : .deferMutations
+    }
+}
+
+enum PendingBookSyncOwnershipPolicy {
+    static func canMutate(expectedUserId: String, currentUserId: String?) -> Bool {
+        currentUserId == expectedUserId
+    }
+}
+
+enum BookRenderCompletionPolicy {
+    static func isComplete(status: String?, pdfURL: String?) -> Bool {
+        guard status == BookRenderStatus.rendered.rawValue,
+              let pdfURL else { return false }
+        return !pdfURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+enum CoverArtRevisionPolicy {
+    static func next(existingRevision: Int?, hasCover: Bool) -> Int? {
+        guard hasCover else { return nil }
+        return max(0, existingRevision ?? 0) + 1
+    }
+}
+
+enum FallbackTextPageLayout {
+    static func measuredHeight(
+        text: String,
+        width: CGFloat,
+        font: UIFont,
+        maximumHeight: CGFloat
+    ) -> CGFloat {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        let bounds = (text as NSString).boundingRect(
+            with: CGSize(width: max(1, width), height: max(1, maximumHeight)),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font, .paragraphStyle: paragraph],
+            context: nil
+        )
+        return min(maximumHeight, ceil(bounds.height))
+    }
+}
+
+actor PendingSyncRetryGate {
+    private var inFlightKeys: Set<String> = []
+
+    func claim(_ key: String) -> Bool {
+        inFlightKeys.insert(key).inserted
+    }
+
+    func release(_ key: String) {
+        inFlightKeys.remove(key)
+    }
+}
+
 /// Chains `syncBook` / Storage for the same `bookVersionId` so concurrent in-place saves do not interleave.
 private actor BookVersionSyncSequencer {
     private struct Tail {
@@ -110,6 +203,7 @@ final class FirestoreSyncService {
     
     private let db = Firestore.firestore()
     private let bookVersionSyncSequencer = BookVersionSyncSequencer()
+    private let pendingSyncRetryGate = PendingSyncRetryGate()
     private let memoryOperationSequencer = MemoryOperationSequencer()
     private let memorySyncPersistenceLock = NSLock()
     private let memoryDeletionPersistenceLock = NSLock()
@@ -119,6 +213,8 @@ final class FirestoreSyncService {
     private var lastPostSignInCoverBackfillUserId: String?
     private var coverHealBudgetLock = NSLock()
     private var coverHealSessionAttempts: [String: Int] = [:]
+    private var coverRepairLock = NSLock()
+    private var coverRepairsInFlight: Set<String> = []
     private static let maxCoverHealAttemptsPerVersionPerSession = 2
 
     private init() {
@@ -157,25 +253,28 @@ final class FirestoreSyncService {
         let profileId: String
         let firebaseUserId: String?
         let queuedAt: Date
-        /// Incremented when `invokeBookRenderFunction` fails; used for debugging / future backoff.
+        /// Incremented when a sync or render attempt fails.
         var renderRetryCount: Int
+        var lastAttemptAt: Date?
 
         init(
             bookId: String,
             profileId: String,
             firebaseUserId: String,
             queuedAt: Date,
-            renderRetryCount: Int = 0
+            renderRetryCount: Int = 0,
+            lastAttemptAt: Date? = nil
         ) {
             self.bookId = bookId
             self.profileId = profileId
             self.firebaseUserId = firebaseUserId
             self.queuedAt = queuedAt
             self.renderRetryCount = renderRetryCount
+            self.lastAttemptAt = lastAttemptAt
         }
 
         private enum CodingKeys: String, CodingKey {
-            case bookId, profileId, firebaseUserId, queuedAt, renderRetryCount
+            case bookId, profileId, firebaseUserId, queuedAt, renderRetryCount, lastAttemptAt
         }
 
         init(from decoder: Decoder) throws {
@@ -185,6 +284,7 @@ final class FirestoreSyncService {
             firebaseUserId = try c.decodeIfPresent(String.self, forKey: .firebaseUserId)
             queuedAt = try c.decode(Date.self, forKey: .queuedAt)
             renderRetryCount = try c.decodeIfPresent(Int.self, forKey: .renderRetryCount) ?? 0
+            lastAttemptAt = try c.decodeIfPresent(Date.self, forKey: .lastAttemptAt)
         }
 
         func encode(to encoder: Encoder) throws {
@@ -194,6 +294,7 @@ final class FirestoreSyncService {
             try c.encodeIfPresent(firebaseUserId, forKey: .firebaseUserId)
             try c.encode(queuedAt, forKey: .queuedAt)
             try c.encode(renderRetryCount, forKey: .renderRetryCount)
+            try c.encodeIfPresent(lastAttemptAt, forKey: .lastAttemptAt)
         }
     }
 
@@ -218,6 +319,7 @@ final class FirestoreSyncService {
             }
             let preserveRetry = existing?.renderRetryCount ?? 0
             let preserveQueued = existing?.queuedAt ?? Date()
+            let preserveLastAttempt = existing?.lastAttemptAt
             records.removeAll { $0.bookId == bookId && $0.firebaseUserId == firebaseUserId }
             records.append(
                 PendingBookSyncRecord(
@@ -225,7 +327,8 @@ final class FirestoreSyncService {
                     profileId: profileId,
                     firebaseUserId: firebaseUserId,
                     queuedAt: preserveQueued,
-                    renderRetryCount: preserveRetry
+                    renderRetryCount: preserveRetry,
+                    lastAttemptAt: preserveLastAttempt
                 )
             )
             if let data = try? JSONEncoder().encode(records) {
@@ -256,14 +359,14 @@ final class FirestoreSyncService {
         )
     }
 
-    private func incrementPendingBookRenderRetry(bookId: String) {
-        guard let firebaseUserId = Auth.auth().currentUser?.uid else { return }
+    private func incrementPendingBookRenderRetry(bookId: String, firebaseUserId: String) {
         bookSyncPersistenceLock.withLock {
             var records = loadPendingBookSyncRecords()
             guard let i = records.firstIndex(where: {
                 $0.bookId == bookId && $0.firebaseUserId == firebaseUserId
             }) else { return }
             records[i].renderRetryCount += 1
+            records[i].lastAttemptAt = Date()
             if let data = try? JSONEncoder().encode(records) {
                 UserDefaults.standard.set(data, forKey: Self.pendingBookSyncStorageKey)
             }
@@ -271,8 +374,7 @@ final class FirestoreSyncService {
         }
     }
 
-    private func clearPendingBookSync(bookId: String) {
-        guard let firebaseUserId = Auth.auth().currentUser?.uid else { return }
+    private func clearPendingBookSync(bookId: String, firebaseUserId: String) {
         bookSyncPersistenceLock.withLock {
             var records = loadPendingBookSyncRecords()
             records.removeAll { $0.bookId == bookId && $0.firebaseUserId == firebaseUserId }
@@ -319,6 +421,16 @@ final class FirestoreSyncService {
     /// Also re-attempts any memory syncs queued by `queueMemorySyncWithProfile` that failed while offline (see `retryPendingMemorySyncs`).
     func retryPendingSyncs(for profileID: UUID) async {
         guard let firebaseUserId = Auth.auth().currentUser?.uid else { return }
+        let retryKey = "\(firebaseUserId)|\(profileID.uuidString)"
+        guard await pendingSyncRetryGate.claim(retryKey) else {
+            print("[CoverFlow] retryPendingSyncs skipped duplicate profile=\(profileID.uuidString.prefix(8))…")
+            return
+        }
+        await retryPendingSyncsClaimed(for: profileID, firebaseUserId: firebaseUserId)
+        await pendingSyncRetryGate.release(retryKey)
+    }
+
+    private func retryPendingSyncsClaimed(for profileID: UUID, firebaseUserId: String) async {
         await retryPendingMemoryDeletions(firebaseUserId: firebaseUserId)
         await retryPendingMemorySyncs(for: profileID)
         let want = profileID.uuidString
@@ -327,51 +439,140 @@ final class FirestoreSyncService {
         }
         guard !pending.isEmpty else { return }
         for record in pending {
-            if let cloud = await fetchBookVersion(bookVersionId: record.bookId),
-               !StorybookCloudApplyPolicy.isIncompleteCloudRecord(cloud),
-               cloud.renderStatus == BookRenderStatus.rendered.rawValue,
-               cloud.pdfURL != nil,
-               !(cloud.coverURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
-                try? StorybookLocalStore.promotePendingBook(
-                    bookVersionID: record.bookId,
-                    profileID: profileID
-                )
-                clearPendingBookSync(bookId: record.bookId)
-                continue
-            }
-            if localStorybookMatchingPending(bookId: record.bookId, profileID: profileID) != nil,
-               let cloud = await fetchBookVersion(bookVersionId: record.bookId),
-               !StorybookCloudApplyPolicy.isIncompleteCloudRecord(cloud),
-               cloud.pageCount > 0,
-               (cloud.pdfURL == nil || cloud.renderStatus != BookRenderStatus.rendered.rawValue) {
-                let hasCover = !(cloud.coverURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                if !hasCover {
-                    _ = await ensureCoverDesignExistsIfMissing(
-                        bookVersionId: record.bookId,
-                        respectSessionBudget: false
-                    )
-                }
-                let renderOk = await invokeBookRenderFunction(bookVersionId: record.bookId) != nil
-                if renderOk {
-                    try? StorybookLocalStore.promotePendingBook(
+            guard PendingBookSyncOwnershipPolicy.canMutate(
+                expectedUserId: firebaseUserId,
+                currentUserId: Auth.auth().currentUser?.uid
+            ) else { return }
+            let cloud = await fetchBookVersion(bookVersionId: record.bookId)
+            guard PendingBookSyncOwnershipPolicy.canMutate(
+                expectedUserId: firebaseUserId,
+                currentUserId: Auth.auth().currentUser?.uid
+            ) else { return }
+            let recoveryAction = PendingBookSyncRetryPolicy.recoveryAction(
+                cloudIsPrintReady: cloud.map { StorybookCloudApplyPolicy.isPrintReady($0) } ?? false,
+                retryCount: record.renderRetryCount,
+                lastAttemptAt: record.lastAttemptAt
+            )
+            if recoveryAction == .acceptCloudCompletion {
+                do {
+                    try StorybookLocalStore.promotePendingBook(
                         bookVersionID: record.bookId,
                         profileID: profileID
                     )
-                    clearPendingBookSync(bookId: record.bookId)
+                    clearPendingBookSync(bookId: record.bookId, firebaseUserId: firebaseUserId)
+                } catch {
+                    print("[CoverFlow] retryPendingSyncs could not promote completed bookId=\(record.bookId.prefix(28))… error=\(error.localizedDescription)")
+                }
+                continue
+            }
+            guard recoveryAction == .attemptMutations else {
+                let delay = PendingBookSyncRetryPolicy.delay(forRetryCount: record.renderRetryCount)
+                print("[CoverFlow] retryPendingSyncs deferred bookId=\(record.bookId.prefix(28))… retry=\(record.renderRetryCount) delay=\(Int(delay))s")
+                continue
+            }
+            if let cloud,
+               !StorybookCloudApplyPolicy.isIncompleteCloudRecord(cloud),
+               BookRenderCompletionPolicy.isComplete(status: cloud.renderStatus, pdfURL: cloud.pdfURL),
+               !StorybookCloudApplyPolicy.hasPrintCoverArtifact(cloud) {
+                _ = await ensureCoverDesignExistsIfMissing(
+                    bookVersionId: record.bookId,
+                    respectSessionBudget: false,
+                    expectedUserId: firebaseUserId
+                )
+                guard PendingBookSyncOwnershipPolicy.canMutate(
+                    expectedUserId: firebaseUserId,
+                    currentUserId: Auth.auth().currentUser?.uid
+                ) else { return }
+                let repaired = await fetchBookVersion(bookVersionId: record.bookId)
+                guard PendingBookSyncOwnershipPolicy.canMutate(
+                    expectedUserId: firebaseUserId,
+                    currentUserId: Auth.auth().currentUser?.uid
+                ) else { return }
+                if let repaired, StorybookCloudApplyPolicy.isPrintReady(repaired) {
+                    do {
+                        try StorybookLocalStore.promotePendingBook(
+                            bookVersionID: record.bookId,
+                            profileID: profileID
+                        )
+                        clearPendingBookSync(bookId: record.bookId, firebaseUserId: firebaseUserId)
+                    } catch {
+                        print("[CoverFlow] retryPendingSyncs could not promote repaired bookId=\(record.bookId.prefix(28))… error=\(error.localizedDescription)")
+                    }
                 } else {
-                    incrementPendingBookRenderRetry(bookId: record.bookId)
+                    incrementPendingBookRenderRetry(bookId: record.bookId, firebaseUserId: firebaseUserId)
+                }
+                continue
+            }
+            if localStorybookMatchingPending(bookId: record.bookId, profileID: profileID) != nil,
+               let cloud,
+               !StorybookCloudApplyPolicy.isIncompleteCloudRecord(cloud),
+               cloud.pageCount > 0,
+               (cloud.pdfURL == nil || cloud.renderStatus != BookRenderStatus.rendered.rawValue) {
+                let hasCover = StorybookCloudApplyPolicy.hasPrintCoverArtifact(cloud)
+                if !hasCover {
+                    _ = await ensureCoverDesignExistsIfMissing(
+                        bookVersionId: record.bookId,
+                        respectSessionBudget: false,
+                        expectedUserId: firebaseUserId
+                    )
+                    guard PendingBookSyncOwnershipPolicy.canMutate(
+                        expectedUserId: firebaseUserId,
+                        currentUserId: Auth.auth().currentUser?.uid
+                    ) else { return }
+                }
+                let renderResponse = await invokeBookRenderFunction(
+                    bookVersionId: record.bookId,
+                    expectedUserId: firebaseUserId
+                )
+                guard PendingBookSyncOwnershipPolicy.canMutate(
+                    expectedUserId: firebaseUserId,
+                    currentUserId: Auth.auth().currentUser?.uid
+                ) else { return }
+                let renderOk = BookRenderCompletionPolicy.isComplete(
+                    status: renderResponse?.status,
+                    pdfURL: renderResponse?.pdfURL
+                )
+                if renderOk {
+                    do {
+                        try StorybookLocalStore.promotePendingBook(
+                            bookVersionID: record.bookId,
+                            profileID: profileID
+                        )
+                        clearPendingBookSync(bookId: record.bookId, firebaseUserId: firebaseUserId)
+                    } catch {
+                        print("[CoverFlow] retryPendingSyncs could not promote rendered bookId=\(record.bookId.prefix(28))… error=\(error.localizedDescription)")
+                    }
+                } else {
+                    incrementPendingBookRenderRetry(bookId: record.bookId, firebaseUserId: firebaseUserId)
                 }
                 continue
             }
             guard let book = localStorybookMatchingPending(bookId: record.bookId, profileID: profileID) else {
                 continue
             }
+            guard PendingBookSyncOwnershipPolicy.canMutate(
+                expectedUserId: firebaseUserId,
+                currentUserId: Auth.auth().currentUser?.uid
+            ) else { return }
             let synced = await syncBook(book, bookId: record.bookId, renderedPageImages: nil, coverInputs: nil)
+            guard PendingBookSyncOwnershipPolicy.canMutate(
+                expectedUserId: firebaseUserId,
+                currentUserId: Auth.auth().currentUser?.uid
+            ) else { return }
             if synced {
-                try? StorybookLocalStore.promotePendingBook(
-                    bookVersionID: record.bookId,
-                    profileID: profileID
-                )
+                do {
+                    try StorybookLocalStore.promotePendingBook(
+                        bookVersionID: record.bookId,
+                        profileID: profileID
+                    )
+                } catch {
+                    registerPendingBookSync(
+                        bookId: record.bookId,
+                        profileId: record.profileId,
+                        firebaseUserId: firebaseUserId
+                    )
+                    print("[CoverFlow] retryPendingSyncs restored recovery row after promotion failed bookId=\(record.bookId.prefix(28))… error=\(error.localizedDescription)")
+                }
             }
         }
     }
@@ -1022,9 +1223,36 @@ final class FirestoreSyncService {
             // Build canonical version record first.
             let syncStart = Date()
             let baseRecord = BookVersionRecordFactory.fromPersistable(book, bookVersionId: bookId)
+            let existingSnapshot = try? await bookRef.getDocument()
+            let existingCoverRevision = existingSnapshot?.data().flatMap(BookVersionRecord.fromFirestoreData)?.coverArtRevision
             let isLandscapeTrim = baseRecord.pageWidth > baseRecord.pageHeight
             var coverStoragePath: String?
             var coverURL: String?
+
+            // Relaunch recovery must reuse a cover that already reached Storage. The
+            // previous attempt may have failed before the Firestore record was written.
+            if renderedPageImages == nil, renderedPageProvider == nil, coverPDFOverride == nil {
+                let expectedPath = "users/\(userId)/bookVersions/\(bookId)/cover.pdf"
+                if let freshURL = try? await StorageService.shared.freshDownloadURL(
+                    forStoragePath: expectedPath
+                ) {
+                    coverStoragePath = expectedPath
+                    coverURL = freshURL.absoluteString
+                    print("[CoverFlow] syncBook reusing uploaded cover bookId=\(bookId.prefix(28))…")
+                }
+            }
+            let firstRenderedIllustration: () async -> UIImage? = {
+                guard let index = baseRecord.pages.firstIndex(where: { $0.type == "illustration" }) else {
+                    return nil
+                }
+                if let renderedPageImages, index < renderedPageImages.count {
+                    return renderedPageImages[index]
+                }
+                if let renderedPageProvider {
+                    return await renderedPageProvider(index)
+                }
+                return nil
+            }
 
             if let coverPDFOverride {
                 let result = try await StorageService.shared.uploadBookCoverPDF(
@@ -1097,15 +1325,8 @@ final class FirestoreSyncService {
 
             // Landscape (kids) fallback: first interior illustration as cover when Gemini path did not produce `coverURL`.
             // Without this, `isBookOrderable` stays false on device (PDF can still render) while simulator often succeeds on Gemini.
-            if isLandscapeTrim, coverStoragePath == nil, let renderedPageImages {
-                let firstIllustration: UIImage? = {
-                    for (index, page) in baseRecord.pages.enumerated() {
-                        if page.type == "illustration", index < renderedPageImages.count {
-                            return renderedPageImages[index]
-                        }
-                    }
-                    return nil
-                }()
+            if isLandscapeTrim, coverStoragePath == nil {
+                let firstIllustration = await firstRenderedIllustration()
                 let trimmedDisplay = book.bookDisplayTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let firstPageTitle = book.pageItems.first?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let resolvedTitle: String? = {
@@ -1216,15 +1437,8 @@ final class FirestoreSyncService {
             }
 
             // Portrait fallback: interior illustration as front art — native title overlay remains for readability (no AI title).
-            if !isLandscapeTrim, coverStoragePath == nil, let renderedPageImages {
-                let firstIllustration: UIImage? = {
-                    for (index, page) in baseRecord.pages.enumerated() {
-                        if page.type == "illustration", index < renderedPageImages.count {
-                            return renderedPageImages[index]
-                        }
-                    }
-                    return nil
-                }()
+            if !isLandscapeTrim, coverStoragePath == nil {
+                let firstIllustration = await firstRenderedIllustration()
                 let trimmedDisplay = book.bookDisplayTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let firstPageTitle = book.pageItems.first?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let resolvedTitle: String? = {
@@ -1414,7 +1628,10 @@ final class FirestoreSyncService {
                 pdfPageCount: nil,
                 coverStoragePath: coverStoragePath,
                 coverURL: coverURL,
-                coverArtRevision: nil,
+                coverArtRevision: CoverArtRevisionPolicy.next(
+                    existingRevision: existingCoverRevision,
+                    hasCover: coverStoragePath != nil
+                ),
                 syncedAt: Date(),
                 renderStatus: BookRenderStatus.pending.rawValue,
                 renderedAt: nil,
@@ -1450,16 +1667,23 @@ final class FirestoreSyncService {
             }
             
             // Keep `pendingBookSync` until the server PDF job is actually triggered (or we record a render retry).
-            let renderResponse = await invokeBookRenderFunction(bookVersionId: bookId)
-            if renderResponse != nil {
-                clearPendingBookSync(bookId: bookId)
+            let renderResponse = await invokeBookRenderFunction(
+                bookVersionId: bookId,
+                expectedUserId: userId
+            )
+            if BookRenderCompletionPolicy.isComplete(
+                status: renderResponse?.status,
+                pdfURL: renderResponse?.pdfURL
+            ) {
+                clearPendingBookSync(bookId: bookId, firebaseUserId: userId)
             } else {
-                incrementPendingBookRenderRetry(bookId: bookId)
+                incrementPendingBookRenderRetry(bookId: bookId, firebaseUserId: userId)
             }
             
             print("✅ Synced canonical book version \(bookId.prefix(28))… to Firebase with \(uploadedPages.count) pages and \(totalPngBytes) PNG bytes (layout: \(Int(baseRecord.pageWidth))x\(Int(baseRecord.pageHeight))pt)")
             return true
         } catch {
+            incrementPendingBookRenderRetry(bookId: bookId, firebaseUserId: userId)
             print("[CoverFlow] syncBook ERROR bookId=\(bookId.prefix(28))… — \(error.localizedDescription)")
             print("❌ Failed to sync book to Firebase: \(error)")
             return false
@@ -1485,23 +1709,37 @@ final class FirestoreSyncService {
             let drawWidth = size.width - (margin * 2)
 
             if let title, !title.isEmpty {
+                let font = UIFont.systemFont(ofSize: size.height * 0.045, weight: .semibold)
                 let attrs: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: size.height * 0.045, weight: .semibold),
+                    .font: font,
                     .foregroundColor: UIColor.black
                 ]
-                let rect = CGRect(x: margin, y: y, width: drawWidth, height: size.height * 0.12)
+                let titleHeight = FallbackTextPageLayout.measuredHeight(
+                    text: title,
+                    width: drawWidth,
+                    font: font,
+                    maximumHeight: size.height * 0.18
+                )
+                let rect = CGRect(x: margin, y: y, width: drawWidth, height: titleHeight)
                 title.draw(in: rect, withAttributes: attrs)
-                y += size.height * 0.085
+                y += titleHeight + (size.height * 0.018)
             }
 
             if let subtitle, !subtitle.isEmpty {
+                let font = UIFont.systemFont(ofSize: size.height * 0.028, weight: .regular)
                 let attrs: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: size.height * 0.028, weight: .regular),
+                    .font: font,
                     .foregroundColor: UIColor.darkGray
                 ]
-                let rect = CGRect(x: margin, y: y, width: drawWidth, height: size.height * 0.08)
+                let subtitleHeight = FallbackTextPageLayout.measuredHeight(
+                    text: subtitle,
+                    width: drawWidth,
+                    font: font,
+                    maximumHeight: size.height * 0.12
+                )
+                let rect = CGRect(x: margin, y: y, width: drawWidth, height: subtitleHeight)
                 subtitle.draw(in: rect, withAttributes: attrs)
-                y += size.height * 0.075
+                y += subtitleHeight + (size.height * 0.022)
             }
 
             let bodyStyle = NSMutableParagraphStyle()
@@ -1625,15 +1863,22 @@ final class FirestoreSyncService {
     /// Triggers server-side PDF packaging from already uploaded PNG pages.
     func invokeBookRenderFunction(
         bookVersionId: String,
-        forceRegenerate: Bool = false
+        forceRegenerate: Bool = false,
+        expectedUserId: String? = nil
     ) async -> BookRenderFunctionResponse? {
-        await invokeBookRenderFunction(bookVersionId: bookVersionId, forceRegenerate: forceRegenerate, didRetryCoverRepair: false)
+        await invokeBookRenderFunction(
+            bookVersionId: bookVersionId,
+            forceRegenerate: forceRegenerate,
+            didRetryCoverRepair: false,
+            expectedUserId: expectedUserId
+        )
     }
 
     private func invokeBookRenderFunction(
         bookVersionId: String,
         forceRegenerate: Bool,
-        didRetryCoverRepair: Bool
+        didRetryCoverRepair: Bool,
+        expectedUserId: String?
     ) async -> BookRenderFunctionResponse? {
         guard let functionURL = bookRenderFunctionURL else {
             print("⚠️ BOOK_RENDER_FUNCTION_URL missing in Info.plist, skipping cloud PDF trigger")
@@ -1643,9 +1888,13 @@ final class FirestoreSyncService {
             print("⚠️ Cannot trigger render - user not signed in")
             return nil
         }
+        guard expectedUserId == nil || user.uid == expectedUserId else { return nil }
 
         do {
             let idToken = try await user.getIDToken()
+            guard expectedUserId == nil || Auth.auth().currentUser?.uid == expectedUserId else {
+                return nil
+            }
             var request = URLRequest(url: functionURL)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1667,12 +1916,14 @@ final class FirestoreSyncService {
                 print("⚠️ Render function 409 (missing cover / precondition); repairing cover then retrying once")
                 _ = await ensureCoverDesignExistsIfMissing(
                     bookVersionId: bookVersionId,
-                    respectSessionBudget: false
+                    respectSessionBudget: false,
+                    expectedUserId: expectedUserId
                 )
                 return await invokeBookRenderFunction(
                     bookVersionId: bookVersionId,
                     forceRegenerate: forceRegenerate,
-                    didRetryCoverRepair: true
+                    didRetryCoverRepair: true,
+                    expectedUserId: expectedUserId
                 )
             }
             guard (200...299).contains(http.statusCode) else {
@@ -1723,7 +1974,8 @@ final class FirestoreSyncService {
 
             var updated = 0
             for record in candidates {
-                if await invokeBookRenderFunction(bookVersionId: record.bookVersionId) != nil {
+                let response = await invokeBookRenderFunction(bookVersionId: record.bookVersionId)
+                if BookRenderCompletionPolicy.isComplete(status: response?.status, pdfURL: response?.pdfURL) {
                     updated += 1
                 }
             }
@@ -1751,7 +2003,8 @@ final class FirestoreSyncService {
                 if record.pages.contains(where: { $0.renderedPageURL == nil }) ||
                     record.renderStatus != BookRenderStatus.rendered.rawValue ||
                     record.pdfURL == nil {
-                    if await invokeBookRenderFunction(bookVersionId: record.bookVersionId) != nil {
+                    let response = await invokeBookRenderFunction(bookVersionId: record.bookVersionId)
+                    if BookRenderCompletionPolicy.isComplete(status: response?.status, pdfURL: response?.pdfURL) {
                         updated += 1
                     }
                 }
@@ -1878,22 +2131,60 @@ final class FirestoreSyncService {
     /// - Parameter respectSessionBudget: When `true`, gallery-style auto-heal throttles repeated work per `bookVersionId` per app session.
     func ensureCoverDesignExistsIfMissing(
         bookVersionId: String,
-        respectSessionBudget: Bool = true
+        respectSessionBudget: Bool = true,
+        expectedUserId: String? = nil
     ) async -> Bool {
         guard let userId = Auth.auth().currentUser?.uid else { return false }
+        guard expectedUserId == nil || userId == expectedUserId else { return false }
         let docRef = db.collection("users").document(userId).collection("bookVersions").document(bookVersionId)
         do {
             let snapshot = try await docRef.getDocument()
             guard snapshot.exists, let data = snapshot.data(), let record = BookVersionRecord.fromFirestoreData(data) else {
                 return false
             }
-            let trimmed = record.coverURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !trimmed.isEmpty {
+            if StorybookCloudApplyPolicy.hasPrintCoverArtifact(record) {
+                return true
+            }
+            if let storagePath = record.coverStoragePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !storagePath.isEmpty,
+               storagePath.lowercased().hasSuffix("cover.pdf"),
+               let freshURL = try? await StorageService.shared.freshDownloadURL(forStoragePath: storagePath) {
+                try await docRef.setData([
+                    "coverURL": freshURL.absoluteString,
+                    "syncedAt": FieldValue.serverTimestamp()
+                ], merge: true)
                 return true
             }
             if respectSessionBudget, !canConsumeCoverHealSessionAttempt(for: bookVersionId) {
                 print("⚠️ cover heal session budget hit for id=\(bookVersionId.prefix(20))… — skipping")
                 return false
+            }
+            let startedRepair = coverRepairLock.withLock {
+                coverRepairsInFlight.insert(bookVersionId).inserted
+            }
+            if !startedRepair {
+                print("[CoverFlow] joining cover repair id=\(bookVersionId.prefix(20))…")
+                for _ in 0..<120 {
+                    do {
+                        try await Task.sleep(nanoseconds: 1_000_000_000)
+                    } catch {
+                        return false
+                    }
+                    if let updated = await fetchBookVersion(bookVersionId: bookVersionId),
+                       StorybookCloudApplyPolicy.hasPrintCoverArtifact(updated) {
+                        return true
+                    }
+                    let stillRunning = coverRepairLock.withLock {
+                        coverRepairsInFlight.contains(bookVersionId)
+                    }
+                    if !stillRunning { return false }
+                }
+                return false
+            }
+            defer {
+                coverRepairLock.withLock {
+                    coverRepairsInFlight.remove(bookVersionId)
+                }
             }
             return await regenerateCoverDesign(for: record, userId: userId)
         } catch {
@@ -2413,7 +2704,7 @@ final class FirestoreSyncService {
         } catch {
             return .error(error.localizedDescription)
         }
-        clearPendingBookSync(bookId: bookId)
+        clearPendingBookSync(bookId: bookId, firebaseUserId: userId)
         print("🗑️ deleteBookVersion completed: \(bookId.prefix(32))…")
         return .deleted
     }

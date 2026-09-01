@@ -271,8 +271,10 @@ struct SettingsView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
                     .padding(.bottom, 100)
+                    .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth)
                 }
             }
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth)
 
             if isDeletingAccount {
                 Color.black.opacity(0.18)
@@ -457,7 +459,7 @@ struct SettingsView: View {
             Spacer()
             Spacer()
         }
-        .presentationDetents([.height(320)])
+        .adaptiveSheetDetents(preferredHeight: 320)
         .presentationDragIndicator(.visible)
         .onDisappear {
             devKey = ""

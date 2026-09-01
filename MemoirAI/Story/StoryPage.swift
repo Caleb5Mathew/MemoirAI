@@ -187,6 +187,7 @@ struct StoryPage: View {
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
     @Environment(\.storybookScreenEntry) private var storybookScreenEntry
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var userRace: String = ""
     @StateObject private var subscriptionManager = RCSubscriptionManager.shared
     
@@ -792,7 +793,7 @@ struct StoryPage: View {
                 forProfileID: currentProfileID,
                 profileName: profileVM.selectedProfile.name,
                 overridePageCount: finalPageCount,
-                profileEthnicity: profileVM.selectedProfile.ethnicity
+                profileEthnicity: userRace
             )
 
             // Cloud generation: `generateStorybook` returns immediately after
@@ -899,7 +900,7 @@ struct StoryPage: View {
                     showCoverEditor = true
                 }
             )
-            .presentationDetents([PresentationDetent.height(196)])
+            .adaptiveSheetDetents(preferredHeight: 196)
             .presentationDragIndicator(Visibility.visible)
         }
         .onChange(of: vm.coverPanelEditing) { oldVal, newVal in
@@ -983,36 +984,68 @@ struct StoryPage: View {
     
     @ViewBuilder
     private func makeMainContent() -> some View {
-        ZStack {
-            localColors.softCream
-                .ignoresSafeArea()
-            
-            VStack(spacing: 0) {
-                makeHeader()
-                makeStorybookContentArea()
-                makeBottomActionArea()
-            }
-            .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: 5)
+        GeometryReader { geometry in
+            let usesCompactChrome = AdaptiveLayoutPolicy.usesCompactVerticalChrome(
+                width: geometry.size.width,
+                height: geometry.size.height,
+                verticalSizeClass: verticalSizeClass
+            )
+
+            ZStack {
+                localColors.softCream
+                    .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    makeHeader(usesCompactChrome: usesCompactChrome)
+                    makeStorybookContentArea()
+                    makeBottomActionArea(usesCompactChrome: usesCompactChrome)
+                }
+                .safeAreaInset(edge: .bottom) {
+                    Color.clear.frame(height: usesCompactChrome ? 0 : 5)
+                }
             }
         }
     }
     
     @ViewBuilder
-    private func makeHeader() -> some View {
-        ZStack(alignment: .top) {
-            HStack(alignment: .top) {
-                makeBackButton()
-                Spacer()
-                makeHeaderButtons()
-            }
+    private func makeHeader(usesCompactChrome: Bool) -> some View {
+        if usesCompactChrome {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    makeBackButton()
 
-            makeTitleSection()
-                .frame(maxWidth: 250, alignment: .top)
+                    Text("Your Storybook")
+                        .font(.system(size: 21, weight: .bold, design: .serif))
+                        .foregroundColor(localColors.defaultBlack.opacity(0.8))
+                        .lineLimit(1)
+
+                    Spacer(minLength: 4)
+                    makeHeaderButtons(horizontal: true)
+                }
+
+                HStack(spacing: 8) {
+                    makeBackButton()
+                    Spacer(minLength: 0)
+                    makeHeaderButtons(horizontal: true)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+        } else {
+            ZStack(alignment: .top) {
+                HStack(alignment: .top) {
+                    makeBackButton()
+                    Spacer()
+                    makeHeaderButtons(horizontal: false)
+                }
+
+                makeTitleSection()
+                    .frame(maxWidth: 250, alignment: .top)
+            }
+            .padding(.horizontal)
+            .padding(.top, 5)
+            .padding(.bottom, 10)
         }
-        .padding(.horizontal)
-        .padding(.top, 5)
-        .padding(.bottom, 10)
     }
     
     @ViewBuilder
@@ -1059,8 +1092,23 @@ struct StoryPage: View {
     }
     
     @ViewBuilder
-    private func makeHeaderButtons() -> some View {
-        VStack(spacing: 8) {
+    private func makeHeaderButtons(horizontal: Bool) -> some View {
+        Group {
+            if horizontal {
+                HStack(spacing: 6) {
+                    makeHeaderButtonItems()
+                }
+            } else {
+                VStack(spacing: 8) {
+                    makeHeaderButtonItems()
+                }
+            }
+        }
+        .frame(minWidth: 44)
+    }
+
+    @ViewBuilder
+    private func makeHeaderButtonItems() -> some View {
             if hasGeneratedStorybook, !vm.skippedMemoriesDuringGeneration.isEmpty {
                 Button {
                     showSkippedMemoriesExplanation = true
@@ -1085,8 +1133,6 @@ struct StoryPage: View {
             }
 
             makeGalleryButton()
-        }
-        .frame(minWidth: 44)
     }
 
     /// Opens the same print-order sheet as **Print** (cart + checkout live here).
@@ -1200,7 +1246,7 @@ struct StoryPage: View {
         let bookFrameWidth = scaledWidth
         let bookContentAreaWidth = scaledWidth * 0.92
         let bookContentHeightInsideFrame = scaledHeight * 0.92
-        let verticalPad: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 30 : 20
+        let verticalPad: CGFloat = geo.size.height >= 700 ? 30 : 20
         let bookFrameHeight = bookContentHeightInsideFrame + (verticalPad * 2)
         let bookFrameX = geo.size.width / 2
         // Nudge empty-state card slightly upward so it visually centers with header controls.
@@ -1268,9 +1314,37 @@ struct StoryPage: View {
     }
     
     @ViewBuilder
-    private func makeBottomActionArea() -> some View {
+    private func makeBottomActionArea(usesCompactChrome: Bool) -> some View {
         if hasRequestedGeneration && !vm.pageItems.isEmpty && !vm.isLoading && (!vm.requiresVisualReadyGate || vm.isVisualBookReady) {
-            VStack(spacing: 14) {
+            if usesCompactChrome {
+                HStack(spacing: 10) {
+                    compactStorybookAction(
+                        title: "Edit",
+                        systemImage: "pencil",
+                        filled: false,
+                        action: handleCurrentPageEditTapped
+                    )
+                    compactStorybookAction(
+                        title: "Regenerate",
+                        systemImage: "arrow.clockwise",
+                        filled: false,
+                        action: { showRegenerateConfirmation = true }
+                    )
+                    compactStorybookAction(
+                        title: "Order",
+                        systemImage: isOrderPreparing ? nil : "printer",
+                        filled: true,
+                        showsProgress: isOrderPreparing,
+                        action: orderBookTapped
+                    )
+                    .disabled(isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud || vm.hasUnpublishedBookChanges)
+                    .opacity((isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud || vm.hasUnpublishedBookChanges) ? 0.7 : 1.0)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth)
+            } else {
+                VStack(spacing: 14) {
                 Button(action: handleCurrentPageEditTapped) {
                     HStack(spacing: 7) {
                         Image(systemName: "pencil")
@@ -1334,11 +1408,42 @@ struct StoryPage: View {
                 }
                 .frame(maxWidth: 360)
                 .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+                .padding(.bottom, 20)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
-            .padding(.bottom, 20)
         }
+    }
+
+    private func compactStorybookAction(
+        title: String,
+        systemImage: String?,
+        filled: Bool,
+        showsProgress: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if showsProgress {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.8)
+                } else if let systemImage {
+                    Image(systemName: systemImage)
+                }
+                Text(title)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundColor(filled ? .white : localColors.terracotta)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(filled ? localColors.terracotta : localColors.terracotta.opacity(0.14))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
     }
 
     private func orderBookTapped() {
@@ -2739,7 +2844,7 @@ extension View {
                         },
                         isEditing: vm.isEditingImage(at: index)
                     )
-                    .presentationDetents([PresentationDetent.height(152)])
+                    .adaptiveSheetDetents(preferredHeight: 152)
                     .presentationDragIndicator(Visibility.visible)
                 }
             }
@@ -2821,7 +2926,7 @@ extension View {
             .onAppear {
                 print("🧭 StoryPage lifecycle onAppear; profile=\(profileVM.selectedProfile.id.uuidString.prefix(8))…, hasGenerated=\(vm.hasGeneratedStorybook), hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count), entry=\(storybookScreenEntry)")
                 StorybookSeenTracker.shared.setStoryPageVisible(true)
-                StorybookSeenTracker.shared.consumePendingRouteAsSeen()
+                let routedJobID = StorybookSeenTracker.shared.consumePendingRouteForAttachment()
                 if let bookId = vm.currentBookVersionRecord?.bookVersionId {
                     StorybookSeenTracker.shared.markCompletedSeen(jobId: bookId)
                 }
@@ -2829,7 +2934,8 @@ extension View {
                     let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
                         profileID: profileVM.selectedProfile.id,
                         profileName: profileVM.selectedProfile.name,
-                        profileEthnicity: profileVM.selectedProfile.ethnicity
+                        profileEthnicity: profileVM.selectedProfile.ethnicity,
+                        routedJobID: routedJobID
                     )
                     if resuming {
                         hasRequestedGeneration.wrappedValue = true

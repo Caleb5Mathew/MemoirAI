@@ -67,6 +67,7 @@ struct MemoirView: View {
                 allChaptersTitle
                 chaptersGrid
             }
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
             .padding(.bottom, 100)
         }
         .background(colors.softCream.ignoresSafeArea())

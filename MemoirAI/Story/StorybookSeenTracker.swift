@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import Combine
 import UIKit
 
 /// Seen-state for storybook cloud jobs, in two scopes:
@@ -15,7 +16,7 @@ import UIKit
 /// - In-flight jobs reset per foreground session: reopening the app routes back to a running
 ///   generation, but navigating away while the app stays open is respected.
 @MainActor
-final class StorybookSeenTracker {
+final class StorybookSeenTracker: ObservableObject {
     static let shared = StorybookSeenTracker()
 
     private static let completedSeenKey = "memoirai.storybookCompletedJobsSeen"
@@ -27,7 +28,7 @@ final class StorybookSeenTracker {
     private var seenThisForeground: Set<String> = []
 
     /// True while `StoryPage` is on screen; the auto-route is a no-op then.
-    private(set) var isStoryPageVisible = false
+    @Published private(set) var isStoryPageVisible = false
 
     /// Set just before ContentView pushes the storybook route; consumed by `StoryPage.onAppear`
     /// so a job only counts as seen once the destination actually appeared.
@@ -81,16 +82,15 @@ final class StorybookSeenTracker {
         pendingRoute = (jobId, isComplete)
     }
 
-    /// Called from `StoryPage.onAppear`; marks the routed-to job as seen now that the
-    /// user is actually looking at it.
-    func consumePendingRouteAsSeen() {
-        guard let pending = pendingRoute else { return }
+    /// Returns the exact job selected by the router. In-flight jobs count as seen when
+    /// the screen appears; completed jobs count only after their canonical book loads.
+    func consumePendingRouteForAttachment() -> String? {
+        guard let pending = pendingRoute else { return nil }
         pendingRoute = nil
-        if pending.isComplete {
-            markCompletedSeen(jobId: pending.jobId)
-        } else {
+        if !pending.isComplete {
             markSeenThisForeground(jobId: pending.jobId)
         }
+        return pending.jobId
     }
 
     // MARK: - Lifecycle

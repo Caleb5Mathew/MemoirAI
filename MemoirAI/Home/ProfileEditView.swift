@@ -86,6 +86,7 @@ struct ProfileEditView: View {
                 navBar
                 scrollContent
             }
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
         }
         .onAppear {
             withAnimation(.easeOut(duration: 0.45)) { appeared = true }

@@ -21,6 +21,38 @@ enum StorybookJobFinalizationPolicy {
     }
 }
 
+enum StorybookCloudJobResumeAction: Equatable {
+    case waitForCloud
+    case finalizeCloudResults
+    case loadCompletedBook
+    case showFailure
+
+    static func action(for status: String) -> StorybookCloudJobResumeAction {
+        switch status {
+        case "aiComplete":
+            return .finalizeCloudResults
+        case "complete":
+            return .loadCompletedBook
+        case "failed", "dismissedFailed":
+            return .showFailure
+        default:
+            return .waitForCloud
+        }
+    }
+}
+
+enum GlobalStorybookBannerVisibilityPolicy {
+    static func shouldShow(hasActiveJob: Bool, isStoryPageVisible: Bool, isDismissed: Bool) -> Bool {
+        hasActiveJob && !isStoryPageVisible && !isDismissed
+    }
+}
+
+enum StorybookProfileSetupPolicy {
+    static func initialEthnicity() -> String {
+        ""
+    }
+}
+
 enum StorybookGenerationBatchPolicy {
     static let maximumPagesPerBook = 9
 

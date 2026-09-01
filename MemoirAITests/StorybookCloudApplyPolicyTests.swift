@@ -96,6 +96,57 @@ struct StorybookCloudApplyPolicyTests {
         #expect(StorybookCloudApplyPolicy.isCoverPresentOrNotInStuckRenderedHole(r) == true)
     }
 
+    @Test func rasterCoverDoesNotSatisfyPrintCoverReadiness() {
+        let r = makeRecord(
+            pageCount: 1,
+            pages: [],
+            coverURL: "https://x/cover.png",
+            renderStatus: BookRenderStatus.rendered.rawValue
+        )
+
+        #expect(StorybookCloudApplyPolicy.hasPrintCoverArtifact(r) == false)
+        #expect(StorybookCloudApplyPolicy.isCoverStuckFinalizingState(r) == true)
+    }
+
+    @Test func printReadinessRequiresCompletePagesInteriorPDFAndPrintCover() {
+        let page = BookVersionPageRecord(
+            pageIndex: 0,
+            type: "text",
+            memoryId: nil,
+            memoryCreatedAt: nil,
+            title: nil,
+            subtitle: nil,
+            textContent: "Story",
+            imageStoragePath: nil,
+            imageURL: nil,
+            renderedPageStoragePath: "users/u/book/page.png",
+            renderedPageURL: "https://x/page.png",
+            renderedPageFormat: "png",
+            renderedPixelWidth: 100,
+            renderedPixelHeight: 100,
+            renderedChecksum: "hash",
+            renderedBytes: 100,
+            createdAt: Date()
+        )
+        let ready = makeRecord(
+            pageCount: 1,
+            pages: [page],
+            coverStoragePath: "users/u/book/cover.pdf",
+            coverURL: "https://x/cover.pdf",
+            pdfURL: "https://x/book.pdf",
+            renderStatus: BookRenderStatus.rendered.rawValue
+        )
+        #expect(StorybookCloudApplyPolicy.isPrintReady(ready))
+        #expect(!StorybookCloudApplyPolicy.isPrintReady(makeRecord(
+            pageCount: 1,
+            pages: [page],
+            coverStoragePath: "users/u/book/cover.pdf",
+            coverURL: "https://x/cover.pdf",
+            pdfURL: nil,
+            renderStatus: BookRenderStatus.rendered.rawValue
+        )))
+    }
+
     @Test func whenRecordIncomplete_skipsByPolicy() {
         let t = Date(timeIntervalSince1970: 1_800_000_000)
         let r = makeRecord(
@@ -120,7 +171,9 @@ private func makeRecord(
     pageCount: Int,
     pages: [BookVersionPageRecord],
     createdAt: Date = Date(),
+    coverStoragePath: String? = nil,
     coverURL: String? = nil,
+    pdfURL: String? = nil,
     renderStatus: String = "pending"
 ) -> BookVersionRecord {
     BookVersionRecord(
@@ -139,9 +192,9 @@ private func makeRecord(
         backCoverPitch: "P",
         coverFontPreset: nil,
         pdfStoragePath: nil,
-        pdfURL: nil,
+        pdfURL: pdfURL,
         pdfPageCount: nil,
-        coverStoragePath: nil,
+        coverStoragePath: coverStoragePath,
         coverURL: coverURL,
         coverArtRevision: nil,
         syncedAt: nil,

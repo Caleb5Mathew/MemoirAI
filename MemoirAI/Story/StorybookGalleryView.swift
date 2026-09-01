@@ -167,6 +167,7 @@ struct StorybookGalleryView: View {
                     }
                 }
             }
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.galleryMaxWidth)
 
             if isOpeningSelection {
                 GalleryBookLoadingOverlay()
@@ -626,7 +627,7 @@ private struct BookCardItem: View {
     }
 
     private var isCoverPending: Bool {
-        book.renderStatus == "rendered" && (book.coverURL?.isEmpty ?? true)
+        book.renderStatus == "rendered" && book.printCoverPDFURL == nil
     }
 
     private func isLikelyPDF(_ url: URL) -> Bool {
@@ -851,6 +852,14 @@ private struct StorybookReaderView: View, Identifiable {
     private let textPrimary = Color(red: 0.2, green: 0.2, blue: 0.2)
     private let textSecondary = Color(red: 0.5, green: 0.5, blue: 0.5)
     private let backgroundColor = Color(red: 0.12, green: 0.12, blue: 0.14)
+    private var coverAspectRatio: CGFloat {
+        let fallback: CGFloat = book.orientation.lowercased() == "landscape" ? 11 / 8.5 : 8.5 / 11
+        return AdaptiveLayoutPolicy.validatedAspectRatio(
+            width: book.pageWidth,
+            height: book.pageHeight,
+            fallback: fallback
+        )
+    }
 
     private enum ReaderSlot {
         case standaloneCover
@@ -945,7 +954,7 @@ private struct StorybookReaderView: View, Identifiable {
                         
                         Spacer()
                         
-                        if book.renderStatus == "rendered", book.pdfURL != nil, book.coverURL != nil {
+                        if book.renderStatus == "rendered", book.pdfURL != nil, book.printCoverPDFURL != nil {
                             Button(action: { showOrderSheet = true }) {
                                 Text("Order Print")
                                     .font(.system(size: 13, weight: .semibold))
@@ -1028,8 +1037,8 @@ private struct StorybookReaderView: View, Identifiable {
                             .progressViewStyle(.circular)
                             .tint(.white)
                     }
-                    .frame(width: usableW, height: usableH * 0.92)
-                    .clipped()
+                    .aspectRatio(coverAspectRatio, contentMode: .fit)
+                    .frame(maxWidth: usableW, maxHeight: usableH * 0.92)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .shadow(color: Color.black.opacity(0.45), radius: 24, x: 0, y: 12)
                 } else if let url = rasterCoverURL {

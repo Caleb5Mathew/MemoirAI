@@ -9,6 +9,7 @@
 
 import Foundation
 import Testing
+import UIKit
 @testable import MemoirAI
 
 /// Both tests read/write `UserDefaults.standard` under the same key as production; run serially to avoid parallel-test races.
@@ -27,6 +28,7 @@ struct BookVersionPersistOrderingTests {
         let profileId: String
         let queuedAt: Date
         var renderRetryCount: Int
+        var lastAttemptAt: Date?
     }
 
     private struct PendingDeletionRow: Codable {
@@ -84,6 +86,7 @@ struct BookVersionPersistOrderingTests {
         var rows = try JSONDecoder().decode([PendingRowFull].self, from: data)
         #expect(rows.count == 1)
         rows[0].renderRetryCount = 4
+        rows[0].lastAttemptAt = Date(timeIntervalSince1970: 1234)
         let patched = try JSONEncoder().encode(rows)
         suite.set(patched, forKey: Self.key)
         FirestoreSyncService.shared.registerPendingBookSyncForProfile(
@@ -95,6 +98,88 @@ struct BookVersionPersistOrderingTests {
         rows = try JSONDecoder().decode([PendingRowFull].self, from: data)
         let row = try #require(rows.first { $0.bookId == book })
         #expect(row.renderRetryCount == 4)
+        #expect(row.lastAttemptAt == Date(timeIntervalSince1970: 1234))
+    }
+
+    @Test func pendingBookRetryPolicy_backsOffRepeatedFailures() {
+        #expect(PendingBookSyncRetryPolicy.delay(forRetryCount: 0) == 0)
+        #expect(PendingBookSyncRetryPolicy.delay(forRetryCount: 1) == 15 * 60)
+        #expect(PendingBookSyncRetryPolicy.delay(forRetryCount: 2) == 60 * 60)
+        #expect(PendingBookSyncRetryPolicy.delay(forRetryCount: 3) == 6 * 60 * 60)
+        #expect(PendingBookSyncRetryPolicy.delay(forRetryCount: 20) == 24 * 60 * 60)
+    }
+
+    @Test func pendingBookRetryPolicy_retriesOnlyWhenDue() {
+        let attempt = Date(timeIntervalSince1970: 10_000)
+        #expect(PendingBookSyncRetryPolicy.shouldRetry(retryCount: 1, lastAttemptAt: nil, now: attempt))
+        #expect(!PendingBookSyncRetryPolicy.shouldRetry(
+            retryCount: 1,
+            lastAttemptAt: attempt,
+            now: attempt.addingTimeInterval(899)
+        ))
+        #expect(PendingBookSyncRetryPolicy.shouldRetry(
+            retryCount: 1,
+            lastAttemptAt: attempt,
+            now: attempt.addingTimeInterval(900)
+        ))
+    }
+
+    @Test func pendingBookRecoveryPolicy_observesCloudCompletionBeforeBackoff() {
+        let attempt = Date(timeIntervalSince1970: 10_000)
+        let withinLongestBackoff = attempt.addingTimeInterval(60)
+
+        #expect(PendingBookSyncRetryPolicy.recoveryAction(
+            cloudIsPrintReady: true,
+            retryCount: 20,
+            lastAttemptAt: attempt,
+            now: withinLongestBackoff
+        ) == .acceptCloudCompletion)
+        #expect(PendingBookSyncRetryPolicy.recoveryAction(
+            cloudIsPrintReady: false,
+            retryCount: 20,
+            lastAttemptAt: attempt,
+            now: withinLongestBackoff
+        ) == .deferMutations)
+        #expect(PendingBookSyncRetryPolicy.recoveryAction(
+            cloudIsPrintReady: false,
+            retryCount: 1,
+            lastAttemptAt: attempt,
+            now: attempt.addingTimeInterval(900)
+        ) == .attemptMutations)
+    }
+
+    @Test func pendingBookOwnershipPolicy_rejectsAccountSwitches() {
+        #expect(PendingBookSyncOwnershipPolicy.canMutate(
+            expectedUserId: "user-a",
+            currentUserId: "user-a"
+        ))
+        #expect(!PendingBookSyncOwnershipPolicy.canMutate(
+            expectedUserId: "user-a",
+            currentUserId: "user-b"
+        ))
+        #expect(!PendingBookSyncOwnershipPolicy.canMutate(
+            expectedUserId: "user-a",
+            currentUserId: nil
+        ))
+    }
+
+    @Test func bookRenderCompletionPolicy_requiresRenderedPDFArtifact() {
+        #expect(!BookRenderCompletionPolicy.isComplete(status: "rendering", pdfURL: "https://x/book.pdf"))
+        #expect(!BookRenderCompletionPolicy.isComplete(status: "rendered", pdfURL: nil))
+        #expect(!BookRenderCompletionPolicy.isComplete(status: "rendered", pdfURL: "  "))
+        #expect(BookRenderCompletionPolicy.isComplete(status: "rendered", pdfURL: "https://x/book.pdf"))
+    }
+
+    @Test func coverArtRevisionPolicy_incrementsSamePathRegeneration() {
+        #expect(CoverArtRevisionPolicy.next(existingRevision: nil, hasCover: true) == 1)
+        #expect(CoverArtRevisionPolicy.next(existingRevision: 4, hasCover: true) == 5)
+        #expect(CoverArtRevisionPolicy.next(existingRevision: 4, hasCover: false) == nil)
+    }
+
+    @Test func storageUploadOwnerPolicyRejectsSignOutAndAccountSwitch() {
+        #expect(StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: "user-a", currentUserID: "user-a"))
+        #expect(!StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: "user-a", currentUserID: "user-b"))
+        #expect(!StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: "user-a", currentUserID: nil))
     }
 
     @MainActor
@@ -169,5 +254,38 @@ struct MemoryOperationSequencerTests {
         await first.value
         await second.value
         #expect(await log.snapshot() == ["first-start", "first-end", "second-start", "second-end"])
+    }
+}
+
+struct PendingSyncRetryGateTests {
+    @Test func claimRejectsDuplicateUntilReleased() async {
+        let gate = PendingSyncRetryGate()
+
+        #expect(await gate.claim("user|profile"))
+        #expect(!(await gate.claim("user|profile")))
+
+        await gate.release("user|profile")
+        #expect(await gate.claim("user|profile"))
+    }
+}
+
+struct FallbackTextPageLayoutTests {
+    @Test func wrappedTitleUsesMoreVerticalSpace() {
+        let font = UIFont.systemFont(ofSize: 28, weight: .semibold)
+        let shortHeight = FallbackTextPageLayout.measuredHeight(
+            text: "A Short Title",
+            width: 500,
+            font: font,
+            maximumHeight: 180
+        )
+        let wrappedHeight = FallbackTextPageLayout.measuredHeight(
+            text: "What type of kid were you? Do you have any memories that best show who you were?",
+            width: 500,
+            font: font,
+            maximumHeight: 180
+        )
+
+        #expect(wrappedHeight > shortHeight)
+        #expect(wrappedHeight <= 180)
     }
 }

@@ -1,7 +1,11 @@
 "use strict";
 
 const assert = require("assert");
-const { computeBookBaseCentsFromLuluLineMake, sumCartLineShippingCents } = require("./merchantPricingMath");
+const {
+  computeBookBaseCentsFromLuluLineMake,
+  sumCartLineShippingCents,
+  unavailablePrintFormatReason
+} = require("./merchantPricingMath");
 
 // Thin book: Lulu make $10 → with 30% margin = $13; floor $29.99 wins
 {
@@ -78,5 +82,9 @@ const { computeBookBaseCentsFromLuluLineMake, sumCartLineShippingCents } = requi
   const total = sumCartLineShippingCents([500, -50, NaN, 300]);
   assert.strictEqual(total, 800);
 }
+
+assert.strictEqual(unavailablePrintFormatReason("kids_hardcover_casewrap"), null);
+assert.ok(unavailablePrintFormatReason("kids_coil_bound"));
+assert.ok(unavailablePrintFormatReason("kids_paperback_perfect"));
 
 console.log("merchantPricingMath.test.js: OK");

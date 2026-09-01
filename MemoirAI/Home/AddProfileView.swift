@@ -37,15 +37,14 @@ struct AddProfileView: View {
             baseBackground
                 .ignoresSafeArea()
 
-            if profileVM.canCreateNewProfile {
-                // ✅ Can create profile - show normal UI
-                profileCreationView
-            } else {
-                // ❌ Cannot create profile - show subscription required
-                subscriptionRequiredView
+            GeometryReader { geometry in
+                if profileVM.canCreateNewProfile {
+                    profileCreationView(minHeight: geometry.size.height)
+                } else {
+                    subscriptionRequiredView(minHeight: geometry.size.height)
+                }
             }
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
         .onChange(of: photoSelection) { oldValue, newValue in
             guard let item = newValue else { return }
             loadPhotoData(from: item)
@@ -90,8 +89,9 @@ struct AddProfileView: View {
     }
 
     // ✨ NEW: Subscription required view
-    private var subscriptionRequiredView: some View {
-        VStack(spacing: 32) {
+    private func subscriptionRequiredView(minHeight: CGFloat) -> some View {
+        ScrollView {
+            VStack(spacing: 32) {
             Spacer()
             
             // Icon
@@ -152,12 +152,17 @@ struct AddProfileView: View {
                 .foregroundColor(.gray)
             }
             .padding(.bottom, 20)
+            }
+            .frame(minHeight: minHeight)
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
         }
+        .scrollBounceBehavior(.basedOnSize)
     }
     
     // ✅ Normal profile creation view
-    private var profileCreationView: some View {
-        VStack(spacing: 24) {
+    private func profileCreationView(minHeight: CGFloat) -> some View {
+        ScrollView {
+            VStack(spacing: 24) {
             // Title
             VStack(spacing: 6) {
                 Text("Add a New Profile")
@@ -264,7 +269,7 @@ struct AddProfileView: View {
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 24)
 
             // Save Button (always enabled)
             Button(action: saveProfile) {
@@ -286,7 +291,12 @@ struct AddProfileView: View {
             .fontWeight(.light)
             .foregroundColor(.gray)
             .padding(.bottom, 20)
+            }
+            .frame(minHeight: minHeight)
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
         }
+        .scrollDismissesKeyboard(.interactively)
+        .scrollBounceBehavior(.basedOnSize)
     }
 
     private func loadPhotoData(from item: PhotosPickerItem) {
@@ -374,7 +384,7 @@ struct AddProfileView: View {
             Spacer()
             Spacer()
         }
-        .presentationDetents([.height(320)])
+        .adaptiveSheetDetents(preferredHeight: 320)
         .presentationDragIndicator(.visible)
         .onDisappear {
             devKey = ""

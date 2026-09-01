@@ -77,7 +77,7 @@ private struct HeadshotPhotoSourceSheet: View {
             .padding(.bottom, 8)
         }
         .padding(.horizontal, 24)
-        .presentationDetents([.height(320)])
+        .adaptiveSheetDetents(preferredHeight: 320)
         .presentationDragIndicator(.visible)
         .fullScreenCover(isPresented: $showImagePicker) {
             ImagePicker(source: pickerSource, allowsCropping: true) { image in
@@ -121,8 +121,7 @@ struct ProfileSetupView: View {
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var subscriptionManager: RCSubscriptionManager
     
-    // NEW: Auto-save using AppStorage
-    @AppStorage("memoirEthnicity") private var savedEthnicity: String = ""
+    // Gender remains a profile preference. Ethnicity is intentionally scoped to one generation.
     @AppStorage("memoirGender") private var savedGender: String = ""
     
     // Dismiss
@@ -252,12 +251,6 @@ struct ProfileSetupView: View {
                                 .textFieldStyle(AppTextFieldStyle())
                                 .accessibilityIdentifier("ethnicityRaceField")
                         }
-                        .onChange(of: race) { newValue in
-                            // Auto-save when user types
-                            savedEthnicity = newValue
-                            // Sync back to profile
-                            syncRaceToProfile(newValue)
-                        }
                         
                         // --- Gender Picker ---
                         Picker("Gender", selection: $selectedGender) {
@@ -322,6 +315,7 @@ struct ProfileSetupView: View {
                     .padding(.horizontal, 40)
                     .padding(.vertical, 30)
                 }
+                .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
             }
         }
         // ── Pick / crop modals ─────────────────────────────
@@ -354,16 +348,9 @@ struct ProfileSetupView: View {
         .onAppear {
             let profile = profileVM.selectedProfile
 
-            // Auto-fill ethnicity from the currently selected profile so users do not re-enter it.
-            // Keep the field editable after hydration.
-            if let profileEthnicity = profile.ethnicity?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !profileEthnicity.isEmpty {
-                race = profileEthnicity
-            } else if race.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      !savedEthnicity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                // Backward-compatible fallback for older users who only have AppStorage values.
-                race = savedEthnicity
-            }
+            // This is optional per generation. Start empty instead of leaking a previous
+            // run's global AppStorage value or silently reusing profile data.
+            race = StorybookProfileSetupPolicy.initialEthnicity()
 
             // Populate gender from profile (takes priority) - MUST happen before setInitialGenderState
             if let profileGender = profile.gender, !profileGender.isEmpty {
@@ -408,26 +395,6 @@ struct ProfileSetupView: View {
         case .other:
             gender = customGender
         }
-    }
-    
-    // Sync race/ethnicity back to profile
-    private func syncRaceToProfile(_ raceValue: String) {
-        let profile = profileVM.selectedProfile
-        let updatedProfile = Profile(
-            id: profile.id,
-            name: profile.name,
-            photoData: profile.photoData,
-            birthdate: profile.birthdate,
-            ethnicity: raceValue.isEmpty ? nil : raceValue,
-            gender: profile.gender,
-            createdAt: profile.createdAt,
-            updatedAt: Date(),
-            childNames: profile.childNames,
-            transcriptionGlossary: profile.transcriptionGlossary,
-            faceDescription: profile.faceDescription,
-            faceDescriptionPhotoHash: profile.faceDescriptionPhotoHash
-        )
-        profileVM.updateSelectedProfile(with: updatedProfile)
     }
     
     // Sync gender back to profile

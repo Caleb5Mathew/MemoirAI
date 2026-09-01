@@ -3,6 +3,8 @@ const { memoryIndexBelongsToUser } = require("./memoryIndexOwnership");
 const { beginAccountDeletion } = require("./accountOperationLock");
 
 const RETAINED_SUBCOLLECTIONS = new Set(["orders", "paidBookCheckouts"]);
+const SHARING_SUBCOLLECTIONS = ["sharedAudioAccess", "accessGrants"];
+const STORAGE_DELETE_ATTEMPTS = 3;
 const MAX_RECENT_AUTH_AGE_SECONDS = 5 * 60;
 const TERMINAL_CHECKOUT_STATUSES = new Set([
   "paid",
@@ -98,18 +100,51 @@ async function deleteMemoryIndexes(db, memoriesRef) {
   }
 }
 
+async function deleteStorageFileSecurely(file) {
+  let lastError;
+  for (let attempt = 0; attempt < STORAGE_DELETE_ATTEMPTS; attempt += 1) {
+    try {
+      await file.delete();
+      return;
+    } catch (error) {
+      if (Number(error?.code || 0) === 404) return;
+      lastError = error;
+    }
+  }
+
+  // Firebase download-token URLs bypass Storage Rules. Revoke that bearer
+  // token before surfacing the deletion failure so a retry remains private.
+  await file.setMetadata({
+    metadata: { firebaseStorageDownloadTokens: null }
+  });
+  throw lastError;
+}
+
+async function deleteStorageFiles(files) {
+  for (let offset = 0; offset < files.length; offset += 20) {
+    await Promise.all(files.slice(offset, offset + 20).map(deleteStorageFileSecurely));
+  }
+}
+
+async function revokeAccountSharing(db, userRef) {
+  const results = await Promise.allSettled(SHARING_SUBCOLLECTIONS.map((collectionName) => (
+    db.recursiveDelete(userRef.collection(collectionName))
+  )));
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure) {
+    throw failure.reason;
+  }
+}
+
+async function deleteAccountAudioStorage(bucket, userId) {
+  const [files] = await bucket.getFiles({ prefix: `users/${userId}/audio/` });
+  await deleteStorageFiles(files);
+}
+
 async function deleteUnretainedStorage(bucket, userId, retainedPaths) {
   const [files] = await bucket.getFiles({ prefix: `users/${userId}/` });
   const deletions = files.filter((file) => !retainedPaths.has(file.name));
-  for (let offset = 0; offset < deletions.length; offset += 20) {
-    await Promise.all(deletions.slice(offset, offset + 20).map(async (file) => {
-      try {
-        await file.delete();
-      } catch (error) {
-        if (Number(error?.code || 0) !== 404) throw error;
-      }
-    }));
-  }
+  await deleteStorageFiles(deletions);
 }
 
 async function deleteAuthUserIfPresent(auth, userId) {
@@ -175,6 +210,7 @@ function createDeleteOwnAccountHandler({
       );
     }
 
+    const userRef = db.collection("users").doc(userId);
     const deletionFields = {
       status: "deleting",
       updatedAt: serverTimestamp()
@@ -189,7 +225,15 @@ function createDeleteOwnAccountHandler({
 
     let authDeletionStarted = false;
     try {
-      const userRef = db.collection("users").doc(userId);
+      // Disable both grant-based and byte-level shared-audio access before the
+      // slower Firestore cleanup. Attempt both even if either operation fails.
+      const accessResults = await Promise.allSettled([
+        revokeAccountSharing(db, userRef),
+        deleteAccountAudioStorage(bucket, userId)
+      ]);
+      const accessFailure = accessResults.find((result) => result.status === "rejected");
+      if (accessFailure) throw accessFailure.reason;
+
       const memoriesRef = userRef.collection("memories");
       await deleteMemoryIndexes(db, memoriesRef);
 
@@ -255,8 +299,12 @@ module.exports = {
   assertRecentAuthentication,
   blockingPendingCheckoutIds,
   createDeleteOwnAccountHandler,
+  deleteAccountAudioStorage,
   deleteMemoryIndexes,
+  deleteStorageFileSecurely,
+  deleteStorageFiles,
   deleteUnretainedStorage,
   findBlockingPendingCheckouts,
+  revokeAccountSharing,
   retainedOrderArtifactPaths
 };

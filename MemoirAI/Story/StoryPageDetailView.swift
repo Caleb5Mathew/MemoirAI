@@ -166,7 +166,7 @@ struct StoryPageDetailView: View {
                     showTitleBlurbEditor = true
                 }
             )
-            .presentationDetents([PresentationDetent.height(196)])
+            .adaptiveSheetDetents(preferredHeight: 196)
             .presentationDragIndicator(Visibility.visible)
         }
         .sheet(isPresented: $showTitleBlurbEditor) {

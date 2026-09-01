@@ -6,7 +6,7 @@
   },
   "main": "index.js",
   "scripts": {
-    "test": "npm run test:merchant-pricing && npm run test:transcription && npm run test:memory-deletion && npm run test:memory-index-ownership && npm run test:account-deletion && npm run test:account-state-guards && npm run test:account-operation-lock && npm run test:admin-authorization && npm run test:book-pdf && npm run test:privacy-logging && npm run test:storybook-logging && npm run test:storybook-failure-privacy && npm run test:storybook-admission && npm run test:storybook-age-prompt && npm run test:back-cover-pitch && npm run test:storybook-provider-deadline && npm run test:retry-deadline && npm run test:lulu-webhook-auth && npm run test:checkout-return && npm run test:order-flow && npm run test:storage-artifact-urls && npm run test:paid-checkout-artifacts && npm run test:fulfillment-incident && npm run test:shared-access-revocation && npm run test:shared-memory-projection",
+    "test": "npm run test:merchant-pricing && npm run test:transcription && npm run test:memory-deletion && npm run test:memory-index-ownership && npm run test:account-deletion && npm run test:account-state-guards && npm run test:account-operation-lock && npm run test:admin-authorization && npm run test:book-pdf && npm run test:privacy-logging && npm run test:storybook-logging && npm run test:storybook-failure-privacy && npm run test:storybook-admission && npm run test:storybook-age-prompt && npm run test:back-cover-pitch && npm run test:storybook-provider-deadline && npm run test:retry-deadline && npm run test:lulu-webhook-auth && npm run test:checkout-return && npm run test:order-flow && npm run test:storage-artifact-urls && npm run test:storage-rules-budget && npm run test:paid-checkout-artifacts && npm run test:fulfillment-incident && npm run test:shared-access-revocation && npm run test:shared-memory-projection",
     "test:privacy-logging": "node privacyLogging.test.js",
     "test:merchant-pricing": "node merchantPricingMath.test.js",
     "test:transcription": "node transcriptionValidation.test.js",
@@ -28,6 +28,7 @@
     "test:checkout-return": "node checkoutReturnVerification.test.js",
     "test:order-flow": "node orderFlowIdempotency.test.js",
     "test:storage-artifact-urls": "node storageArtifactUrls.test.js",
+    "test:storage-rules-budget": "node storageRulesAccessBudget.test.js",
     "test:paid-checkout-artifacts": "node paidCheckoutArtifactGuard.test.js",
     "test:fulfillment-incident": "node fulfillmentIncident.test.js",
     "test:shared-access-revocation": "node sharedAccessRevocation.test.js",

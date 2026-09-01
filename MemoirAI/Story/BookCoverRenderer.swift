@@ -41,22 +41,37 @@ extension CoverFontPreset {
     }
 }
 
-/// Lulu spine width (inches) by page count. Approximates Lulu's casewrap spine table.
+/// Lulu hardcover casewrap spine width (inches) by page count.
+/// Source: Lulu Developer Portal, "How is spine width calculated?"
 func spineWidthInches(forPageCount count: Int) -> CGFloat {
     switch count {
-    case 0..<24: return 0.25
-    case 24..<84: return 0.25
-    case 84..<100: return 0.28
-    case 100..<116: return 0.32
-    case 116..<132: return 0.36
-    case 132..<148: return 0.40
-    case 148..<164: return 0.45
-    case 164..<180: return 0.49
-    case 180..<196: return 0.53
-    case 196..<212: return 0.57
-    case 212..<228: return 0.61
-    case 228..<244: return 0.65
-    default: return min(2.125, 0.25 + CGFloat(count - 24) * 0.004)
+    case ...84: return 0.25
+    case 85...140: return 0.5
+    case 141...168: return 0.625
+    case 169...194: return 0.6875
+    case 195...222: return 0.75
+    case 223...250: return 0.8125
+    case 251...278: return 0.875
+    case 279...306: return 0.9375
+    case 307...334: return 1.0
+    case 335...360: return 1.0625
+    case 361...388: return 1.125
+    case 389...416: return 1.1875
+    case 417...444: return 1.25
+    case 445...472: return 1.3125
+    case 473...500: return 1.375
+    case 501...528: return 1.4375
+    case 529...556: return 1.5
+    case 557...582: return 1.5625
+    case 583...610: return 1.625
+    case 611...638: return 1.6875
+    case 639...666: return 1.75
+    case 667...694: return 1.8125
+    case 695...722: return 1.875
+    case 723...750: return 1.9375
+    case 751...778: return 2.0
+    case 779...799: return 2.0625
+    default: return 2.125
     }
 }
 
@@ -152,6 +167,26 @@ struct BookCoverRenderer {
 
     private static let brandImprintLine = "Made with MemoirAI • memoirai.app"
 
+    static func aspectFillRect(imageSize: CGSize, in bounds: CGRect) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0,
+              bounds.width > 0, bounds.height > 0 else { return bounds }
+        let scale = max(bounds.width / imageSize.width, bounds.height / imageSize.height)
+        let size = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        return CGRect(
+            x: bounds.midX - size.width / 2,
+            y: bounds.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private static func drawAspectFill(_ image: UIImage, in bounds: CGRect, context: CGContext) {
+        context.saveGState()
+        context.clip(to: bounds)
+        image.draw(in: aspectFillRect(imageSize: image.size, in: bounds))
+        context.restoreGState()
+    }
+
     /// Render full flat cover at 300 DPI (Kids template: fixed 24×10.25").
     /// - Parameters:
     ///   - frontCoverArt: AI-generated illustration for front cover (will be scaled to fill front area)
@@ -205,7 +240,7 @@ struct BookCoverRenderer {
             // 2. Back cover art (optional): full bleed on back face + left wrap, before spine/front.
             if let backCoverArt {
                 let backArtRect = CGRect(x: 0, y: 0, width: wrap + backW, height: height)
-                backCoverArt.draw(in: backArtRect)
+                drawAspectFill(backCoverArt, in: backArtRect, context: cgContext)
                 drawBackCoverLegibilityOverlay(in: backPanel, context: cgContext)
             }
 
@@ -216,7 +251,7 @@ struct BookCoverRenderer {
             // 4. Front cover: AI art (full panel including wrap bleed).
             let frontX = spineX + spineW
             let frontRect = CGRect(x: frontX, y: 0, width: frontW + wrap, height: height)
-            frontCoverArt.draw(in: frontRect)
+            drawAspectFill(frontCoverArt, in: frontRect, context: cgContext)
 
             // 5. Back cover: headline + pitch + bottom-right MemoirAI imprint.
             drawBackCoverPanel(in: backPanel, pitch: backCoverPitch, fontPreset: fontPreset, context: cgContext)
@@ -547,7 +582,7 @@ struct BookCoverRenderer {
 
             if let backCoverArt {
                 let backArtRect = CGRect(x: 0, y: 0, width: wrap + faceW, height: height)
-                backCoverArt.draw(in: backArtRect)
+                drawAspectFill(backCoverArt, in: backArtRect, context: cgContext)
                 drawBackCoverLegibilityOverlay(in: backPanel, context: cgContext)
             }
 
@@ -556,7 +591,7 @@ struct BookCoverRenderer {
 
             let frontX = spineX + spinePx
             let frontRect = CGRect(x: frontX, y: 0, width: faceW + wrap, height: height)
-            frontCoverArt.draw(in: frontRect)
+            drawAspectFill(frontCoverArt, in: frontRect, context: cgContext)
 
             drawBackCoverPanel(in: backPanel, pitch: backCoverPitch, fontPreset: fontPreset, context: cgContext)
 
@@ -616,7 +651,7 @@ struct BookCoverRenderer {
 
             if let backCoverArt {
                 let backArtRect = CGRect(x: 0, y: 0, width: wrap + faceW, height: height)
-                backCoverArt.draw(in: backArtRect)
+                drawAspectFill(backCoverArt, in: backArtRect, context: cgContext)
                 drawBackCoverLegibilityOverlay(in: backPanel, context: cgContext)
             }
 
@@ -625,7 +660,7 @@ struct BookCoverRenderer {
 
             let frontX = spineX + spinePx
             let frontRect = CGRect(x: frontX, y: 0, width: faceW + wrap, height: height)
-            frontCoverArt.draw(in: frontRect)
+            drawAspectFill(frontCoverArt, in: frontRect, context: cgContext)
 
             drawBackCoverPanel(in: backPanel, pitch: backCoverPitch, fontPreset: fontPreset, context: cgContext)
 
@@ -718,4 +753,3 @@ extension BookCoverRenderer {
         }
     }
 }
-

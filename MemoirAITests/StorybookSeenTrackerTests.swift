@@ -41,19 +41,19 @@ struct StorybookSeenTrackerTests {
         #expect(!tracker.hasSeenThisForeground(jobId: "job-b"))
     }
 
-    @Test func pendingRouteConsumedAsCompletedSeen() {
+    @Test func completedPendingRouteIsNotSeenUntilBookLoads() {
         let (tracker, defaults, suite) = makeTracker()
         defer { defaults.removePersistentDomain(forName: suite) }
 
         tracker.notePendingRoute(jobId: "job-c", isComplete: true)
         #expect(!tracker.hasSeenCompleted(jobId: "job-c"))
 
-        tracker.consumePendingRouteAsSeen()
-        #expect(tracker.hasSeenCompleted(jobId: "job-c"))
+        #expect(tracker.consumePendingRouteForAttachment() == "job-c")
+        #expect(!tracker.hasSeenCompleted(jobId: "job-c"))
 
-        // Second consume is a no-op (no pending route left).
-        tracker.consumePendingRouteAsSeen()
+        tracker.markCompletedSeen(jobId: "job-c")
         #expect(tracker.hasSeenCompleted(jobId: "job-c"))
+        #expect(tracker.consumePendingRouteForAttachment() == nil)
     }
 
     @Test func pendingRouteConsumedAsForegroundSeenForInFlightJob() {
@@ -61,7 +61,7 @@ struct StorybookSeenTrackerTests {
         defer { defaults.removePersistentDomain(forName: suite) }
 
         tracker.notePendingRoute(jobId: "job-d", isComplete: false)
-        tracker.consumePendingRouteAsSeen()
+        #expect(tracker.consumePendingRouteForAttachment() == "job-d")
         #expect(tracker.hasSeenThisForeground(jobId: "job-d"))
         #expect(!tracker.hasSeenCompleted(jobId: "job-d"))
     }
@@ -72,7 +72,7 @@ struct StorybookSeenTrackerTests {
 
         tracker.notePendingRoute(jobId: "job-e", isComplete: true)
         tracker.resetForegroundSession()
-        tracker.consumePendingRouteAsSeen()
+        #expect(tracker.consumePendingRouteForAttachment() == nil)
         #expect(!tracker.hasSeenCompleted(jobId: "job-e"))
     }
 
