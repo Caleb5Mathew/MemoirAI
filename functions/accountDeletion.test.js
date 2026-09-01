@@ -3,9 +3,13 @@ const {
   assertRecentAuthentication,
   blockingPendingCheckoutIds,
   createDeleteOwnAccountHandler,
+  deleteAccountAudioStorage,
   deleteMemoryIndexes,
+  deleteStorageFileSecurely,
+  deleteStorageFiles,
   deleteUnretainedStorage,
   findBlockingPendingCheckouts,
+  revokeAccountSharing,
   retainedOrderArtifactPaths
 } = require("./accountDeletion");
 
@@ -107,6 +111,78 @@ async function run() {
     "users/user-1/audio/a.m4a",
     "users/user-1/bookVersions/book-1/pages/page_001.png"
   ]);
+
+  const sharingEvents = [];
+  const sharingUserRef = {
+    collection(name) {
+      return { path: `users/user-1/${name}` };
+    }
+  };
+  await revokeAccountSharing({
+    async recursiveDelete(ref) { sharingEvents.push(ref.path); }
+  }, sharingUserRef);
+  assert.deepStrictEqual(sharingEvents, [
+    "users/user-1/sharedAudioAccess",
+    "users/user-1/accessGrants"
+  ]);
+
+  const attemptedSharingCollections = [];
+  await assert.rejects(
+    revokeAccountSharing({
+      async recursiveDelete(ref) {
+        attemptedSharingCollections.push(ref.path);
+        if (ref.path.endsWith("sharedAudioAccess")) throw new Error("canonical delete failed");
+      }
+    }, sharingUserRef),
+    /canonical delete failed/
+  );
+  assert.deepStrictEqual(attemptedSharingCollections, [
+    "users/user-1/sharedAudioAccess",
+    "users/user-1/accessGrants"
+  ]);
+
+  const audioDeletes = [];
+  await deleteAccountAudioStorage({
+    async getFiles(options) {
+      assert.deepStrictEqual(options, { prefix: "users/user-1/audio/" });
+      return [[
+        { async delete() { audioDeletes.push("first"); } },
+        { async delete() { const error = new Error("already gone"); error.code = 404; throw error; } }
+      ]];
+    }
+  }, "user-1");
+  assert.deepStrictEqual(audioDeletes, ["first"]);
+
+  let deniedDeleteAttempts = 0;
+  const invalidatedMetadata = [];
+  const deniedFile = {
+    async delete() {
+      deniedDeleteAttempts += 1;
+      const error = new Error("denied");
+      error.code = 403;
+      throw error;
+    },
+    async setMetadata(metadata) { invalidatedMetadata.push(metadata); }
+  };
+  await assert.rejects(
+    deleteStorageFiles([deniedFile]),
+    (error) => error.code === 403
+  );
+  assert.strictEqual(deniedDeleteAttempts, 3);
+  assert.deepStrictEqual(invalidatedMetadata, [{
+    metadata: { firebaseStorageDownloadTokens: null }
+  }]);
+
+  let missingDeleteAttempts = 0;
+  await deleteStorageFileSecurely({
+    async delete() {
+      missingDeleteAttempts += 1;
+      const error = new Error("already gone");
+      error.code = 404;
+      throw error;
+    }
+  });
+  assert.strictEqual(missingDeleteAttempts, 1);
 
   class FakeHttpsError extends Error {
     constructor(code, message, details) {

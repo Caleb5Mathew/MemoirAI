@@ -33,6 +33,14 @@ assert.ok(
   !rules.includes("documents/users/$(userId)/accessRequests/$(request.auth.uid)"),
   "shared audio reads must not combine tombstone, grant, and request lookups"
 );
+const sharedAudioReadRule = rules.match(
+  /match \/users\/\{userId\}\/audio\/\{audioFile\} \{([\s\S]*?)allow create, update:/
+)?.[1] || "";
+assert.ok(
+  sharedAudioReadRule.includes("!isDeletedAudio(userId, audioFile)")
+    && !sharedAudioReadRule.includes("hasBlockingAccountOperation(userId)"),
+  "the canonical shared-audio path must use the tombstone and grant without an extra lock lookup"
+);
 assert.ok(
   rules.includes("allow list: if isActiveOwner(userId);")
     && (rules.match(/allow read: if isActiveOwner\(userId\);/g) || []).length >= 7,

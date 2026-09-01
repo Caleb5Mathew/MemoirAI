@@ -124,6 +124,45 @@ struct BookVersionPersistOrderingTests {
         ))
     }
 
+    @Test func pendingBookRecoveryPolicy_observesCloudCompletionBeforeBackoff() {
+        let attempt = Date(timeIntervalSince1970: 10_000)
+        let withinLongestBackoff = attempt.addingTimeInterval(60)
+
+        #expect(PendingBookSyncRetryPolicy.recoveryAction(
+            cloudIsPrintReady: true,
+            retryCount: 20,
+            lastAttemptAt: attempt,
+            now: withinLongestBackoff
+        ) == .acceptCloudCompletion)
+        #expect(PendingBookSyncRetryPolicy.recoveryAction(
+            cloudIsPrintReady: false,
+            retryCount: 20,
+            lastAttemptAt: attempt,
+            now: withinLongestBackoff
+        ) == .deferMutations)
+        #expect(PendingBookSyncRetryPolicy.recoveryAction(
+            cloudIsPrintReady: false,
+            retryCount: 1,
+            lastAttemptAt: attempt,
+            now: attempt.addingTimeInterval(900)
+        ) == .attemptMutations)
+    }
+
+    @Test func pendingBookOwnershipPolicy_rejectsAccountSwitches() {
+        #expect(PendingBookSyncOwnershipPolicy.canMutate(
+            expectedUserId: "user-a",
+            currentUserId: "user-a"
+        ))
+        #expect(!PendingBookSyncOwnershipPolicy.canMutate(
+            expectedUserId: "user-a",
+            currentUserId: "user-b"
+        ))
+        #expect(!PendingBookSyncOwnershipPolicy.canMutate(
+            expectedUserId: "user-a",
+            currentUserId: nil
+        ))
+    }
+
     @Test func bookRenderCompletionPolicy_requiresRenderedPDFArtifact() {
         #expect(!BookRenderCompletionPolicy.isComplete(status: "rendering", pdfURL: "https://x/book.pdf"))
         #expect(!BookRenderCompletionPolicy.isComplete(status: "rendered", pdfURL: nil))
