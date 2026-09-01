@@ -6,7 +6,11 @@ const { defineSecret } = require("firebase-functions/params");
 const { PDFDocument } = require("pdf-lib");
 const crypto = require("crypto");
 const Stripe = require("stripe");
-const { computeBookBaseCentsFromLuluLineMake, sumCartLineShippingCents } = require("./merchantPricingMath");
+const {
+  computeBookBaseCentsFromLuluLineMake,
+  sumCartLineShippingCents,
+  unavailablePrintFormatReason
+} = require("./merchantPricingMath");
 const {
   mustAbortPdfPackagingForMissingCoverUrl,
   nextCoverPreconditionAttemptMeta,
@@ -1180,10 +1184,11 @@ function optionsForBook(isLandscape, pricing) {
 }
 
 function optionAvailability(option, pageCount) {
-  if (option.optionId === "kids_coil_bound") {
+  const unavailableReason = unavailablePrintFormatReason(option.optionId);
+  if (unavailableReason) {
     return {
       available: false,
-      reason: "Coil binding is temporarily unavailable while we finalize cover templates for Lulu."
+      reason: unavailableReason
     };
   }
   if (pageCount < option.minPages) {

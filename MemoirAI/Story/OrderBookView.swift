@@ -11,6 +11,19 @@ import MapKit
 import FirebaseAuth
 import AuthenticationServices
 
+enum PrintProductAvailabilityPolicy {
+    static func unavailableReason(optionID: String) -> String? {
+        switch optionID {
+        case "kids_coil_bound":
+            return "Coil binding is temporarily unavailable while we finalize cover templates for Lulu."
+        case "kids_paperback_perfect":
+            return "Paperback is temporarily unavailable while we add its Lulu-specific cover template."
+        default:
+            return nil
+        }
+    }
+}
+
 @MainActor
 private final class LocalAddressAutocomplete: NSObject, ObservableObject, @preconcurrency MKLocalSearchCompleterDelegate {
     @Published var completions: [MKLocalSearchCompletion] = []
@@ -1660,8 +1673,8 @@ struct OrderBookView: View {
     }
 
     private func optionAvailability(_ option: PrintProductOption, pageCount: Int) -> (available: Bool, reason: String?) {
-        if option.id == "kids_coil_bound" {
-            return (false, "Coil binding is temporarily unavailable while we finalize cover templates for Lulu.")
+        if let reason = PrintProductAvailabilityPolicy.unavailableReason(optionID: option.id) {
+            return (false, reason)
         }
         if pageCount < option.minPages {
             return (false, "Add \(option.minPages - pageCount) more page(s) to unlock this format.")

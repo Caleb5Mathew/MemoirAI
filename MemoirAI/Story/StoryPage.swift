@@ -792,7 +792,7 @@ struct StoryPage: View {
                 forProfileID: currentProfileID,
                 profileName: profileVM.selectedProfile.name,
                 overridePageCount: finalPageCount,
-                profileEthnicity: profileVM.selectedProfile.ethnicity
+                profileEthnicity: userRace
             )
 
             // Cloud generation: `generateStorybook` returns immediately after
@@ -2821,7 +2821,7 @@ extension View {
             .onAppear {
                 print("🧭 StoryPage lifecycle onAppear; profile=\(profileVM.selectedProfile.id.uuidString.prefix(8))…, hasGenerated=\(vm.hasGeneratedStorybook), hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count), entry=\(storybookScreenEntry)")
                 StorybookSeenTracker.shared.setStoryPageVisible(true)
-                StorybookSeenTracker.shared.consumePendingRouteAsSeen()
+                let routedJobID = StorybookSeenTracker.shared.consumePendingRouteForAttachment()
                 if let bookId = vm.currentBookVersionRecord?.bookVersionId {
                     StorybookSeenTracker.shared.markCompletedSeen(jobId: bookId)
                 }
@@ -2829,7 +2829,8 @@ extension View {
                     let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
                         profileID: profileVM.selectedProfile.id,
                         profileName: profileVM.selectedProfile.name,
-                        profileEthnicity: profileVM.selectedProfile.ethnicity
+                        profileEthnicity: profileVM.selectedProfile.ethnicity,
+                        routedJobID: routedJobID
                     )
                     if resuming {
                         hasRequestedGeneration.wrappedValue = true

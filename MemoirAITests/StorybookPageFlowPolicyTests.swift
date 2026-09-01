@@ -42,6 +42,43 @@ struct StorybookPageFlowPolicyTests {
         #expect(!StorybookJobFinalizationPolicy.isFailureFinalizationSatisfied(status: "aiComplete"))
     }
 
+    @Test func completedCloudJobLoadsCanonicalBookInsteadOfWaitingForever() {
+        #expect(StorybookCloudJobResumeAction.action(for: "queued") == .waitForCloud)
+        #expect(StorybookCloudJobResumeAction.action(for: "running") == .waitForCloud)
+        #expect(StorybookCloudJobResumeAction.action(for: "aiComplete") == .finalizeCloudResults)
+        #expect(StorybookCloudJobResumeAction.action(for: "complete") == .loadCompletedBook)
+        #expect(StorybookCloudJobResumeAction.action(for: "failed") == .showFailure)
+    }
+
+    @Test func globalProgressBannerIsHiddenOnStorybookScreen() {
+        #expect(GlobalStorybookBannerVisibilityPolicy.shouldShow(
+            hasActiveJob: true,
+            isStoryPageVisible: false,
+            isDismissed: false
+        ))
+        #expect(!GlobalStorybookBannerVisibilityPolicy.shouldShow(
+            hasActiveJob: true,
+            isStoryPageVisible: true,
+            isDismissed: false
+        ))
+        #expect(!GlobalStorybookBannerVisibilityPolicy.shouldShow(
+            hasActiveJob: true,
+            isStoryPageVisible: false,
+            isDismissed: true
+        ))
+    }
+
+    @Test func ethnicityDoesNotLeakFromAnotherProfile() {
+        #expect(StorybookProfileSetupPolicy.initialEthnicity().isEmpty)
+    }
+
+    @Test func onlyFormatsWithMatchingCoverTemplatesCanBeOrdered() {
+        #expect(PrintProductAvailabilityPolicy.unavailableReason(optionID: "kids_hardcover_casewrap") == nil)
+        #expect(PrintProductAvailabilityPolicy.unavailableReason(optionID: "portrait_hardcover_casewrap") == nil)
+        #expect(PrintProductAvailabilityPolicy.unavailableReason(optionID: "kids_coil_bound") != nil)
+        #expect(PrintProductAvailabilityPolicy.unavailableReason(optionID: "kids_paperback_perfect") != nil)
+    }
+
     @Test func generationBatchCapsOneBookWithoutChangingMonthlyAllowance() {
         #expect(StorybookGenerationBatchPolicy.maximumSelectablePages(remainingAllowance: 100) == 9)
         #expect(StorybookGenerationBatchPolicy.maximumSelectablePages(remainingAllowance: 4) == 4)

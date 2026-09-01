@@ -626,7 +626,7 @@ private struct BookCardItem: View {
     }
 
     private var isCoverPending: Bool {
-        book.renderStatus == "rendered" && (book.coverURL?.isEmpty ?? true)
+        book.renderStatus == "rendered" && book.printCoverPDFURL == nil
     }
 
     private func isLikelyPDF(_ url: URL) -> Bool {
@@ -945,7 +945,7 @@ private struct StorybookReaderView: View, Identifiable {
                         
                         Spacer()
                         
-                        if book.renderStatus == "rendered", book.pdfURL != nil, book.coverURL != nil {
+                        if book.renderStatus == "rendered", book.pdfURL != nil, book.printCoverPDFURL != nil {
                             Button(action: { showOrderSheet = true }) {
                                 Text("Order Print")
                                     .font(.system(size: 13, weight: .semibold))

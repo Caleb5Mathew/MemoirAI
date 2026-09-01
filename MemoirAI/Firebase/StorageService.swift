@@ -18,6 +18,12 @@ enum StorageOwnershipPolicy {
     }
 }
 
+enum StorageUploadOwnerPolicy {
+    static func isCurrentOwner(expectedUserID: String, currentUserID: String?) -> Bool {
+        currentUserID == expectedUserID
+    }
+}
+
 /// Service for uploading and managing files in Firebase Storage
 final class StorageService {
     
@@ -342,6 +348,12 @@ final class StorageService {
         isKidsBook: Bool,
         asUserId userId: String
     ) async throws -> UploadedBookPageArtifacts {
+        guard StorageUploadOwnerPolicy.isCurrentOwner(
+            expectedUserID: userId,
+            currentUserID: Auth.auth().currentUser?.uid
+        ) else {
+            throw StorageError.notAuthenticated
+        }
         let preparedImage = resizedForBookUpload(image, isKidsBook: isKidsBook)
         guard let pngData = preparedImage.pngData(),
               let jpegData = preparedImage.jpegData(compressionQuality: 0.90) else {
@@ -353,14 +365,26 @@ final class StorageService {
         let pngMetadata = StorageMetadata()
         pngMetadata.contentType = "image/png"
         _ = try await pngRef.putDataAsync(pngData, metadata: pngMetadata)
+        guard StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: userId, currentUserID: Auth.auth().currentUser?.uid) else {
+            throw StorageError.notAuthenticated
+        }
         let pngURL = try await pngRef.downloadURL()
+        guard StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: userId, currentUserID: Auth.auth().currentUser?.uid) else {
+            throw StorageError.notAuthenticated
+        }
 
         let jpegPath = String(format: "users/%@/bookVersions/%@/pages/page_%03d.jpg", userId, bookId, pageIndex)
         let jpegRef = storage.reference().child(jpegPath)
         let jpegMetadata = StorageMetadata()
         jpegMetadata.contentType = "image/jpeg"
         _ = try await jpegRef.putDataAsync(jpegData, metadata: jpegMetadata)
+        guard StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: userId, currentUserID: Auth.auth().currentUser?.uid) else {
+            throw StorageError.notAuthenticated
+        }
         let jpegURL = try await jpegRef.downloadURL()
+        guard StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: userId, currentUserID: Auth.auth().currentUser?.uid) else {
+            throw StorageError.notAuthenticated
+        }
 
         let pixelWidth = Int(preparedImage.size.width)
         let pixelHeight = Int(preparedImage.size.height)
@@ -410,6 +434,12 @@ final class StorageService {
         pageIndex: Int,
         asUserId userId: String
     ) async throws -> (storagePath: String, downloadURL: String) {
+        guard StorageUploadOwnerPolicy.isCurrentOwner(
+            expectedUserID: userId,
+            currentUserID: Auth.auth().currentUser?.uid
+        ) else {
+            throw StorageError.notAuthenticated
+        }
         guard !data.isEmpty,
               data.count <= BookPageCapacityPolicy.maximumEncodedDocumentByteCount else {
             throw StorageError.invalidImageData
@@ -425,7 +455,13 @@ final class StorageService {
         let metadata = StorageMetadata()
         metadata.contentType = "application/json"
         _ = try await ref.putDataAsync(data, metadata: metadata)
+        guard StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: userId, currentUserID: Auth.auth().currentUser?.uid) else {
+            throw StorageError.notAuthenticated
+        }
         let downloadURL = try await ref.downloadURL()
+        guard StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: userId, currentUserID: Auth.auth().currentUser?.uid) else {
+            throw StorageError.notAuthenticated
+        }
         return (path, downloadURL.absoluteString)
     }
 
@@ -439,6 +475,12 @@ final class StorageService {
     }
 
     func uploadBookCoverPDF(_ pdfData: Data, bookId: String, asUserId userId: String) async throws -> (storagePath: String, downloadURL: String) {
+        guard StorageUploadOwnerPolicy.isCurrentOwner(
+            expectedUserID: userId,
+            currentUserID: Auth.auth().currentUser?.uid
+        ) else {
+            throw StorageError.notAuthenticated
+        }
         let path = "users/\(userId)/bookVersions/\(bookId)/cover.pdf"
         let ref = storage.reference().child(path)
 
@@ -446,7 +488,13 @@ final class StorageService {
         metadata.contentType = "application/pdf"
 
         _ = try await ref.putDataAsync(pdfData, metadata: metadata)
+        guard StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: userId, currentUserID: Auth.auth().currentUser?.uid) else {
+            throw StorageError.notAuthenticated
+        }
         let downloadURL = try await ref.downloadURL()
+        guard StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: userId, currentUserID: Auth.auth().currentUser?.uid) else {
+            throw StorageError.notAuthenticated
+        }
 
         await DevCostTelemetryService.shared.logEvent(
             DevCostEvent(

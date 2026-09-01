@@ -18,13 +18,27 @@ enum StorybookCloudApplyPolicy {
         record.pageCount > 0 && record.pages.count < record.pageCount
     }
 
-    /// My Library / cloud doc can show **rendered** while `coverURL` is still empty (interrupted backfill, CF race, etc.). Gallery and heal paths treat this as "cover work still in flight" / stuck.
-    static func isCoverStuckFinalizingState(_ record: BookVersionRecord) -> Bool {
-        record.renderStatus == BookRenderStatus.rendered.rawValue
-            && (record.coverURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    static func hasPrintCoverArtifact(_ record: BookVersionRecord) -> Bool {
+        record.printCoverPDFURL != nil
     }
 
-    /// The opposite: cover is present, or the book is not in the "rendered but no cover" stuck hole (e.g. still pending, or already has a `coverURL`).
+    static func isPrintReady(_ record: BookVersionRecord) -> Bool {
+        record.pageCount > 0
+            && !isIncompleteCloudRecord(record)
+            && BookRenderCompletionPolicy.isComplete(
+                status: record.renderStatus,
+                pdfURL: record.pdfURL
+            )
+            && hasPrintCoverArtifact(record)
+    }
+
+    /// My Library / cloud doc can show **rendered** while its print cover is still absent.
+    static func isCoverStuckFinalizingState(_ record: BookVersionRecord) -> Bool {
+        record.renderStatus == BookRenderStatus.rendered.rawValue
+            && !hasPrintCoverArtifact(record)
+    }
+
+    /// The opposite: print cover is present, or the book is not in the rendered-but-no-cover hole.
     static func isCoverPresentOrNotInStuckRenderedHole(_ record: BookVersionRecord) -> Bool {
         !isCoverStuckFinalizingState(record)
     }

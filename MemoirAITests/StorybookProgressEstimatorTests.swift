@@ -96,7 +96,7 @@ struct StorybookProgressEstimatorTests {
             e.noteStatus("running", completed: i, total: 10, now: t0.addingTimeInterval(Double(i) * 20))
         }
         let eta = e.snapshot(now: t0.addingTimeInterval(100)).etaSeconds ?? 0
-        // 5 memories left at ~20s each plus finalize (60s default): well above the
+        // 5 memories left at ~20s each plus finalization: well above the
         // 12s-per-memory naive estimate of ~120s total.
         #expect(eta > 120)
         #expect(eta < 400)
@@ -114,7 +114,7 @@ struct StorybookProgressEstimatorTests {
             now: t0
         )
         let p = e.snapshot(now: t0).progress
-        #expect(p > 0.4)
+        #expect(p > 0.3)
     }
 
     @Test func etaDecreasesAsWorkCompletes() {
@@ -124,6 +124,19 @@ struct StorybookProgressEstimatorTests {
         e.noteStatus("running", completed: 9, total: 10, now: t0.addingTimeInterval(110))
         let etaLate = e.snapshot(now: t0.addingTimeInterval(111)).etaSeconds ?? 0
         #expect(etaLate < etaEarly)
+    }
+
+    @Test func finalizeEtaUsesElapsedTimeInsteadOfVisualEasing() {
+        var e = makeEstimator(pages: 1)
+        e.noteStatus("aiComplete", completed: 1, total: 1, now: t0)
+
+        let eta = e.snapshot(now: t0.addingTimeInterval(25)).etaSeconds
+
+        #expect(eta == 185)
+    }
+
+    @Test func defaultFinalizeEstimateMatchesMeasuredLivePipeline() {
+        #expect(StorybookProgressEstimator.Calibration.default.finalizeSeconds == 210)
     }
 
     @Test func etaDisplayStringBuckets() {
@@ -153,7 +166,8 @@ struct StorybookProgressEstimatorTests {
         #expect(updated.perMemorySeconds > StorybookProgressEstimator.Calibration.default.perMemorySeconds)
         #expect(updated.perMemorySeconds < 20)
         #expect(updated.rankingSeconds > StorybookProgressEstimator.Calibration.default.rankingSeconds)
-        #expect(updated.finalizeSeconds > StorybookProgressEstimator.Calibration.default.finalizeSeconds)
+        let defaultFinalizeError = abs(StorybookProgressEstimator.Calibration.default.finalizeSeconds - 90)
+        #expect(abs(updated.finalizeSeconds - 90) < defaultFinalizeError)
 
         // Absurd observations get clamped to sane bounds.
         for _ in 0..<50 {

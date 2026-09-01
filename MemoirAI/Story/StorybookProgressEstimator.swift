@@ -62,13 +62,17 @@ struct StorybookProgressEstimator {
         var rankingSeconds: Double
         var finalizeSeconds: Double
 
-        static let `default` = Calibration(perMemorySeconds: 12, rankingSeconds: 15, finalizeSeconds: 60)
+        // Live generation QA measured 212 seconds from aiComplete through canonical
+        // book installation. Keep the first-run estimate near that observed baseline;
+        // successful runs continue adapting it per device and network.
+        static let `default` = Calibration(perMemorySeconds: 12, rankingSeconds: 15, finalizeSeconds: 210)
 
         static let perMemoryBounds = 4.0...60.0
         static let rankingBounds = 5.0...90.0
         static let finalizeBounds = 20.0...240.0
 
-        private static let key = "memoirai.storybookTimingCalibration"
+        // v2 discards calibration learned from the previous 60-second finalize baseline.
+        private static let key = "memoirai.storybookTimingCalibration.v2"
 
         static func load(defaults: UserDefaults = .standard) -> Calibration {
             guard let dict = defaults.dictionary(forKey: key) else { return .default }
@@ -331,8 +335,12 @@ struct StorybookProgressEstimator {
                     let left = Double(max(0, effectiveTotalMemories - completedMemories))
                     let sinceLast = now.timeIntervalSince(lastCompletionAt ?? phaseStartedAt)
                     remaining += max(0, left * perMemorySeconds - min(sinceLast, perMemorySeconds))
+                } else if p == .finalizing {
+                    let elapsed = now.timeIntervalSince(finalizeStartedAt ?? phaseStartedAt)
+                    remaining += max(0, expectedSeconds(for: p) - elapsed)
                 } else {
-                    remaining += expectedSeconds(for: p) * (1 - currentPhaseFraction(now: now))
+                    let elapsed = now.timeIntervalSince(phaseStartedAt)
+                    remaining += max(0, expectedSeconds(for: p) - elapsed)
                 }
             }
         }
