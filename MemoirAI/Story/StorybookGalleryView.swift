@@ -852,17 +852,8 @@ private struct StorybookReaderView: View, Identifiable {
     private let textPrimary = Color(red: 0.2, green: 0.2, blue: 0.2)
     private let textSecondary = Color(red: 0.5, green: 0.5, blue: 0.5)
     private let backgroundColor = Color(red: 0.12, green: 0.12, blue: 0.14)
-    private var coverAspectRatio: CGFloat {
-        let fallback: CGFloat = book.orientation.lowercased() == "landscape" ? 11 / 8.5 : 8.5 / 11
-        return AdaptiveLayoutPolicy.validatedAspectRatio(
-            width: book.pageWidth,
-            height: book.pageHeight,
-            fallback: fallback
-        )
-    }
-
     private enum ReaderSlot {
-        case standaloneCover
+        case cover(BookCoverFlatPanel)
         case record(BookVersionPageRecord)
     }
 
@@ -870,50 +861,46 @@ private struct StorybookReaderView: View, Identifiable {
         book.pages.sorted { $0.pageIndex < $1.pageIndex }
     }
 
-    /// Raster cover when `coverURL` is an image (PDF covers use `printCoverPDFURL` instead).
-    private var rasterCoverURL: URL? {
-        guard book.printCoverPDFURL == nil,
-              let raw = book.coverURL?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty,
-              let url = URL(string: raw),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https" else {
-            return nil
-        }
-        let lower = raw.lowercased()
-        guard lower.contains(".jpg") || lower.contains(".jpeg") || lower.contains(".png") || lower.contains(".webp") else {
-            return nil
-        }
-        return url
-    }
-
-    private var hasDisplayableAICover: Bool {
-        book.printCoverPDFURL != nil || rasterCoverURL != nil
-    }
-
     private func isInteriorTitlePage(_ item: BookVersionPageRecord) -> Bool {
-        guard item.type == "textPage" else { return false }
-        guard let mid = item.memoryId?.trimmingCharacters(in: .whitespacesAndNewlines), !mid.isEmpty,
-              let uuid = UUID(uuidString: mid) else {
-            return false
-        }
-        return uuid == BookInteriorAnchor.titlePageMemoryId
+        recoveredMemoryID(for: item) == BookInteriorAnchor.titlePageMemoryId
     }
 
-    /// Library reader used to start on the first *interior* page; prepend the print/AI cover when it is not already the opening `textPage` bookend.
-    private var shouldPrependStandaloneCover: Bool {
-        guard hasDisplayableAICover, let first = orderedPages.first else { return false }
-        if isInteriorTitlePage(first) { return false }
-        return true
+    private func isInteriorClosingPage(_ item: BookVersionPageRecord) -> Bool {
+        recoveredMemoryID(for: item) == BookInteriorAnchor.closingPageMemoryId
+    }
+
+    private func isInteriorBlankPage(_ item: BookVersionPageRecord) -> Bool {
+        recoveredMemoryID(for: item) == BookInteriorAnchor.blankPageMemoryId
+    }
+
+    private func recoveredMemoryID(for item: BookVersionPageRecord) -> UUID? {
+        StorybookBookendRecoveryPolicy.recoveredMemoryID(
+            storedMemoryID: item.memoryId,
+            pageType: item.type,
+            title: item.title,
+            textContent: item.textContent
+        )
     }
 
     private var readerSlots: [ReaderSlot] {
-        var slots: [ReaderSlot] = []
-        if shouldPrependStandaloneCover {
-            slots.append(.standaloneCover)
+        var seenBookendIDs: Set<UUID> = []
+        let records: [ReaderSlot] = orderedPages.compactMap { page in
+            guard let memoryID = recoveredMemoryID(for: page) else {
+                return .record(page)
+            }
+            guard StorybookBookendRecoveryPolicy.shouldInclude(
+                memoryID: memoryID,
+                seenBookendIDs: seenBookendIDs
+            ) else {
+                return nil
+            }
+            if BookInteriorAnchor.isNonMemoryPage(memoryID) {
+                seenBookendIDs.insert(memoryID)
+            }
+            return .record(page)
         }
-        slots.append(contentsOf: orderedPages.map { .record($0) })
-        return slots
+        guard book.printCoverPDFURL != nil else { return records }
+        return [.cover(.front)] + records + [.cover(.back)]
     }
 
     private var readerPageCount: Int {
@@ -1009,64 +996,45 @@ private struct StorybookReaderView: View, Identifiable {
     @ViewBuilder
     private func slotView(_ slot: ReaderSlot) -> some View {
         switch slot {
-        case .standaloneCover:
-            aiGeneratedCoverPanel()
+        case .cover(let panel):
+            exteriorCover(panel: panel)
         case .record(let item):
             pageView(for: item)
         }
     }
 
     @ViewBuilder
-    private func aiGeneratedCoverPanel() -> some View {
+    private func exteriorCover(panel: BookCoverFlatPanel) -> some View {
         GeometryReader { geo in
-            let horizontalPad: CGFloat = 24
-            let usableW = max(geo.size.width - horizontalPad * 2, 120)
-            let usableH = max(geo.size.height - 40, 120)
-            VStack {
-                Spacer(minLength: 0)
-                if let pdfURL = book.printCoverPDFURL {
-                    RemotePDFThumbnailView(
-                        url: pdfURL,
-                        targetSize: CGSize(width: max(usableW, 240), height: max(usableH, 240)),
-                        layout: book.coverFlatLayoutKind,
-                        panel: .front,
-                        cacheRevision: book.coverThumbnailCacheRevision,
-                        cacheIdentity: book.coverStoragePath ?? ""
-                    ) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .tint(.white)
+            if let url = book.printCoverPDFURL {
+                RemotePDFThumbnailView(
+                    url: url,
+                    targetSize: CGSize(width: geo.size.width * 2, height: geo.size.height * 2),
+                    layout: book.coverFlatLayoutKind,
+                    panel: panel,
+                    cacheRevision: book.coverThumbnailCacheRevision,
+                    cacheIdentity: book.coverStoragePath ?? ""
+                ) {
+                    if panel == .front {
+                        MemoirCoverFrontPage(
+                            title: book.printTitle ?? book.bookDisplayName ?? "Memoir",
+                            subtitle: "",
+                            frameWidth: geo.size.width,
+                            frameHeight: geo.size.height,
+                            isKidsBook: book.pageWidth > book.pageHeight
+                        )
+                    } else {
+                        MemoirCoverBackPage(
+                            subtitle: book.backCoverPitch,
+                            frameWidth: geo.size.width,
+                            frameHeight: geo.size.height
+                        )
                     }
-                    .aspectRatio(coverAspectRatio, contentMode: .fit)
-                    .frame(maxWidth: usableW, maxHeight: usableH * 0.92)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .shadow(color: Color.black.opacity(0.45), radius: 24, x: 0, y: 12)
-                } else if let url = rasterCoverURL {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        case .empty:
-                            ProgressView()
-                                .progressViewStyle(.circular)
-                                .tint(.white)
-                        default:
-                            Image(systemName: "photo")
-                                .font(.system(size: 48, weight: .thin))
-                                .foregroundColor(.white.opacity(0.35))
-                        }
-                    }
-                    .frame(maxWidth: usableW, maxHeight: usableH * 0.92)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .shadow(color: Color.black.opacity(0.45), radius: 24, x: 0, y: 12)
                 }
-                Spacer(minLength: 0)
+                .frame(width: geo.size.width, height: geo.size.height)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, horizontalPad)
         }
+        .padding(24)
     }
     
     /// Prefer JPEG `imageURL`, then pre-rendered PNG `renderedPageURL` (matches main book loader).
@@ -1087,18 +1055,10 @@ private struct StorybookReaderView: View, Identifiable {
             if let url = illustrationDisplayURL(for: item) {
                 VStack(spacing: 20) {
                     Spacer()
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        case .empty:
-                            ProgressView()
-                        default:
-                            Color.gray.opacity(0.2)
-                        }
-                    }
+                    StorybookReaderRemoteImage(
+                        url: url,
+                        storagePath: item.imageStoragePath ?? item.renderedPageStoragePath
+                    )
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .shadow(color: Color.black.opacity(0.4), radius: 20, x: 0, y: 10)
                     
@@ -1127,8 +1087,40 @@ private struct StorybookReaderView: View, Identifiable {
             }
             
         case "textPage":
-            if isInteriorTitlePage(item), hasDisplayableAICover {
-                aiGeneratedCoverPanel()
+            if isInteriorTitlePage(item) {
+                GeometryReader { geo in
+                    let aspectRatio = CGFloat(book.pageWidth / max(book.pageHeight, 1))
+                    let width = min(geo.size.width - 40, (geo.size.height - 24) * aspectRatio)
+                    let height = width / max(aspectRatio, 0.01)
+                    MemoirCoverFrontPage(
+                        title: item.title ?? "Memoir",
+                        subtitle: item.textContent ?? "",
+                        frameWidth: width,
+                        frameHeight: height,
+                        isKidsBook: book.artStyle.lowercased().contains("kid")
+                    )
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                }
+            } else if isInteriorBlankPage(item) {
+                GeometryReader { geo in
+                    let aspectRatio = CGFloat(book.pageWidth / max(book.pageHeight, 1))
+                    let width = min(geo.size.width - 40, (geo.size.height - 24) * aspectRatio)
+                    let height = width / max(aspectRatio, 0.01)
+                    MemoirBlankPage(frameWidth: width, frameHeight: height)
+                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                }
+            } else if isInteriorClosingPage(item) {
+                GeometryReader { geo in
+                    let aspectRatio = CGFloat(book.pageWidth / max(book.pageHeight, 1))
+                    let width = min(geo.size.width - 40, (geo.size.height - 24) * aspectRatio)
+                    let height = width / max(aspectRatio, 0.01)
+                    MemoirCoverBackPage(
+                        subtitle: item.subtitle,
+                        frameWidth: width,
+                        frameHeight: height
+                    )
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                }
             } else {
                 // Text/memory page - clean card design
                 ScrollView(showsIndicators: false) {
@@ -1240,6 +1232,92 @@ private struct StorybookReaderView: View, Identifiable {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(.white.opacity(0.5))
             }
+        }
+    }
+}
+
+enum StorybookReaderImagePolicy {
+    static let maximumByteCount = 25 * 1024 * 1024
+
+    static func accepts(statusCode: Int, byteCount: Int) -> Bool {
+        (200...299).contains(statusCode)
+            && byteCount > 0
+            && byteCount <= maximumByteCount
+    }
+}
+
+private struct StorybookReaderRemoteImage: View {
+    let url: URL
+    let storagePath: String?
+
+    @State private var image: UIImage?
+    @State private var isLoading = false
+    @State private var loadFailed = false
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else if isLoading {
+                ProgressView()
+                    .tint(.white)
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "photo")
+                    Text("Image unavailable")
+                        .font(.caption)
+                    if loadFailed {
+                        Button("Retry") {
+                            loadFailed = false
+                            Task { await load() }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .foregroundStyle(.white.opacity(0.75))
+            }
+        }
+        .task(id: url) {
+            await load()
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        guard image == nil, !isLoading else { return }
+        isLoading = true
+        defer { isLoading = false }
+
+        if let loaded = await download(from: url) {
+            image = loaded
+            loadFailed = false
+            return
+        }
+        if let storagePath,
+           let freshURL = try? await StorageService.shared.freshDownloadURL(forStoragePath: storagePath),
+           let loaded = await download(from: freshURL) {
+            image = loaded
+            loadFailed = false
+            return
+        }
+        loadFailed = true
+    }
+
+    private func download(from url: URL) async -> UIImage? {
+        var request = URLRequest(url: url, timeoutInterval: 45)
+        request.cachePolicy = .returnCacheDataElseLoad
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  StorybookReaderImagePolicy.accepts(
+                    statusCode: http.statusCode,
+                    byteCount: data.count
+                  ) else { return nil }
+            return UIImage(data: data)
+        } catch {
+            return nil
         }
     }
 }

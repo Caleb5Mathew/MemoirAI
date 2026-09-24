@@ -243,7 +243,6 @@ class StoryPageViewModel: ObservableObject {
     private var pageRebuildTicket: UInt64 = 0
     /// Completed-memory count of the last published rebuild; snapshots that don't change
     /// it (status-text-only updates) skip the rebuild to avoid churning the live TabView.
-    private var lastRebuiltCompletedCount: Int? = nil
     /// True while saving, rendering page images, and waiting for canonical PDF after generation reached 100%.
     @Published var isFinalizingAssets: Bool = false
     @Published var errorMessage   : String?
@@ -279,6 +278,7 @@ class StoryPageViewModel: ObservableObject {
     @Published var etaDisplayText: String = ""
     private var progressEstimator: StorybookProgressEstimator?
     private var progressTickTimer: Timer?
+    private var progressLifecycleObservers: [NSObjectProtocol] = []
     
     // Image editing state
     @Published var editingImageIndex: Int? = nil
@@ -309,14 +309,12 @@ class StoryPageViewModel: ObservableObject {
     @AppStorage("memoirEthnicity")          private var ethnicity             = ""
     @AppStorage("memoirGender")             private var gender                = ""
     @AppStorage("memoirOtherPersonalDetails") private var otherDetails        = ""
-    @AppStorage("memoirMemorySource")       private var memorySourceSetting   = "all"
     @AppStorage("memoirGeminiModelOverride") private var geminiModelOverrideRawValue = GeminiImageService.Model.gemini3ProPreview
     @AppStorage("memoirStyleReferencePreset") private var styleReferencePresetRawValue = "normal"
     
     // iCloud backup for critical settings
     private func backupSettingsToCloud() {
         NSUbiquitousKeyValueStore.default.set(pageCountSetting, forKey: "memoir_pageCount")
-        NSUbiquitousKeyValueStore.default.set(artStyleRaw, forKey: "memoir_artStyle")
         NSUbiquitousKeyValueStore.default.set(customArtStyleText, forKey: "memoir_customArtStyleText")
         NSUbiquitousKeyValueStore.default.set(ethnicity, forKey: "memoir_ethnicity")
         NSUbiquitousKeyValueStore.default.set(gender, forKey: "memoir_gender")
@@ -324,17 +322,12 @@ class StoryPageViewModel: ObservableObject {
         NSUbiquitousKeyValueStore.default.synchronize()
     }
     
-    private func restoreSettingsFromCloud() {
+    func restoreSettingsFromCloud() {
         NSUbiquitousKeyValueStore.default.synchronize()
 
         let cloudPageCount = NSUbiquitousKeyValueStore.default.longLong(forKey: "memoir_pageCount")
         if cloudPageCount > 0 {
             pageCountSetting = StorybookGenerationBatchPolicy.clampedTargetPageCount(Int(cloudPageCount))
-        }
-
-        let cloudArtStyle = NSUbiquitousKeyValueStore.default.string(forKey: "memoir_artStyle")
-        if let artStyle = cloudArtStyle, !artStyle.isEmpty {
-            artStyleRaw = artStyle
         }
 
         let cloudCustomStyle = NSUbiquitousKeyValueStore.default.string(forKey: "memoir_customArtStyleText")
@@ -446,11 +439,7 @@ class StoryPageViewModel: ObservableObject {
             GeminiImageService.Model.gemini25FlashImage
         ])
 
-        #if DEBUG
         let canUseDeveloperOverride = RCSubscriptionManager.shared.isDeveloperUnlocked
-        #else
-        let canUseDeveloperOverride = false
-        #endif
 
         guard canUseDeveloperOverride else {
             return productionModel
@@ -571,8 +560,9 @@ class StoryPageViewModel: ObservableObject {
     init() {
         geminiImageSvc = GeminiImageService()
 
-        // Restore settings from iCloud backup
-        restoreSettingsFromCloud()
+        artStyleRaw = StorybookGenerationStylePolicy.supportedArtStyle(
+            legacyStoredValue: artStyleRaw
+        ).rawValue
 
         NotificationCenter.default.addObserver(forName: .storybookCloudUploadActivity, object: nil, queue: .main) { [weak self] n in
             Task { @MainActor in
@@ -590,6 +580,162 @@ class StoryPageViewModel: ObservableObject {
             Task { @MainActor in
                 self?.emergencyFlushInProgressGenerationToDisk()
             }
+        }
+        progressLifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didEnterBackgroundNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.progressEstimator?.setActive(false)
+                    if self?.isFinalizingAssets == true {
+                        self?.etaDisplayText = "Finishing resumes when MemoirAI is open"
+                    }
+                }
+            }
+        )
+        progressLifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.progressEstimator?.setActive(true)
+                    self?.publishProgressSnapshot()
+                }
+            }
+        )
+    }
+
+    func seedStorybookForUITesting(profileID: UUID, profileName: String) {
+        let policy = CoverCopyPolicy(artStyle: .realistic, profileDisplayName: profileName)
+        let memoryID = UUID(uuidString: "A11CE000-0000-4000-8000-000000000001")!
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 1_000)).image { context in
+            UIColor(red: 0.82, green: 0.89, blue: 0.92, alpha: 1).setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 800, height: 1_000))
+            UIColor(red: 0.92, green: 0.74, blue: 0.53, alpha: 1).setFill()
+            context.cgContext.fillEllipse(in: CGRect(x: 220, y: 220, width: 360, height: 360))
+        }
+        currentProfileID = profileID
+        self.profileName = profileName
+        artStyleRaw = ArtStyle.realistic.rawValue
+        bookDisplayTitle = policy.defaultBookTitle()
+        backCoverPitch = policy.fallbackBackCoverPitch(bookTitle: bookDisplayTitle)
+        pageItems = [
+            .textPage(
+                index: 1,
+                total: 1,
+                body: policy.interiorTitlePageBlurb(),
+                title: bookDisplayTitle,
+                subtitle: nil,
+                memoryID: BookInteriorAnchor.titlePageMemoryId
+            ),
+            .textPage(
+                index: 1,
+                total: 1,
+                body: "",
+                title: nil,
+                subtitle: nil,
+                memoryID: BookInteriorAnchor.blankPageMemoryId
+            ),
+            .illustration(image: image, memoryID: memoryID, title: "A Summer Afternoon"),
+            .textPage(
+                index: 1,
+                total: 1,
+                body: "We spent the afternoon together, sharing stories and laughing in the warm light.",
+                title: "A Summer Afternoon",
+                subtitle: profileName,
+                memoryID: memoryID
+            ),
+            .textPage(
+                index: 1,
+                total: 1,
+                body: "",
+                title: "Made with Memoir",
+                subtitle: profileName,
+                memoryID: BookInteriorAnchor.closingPageMemoryId
+            )
+        ]
+        freeformPageDocuments = [:]
+        freeformUnavailablePageIDs = []
+        freeformPendingPageIDs = []
+        normalizeSemanticBookendDocuments()
+        let seededBook = PersistableStorybook(
+            ownerUserID: nil,
+            bookVersionID: "ui-test-book",
+            profileID: profileID,
+            pageItems: persistablePageItemsFromCurrentState(),
+            artStyle: ArtStyle.realistic.firestoreKey,
+            createdAt: Date(),
+            bookDisplayTitle: bookDisplayTitle,
+            backCoverPitch: backCoverPitch,
+            coverFontPreset: coverFontPreset
+        )
+        let baseRecord = BookVersionRecordFactory.fromPersistable(
+            seededBook,
+            bookVersionId: "ui-test-book"
+        )
+        currentBookVersionRecord = BookVersionRecord(
+            bookVersionId: baseRecord.bookVersionId,
+            profileId: baseRecord.profileId,
+            createdAt: baseRecord.createdAt,
+            memoryOrder: baseRecord.memoryOrder,
+            pageCount: baseRecord.pageCount,
+            artStyle: baseRecord.artStyle,
+            orientation: baseRecord.orientation,
+            pageWidth: baseRecord.pageWidth,
+            pageHeight: baseRecord.pageHeight,
+            trimSizeInches: baseRecord.trimSizeInches,
+            layoutVersion: baseRecord.layoutVersion,
+            printTitle: baseRecord.printTitle,
+            backCoverPitch: baseRecord.backCoverPitch,
+            coverFontPreset: baseRecord.coverFontPreset,
+            pdfStoragePath: "ui-test/interior.pdf",
+            pdfURL: "https://example.invalid/interior.pdf",
+            pdfPageCount: baseRecord.pageCount,
+            coverStoragePath: "ui-test/cover.pdf",
+            coverURL: "https://example.invalid/cover.pdf",
+            coverArtRevision: 1,
+            syncedAt: baseRecord.createdAt,
+            renderStatus: BookRenderStatus.rendered.rawValue,
+            renderedAt: baseRecord.createdAt,
+            renderError: nil,
+            renderAttemptCount: 1,
+            renderDurationMs: nil,
+            totalPngBytes: nil,
+            pdfBytes: nil,
+            source: baseRecord.source,
+            pages: baseRecord.pages,
+            bookDisplayName: "ui_test_book",
+            userHandle: nil,
+            bookSeq: 1
+        )
+        lastSyncedBookVersionId = baseRecord.bookVersionId
+        if ProcessInfo.processInfo.arguments.contains("-UITestSeedPrintCart") {
+            OrderCartStore.shared.addOrIncrement(
+                bookVersionId: "ui-test-existing-cart-book",
+                displayTitle: "A Different Memoir",
+                coverURL: nil,
+                productOptionId: "portrait_hardcover_casewrap",
+                productTitle: "Hardcover (Casewrap)",
+                quantity: 1,
+                snapshotPageCount: 48,
+                isLandscape: false
+            )
+        }
+        hasGeneratedStorybook = true
+        isVisualBookReady = true
+        requiresVisualReadyGate = false
+        isLoadingProfileBook = false
+        isLoading = false
+        errorMessage = nil
+    }
+
+    deinit {
+        for observer in progressLifecycleObservers {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
 
@@ -715,38 +861,6 @@ class StoryPageViewModel: ObservableObject {
         }
     }
     
-    // NEW: Clear current storybook (for regeneration)
-    func clearCurrentStorybook() {
-        pageItems.removeAll()
-        freeformPageDocuments.removeAll()
-        freeformUnavailablePageIDs.removeAll()
-        freeformPendingPageIDs.removeAll()
-        hasGeneratedStorybook = false
-        isVisualBookReady = false
-        isFinalizingAssets = false
-        requiresVisualReadyGate = false
-        currentBookVersionRecord = nil
-        hasUnpublishedBookChanges = false
-        errorMessage = nil
-        loadedBookOrientation = nil
-        loadedBookPageWidth = nil
-        loadedBookPageHeight = nil
-        bookDisplayTitle = ""
-        backCoverPitch = ""
-        coverFontPreset = ""
-        lastSyncedBookVersionId = nil
-        lastPersistedBookCreatedAt = nil
-        precomposedIllustrationMemoryIDs = []
-        illustrationReloadSources = [:]
-        illustrationRetryInProgress = []
-        skippedMemoriesDuringGeneration = []
-        
-        // Clear persisted data for current profile
-        if let profileID = currentProfileID {
-            clearPersistedStorybook(for: profileID)
-        }
-    }
-
     func freeformDocument(at pageIndex: Int) -> BookPageDocument? {
         guard pageItems.indices.contains(pageIndex) else { return nil }
         return freeformPageDocuments[pageItems[pageIndex].id]
@@ -767,7 +881,7 @@ class StoryPageViewModel: ObservableObject {
     }
 
     func makeEditableFreeformDocument(at pageIndex: Int) async throws -> BookPageDocument {
-        guard !isLoadingProfileBook, !isSavingBookRevision else {
+        guard !isLoadingProfileBook else {
             throw BookPageEditorPersistenceError.editingUnavailable
         }
         guard pageItems.indices.contains(pageIndex) else {
@@ -778,15 +892,47 @@ class StoryPageViewModel: ObservableObject {
               !freeformPendingPageIDs.contains(item.id) else {
             throw BookPageEditorPersistenceError.cloudLayoutUnavailable
         }
-        if let existing = freeformPageDocuments[item.id] {
+        let spec = resolvedPrintSpec()
+        let typographyPreset: BookPageTypographyPreset = switch currentArtStyle {
+        case .kidsBook: .kidsBook
+        case .comic: .comic
+        case .realistic: .realistic
+        case .custom: .custom
+        }
+        if var existing = freeformPageDocuments[item.id] {
+            existing.pageAspectRatio = Double(spec.widthPt / max(spec.heightPt, 1))
+            if BookInteriorPageDocumentFactory.requiresSemanticMigration(
+                memoryID: item.memoryID,
+                document: existing
+            ) {
+                return try makeSemanticInteriorDocument(
+                    item: item,
+                    spec: spec,
+                    typographyPreset: typographyPreset,
+                    legacyDocument: existing
+                )
+            }
             return existing
         }
 
-        let spec = resolvedPrintSpec()
+        if BookInteriorAnchor.isNonMemoryPage(item.memoryID) {
+            return try makeSemanticInteriorDocument(
+                item: item,
+                spec: spec,
+                typographyPreset: typographyPreset,
+                legacyDocument: nil
+            )
+        }
+        let isLandscape = spec.orientation == "landscape"
         var document = BookPageDocument(pageAspectRatio: Double(spec.widthPt / max(spec.heightPt, 1)))
 
         switch item {
         case .illustration(let image, let memoryID, let title):
+            let isPrecomposed = isPrecomposedIllustration(memoryID: memoryID)
+            let layout = BookPageCanonicalLayout.illustration(
+                isLandscape: isLandscape,
+                isPrecomposed: isPrecomposed
+            )
             guard let sourceData = image.jpegData(compressionQuality: 0.88) else {
                 throw BookPageImagePreparationError.couldNotCompress
             }
@@ -794,57 +940,301 @@ class StoryPageViewModel: ObservableObject {
                 try BookPageImagePreparation.prepareForStorage(
                     sourceData,
                     accessibilityDescription: "Generated memoir illustration",
-                    fit: .fit,
+                    fit: layout.imageFit,
                     source: .aiGenerated
                 )
             }.value
-            let isPrecomposed = isPrecomposedIllustration(memoryID: memoryID)
             _ = try document.addImage(
                 storedImage,
-                frame: isPrecomposed
-                    ? NormalizedPageRect(x: 0, y: 0, width: 1, height: 1)
-                    : NormalizedPageRect(x: 0.06, y: 0.13, width: 0.88, height: 0.76)
+                frame: layout.imageFrame
             )
             if !isPrecomposed,
                let title = title?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !title.isEmpty {
+               !title.isEmpty,
+               let titleFrame = layout.titleFrame {
                 let titleID = try document.addText(
                     title,
-                    frame: NormalizedPageRect(x: 0.06, y: 0.035, width: 0.80, height: 0.075)
+                    frame: titleFrame,
+                    role: .title,
+                    typographyPreset: typographyPreset
                 )
-                document.updateFontSize(id: titleID, fontSize: 0.032)
+                document.updateFontSize(id: titleID, fontSize: 0.035)
             }
 
         case .textPage(_, _, let body, let title, let subtitle, _):
-            var bodyTop = 0.10
-            if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let trimmedSubtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let layout = BookPageCanonicalLayout.text(
+                isLandscape: isLandscape,
+                hasTitle: !trimmedTitle.isEmpty,
+                hasSubtitle: !trimmedSubtitle.isEmpty
+            )
+            if !trimmedTitle.isEmpty, let titleFrame = layout.titleFrame {
                 let titleID = try document.addText(
-                    title,
-                    frame: NormalizedPageRect(x: 0.08, y: 0.06, width: 0.84, height: 0.10)
+                    trimmedTitle,
+                    frame: titleFrame,
+                    role: .title,
+                    typographyPreset: typographyPreset
                 )
-                document.updateFontSize(id: titleID, fontSize: 0.044)
-                bodyTop = 0.18
+                document.updateFontSize(id: titleID, fontSize: 0.035)
             }
-            if let subtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !subtitle.isEmpty {
+            if !trimmedSubtitle.isEmpty, let subtitleFrame = layout.subtitleFrame {
                 let subtitleID = try document.addText(
-                    subtitle,
-                    frame: NormalizedPageRect(x: 0.08, y: bodyTop, width: 0.84, height: 0.075)
+                    trimmedSubtitle,
+                    frame: subtitleFrame,
+                    role: .subtitle,
+                    typographyPreset: typographyPreset
                 )
-                document.updateFontSize(id: subtitleID, fontSize: 0.026)
-                bodyTop += 0.09
+                document.updateFontSize(id: subtitleID, fontSize: 0.021)
             }
             let bodyID = try document.addText(
                 body,
-                frame: NormalizedPageRect(x: 0.08, y: bodyTop, width: 0.84, height: max(0.12, 0.88 - bodyTop))
+                frame: layout.bodyFrame,
+                role: .body,
+                typographyPreset: typographyPreset
             )
-            document.updateFontSize(id: bodyID, fontSize: 0.029)
+            document.updateFontSize(id: bodyID, fontSize: 0.020)
         }
 
         return document
     }
 
-    func applyFreeformDocument(_ document: BookPageDocument, pageID: String) async throws {
-        guard !isLoadingProfileBook, !isSavingBookRevision else {
+    private func makeSemanticInteriorDocument(
+        item: PageItem,
+        spec: BookPrintSpec,
+        typographyPreset: BookPageTypographyPreset,
+        legacyDocument: BookPageDocument?
+    ) throws -> BookPageDocument {
+        guard case .textPage(_, _, let body, let title, let subtitle, let memoryID) = item else {
+            throw BookPageEditorPersistenceError.editingUnavailable
+        }
+        let renderScale: CGFloat = 2
+        let width = spec.widthPt * renderScale
+        let height = spec.heightPt * renderScale
+        let backgroundImage: UIImage
+        if memoryID == BookInteriorAnchor.titlePageMemoryId {
+            backgroundImage = MemoirCoverFrontPage(
+                title: "",
+                subtitle: "",
+                frameWidth: width,
+                frameHeight: height,
+                isKidsBook: currentArtStyle == .kidsBook
+            ).snapshot(width: width, height: height)
+        } else if memoryID == BookInteriorAnchor.closingPageMemoryId {
+            backgroundImage = MemoirCoverBackBackgroundPage(
+                frameWidth: width,
+                frameHeight: height
+            ).snapshot(width: width, height: height)
+        } else {
+            backgroundImage = MemoirBlankPage(
+                frameWidth: width,
+                frameHeight: height
+            ).snapshot(width: width, height: height)
+        }
+        guard let backgroundData = backgroundImage.jpegData(compressionQuality: 0.9) else {
+            throw BookPageImagePreparationError.couldNotCompress
+        }
+        let background = try BookPageImagePreparation.prepareForStorage(
+            backgroundData,
+            accessibilityDescription: "Book page background",
+            fit: .fill,
+            source: .pageBackground,
+            maximumPixelCount: 2_000_000
+        )
+        return try BookInteriorPageDocumentFactory.make(
+            memoryID: memoryID,
+            title: title,
+            body: body,
+            subtitle: subtitle,
+            pageAspectRatio: Double(spec.widthPt / max(spec.heightPt, 1)),
+            typographyPreset: typographyPreset,
+            isKidsBook: currentArtStyle == .kidsBook,
+            background: background,
+            preservingEditableElementsFrom: legacyDocument
+        )
+    }
+
+    private func normalizeSemanticBookendDocuments() {
+        let spec = resolvedPrintSpec()
+        let expectedAspectRatio = Double(spec.widthPt / max(spec.heightPt, 1))
+        let typographyPreset: BookPageTypographyPreset = switch currentArtStyle {
+        case .kidsBook: .kidsBook
+        case .comic: .comic
+        case .realistic: .realistic
+        case .custom: .custom
+        }
+
+        for item in pageItems where BookInteriorPageDocumentFactory.expectedTemplate(for: item.memoryID) != nil {
+            guard !freeformPendingPageIDs.contains(item.id),
+                  !freeformUnavailablePageIDs.contains(item.id) else { continue }
+            if var existing = freeformPageDocuments[item.id],
+               !BookInteriorPageDocumentFactory.requiresSemanticMigration(
+                    memoryID: item.memoryID,
+                    document: existing
+               ) {
+                existing.pageAspectRatio = expectedAspectRatio
+                freeformPageDocuments[item.id] = existing
+                continue
+            }
+            do {
+                freeformPageDocuments[item.id] = try makeSemanticInteriorDocument(
+                    item: item,
+                    spec: spec,
+                    typographyPreset: typographyPreset,
+                    legacyDocument: freeformPageDocuments[item.id]
+                )
+            } catch {
+                print("⚠️ Could not normalize semantic bookend \(item.id): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func makeEditableExteriorCoverDocument(panel: BookCoverFlatPanel) async throws -> BookPageDocument {
+        guard !isLoadingProfileBook,
+              panel == .front || panel == .back,
+              let record = currentBookVersionRecord,
+              let coverURL = record.printCoverPDFURL else {
+            throw BookPageEditorPersistenceError.editingUnavailable
+        }
+        let spec = resolvedPrintSpec()
+        guard let panelAspectRatio = BookCoverRenderer.flatPanelAspectRatio(
+            for: record.coverFlatLayoutKind,
+            panel: panel
+        ) else {
+            throw BookPageEditorPersistenceError.cloudLayoutUnavailable
+        }
+        let panelTargetSize = CGSize(
+            width: spec.heightPt * 2 * panelAspectRatio,
+            height: spec.heightPt * 2
+        )
+        guard let panelImage = await CoverPDFThumbnailService.loadAndCache(
+            url: coverURL,
+            layout: record.coverFlatLayoutKind,
+            panel: panel,
+            targetSize: panelTargetSize,
+            cacheRevision: record.coverThumbnailCacheRevision,
+            cacheIdentity: record.coverStoragePath ?? ""
+        ) else {
+            throw BookPageEditorPersistenceError.cloudLayoutUnavailable
+        }
+        return try makeLockedSnapshotDocument(
+            image: panelImage,
+            aspectRatio: panelAspectRatio,
+            accessibilityDescription: panel == .front ? "Original front cover" : "Original back cover"
+        )
+    }
+
+    private func makeLockedSnapshotDocument(
+        image: UIImage,
+        aspectRatio: CGFloat,
+        accessibilityDescription: String
+    ) throws -> BookPageDocument {
+        guard let sourceData = image.jpegData(compressionQuality: 0.9) else {
+            throw BookPageImagePreparationError.couldNotCompress
+        }
+        let storedImage = try BookPageImagePreparation.prepareForStorage(
+            sourceData,
+            accessibilityDescription: accessibilityDescription,
+            fit: .fill,
+            source: .pageBackground,
+            maximumPixelCount: 2_000_000
+        )
+        var document = BookPageDocument(pageAspectRatio: Double(aspectRatio))
+        _ = try document.addImage(
+            storedImage,
+            frame: NormalizedPageRect(x: 0, y: 0, width: 1, height: 1)
+        )
+        return document
+    }
+
+    func applyExteriorCoverDocument(
+        _ document: BookPageDocument,
+        panel: BookCoverFlatPanel
+    ) async throws {
+        guard !isLoadingProfileBook,
+              panel == .front || panel == .back,
+              let record = currentBookVersionRecord,
+              let coverURL = record.printCoverPDFURL else {
+            throw BookPageEditorPersistenceError.editingUnavailable
+        }
+        let spec = resolvedPrintSpec()
+        guard let panelAspectRatio = BookCoverRenderer.flatPanelAspectRatio(
+            for: record.coverFlatLayoutKind,
+            panel: panel
+        ) else {
+            throw BookPageEditorPersistenceError.cloudLayoutUnavailable
+        }
+        let panelTargetSize = CGSize(
+            width: spec.heightPt * 2 * panelAspectRatio,
+            height: spec.heightPt * 2
+        )
+        guard let editedPanel = BookPagePrintRenderer.render(
+            document: document,
+            pixelSize: panelTargetSize
+        ) else {
+            throw BookPageEditorPersistenceError.saveFailed
+        }
+        let otherPanel: BookCoverFlatPanel = panel == .front ? .back : .front
+        guard let preservedPanel = await CoverPDFThumbnailService.loadAndCache(
+            url: coverURL,
+            layout: record.coverFlatLayoutKind,
+            panel: otherPanel,
+            targetSize: panelTargetSize,
+            cacheRevision: record.coverThumbnailCacheRevision,
+            cacheIdentity: record.coverStoragePath ?? ""
+        ) else {
+            throw BookPageEditorPersistenceError.cloudLayoutUnavailable
+        }
+        let front = panel == .front ? editedPanel : preservedPanel
+        let back = panel == .back ? editedPanel : preservedPanel
+        let profileDisplayName = profileName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nameForRender = profileDisplayName?.isEmpty == false ? (profileDisplayName ?? "Narrator") : "Narrator"
+        let pdfData: Data?
+        if record.pageWidth > record.pageHeight {
+            pdfData = BookCoverRenderer.renderLuluPDF(
+                frontCoverArt: front,
+                backCoverArt: back,
+                profileName: nameForRender,
+                pageCount: pageItems.count,
+                frontTitle: bookDisplayTitle,
+                backCoverPitch: backCoverPitch,
+                fontPreset: CoverFontPreset(rawValue: coverFontPreset)
+                    ?? CoverCopyPolicy(artStyle: currentArtStyle, profileDisplayName: nameForRender).coverFontPreset(),
+                useNativeFrontTitleOverlay: false,
+                useNativeBackCopyOverlay: false
+            )
+        } else {
+            pdfData = BookCoverRenderer.renderPortraitPDF(
+                frontCoverArt: front,
+                backCoverArt: back,
+                profileName: nameForRender,
+                pageCount: pageItems.count,
+                frontTitle: bookDisplayTitle,
+                backCoverPitch: backCoverPitch,
+                fontPreset: CoverFontPreset(rawValue: coverFontPreset)
+                    ?? CoverCopyPolicy(artStyle: currentArtStyle, profileDisplayName: nameForRender).coverFontPreset(),
+                useNativeFrontTitleOverlay: false,
+                useNativeBackCopyOverlay: false
+            )
+        }
+        let originalBookVersionID = record.bookVersionId
+        guard let pdfData,
+              await saveCurrentBookInPlace(reason: "coverEdit", coverPDFOverride: pdfData),
+              let updatedRecord = currentBookVersionRecord,
+              updatedRecord.bookVersionId != originalBookVersionID,
+              updatedRecord.printCoverPDFURL != nil,
+              let updatedCoverPath = updatedRecord.coverStoragePath,
+              !updatedCoverPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw BookPageEditorPersistenceError.saveFailed
+        }
+    }
+
+    func applyFreeformDocument(
+        _ document: BookPageDocument,
+        pageID: String,
+        onLocallyApplied: (() -> Void)? = nil
+    ) async throws {
+        guard !isLoadingProfileBook else {
             throw BookPageEditorPersistenceError.editingUnavailable
         }
         let expectedProfileID = currentProfileID
@@ -862,12 +1252,25 @@ class StoryPageViewModel: ObservableObject {
         guard BookPageCollectionCapacityPolicy.accepts(candidateDocuments.values) else {
             throw BookPageEditorPersistenceError.bookTooLarge
         }
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-UITestSeedStorybook") {
+            freeformPageDocuments[pageID] = document
+            hasUnpublishedBookChanges = true
+            onLocallyApplied?()
+            return
+        }
+#endif
         let previousDocument = freeformPageDocuments[pageID]
         freeformPageDocuments[pageID] = document
+        hasUnpublishedBookChanges = true
+        onLocallyApplied?()
         guard await saveCurrentBookInPlace(reason: "freeformPageEdit") else {
-            if currentProfileID == expectedProfileID,
-               Auth.auth().currentUser?.uid == expectedUserID,
-               pageItems.contains(where: { $0.id == pageID }) {
+            guard currentProfileID == expectedProfileID,
+                  Auth.auth().currentUser?.uid == expectedUserID,
+                  pageItems.contains(where: { $0.id == pageID }) else {
+                throw BookPageEditorPersistenceError.pageChanged
+            }
+            if freeformPageDocuments[pageID] == document {
                 if let previousDocument {
                     freeformPageDocuments[pageID] = previousDocument
                 } else {
@@ -918,15 +1321,25 @@ class StoryPageViewModel: ObservableObject {
         document: BookPageDocument,
         item: PageItem,
         frameWidth: CGFloat,
-        frameHeight: CGFloat
+        frameHeight: CGFloat,
+        pageNumber: Int? = nil,
+        isLandscape: Bool? = nil
     ) -> AnyView {
+        let isIllustration: Bool = {
+            if case .illustration = item { return true }
+            return false
+        }()
         let page = BookPageDocumentView(document: document)
             .frame(width: frameWidth, height: frameHeight)
-        if item.memoryID == BookInteriorAnchor.titlePageMemoryId
-            || item.memoryID == BookInteriorAnchor.closingPageMemoryId {
-            return AnyView(page)
-        }
-        return AnyView(page.overlay(QRWatermark(memoryID: item.memoryID)))
+            .overlay(
+                BookPageDocumentChrome(
+                    memoryID: BookInteriorAnchor.isNonMemoryPage(item.memoryID) ? nil : item.memoryID,
+                    pageNumber: BookInteriorAnchor.isNonMemoryPage(item.memoryID) ? nil : pageNumber,
+                    isLandscape: isLandscape ?? (resolvedPrintSpec().orientation == "landscape"),
+                    isIllustration: isIllustration
+                )
+            )
+        return AnyView(page)
     }
 
     func freeformPageView(
@@ -940,7 +1353,8 @@ class StoryPageViewModel: ObservableObject {
             document: document,
             item: pageItems[pageIndex],
             frameWidth: frameWidth,
-            frameHeight: frameHeight
+            frameHeight: frameHeight,
+            pageNumber: pageIndex + 1
         )
     }
     
@@ -950,106 +1364,34 @@ class StoryPageViewModel: ObservableObject {
         let printSpec = resolvedPrintSpec()
         let pdfWidth = printSpec.widthPt
         let pdfHeight = printSpec.heightPt
-        let isKids = printSpec.orientation == "landscape"
         
         // PDF bounds in points - always use standard page sizes
         let pdfBounds = CGRect(x: 0, y: 0, width: pdfWidth, height: pdfHeight)
         let renderer = UIGraphicsPDFRenderer(bounds: pdfBounds)
         
-        // For rendering, use PDF dimensions
-        let bookWidth = pdfWidth
-        let bookHeight = pdfHeight
-
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("MemoirAI_Storybook_\(UUID().uuidString).pdf")
 
+        var renderingFailed = false
         do {
             try renderer.writePDF(to: url) { ctx in
-                for (idx, item) in pageItems.enumerated() {
+                for index in pageItems.indices {
                     ctx.beginPage(withBounds: pdfBounds, pageInfo: [:])
                     autoreleasepool {
-
-                    // Build the same SwiftUI view used on-screen
-                    let view: AnyView
-                    let fontStyle = BookFontStyle(artStyle: currentArtStyle)
-                    if let document = freeformPageDocuments[item.id] {
-                        view = freeformPageView(
-                            document: document,
-                            item: item,
-                            frameWidth: bookWidth,
-                            frameHeight: bookHeight
-                        )
-                    } else {
-                    switch item {
-                    case .illustration(let image, let memoryID, let title):
-                        if isPrecomposedIllustration(memoryID: memoryID) {
-                            view = AnyView(
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: bookWidth, height: bookHeight)
-                                    .clipped()
-                            )
-                        } else {
-                            let illustrationView: AnyView
-                            if isKids {
-                                illustrationView = AnyView(KidsBookIllustrationPage(
-                                    image: image,
-                                    memoryID: memoryID,
-                                    title: title,
-                                    frameWidth: bookWidth,
-                                    frameHeight: bookHeight,
-                                    pageNumber: idx + 1))
-                            } else {
-                                illustrationView = AnyView(VerticalBookIllustrationPage(
-                                    image: image,
-                                    memoryID: memoryID,
-                                    title: title,
-                                    fontStyle: fontStyle,
-                                    frameWidth: bookWidth,
-                                    frameHeight: bookHeight,
-                                    pageNumber: idx + 1,
-                                    totalPages: pageItems.count))
-                            }
-                            let qrTopInset: CGFloat = bookHeight * 0.065 + 6
-                            view = AnyView(illustrationView.overlay(QRWatermark(memoryID: memoryID, topInset: qrTopInset)))
+                        guard let image = renderCurrentBookPagesAsImages(
+                            indices: index..<(index + 1),
+                            printSpecSnapshot: printSpec
+                        ).first else {
+                            renderingFailed = true
+                            return
                         }
-                    case .textPage(let pIdx, let total, let body, let title, let subtitle, let memoryID):
-                        let textView: AnyView
-                        if isKids {
-                            textView = AnyView(KidsBookTextPage(
-                                index: pIdx,
-                                total: total,
-                                text: body,
-                                title: title,
-                                subtitle: subtitle,
-                                memoryID: memoryID,
-                                fontStyle: fontStyle,
-                                frameWidth: bookWidth,
-                                frameHeight: bookHeight,
-                                pageNumber: idx + 1))
-                        } else {
-                            textView = AnyView(VerticalBookTextPage(
-                                index: pIdx,
-                                total: total,
-                                text: body,
-                                title: title,
-                                subtitle: subtitle,
-                                memoryID: memoryID,
-                                fontStyle: fontStyle,
-                                frameWidth: bookWidth,
-                                frameHeight: bookHeight,
-                                pageNumber: idx + 1))
-                        }
-                        view = AnyView(textView.overlay(QRWatermark(memoryID: memoryID)))
-                    }
-                    }
-
-                    // Snapshot & draw full-bleed
-                    let img = view.snapshot(width: bookWidth, height: bookHeight)
-                    img.draw(in: pdfBounds)
+                        image.draw(in: pdfBounds)
                     }
                 }
+            }
+            guard !renderingFailed else {
+                try? FileManager.default.removeItem(at: url)
+                return nil
             }
             return url
         } catch {
@@ -1091,7 +1433,9 @@ class StoryPageViewModel: ObservableObject {
                     document: document,
                     item: item,
                     frameWidth: bookWidth,
-                    frameHeight: bookHeight
+                    frameHeight: bookHeight,
+                    pageNumber: idx + 1,
+                    isLandscape: isKids
                 )
             } else {
             switch item {
@@ -1141,6 +1485,10 @@ class StoryPageViewModel: ObservableObject {
                             frameHeight: bookHeight,
                             isKidsBook: isKids
                         )
+                    )
+                } else if memoryID == BookInteriorAnchor.blankPageMemoryId {
+                    view = AnyView(
+                        MemoirBlankPage(frameWidth: bookWidth, frameHeight: bookHeight)
                     )
                 } else if memoryID == BookInteriorAnchor.closingPageMemoryId {
                     view = AnyView(
@@ -1376,8 +1724,8 @@ class StoryPageViewModel: ObservableObject {
     private func rankedCoverSignals(maxCount: Int = 5) -> [String] {
         let memoryItems = persistablePageItemsFromCurrentState().filter { item in
             guard let memoryId = BookVersionRecordFactory.memoryId(from: item.url) else { return false }
-            return memoryId != BookInteriorAnchor.titlePageMemoryId.uuidString &&
-                memoryId != BookInteriorAnchor.closingPageMemoryId.uuidString
+            guard let id = UUID(uuidString: memoryId) else { return true }
+            return !BookInteriorAnchor.isNonMemoryPage(id)
         }
         guard !memoryItems.isEmpty else { return [] }
 
@@ -1468,7 +1816,7 @@ class StoryPageViewModel: ObservableObject {
     private func stripInteriorBookendPages() {
         pageItems.removeAll {
             if case .textPage(_, _, _, _, _, let id) = $0 {
-                return id == BookInteriorAnchor.titlePageMemoryId || id == BookInteriorAnchor.closingPageMemoryId
+                return BookInteriorAnchor.isNonMemoryPage(id)
             }
             return false
         }
@@ -1491,16 +1839,26 @@ class StoryPageViewModel: ObservableObject {
             subtitle: nil,
             memoryID: BookInteriorAnchor.titlePageMemoryId
         )
+        let blank = PageItem.textPage(
+            index: 1,
+            total: 1,
+            body: "",
+            title: nil,
+            subtitle: nil,
+            memoryID: BookInteriorAnchor.blankPageMemoryId
+        )
         let closing = PageItem.textPage(
             index: 1,
             total: 1,
-            body: closingPitch,
-            title: "About this book",
+            body: "",
+            title: "Made with Memoir",
             subtitle: policy.subjectDisplayName(),
             memoryID: BookInteriorAnchor.closingPageMemoryId
         )
         pageItems.insert(opening, at: 0)
+        pageItems.insert(blank, at: 1)
         pageItems.append(closing)
+        normalizeSemanticBookendDocuments()
     }
 
     private func hasInteriorTitlePage() -> Bool {
@@ -1521,18 +1879,30 @@ class StoryPageViewModel: ObservableObject {
         }
     }
 
+    private func hasInteriorBlankPage() -> Bool {
+        pageItems.contains {
+            if case .textPage(_, _, _, _, _, let id) = $0 {
+                return id == BookInteriorAnchor.blankPageMemoryId
+            }
+            return false
+        }
+    }
+
     private func ensureInteriorBookendsPresent() {
         guard !pageItems.isEmpty else { return }
-        guard !hasInteriorTitlePage() || !hasInteriorClosingPage() else { return }
-        let policy = CoverCopyPolicy(artStyle: currentArtStyle, profileDisplayName: profileName ?? "")
-        let trimmedTitle = bookDisplayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedTitle.isEmpty {
-            bookDisplayTitle = policy.defaultBookTitle()
+        if !hasInteriorTitlePage() || !hasInteriorBlankPage() || !hasInteriorClosingPage() {
+            let policy = CoverCopyPolicy(artStyle: currentArtStyle, profileDisplayName: profileName ?? "")
+            let trimmedTitle = bookDisplayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedTitle.isEmpty {
+                bookDisplayTitle = policy.defaultBookTitle()
+            }
+            let pitch = backCoverPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? policy.fallbackBackCoverPitch(bookTitle: bookDisplayTitle)
+                : backCoverPitch
+            refreshInteriorBookends(openingBlurb: policy.interiorTitlePageBlurb(), closingPitch: pitch)
+        } else {
+            normalizeSemanticBookendDocuments()
         }
-        let pitch = backCoverPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? policy.fallbackBackCoverPitch(bookTitle: bookDisplayTitle)
-            : backCoverPitch
-        refreshInteriorBookends(openingBlurb: policy.interiorTitlePageBlurb(), closingPitch: pitch)
     }
 
     /// Older books stored `title`/`subtitle` only on the first text page of a memory; continuation pages used `nil`, which hid headers.
@@ -1540,7 +1910,7 @@ class StoryPageViewModel: ObservableObject {
         var firstHeaderByMemory: [UUID: (title: String?, subtitle: String?)] = [:]
         for i in pageItems.indices {
             guard case .textPage(let idx, let total, let body, let t, let s, let mid) = pageItems[i] else { continue }
-            if mid == BookInteriorAnchor.titlePageMemoryId || mid == BookInteriorAnchor.closingPageMemoryId {
+            if BookInteriorAnchor.isNonMemoryPage(mid) {
                 continue
             }
             if let existing = firstHeaderByMemory[mid] {
@@ -1964,9 +2334,6 @@ class StoryPageViewModel: ObservableObject {
             lastSyncedBookVersionId = bookId
             lastPersistedBookCreatedAt = bookCreatedAt
             hasUnpublishedBookChanges = false
-            if updated == nil {
-                isVisualBookReady = false
-            }
         }
         do {
             try writeStorybookToLocalAndICloudCaches(
@@ -2147,20 +2514,24 @@ class StoryPageViewModel: ObservableObject {
             
             // Convert back to PageItems
             var restoredFreeformDocuments: [String: BookPageDocument] = [:]
+            var seenBookendIDs: Set<UUID> = []
             pageItems = storybook.pageItems.compactMap { persistableItem in
-                // Extract memoryID from URL if present
-                var memoryID: UUID?
-                if let urlString = persistableItem.url,
-                   let url = URL(string: urlString),
-                   url.scheme == "memoirai",
-                   url.host == "memory" {
-                    let pathComponents = url.pathComponents
-                    if pathComponents.count > 1 {
-                        memoryID = UUID(uuidString: pathComponents[1])
-                    }
+                let linkedMemoryID = persistableItem.url
+                    .flatMap(URL.init(string:))
+                    .flatMap(MemoryLinks.parseMemoryDeepLink)
+                let finalMemoryID = StorybookBookendRecoveryPolicy.recoveredMemoryID(
+                    storedMemoryID: linkedMemoryID?.uuidString,
+                    pageType: persistableItem.type,
+                    title: persistableItem.title,
+                    textContent: persistableItem.textContent
+                ) ?? UUID()
+                guard StorybookBookendRecoveryPolicy.shouldInclude(
+                    memoryID: finalMemoryID,
+                    seenBookendIDs: seenBookendIDs
+                ) else { return nil }
+                if BookInteriorAnchor.isNonMemoryPage(finalMemoryID) {
+                    seenBookendIDs.insert(finalMemoryID)
                 }
-                // Fallback to generating a new UUID if not found
-                let finalMemoryID = memoryID ?? UUID()
                 
                 switch persistableItem.type {
                 case "illustration":
@@ -2281,6 +2652,11 @@ class StoryPageViewModel: ObservableObject {
             print("[StorybookLoad] SKIP applyBookVersionRecord (isLoading) — avoid racing generateStorybook")
             return false
         case .skipBecauseLocalPersistedBookIsNewer(let localCreated, let cloudCreated, let delta):
+            if lastSyncedBookVersionId == record.bookVersionId {
+                applyCanonicalBookMetadataFromCloudRecord(record)
+                print("[StorybookLoad] applied canonical metadata to matching local book; preserving \(pageItems.count) local pages")
+                return true
+            }
             print("[StorybookLoad] SKIP applyBookVersionRecord — local current.book newer by \(String(format: "%.1f", delta))s (local=\(localCreated.timeIntervalSince1970) cloud=\(cloudCreated.timeIntervalSince1970))")
             return false
         case .skipBecauseCloudIsPartial(let inArray, let count):
@@ -2396,7 +2772,7 @@ class StoryPageViewModel: ObservableObject {
     }
 
     /// - Parameter galleryApplyToken: When non-`nil`, ties apply to `galleryBookLoadGeneration` / task cancellation so superseded selections never commit mixed state.
-    ///   Canonical metadata is applied up front; `pageItems` is published with placeholder illustrations immediately for My Library loads (`isLoadingGalleryBook` clears before downloads finish).
+    ///   Canonical metadata is applied up front; pageItems is published with placeholder illustrations immediately for My Library loads (isLoadingGalleryBook clears before downloads finish).
     /// - Returns: `true` if `pageItems` were committed for this record.
     @discardableResult
     private func applyBookVersionRecord(
@@ -2447,6 +2823,7 @@ class StoryPageViewModel: ObservableObject {
         let sortedPages = record.pages.sorted(by: { $0.pageIndex < $1.pageIndex })
         var slots: [PageItem?] = Array(repeating: nil, count: sortedPages.count)
         var precomposedMemoryIDs: Set<UUID> = []
+        var seenBookendIDs: Set<UUID> = []
 
         struct IllustrationPageWork {
             let page: BookVersionPageRecord
@@ -2456,7 +2833,19 @@ class StoryPageViewModel: ObservableObject {
         var freeformDocumentWork: [(pageID: String, url: String)] = []
 
         for (idx, page) in sortedPages.enumerated() {
-            let memoryUUID = UUID(uuidString: page.memoryId ?? "") ?? UUID()
+            let memoryUUID = StorybookBookendRecoveryPolicy.recoveredMemoryID(
+                storedMemoryID: page.memoryId,
+                pageType: page.type,
+                title: page.title,
+                textContent: page.textContent
+            ) ?? UUID()
+            guard StorybookBookendRecoveryPolicy.shouldInclude(
+                memoryID: memoryUUID,
+                seenBookendIDs: seenBookendIDs
+            ) else { continue }
+            if BookInteriorAnchor.isNonMemoryPage(memoryUUID) {
+                seenBookendIDs.insert(memoryUUID)
+            }
             if page.type == "textPage" {
                 let text = page.textContent ?? ""
                 let pageItem = PageItem.textPage(
@@ -2546,6 +2935,11 @@ class StoryPageViewModel: ObservableObject {
                 }
             }
         }
+
+        // Downloads complete after the first bookend normalization pass. Upgrade
+        // legacy title/closing documents before the reader can hand a different
+        // layout to the editor.
+        normalizeSemanticBookendDocuments()
 
         let bookVersionId = record.bookVersionId
         /// Parallelize cloud illustration fetches (sequential was very slow for large books). Chunked to avoid hundreds of simultaneous connections.
@@ -2699,18 +3093,24 @@ class StoryPageViewModel: ObservableObject {
         loadedBookPageHeight = CGFloat(layout.pageHeight)
 
         var restoredFreeformDocuments: [String: BookPageDocument] = [:]
+        var seenBookendIDs: Set<UUID> = []
         pageItems = legacy.pageItems.compactMap { persistableItem in
-            var memoryID: UUID?
-            if let urlString = persistableItem.url,
-               let url = URL(string: urlString),
-               url.scheme == "memoirai",
-               url.host == "memory" {
-                let pathComponents = url.pathComponents
-                if pathComponents.count > 1 {
-                    memoryID = UUID(uuidString: pathComponents[1])
-                }
+            let linkedMemoryID = persistableItem.url
+                .flatMap(URL.init(string:))
+                .flatMap(MemoryLinks.parseMemoryDeepLink)
+            let finalMemoryID = StorybookBookendRecoveryPolicy.recoveredMemoryID(
+                storedMemoryID: linkedMemoryID?.uuidString,
+                pageType: persistableItem.type,
+                title: persistableItem.title,
+                textContent: persistableItem.textContent
+            ) ?? UUID()
+            guard StorybookBookendRecoveryPolicy.shouldInclude(
+                memoryID: finalMemoryID,
+                seenBookendIDs: seenBookendIDs
+            ) else { return nil }
+                if BookInteriorAnchor.isNonMemoryPage(finalMemoryID) {
+                seenBookendIDs.insert(finalMemoryID)
             }
-            let finalMemoryID = memoryID ?? UUID()
             switch persistableItem.type {
             case "illustration":
                 guard let imageData = persistableItem.imageData ?? persistableItem.freeformDocument?.storedImageData(from: .aiGenerated),
@@ -3067,20 +3467,24 @@ class StoryPageViewModel: ObservableObject {
     func loadHistoricBook(_ book: PersistableStorybook) {
         // Convert PersistablePageItem[] to PageItem[] using the same logic as loadPersistedStorybook
         var restoredFreeformDocuments: [String: BookPageDocument] = [:]
+        var seenBookendIDs: Set<UUID> = []
         pageItems = book.pageItems.compactMap { persistableItem in
-            // Extract memoryID from URL if present
-            var memoryID: UUID?
-            if let urlString = persistableItem.url,
-               let url = URL(string: urlString),
-               url.scheme == "memoirai",
-               url.host == "memory" {
-                let pathComponents = url.pathComponents
-                if pathComponents.count > 1 {
-                    memoryID = UUID(uuidString: pathComponents[1])
-                }
+            let linkedMemoryID = persistableItem.url
+                .flatMap(URL.init(string:))
+                .flatMap(MemoryLinks.parseMemoryDeepLink)
+            let finalMemoryID = StorybookBookendRecoveryPolicy.recoveredMemoryID(
+                storedMemoryID: linkedMemoryID?.uuidString,
+                pageType: persistableItem.type,
+                title: persistableItem.title,
+                textContent: persistableItem.textContent
+            ) ?? UUID()
+            guard StorybookBookendRecoveryPolicy.shouldInclude(
+                memoryID: finalMemoryID,
+                seenBookendIDs: seenBookendIDs
+            ) else { return nil }
+                if BookInteriorAnchor.isNonMemoryPage(finalMemoryID) {
+                seenBookendIDs.insert(finalMemoryID)
             }
-            // Fallback to generating a new UUID if not found
-            let finalMemoryID = memoryID ?? UUID()
             
             switch persistableItem.type {
             case "illustration":
@@ -3351,24 +3755,6 @@ class StoryPageViewModel: ObservableObject {
             "tell me about", "describe", "share", "think of"
         ]
         return questionPrefixes.contains { normalizedPrompt.hasPrefix($0 + " ") || normalizedPrompt == $0 }
-    }
-    
-    private func clearPersistedStorybook(for profileID: UUID) {
-        StorybookLocalStore.removeCurrentBook(profileID: profileID)
-        guard let userID = MemoryUserScope.currentFirebaseUserId else { return }
-        let localKey = "storybook_\(userID)_\(profileID.uuidString)"
-        UserDefaults.standard.removeObject(forKey: localKey)
-        
-        // Also clear from iCloud
-        let cloudStore = NSUbiquitousKeyValueStore.default
-        let cloudKey = StorybookStorageScope.cloudCurrentKey(
-            userID: userID,
-            profileID: profileID
-        )
-        cloudStore.removeObject(forKey: cloudKey)
-        cloudStore.synchronize()
-        
-        print("🗑️ Cleared persisted storybook for profile: \(profileID)")
     }
     
     /// Copies persisted vision likeness from the grandparent profile into the job payload for cloud generation.
@@ -5267,7 +5653,6 @@ class StoryPageViewModel: ObservableObject {
     private func startStorybookCloudJobListener(jobId: String, profileID: UUID, thisRun: UInt64) {
         stopStorybookCloudJobListener()
         cloudStorybookFinalizeStarted = false
-        lastRebuiltCompletedCount = nil
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let ref = Firestore.firestore()
             .collection("users").document(uid)
@@ -5288,7 +5673,20 @@ class StoryPageViewModel: ObservableObject {
                 }
                 return
             }
-            guard let snap, snap.exists else { return }
+            guard let snap, snap.exists else {
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          thisRun == self.storybookGenerationCounter,
+                          self.currentProfileID == profileID else { return }
+                    self.errorMessage = "This generation could not be found. Start a new book to try again."
+                    self.stopStorybookCloudJobListener()
+                    self.stopProgressTracking(succeeded: false)
+                    self.isFinalizingAssets = false
+                    self.isLoading = false
+                    self.requiresVisualReadyGate = false
+                }
+                return
+            }
             Task { @MainActor in
                 guard thisRun == self.storybookGenerationCounter,
                       self.currentProfileID == profileID,
@@ -5373,25 +5771,7 @@ class StoryPageViewModel: ObservableObject {
             return
         }
 
-        if status == "running" || status == "ranking" || status == "queued" {
-            if lastRebuiltCompletedCount != completed || pageItems.isEmpty {
-                if (try? await rebuildPageItemsFromCloudJobData(
-                    data,
-                    profileID: profileID,
-                    expectedUserID: userID,
-                    expectedRun: thisRun
-                )) != nil,
-                   StorybookAsyncRunPolicy.isCurrent(
-                    expectedUserID: userID,
-                    expectedProfileID: profileID,
-                    expectedRun: thisRun,
-                    currentUserID: Auth.auth().currentUser?.uid,
-                    currentProfileID: currentProfileID,
-                    currentRun: storybookGenerationCounter
-                   ) {
-                    lastRebuiltCompletedCount = completed
-                }
-            }
+        if StorybookCloudPageRebuildPolicy.shouldDeferPageRebuild(status: status) {
             guard Auth.auth().currentUser?.uid == userID,
                   currentProfileID == profileID,
                   storybookGenerationCounter == thisRun else { return }
@@ -5414,6 +5794,12 @@ class StoryPageViewModel: ObservableObject {
             if let record = completedRecord,
                StorybookCloudApplyPolicy.isPrintReady(record),
                await applyBookVersionRecord(record) {
+                let coverPrepared = await prepareFrontCoverPreview(for: record)
+                let coverResult: StorybookCoverRevealPolicy.PreparationResult = coverPrepared ? .ready : .failed
+                guard StorybookCoverRevealPolicy.shouldReveal(
+                    canonicalArtifactsReady: true,
+                    coverPreparation: coverResult
+                ) else { return }
                 stopStorybookCloudJobListener()
                 stopProgressTracking(succeeded: true, recordsCalibration: false)
                 StorybookSeenTracker.shared.markCompletedSeen(jobId: jobId)
@@ -5622,7 +6008,7 @@ class StoryPageViewModel: ObservableObject {
                 throw NSError(
                     domain: "MemoirAI",
                     code: 3,
-                    userInfo: [NSLocalizedDescriptionKey: "Your book could not finish saving its print cover. Check your connection and try again."]
+                    userInfo: [NSLocalizedDescriptionKey: "Your book could not finish saving its print files. Check your connection and try again."]
                 )
             }
             currentStatus = "Finalizing cover and print assets…"
@@ -5713,7 +6099,8 @@ class StoryPageViewModel: ObservableObject {
         let photoPath = try await FirestoreSyncService.shared.uploadSubjectPhotoIfNeeded(subjectPhoto, profileId: profileID)
 
         currentStatus = "Starting cloud generation…"
-        let entries = try await fetchMemoryEntries(for: profileID)
+        let memoirMode = currentMemoirMode()
+        let entries = try await fetchMemoryEntries(for: profileID, memoirMode: memoirMode)
         guard !entries.isEmpty else {
             throw NSError(domain: "MemoirAI", code: 1, userInfo: [NSLocalizedDescriptionKey: "No memories available to generate."])
         }
@@ -5796,6 +6183,8 @@ class StoryPageViewModel: ObservableObject {
 
         var job: [String: Any] = [
             "profileId": profileID.uuidString,
+            "memoirMode": memoirMode.rawValue,
+            "pinnedMemoryIds": entries.compactMap { $0.id?.uuidString },
             "bookVersionId": reservedBookId,
                 "artStyle": currentArtStyle.firestoreKey,
             "pageCountTarget": min(
@@ -5852,7 +6241,7 @@ class StoryPageViewModel: ObservableObject {
 
         startStorybookCloudJobListener(jobId: reservedBookId, profileID: profileID, thisRun: thisRun)
         StorybookGenLog.line("Listener started for storybookJobs/\(reservedBookId.prefix(24))… — progress updates will follow from Firestore.")
-        currentStatus = "Generating in the cloud. You can close the app and come back."
+        currentStatus = "Creating your storybook…"
     }
 
     /// Resume an in-flight cloud job (cold launch / auto-route).
@@ -5940,7 +6329,7 @@ class StoryPageViewModel: ObservableObject {
         currentStatus = "Preparing..."
         // Clear stale book-identity state from any previously-loaded book so the
         // cover/title/pitch don't leak from the previous generation into the new view.
-        // (Equivalent to clearCurrentStorybook() minus the on-disk delete.)
+        // Reset the editor for the new version without deleting the prior book cache or history.
         currentBookVersionRecord = nil
         hasUnpublishedBookChanges = false
         bookDisplayTitle = ""
@@ -5953,8 +6342,12 @@ class StoryPageViewModel: ObservableObject {
         loadedBookPageHeight = nil
         hasGeneratedStorybook = false
         cloudStorybookFinalizeStarted = false
-        // Snapshot before any async work so concurrent cloud loads cannot overwrite `artStyleRaw` mid-generation.
-        let artStyleForGeneration = currentArtStyle
+        // New books use the single supported style even when a legacy preference or
+        // a concurrently loaded older book carries another serialized style.
+        let artStyleForGeneration = StorybookGenerationStylePolicy.supportedArtStyle(
+            legacyStoredValue: artStyleRaw
+        )
+        artStyleRaw = artStyleForGeneration.rawValue
         let thisRun: UInt64 = { storybookGenerationCounter += 1; return storybookGenerationCounter }()
 
         do {
@@ -5982,7 +6375,7 @@ class StoryPageViewModel: ObservableObject {
             stopStorybookCloudJobListener()
             stopProgressTracking(succeeded: false)
             if let nsError = error as? NSError, nsError.code == 429 {
-                errorMessage = "Too many requests to OpenAI. Please wait a few minutes and try again."
+                errorMessage = "The storybook service is receiving too many requests. Please wait a few minutes and try again."
                 print("StoryPageViewModel ERROR: Rate limited (429)")
             } else {
                 errorMessage = error.localizedDescription
@@ -6099,6 +6492,19 @@ class StoryPageViewModel: ObservableObject {
         }
     }
 
+    private func prepareFrontCoverPreview(for record: BookVersionRecord) async -> Bool {
+        guard let coverURL = record.printCoverPDFURL else { return false }
+        let thumbnail = await CoverPDFThumbnailService.loadAndCache(
+            url: coverURL,
+            layout: record.coverFlatLayoutKind,
+            panel: .front,
+            targetSize: CGSize(width: 1200, height: 900),
+            cacheRevision: record.coverThumbnailCacheRevision,
+            cacheIdentity: record.coverStoragePath ?? ""
+        )
+        return thumbnail != nil
+    }
+
     private func refreshBookVersionAfterCoverBackfill(updated: BookVersionRecord, bookVersionId: String) async {
         // Only update the record — do NOT call applyBookVersionRecord here, which would
         // trigger a full page rebuild and risk racing with the user's current view state.
@@ -6130,7 +6536,44 @@ class StoryPageViewModel: ObservableObject {
             if let record = await FirestoreSyncService.shared.fetchBookVersion(bookVersionId: bookVersionId),
                canonicalVisualReadiness(for: record) {
                 print("[CoverFlow] canonicalReadiness MET book=\(bookVersionId.prefix(20))… renderStatus=\(record.renderStatus)")
-                await applyBookVersionRecord(record)
+                let coverPrepared = await prepareFrontCoverPreview(for: record)
+                let coverResult: StorybookCoverRevealPolicy.PreparationResult = coverPrepared ? .ready : .failed
+                guard StorybookCoverRevealPolicy.shouldReveal(
+                    canonicalArtifactsReady: true,
+                    coverPreparation: coverResult
+                ) else {
+                    continue
+                }
+                let localPageKeys = pageItems.map { item in
+                    switch item {
+                    case .illustration(_, let memoryID, _):
+                        return "illustration:\(memoryID.uuidString.lowercased())"
+                    case .textPage(_, _, _, _, _, let memoryID):
+                        return "textPage:\(memoryID.uuidString.lowercased())"
+                    }
+                }
+                let canonicalPageKeys = record.pages
+                    .sorted(by: { $0.pageIndex < $1.pageIndex })
+                    .map { page in
+                        "\(page.type):\((page.memoryId ?? "").lowercased())"
+                    }
+                let hasPlaceholderIllustrations = pageItems.contains { item in
+                    guard case .illustration(let image, _, _) = item else { return false }
+                    return image.size.width <= 2 || image.size.height <= 2
+                }
+                if StorybookCanonicalInstallPolicy.canPreserveLocalPages(
+                    expectedBookVersionID: lastSyncedBookVersionId,
+                    canonicalBookVersionID: record.bookVersionId,
+                    localPageKeys: localPageKeys,
+                    canonicalPageKeys: canonicalPageKeys,
+                    hasUnresolvedIllustrations: !illustrationReloadSources.isEmpty,
+                    hasPlaceholderIllustrations: hasPlaceholderIllustrations
+                ) {
+                    applyCanonicalBookMetadataFromCloudRecord(record)
+                    print("[StorybookLoad] installed canonical metadata without rehydrating \(pageItems.count) generated pages")
+                } else {
+                    guard await applyBookVersionRecord(record) else { return false }
+                }
                 enqueuePrefetchPrintCoverPanels(for: record)
                 isVisualBookReady = true
                 return true
@@ -6140,32 +6583,22 @@ class StoryPageViewModel: ObservableObject {
         return false
     }
 
-    func fetchMemoryEntries(for profileID: UUID) async throws -> [MemoryEntry] {
+    func fetchMemoryEntries(
+        for profileID: UUID,
+        memoirMode: MemoirMode? = nil
+    ) async throws -> [MemoryEntry] {
         let ctx = PersistenceController.shared.container.viewContext
-        // Capture the setting before entering the closure
-        let sourceSetting = self.memorySourceSetting
-        
         return try await ctx.perform {
             let req: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
-            
-            // Base predicate for profile + current Firebase user scope
-            var predicates = [MemoryUserScope.profilePredicate(profileID: profileID)]
-            
-            // Filter by memory source setting
-            switch sourceSetting {
-            case "memoir":
-                // Only memories with chapter (from guided memoir flow)
-                predicates.append(NSPredicate(format: "chapter != nil"))
-            case "recordings":
-                // Only memories without chapter (from quick record)
-                predicates.append(NSPredicate(format: "chapter == nil"))
-            default:
-                // "all" - no additional filter
-                break
-            }
+            let predicates = [
+                MemoryUserScope.profilePredicate(profileID: profileID),
+                NSPredicate(format: "chapter != nil AND chapter != ''")
+            ]
             
             req.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
-            return try ctx.fetch(req)
+            let entries = try ctx.fetch(req)
+            guard let memoirMode else { return entries }
+            return entries.filter { $0.classifiedMemoirMode == memoirMode }
         }
     }
 
@@ -6640,7 +7073,8 @@ class StoryPageViewModel: ObservableObject {
                     frontTitle: titleForPrint,
                     backCoverPitch: pitch,
                     fontPreset: preset,
-                    useNativeFrontTitleOverlay: false
+                    useNativeFrontTitleOverlay: false,
+                    useNativeBackCopyOverlay: false
                 )
             } else {
                 pdfData = BookCoverRenderer.renderPortraitPDF(
@@ -6651,7 +7085,8 @@ class StoryPageViewModel: ObservableObject {
                     frontTitle: titleForPrint,
                     backCoverPitch: pitch,
                     fontPreset: preset,
-                    useNativeFrontTitleOverlay: false
+                    useNativeFrontTitleOverlay: false,
+                    useNativeBackCopyOverlay: false
                 )
             }
 
@@ -6761,7 +7196,7 @@ class StoryPageViewModel: ObservableObject {
         let trimmedSubtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveSubtitle = (trimmedSubtitle?.isEmpty == false) ? trimmedSubtitle : nil
 
-        if memoryID == BookInteriorAnchor.titlePageMemoryId || memoryID == BookInteriorAnchor.closingPageMemoryId {
+        if BookInteriorAnchor.isNonMemoryPage(memoryID) {
             if case .textPage(let pageIndex, let total, _, _, _, _) = pageItems[index] {
                 pageItems[index] = .textPage(
                     index: pageIndex,

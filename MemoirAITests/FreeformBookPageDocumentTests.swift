@@ -22,6 +22,28 @@ struct FreeformBookPageDocumentTests {
         #expect(result == NormalizedPageRect(x: 0.7, y: 0, width: 0.3, height: 0.4))
     }
 
+    @Test func movingLightlySnapsToPageAndNearbyElementAlignment() {
+        let source = NormalizedPageRect(x: 0.2, y: 0.2, width: 0.2, height: 0.2)
+        let nearbyElement = NormalizedPageRect(x: 0.51, y: 0.61, width: 0.2, height: 0.2)
+        let aligned = BookPageEditingPolicy.moved(
+            source,
+            normalizedTranslation: CGSize(width: 0.301, height: 0.409),
+            snappingTo: [nearbyElement]
+        )
+
+        #expect(abs(aligned.x - nearbyElement.x) < 1e-12)
+        #expect(abs(aligned.y - nearbyElement.y) < 1e-12)
+
+        let outsideThreshold = BookPageEditingPolicy.moved(
+            source,
+            normalizedTranslation: CGSize(width: 0.28, height: 0.38),
+            snappingTo: [nearbyElement]
+        )
+
+        #expect(abs(outsideThreshold.x - 0.48) < 1e-12)
+        #expect(abs(outsideThreshold.y - 0.58) < 1e-12)
+    }
+
     @Test func everyResizeHandleHonorsMinimumSizeAndBounds() {
         let source = NormalizedPageRect(x: 0.2, y: 0.2, width: 0.4, height: 0.4)
 
@@ -68,12 +90,61 @@ struct FreeformBookPageDocumentTests {
         #expect(secondImage.y + secondImage.height <= 1)
     }
 
+    @Test func canonicalPageLayoutsMatchTheReaderGeometry() {
+        let landscapeIllustration = BookPageCanonicalLayout.illustration(
+            isLandscape: true,
+            isPrecomposed: false
+        )
+        #expect(landscapeIllustration.imageFrame == NormalizedPageRect(x: 0, y: 0.065, width: 1, height: 0.935))
+        #expect(landscapeIllustration.imageFit == .fill)
+
+        let landscapeText = BookPageCanonicalLayout.text(
+            isLandscape: true,
+            hasTitle: true,
+            hasSubtitle: false
+        )
+        #expect(landscapeText.titleFrame?.y == 0.085)
+        #expect(landscapeText.bodyFrame.y == 0.18)
+
+        let portraitText = BookPageCanonicalLayout.text(
+            isLandscape: false,
+            hasTitle: true,
+            hasSubtitle: true
+        )
+        #expect(portraitText.titleFrame?.x == 0.06)
+        #expect(portraitText.subtitleFrame?.y == 0.125)
+        #expect(portraitText.bodyFrame.y == 0.18)
+        #expect(portraitText.bodyFrame.height == 0.74)
+    }
+
     @Test func decodedTextClampsAnOutOfRangeFontSize() throws {
         let encoded = Data(#"{"text":"Hello","fontSize":4,"alignment":"center"}"#.utf8)
         let decoded = try JSONDecoder().decode(BookPageTextContent.self, from: encoded)
 
         #expect(decoded.fontSize == BookPageEditingPolicy.maximumFontSize)
         #expect(decoded.alignment == .center)
+        #expect(decoded.role == .custom)
+        #expect(decoded.typographyPreset == .custom)
+    }
+
+    @Test func textRoleAndTypographySurviveDocumentRoundTrip() throws {
+        var document = BookPageDocument()
+        _ = try document.addText(
+            "A chapter title",
+            role: .title,
+            typographyPreset: .kidsBook
+        )
+
+        let decoded = try JSONDecoder().decode(
+            BookPageDocument.self,
+            from: JSONEncoder().encode(document)
+        )
+        guard case .text(let text) = decoded.elements.first?.content else {
+            Issue.record("Expected the title text element")
+            return
+        }
+        #expect(text.role == .title)
+        #expect(text.typographyPreset == .kidsBook)
     }
 
     @Test func documentMutationsPreserveZOrderAndDeleteExactlyOneElement() throws {
@@ -132,12 +203,116 @@ struct FreeformBookPageDocumentTests {
         let storedImage = try BookPageImagePreparation.prepareForStorage(makeTestImageData())
         var document = BookPageDocument(pageAspectRatio: 1.25)
         _ = try document.addText("A memory")
-        _ = try document.addImage(storedImage)
+        let imageID = try document.addImage(storedImage)
+        document.updateImageCaption(id: imageID, caption: "First day at the lake")
+        document.updateImageCropTransform(
+            id: imageID,
+            transform: BookPageImageCropTransform(zoom: 2.25, offsetX: 0.2, offsetY: -0.1),
+            viewportSize: CGSize(width: 240, height: 160)
+        )
 
         let encoded = try JSONEncoder().encode(document)
         let decoded = try JSONDecoder().decode(BookPageDocument.self, from: encoded)
 
         #expect(decoded == document)
+    }
+
+    @Test func schemaOneImageDefaultsCaptionAndCropForBackwardCompatibility() throws {
+        let storedImage = try BookPageImagePreparation.prepareForStorage(makeTestImageData())
+        var document = BookPageDocument()
+        _ = try document.addImage(storedImage)
+        let encoded = try JSONEncoder().encode(document)
+        var root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        root["schemaVersion"] = 1
+        var elements = try #require(root["elements"] as? [[String: Any]])
+        var image = try #require(elements[0]["image"] as? [String: Any])
+        image.removeValue(forKey: "caption")
+        image.removeValue(forKey: "cropTransform")
+        elements[0]["image"] = image
+        root["elements"] = elements
+
+        let legacyData = try JSONSerialization.data(withJSONObject: root)
+        let decoded = try JSONDecoder().decode(BookPageDocument.self, from: legacyData)
+
+        #expect(decoded.schemaVersion == BookPageDocument.currentSchemaVersion)
+        if case .image(let decodedImage) = decoded.elements.first?.content {
+            #expect(decodedImage.caption.isEmpty)
+            #expect(decodedImage.cropTransform == .identity)
+        } else {
+            Issue.record("Expected a decoded image layer")
+        }
+    }
+
+    @Test func imageCaptionIsBoundedAndCropStaysInsideItsViewport() throws {
+        let storedImage = try BookPageImagePreparation.prepareForStorage(
+            makeTestImageData(width: 400, height: 200)
+        )
+        var document = BookPageDocument()
+        let imageID = try document.addImage(storedImage)
+        document.updateImageCaption(
+            id: imageID,
+            caption: String(repeating: "c", count: BookPageEditingPolicy.maximumCaptionCharacterCount + 20)
+        )
+        document.updateImageCropTransform(
+            id: imageID,
+            transform: BookPageImageCropTransform(zoom: 4, offsetX: 20, offsetY: -20),
+            viewportSize: CGSize(width: 100, height: 100)
+        )
+
+        if case .image(let image) = document.elements.first?.content {
+            #expect(image.caption.count == BookPageEditingPolicy.maximumCaptionCharacterCount)
+            #expect(image.cropTransform == BookPageImageCropTransform(zoom: 4, offsetX: 3.5, offsetY: -1.5))
+        } else {
+            Issue.record("Expected an updated image layer")
+        }
+    }
+
+    @Test func cropPolicyNormalizesInvalidGeometryAndBoundsZoom() {
+        let invalidViewport = BookPageImageCropPolicy.clamped(
+            BookPageImageCropTransform(zoom: 3, offsetX: 1, offsetY: 1),
+            imageSize: CGSize(width: 400, height: 200),
+            viewportSize: .zero
+        )
+        let boundedZoom = BookPageImageCropTransform(zoom: 20, offsetX: 0, offsetY: 0)
+
+        #expect(invalidViewport == .identity)
+        #expect(boundedZoom.zoom == BookPageImageCropPolicy.maximumZoom)
+    }
+
+    @Test func replacingGeneratedImagePreservesCaptionAndCrop() throws {
+        let generated = try BookPageImagePreparation.prepareForStorage(
+            makeTestImageData(width: 120, height: 80),
+            source: .aiGenerated
+        )
+        let replacement = try BookPageImagePreparation.prepareForStorage(
+            makeTestImageData(width: 80, height: 120),
+            source: .aiGenerated
+        )
+        var document = BookPageDocument()
+        let imageID = try document.addImage(generated)
+        document.updateImageCaption(id: imageID, caption: "A summer afternoon")
+        document.updateImageCropTransform(
+            id: imageID,
+            transform: BookPageImageCropTransform(zoom: 2, offsetX: 0.25, offsetY: 0),
+            viewportSize: CGSize(width: 200, height: 100)
+        )
+        let originalCrop: BookPageImageCropTransform
+        if case .image(let image) = document.elements.first?.content {
+            originalCrop = image.cropTransform
+        } else {
+            Issue.record("Expected an image layer")
+            return
+        }
+
+        try document.replaceFirstImage(from: .aiGenerated, with: replacement)
+
+        if case .image(let image) = document.elements.first?.content {
+            #expect(image.caption == "A summer afternoon")
+            #expect(image.cropTransform == originalCrop)
+            #expect(image.jpegData == replacement.jpegData)
+        } else {
+            Issue.record("Expected a replacement image layer")
+        }
     }
 
     @Test func replacingGeneratedImagePreservesFrameAndUserPhotos() throws {
@@ -332,6 +507,75 @@ struct FreeformBookPageDocumentTests {
         #expect(max(result.pixelWidth, result.pixelHeight) <= BookPageImagePreparation.maximumPixelDimension)
         #expect(result.jpegData.count <= BookPageImagePreparation.maximumByteCount)
         #expect(UIImage(data: result.jpegData) != nil)
+        #expect(result.fit == .fit)
+    }
+
+    @Test func imagePreparationRespectsRemainingDecodedPixelBudget() throws {
+        let pixelBudget = 1_500_000
+        let result = try BookPageImagePreparation.prepareForStorage(
+            makeTestImageData(width: 3_200, height: 2_400),
+            maximumPixelCount: pixelBudget
+        )
+
+        #expect(result.pixelWidth * result.pixelHeight <= pixelBudget)
+        #expect(UIImage(data: result.jpegData) != nil)
+    }
+
+    @Test func generatedImageAndBudgetedPhotoFitOnTheSamePage() throws {
+        let generated = try BookPageImagePreparation.prepareForStorage(
+            makeTestImageData(width: 2_400, height: 1_800),
+            source: .aiGenerated
+        )
+        var document = BookPageDocument()
+        _ = try document.addImage(generated)
+        let remainingPixels = BookPageCapacityPolicy.maximumStoredImagePixelCount
+            - document.storedImagePixelCount
+        let photo = try BookPageImagePreparation.prepareForStorage(
+            makeTestImageData(width: 3_200, height: 2_400),
+            maximumPixelCount: remainingPixels
+        )
+
+        _ = try document.addImage(photo)
+
+        #expect(document.imageCount == 2)
+        #expect(document.storedImagePixelCount <= BookPageCapacityPolicy.maximumStoredImagePixelCount)
+    }
+
+    @Test func editorHistoryCoalescesAContinuousGestureAndSupportsRedo() throws {
+        var document = BookPageDocument()
+        let elementID = try document.addText("Move me")
+        let original = document
+        var history = BookPageEditorHistory()
+
+        history.beginMutation(from: document)
+        document.moveElement(id: elementID, normalizedTranslation: CGSize(width: 0.05, height: 0))
+        document.moveElement(id: elementID, normalizedTranslation: CGSize(width: 0.05, height: 0))
+        history.commitMutation(to: document)
+        let moved = document
+
+        #expect(history.undoSnapshots.count == 1)
+        history.undo(current: &document)
+        #expect(document == original)
+        #expect(history.canRedo)
+        history.redo(current: &document)
+        #expect(document == moved)
+    }
+
+    @Test func editorHistoryClearsRedoAfterANewMutation() throws {
+        var document = BookPageDocument()
+        _ = try document.addText("First")
+        let first = document
+        _ = try document.addText("Second")
+        var history = BookPageEditorHistory()
+        history.recordMutation(from: first, to: document)
+        history.undo(current: &document)
+        #expect(history.canRedo)
+
+        let beforeNewMutation = document
+        _ = try document.addText("Replacement")
+        history.recordMutation(from: beforeNewMutation, to: document)
+
+        #expect(!history.canRedo)
     }
 
     @Test func documentDownloadPolicyRequiresSecureSuccessfulBoundedPayload() throws {
@@ -439,6 +683,373 @@ struct FreeformBookPageDocumentTests {
         )
 
         #expect(image?.size == CGSize(width: 600, height: 400))
+    }
+
+    @MainActor
+    @Test func captionAndCropAffectSharedPrintRendering() throws {
+        let storedImage = try BookPageImagePreparation.prepareForStorage(makeTestImageData())
+        var document = BookPageDocument(pageAspectRatio: 1)
+        let imageID = try document.addImage(
+            storedImage,
+            frame: NormalizedPageRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+        )
+        let original = BookPagePrintRenderer.render(
+            document: document,
+            pixelSize: CGSize(width: 400, height: 400)
+        )?.pngData()
+
+        document.updateImageCaption(id: imageID, caption: "Visible in print")
+        document.updateImageCropTransform(
+            id: imageID,
+            transform: BookPageImageCropTransform(zoom: 2, offsetX: 0.2, offsetY: 0.1),
+            viewportSize: CGSize(width: 320, height: 260)
+        )
+        let edited = BookPagePrintRenderer.render(
+            document: document,
+            pixelSize: CGSize(width: 400, height: 400)
+        )?.pngData()
+
+        #expect(original != nil)
+        #expect(edited != nil)
+        #expect(edited != original)
+        #expect(BookPageImageLayout.captionHeight(
+            caption: "Visible in print",
+            containerSize: CGSize(width: 320, height: 320)
+        ) > 0)
+        #expect(BookPageImageLayout.captionHeight(
+            caption: "   ",
+            containerSize: CGSize(width: 320, height: 320)
+        ) == 0)
+    }
+
+    @Test func snapshotBackgroundCannotBeSelectedOrMutatedByDocumentCommands() throws {
+        let background = try BookPageImagePreparation.prepareForStorage(
+            makeTestImageData(),
+            fit: .fill,
+            source: .pageBackground
+        )
+        var document = BookPageDocument(pageAspectRatio: 1)
+        let backgroundID = try document.addImage(
+            background,
+            frame: NormalizedPageRect(x: 0, y: 0, width: 1, height: 1)
+        )
+        let original = document
+
+        document.moveElement(id: backgroundID, normalizedTranslation: CGSize(width: 0.2, height: 0.2))
+        document.resizeElement(
+            id: backgroundID,
+            handle: .bottomTrailing,
+            normalizedTranslation: CGSize(width: -0.2, height: -0.2)
+        )
+        document.deleteElement(id: backgroundID)
+
+        #expect(document == original)
+        #expect(document.elements.first?.isLockedBackground == true)
+        let decoded = try JSONDecoder().decode(BookPageDocument.self, from: JSONEncoder().encode(document))
+        #expect(decoded.elements.first?.isLockedBackground == true)
+    }
+
+    @Test func everyTextRoleUsesItsSavedFontSize() {
+        for role in [BookPageTextRole.title, .subtitle, .body, .custom] {
+            let content = BookPageTextContent(text: "Resizable", fontSize: 0.05, role: role)
+            #expect(BookPageTextSizing.pointSize(for: content, pageHeight: 600) == 30)
+        }
+
+        let smallest = BookPageTextContent(
+            text: "Small but proportional",
+            fontSize: BookPageEditingPolicy.minimumFontSize
+        )
+        #expect(BookPageTextSizing.pointSize(for: smallest, pageHeight: 400) == 6)
+        #expect(BookPageTextSizing.pointSize(for: smallest, pageHeight: 800) == 12)
+    }
+
+    @Test func titlePageFactoryMakesOriginalCopyEditableAndMigratesUserLayers() throws {
+        let background = try BookPageImagePreparation.prepareForStorage(
+            makeTestImageData(),
+            fit: .fill,
+            source: .pageBackground
+        )
+        var legacy = BookPageDocument(pageAspectRatio: 8.5 / 11)
+        _ = try legacy.addImage(
+            background,
+            frame: NormalizedPageRect(x: 0, y: 0, width: 1, height: 1)
+        )
+        let noteID = try legacy.addText("Keep my note")
+
+        #expect(BookInteriorPageDocumentFactory.requiresSemanticMigration(
+            memoryID: BookInteriorAnchor.titlePageMemoryId,
+            document: legacy
+        ))
+
+        let document = try BookInteriorPageDocumentFactory.make(
+            memoryID: BookInteriorAnchor.titlePageMemoryId,
+            title: "Grandparent's Memoir",
+            body: "A collection of memories.",
+            subtitle: nil,
+            pageAspectRatio: 8.5 / 11,
+            typographyPreset: .realistic,
+            isKidsBook: false,
+            background: background,
+            preservingEditableElementsFrom: legacy
+        )
+        let text = document.elements.compactMap { element -> BookPageTextContent? in
+            guard case .text(let content) = element.content else { return nil }
+            return content
+        }
+
+        #expect(document.elements.filter { $0.isLockedBackground }.count == 1)
+        #expect(text.contains { $0.text == "Grandparent's Memoir" && $0.role == .title })
+        #expect(text.contains { $0.text == "A collection of memories." && $0.role == .body })
+        #expect(text.contains { $0.text == "Keep my note" })
+        #expect(document.elements.contains { $0.id == noteID })
+        #expect(document.semanticTemplate == .interiorTitle)
+        #expect(document.semanticTemplateVersion == BookInteriorPageDocumentFactory.semanticTemplateVersion)
+        #expect(!BookInteriorPageDocumentFactory.requiresSemanticMigration(
+            memoryID: BookInteriorAnchor.titlePageMemoryId,
+            document: document
+        ))
+    }
+
+    @Test func semanticBookendLayoutsAreReadableAndOrientationAware() {
+        let landscape = BookInteriorPageDocumentFactory.layout(
+            pageAspectRatio: 11.0 / 8.5,
+            isKidsBook: false
+        )
+        let portrait = BookInteriorPageDocumentFactory.layout(
+            pageAspectRatio: 8.5 / 11.0,
+            isKidsBook: false
+        )
+        let kidsLandscape = BookInteriorPageDocumentFactory.layout(
+            pageAspectRatio: 11.0 / 8.5,
+            isKidsBook: true
+        )
+
+        #expect(landscape.titleFontSize == 0.085)
+        #expect(kidsLandscape.titleFontSize == 0.09)
+        #expect(portrait.titleFontSize == 0.074)
+        #expect(landscape.titleFrame == NormalizedPageRect(x: 0.11, y: 0.29, width: 0.78, height: 0.17))
+        #expect(landscape.closingIconFrame.y + landscape.closingIconFrame.height < landscape.closingHeadingFrame.y)
+        #expect(landscape.closingHeadingFrame.y + landscape.closingHeadingFrame.height < landscape.closingBadgeFrame.y)
+        #expect(portrait.closingIconFrame.y + portrait.closingIconFrame.height < portrait.closingHeadingFrame.y)
+        #expect(portrait.closingHeadingFrame.y + portrait.closingHeadingFrame.height < portrait.closingBadgeFrame.y)
+        #expect(abs((landscape.closingHeadingFrame.y - (landscape.closingIconFrame.y + landscape.closingIconFrame.height)) - 0.035) < 0.0001)
+        #expect(abs((landscape.closingBadgeFrame.y - (landscape.closingHeadingFrame.y + landscape.closingHeadingFrame.height)) - 0.035) < 0.0001)
+        #expect(abs((portrait.closingHeadingFrame.y - (portrait.closingIconFrame.y + portrait.closingIconFrame.height)) - 0.035) < 0.0001)
+        #expect(abs((portrait.closingBadgeFrame.y - (portrait.closingHeadingFrame.y + portrait.closingHeadingFrame.height)) - 0.035) < 0.0001)
+    }
+
+    @Test func semanticTitleTypographyMatchesTheBookStyle() {
+        #expect(BookPageTypographyPreset.kidsBook.interiorTitleTypography == .rounded)
+        #expect(BookPageTypographyPreset.realistic.interiorTitleTypography == .editorial)
+        #expect(BookPageTypographyPreset.comic.interiorTitleTypography == .editorial)
+        #expect(BookPageTypographyPreset.custom.interiorTitleTypography == .editorial)
+    }
+
+    @Test func semanticMigrationPreservesEditedCanonicalCopyWithoutDuplicates() throws {
+        let editedTitleFrame = NormalizedPageRect(x: 0.18, y: 0.22, width: 0.64, height: 0.24)
+        var legacy = BookPageDocument(
+            pageAspectRatio: 11.0 / 8.5,
+            semanticTemplate: .interiorTitle,
+            semanticTemplateVersion: 1
+        )
+        let titleID = try legacy.addText(
+            "Caleb's Edited Story",
+            frame: editedTitleFrame,
+            role: .title,
+            typographyPreset: .comic,
+            color: .brown
+        )
+        legacy.updateFontSize(id: titleID, fontSize: 0.068)
+        legacy.updateTextAlignment(id: titleID, alignment: .trailing)
+        _ = try legacy.addText("An edited subtitle.", role: .body, typographyPreset: .realistic)
+        let noteID = try legacy.addText("Keep this note", role: .custom, typographyPreset: .custom)
+        let originalTitle = try #require(legacy.elements.first { $0.id == titleID })
+
+        let migrated = try BookInteriorPageDocumentFactory.make(
+            memoryID: BookInteriorAnchor.titlePageMemoryId,
+            title: "Grandparent's Memoir",
+            body: "A collection of memories.",
+            subtitle: nil,
+            pageAspectRatio: 11.0 / 8.5,
+            typographyPreset: .realistic,
+            isKidsBook: false,
+            background: nil,
+            preservingEditableElementsFrom: legacy
+        )
+        let text = migrated.elements.compactMap { element -> BookPageTextContent? in
+            guard case .text(let content) = element.content else { return nil }
+            return content
+        }
+
+        #expect(text.filter { $0.role == .title }.map(\.text) == ["Caleb's Edited Story"])
+        #expect(text.filter { $0.role == .body }.map(\.text) == ["An edited subtitle."])
+        #expect(migrated.elements.first { $0.id == titleID } == originalTitle)
+        #expect(migrated.elements.contains { $0.id == noteID })
+        #expect(migrated.semanticTemplateVersion == BookInteriorPageDocumentFactory.semanticTemplateVersion)
+    }
+
+    @Test func semanticMigrationUpdatesAnUneditedVersionTwoTitleLayout() throws {
+        let oldTitleFrame = NormalizedPageRect(x: 0.09, y: 0.27, width: 0.82, height: 0.20)
+        let oldBodyFrame = NormalizedPageRect(x: 0.16, y: 0.51, width: 0.68, height: 0.13)
+        var legacy = BookPageDocument(
+            pageAspectRatio: 11.0 / 8.5,
+            semanticTemplate: .interiorTitle,
+            semanticTemplateVersion: 2
+        )
+        let titleID = try legacy.addText(
+            "Caleb's Edited Story",
+            frame: oldTitleFrame,
+            role: .title,
+            typographyPreset: .realistic
+        )
+        legacy.updateFontSize(id: titleID, fontSize: 0.10)
+        legacy.updateTextAlignment(id: titleID, alignment: .center)
+        let bodyID = try legacy.addText(
+            "An edited subtitle.",
+            frame: oldBodyFrame,
+            role: .body,
+            typographyPreset: .realistic
+        )
+        legacy.updateFontSize(id: bodyID, fontSize: 0.043)
+        legacy.updateTextAlignment(id: bodyID, alignment: .center)
+
+        let migrated = try BookInteriorPageDocumentFactory.make(
+            memoryID: BookInteriorAnchor.titlePageMemoryId,
+            title: "Grandparent's Memoir",
+            body: "A collection of memories.",
+            subtitle: nil,
+            pageAspectRatio: 11.0 / 8.5,
+            typographyPreset: .realistic,
+            isKidsBook: false,
+            background: nil,
+            preservingEditableElementsFrom: legacy
+        )
+        let layout = BookInteriorPageDocumentFactory.layout(
+            pageAspectRatio: 11.0 / 8.5,
+            isKidsBook: false
+        )
+        let migratedTitle = try #require(migrated.elements.first { element in
+            guard case .text(let text) = element.content else { return false }
+            return text.role == .title
+        })
+        let migratedTitleText: BookPageTextContent? = {
+            guard case .text(let text) = migratedTitle.content else { return nil }
+            return text
+        }()
+        let resolvedTitleText = try #require(migratedTitleText)
+
+        #expect(migratedTitle.frame == layout.titleFrame)
+        #expect(resolvedTitleText.text == "Caleb's Edited Story")
+        #expect(resolvedTitleText.fontSize == layout.titleFontSize)
+        #expect(resolvedTitleText.alignment == .center)
+        #expect(migrated.semanticTemplateVersion == BookInteriorPageDocumentFactory.semanticTemplateVersion)
+    }
+
+    @Test func semanticMigrationPreservesCustomizedVersionTwoTypography() throws {
+        let oldTitleFrame = NormalizedPageRect(x: 0.09, y: 0.27, width: 0.82, height: 0.20)
+        var legacy = BookPageDocument(
+            pageAspectRatio: 11.0 / 8.5,
+            semanticTemplate: .interiorTitle,
+            semanticTemplateVersion: 2
+        )
+        let titleID = try legacy.addText(
+            "A Different Typeface",
+            frame: oldTitleFrame,
+            role: .title,
+            typographyPreset: .comic
+        )
+        legacy.updateFontSize(id: titleID, fontSize: 0.10)
+        legacy.updateTextAlignment(id: titleID, alignment: .center)
+
+        let migrated = try BookInteriorPageDocumentFactory.make(
+            memoryID: BookInteriorAnchor.titlePageMemoryId,
+            title: "Grandparent's Memoir",
+            body: "",
+            subtitle: nil,
+            pageAspectRatio: 11.0 / 8.5,
+            typographyPreset: .realistic,
+            isKidsBook: false,
+            background: nil,
+            preservingEditableElementsFrom: legacy
+        )
+        let migratedTitle = try #require(migrated.elements.first { $0.id == titleID })
+        let migratedText: BookPageTextContent? = {
+            guard case .text(let text) = migratedTitle.content else { return nil }
+            return text
+        }()
+
+        #expect(migratedTitle.frame == oldTitleFrame)
+        #expect(try #require(migratedText).typographyPreset == .comic)
+    }
+
+    @Test func partialSemanticTitleDocumentStillRequiresDeterministicMigration() throws {
+        var partial = BookPageDocument(pageAspectRatio: 8.5 / 11)
+        _ = try partial.addText("Grandparent's Memoir", role: .title, typographyPreset: .realistic)
+
+        #expect(BookInteriorPageDocumentFactory.requiresSemanticMigration(
+            memoryID: BookInteriorAnchor.titlePageMemoryId,
+            document: partial
+        ))
+
+        let migrated = try BookInteriorPageDocumentFactory.make(
+            memoryID: BookInteriorAnchor.titlePageMemoryId,
+            title: "Grandparent's Memoir",
+            body: "A collection of memories.",
+            subtitle: nil,
+            pageAspectRatio: 8.5 / 11,
+            typographyPreset: .realistic,
+            isKidsBook: false,
+            background: nil,
+            preservingEditableElementsFrom: partial
+        )
+        let matchingTitles = migrated.elements.filter { element in
+            guard case .text(let text) = element.content else { return false }
+            return text.role == .title && text.text == "Grandparent's Memoir"
+        }
+
+        #expect(matchingTitles.count == 1)
+        #expect(!BookInteriorPageDocumentFactory.requiresSemanticMigration(
+            memoryID: BookInteriorAnchor.titlePageMemoryId,
+            document: migrated
+        ))
+    }
+
+    @Test func closingPageFactoryExposesBothVisiblePhrasesAsText() throws {
+        let document = try BookInteriorPageDocumentFactory.make(
+            memoryID: BookInteriorAnchor.closingPageMemoryId,
+            title: "Made with Memoir",
+            body: "",
+            subtitle: "Grandparent",
+            pageAspectRatio: 8.5 / 11,
+            typographyPreset: .realistic,
+            isKidsBook: false,
+            background: nil
+        )
+        let text = document.elements.compactMap { element -> BookPageTextContent? in
+            guard case .text(let content) = element.content else { return nil }
+            return content
+        }
+
+        #expect(text.contains { $0.text == "Made with Memoir" })
+        #expect(text.contains { $0.text == "Download on the App Store" && $0.color == .white })
+        #expect(!text.contains { $0.text == "Grandparent" })
+        #expect(document.semanticTemplate == .interiorClosing)
+        #expect(document.semanticTemplateVersion == BookInteriorPageDocumentFactory.semanticTemplateVersion)
+
+        let layout = BookInteriorPageDocumentFactory.layout(
+            pageAspectRatio: 8.5 / 11,
+            isKidsBook: false
+        )
+        let heading = try #require(document.elements.first { element in
+            guard case .text(let content) = element.content else { return false }
+            return content.role == .title
+        })
+        let store = try #require(document.elements.first { element in
+            guard case .text(let content) = element.content else { return false }
+            return content.role == .body
+        })
+        #expect(heading.frame == layout.closingHeadingFrame)
+        #expect(store.frame == layout.closingStoreTextFrame)
     }
 
     private func makeTestImageData(width: Int = 64, height: Int = 48) -> Data {

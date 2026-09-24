@@ -243,6 +243,49 @@ enum AudioPlaybackCompletionPolicy {
     }
 }
 
+protocol AudioPlaybackSessionConfiguring {
+    func setPlaybackCategory() throws
+    func activatePlaybackSession() throws
+}
+
+struct AudioPlaybackSessionPreparer {
+    let session: AudioPlaybackSessionConfiguring
+
+    func prepare() throws {
+        try session.setPlaybackCategory()
+        try session.activatePlaybackSession()
+    }
+}
+
+struct SystemAudioPlaybackSession: AudioPlaybackSessionConfiguring {
+    func setPlaybackCategory() throws {
+        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+    }
+
+    func activatePlaybackSession() throws {
+        try AVAudioSession.sharedInstance().setActive(true)
+    }
+}
+
+enum AudioPlaybackFailureKind: Equatable {
+    case session
+    case localMedia
+    case remoteMedia
+}
+
+enum AudioPlaybackErrorPolicy {
+    static func message(for failure: AudioPlaybackFailureKind) -> String {
+        switch failure {
+        case .session:
+            return "Audio playback couldn’t start. Check that no other app is using audio, then try again."
+        case .localMedia:
+            return "The saved recording couldn’t be opened. Try again after checking your connection."
+        case .remoteMedia:
+            return "The recording couldn’t be downloaded. Check your connection and try again."
+        }
+    }
+}
+
 struct MemoryShareRequest: Equatable {
     let text: String?
     let localAudioURL: URL?
@@ -332,12 +375,15 @@ struct MemoryDetailView: View {
     @EnvironmentObject var profileVM: ProfileViewModel
     @StateObject private var permissionManager = PermissionManager.shared
     let memory: MemoryEntry
+    private let playbackSessionPreparer: AudioPlaybackSessionPreparer
 
     @State private var audioEngine = AVAudioEngine()
     @State private var playerNode = AVAudioPlayerNode()
     @State private var eqNode = AVAudioUnitEQ(numberOfBands: 1)
     @State private var remotePlayer: AVPlayer?
     @State private var remotePlaybackObserver: NSObjectProtocol?
+    @State private var remotePlaybackFailureObserver: NSObjectProtocol?
+    @State private var remotePlaybackStatusObserver: NSKeyValueObservation?
     @State private var isPlaying = false
     @State private var playbackGeneration = UUID()
 
@@ -366,6 +412,14 @@ struct MemoryDetailView: View {
     @State private var isTextExpanded = false
     @State private var showReRecordConfirm = false
     @State private var showReRecordSheet = false
+
+    init(
+        memory: MemoryEntry,
+        playbackSession: AudioPlaybackSessionConfiguring = SystemAudioPlaybackSession()
+    ) {
+        self.memory = memory
+        self.playbackSessionPreparer = AudioPlaybackSessionPreparer(session: playbackSession)
+    }
 
     /// Aligned with `RecentMemoriesView` warm parchment base.
     private let backgroundColor = Color(red: 0.98, green: 0.96, blue: 0.89)
@@ -462,38 +516,19 @@ struct MemoryDetailView: View {
     private func memoryAudioRow(url: URL) -> some View {
         HStack(alignment: .center, spacing: 10) {
             Button(action: { togglePlayback(url: url) }) {
-                HStack(spacing: 16) {
-                    ZStack {
-                        Circle()
-                            .fill(terracotta.opacity(0.12))
-                            .frame(width: 52, height: 52)
-                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 19, weight: .semibold))
-                            .foregroundColor(terracotta)
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Recording")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(textSecondary)
-                        Text(isPlaying ? "Playing…" : "Tap to play this memory")
-                            .font(.system(size: 15, weight: .medium, design: .serif))
-                            .foregroundColor(headerColor)
-                    }
-
-                    Spacer(minLength: 0)
+                ZStack {
+                    Circle()
+                        .fill(terracotta.opacity(0.12))
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundColor(terracotta)
                 }
-                .padding(14)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(softCream.opacity(0.5))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(cardStroke, lineWidth: 1)
-                )
+                .frame(width: 52, height: 52)
+                .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("memoryPlaybackButton")
+            .accessibilityLabel(isPlaying ? "Pause recording" : "Play recording")
 
             Button(action: { showReRecordConfirm = true }) {
                 VStack(spacing: 4) {
@@ -865,28 +900,6 @@ struct MemoryDetailView: View {
                 .allowsHitTesting(true)
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button(action: {
-                    let hasCards = memory.parsedCharacterDetails?.characters.isEmpty == false
-                    if hasCards {
-                        showCharacterDetails = true
-                    } else if GuidedMemoryEnhancementFeature.isEnabled {
-                        showEnhancementCoordinator = true
-                    } else {
-                        showCharacterDetails = true
-                    }
-                }) {
-                    if let details = memory.parsedCharacterDetails, !details.characters.isEmpty {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                    } else if memory.isIncomplete {
-                        Image(systemName: "person.crop.circle.badge.plus")
-                            .foregroundColor(.orange)
-                    } else {
-                        Image(systemName: "person.crop.circle")
-                            .foregroundColor(.gray)
-                    }
-                }
-                
                 Button(action: shareMemory) {
                     if isPreparingShare {
                         ProgressView()
@@ -1106,6 +1119,12 @@ struct MemoryDetailView: View {
             NotificationCenter.default.removeObserver(remotePlaybackObserver)
             self.remotePlaybackObserver = nil
         }
+        if let remotePlaybackFailureObserver {
+            NotificationCenter.default.removeObserver(remotePlaybackFailureObserver)
+            self.remotePlaybackFailureObserver = nil
+        }
+        remotePlaybackStatusObserver?.invalidate()
+        remotePlaybackStatusObserver = nil
         if isPlaying {
             playerNode.stop()
             audioEngine.stop()
@@ -1124,73 +1143,119 @@ struct MemoryDetailView: View {
             if isPlaying {
                 stopPlaybackIfNeeded()
             } else {
-                let player = AVPlayer(url: url)
-                remotePlayer = player
-                remotePlaybackObserver = NotificationCenter.default.addObserver(
-                    forName: .AVPlayerItemDidPlayToEndTime,
-                    object: player.currentItem,
-                    queue: .main
-                ) { _ in
-                    Task { @MainActor in
-                        if let remotePlaybackObserver {
-                            NotificationCenter.default.removeObserver(remotePlaybackObserver)
-                        }
-                        remotePlayer = nil
-                        remotePlaybackObserver = nil
-                        isPlaying = false
-                    }
-                }
-                player.play()
-                isPlaying = true
+                startRemotePlayback(url: url)
             }
             return
         }
+        if isPlaying {
+            stopPlaybackIfNeeded()
+            return
+        }
+
         do {
-            let session = AVAudioSession.sharedInstance()
-            try session.overrideOutputAudioPort(.speaker)
-            if isPlaying {
-                playbackGeneration = UUID()
-                playerNode.stop()
-                audioEngine.stop()
-                isPlaying = false
-            } else {
-                eqNode.globalGain = +22
-                if !audioEngine.attachedNodes.contains(playerNode) {
-                    audioEngine.attach(playerNode)
-                    audioEngine.attach(eqNode)
-                    audioEngine.connect(playerNode, to: eqNode, format: nil)
-                    audioEngine.connect(eqNode, to: audioEngine.mainMixerNode, format: nil)
-                }
-                let file = try AVAudioFile(forReading: url)
-                try audioEngine.start()
-                let generation = UUID()
-                playbackGeneration = generation
-                isPlaying = true
-                playerNode.scheduleFile(
-                    file,
-                    at: nil,
-                    completionCallbackType: .dataPlayedBack
-                ) { _ in
-                    Task { @MainActor in
-                        guard AudioPlaybackCompletionPolicy.shouldResetPlayback(
-                            completedGeneration: generation,
-                            activeGeneration: playbackGeneration
-                        ) else {
-                            return
-                        }
-                        audioEngine.stop()
-                        isPlaying = false
-                    }
-                }
-                playerNode.play()
+            try playbackSessionPreparer.prepare()
+        } catch {
+            failPlayback(.session, error: error)
+            return
+        }
+
+        do {
+            eqNode.globalGain = +22
+            if !audioEngine.attachedNodes.contains(playerNode) {
+                audioEngine.attach(playerNode)
+                audioEngine.attach(eqNode)
+                audioEngine.connect(playerNode, to: eqNode, format: nil)
+                audioEngine.connect(eqNode, to: audioEngine.mainMixerNode, format: nil)
             }
+            let file = try AVAudioFile(forReading: url)
+            try audioEngine.start()
+            let generation = UUID()
+            playbackGeneration = generation
+            isPlaying = true
+            playerNode.scheduleFile(
+                file,
+                at: nil,
+                completionCallbackType: .dataPlayedBack
+            ) { _ in
+                Task { @MainActor in
+                    guard AudioPlaybackCompletionPolicy.shouldResetPlayback(
+                        completedGeneration: generation,
+                        activeGeneration: playbackGeneration
+                    ) else {
+                        return
+                    }
+                    audioEngine.stop()
+                    isPlaying = false
+                }
+            }
+            playerNode.play()
         } catch {
             playbackGeneration = UUID()
             playerNode.stop()
             audioEngine.stop()
             isPlaying = false
-            audioPlaybackError = "The recording is missing, damaged, or temporarily unavailable. Try again after checking your connection."
-            print("Engine playback error: \(error)")
+            tryCloudPlaybackFallback(localError: error)
+        }
+    }
+
+    private func startRemotePlayback(url: URL) {
+        stopPlaybackIfNeeded()
+        let player = AVPlayer(url: url)
+        guard let item = player.currentItem else {
+            failPlayback(.remoteMedia)
+            return
+        }
+        remotePlayer = player
+        remotePlaybackObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in stopPlaybackIfNeeded() }
+        }
+        remotePlaybackFailureObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { notification in
+            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            Task { @MainActor in failPlayback(.remoteMedia, error: error) }
+        }
+        remotePlaybackStatusObserver = item.observe(\.status, options: [.new]) { item, _ in
+            guard item.status == .failed else { return }
+            Task { @MainActor in failPlayback(.remoteMedia, error: item.error) }
+        }
+        player.play()
+        isPlaying = true
+    }
+
+    private func tryCloudPlaybackFallback(localError: Error) {
+        guard let memoryID = memory.id,
+              let ownerID = MemoryOwnershipPolicy.normalizedUserID(memory.firebaseUserId) else {
+            failPlayback(.localMedia, error: localError)
+            return
+        }
+        let generation = UUID()
+        playbackGeneration = generation
+        Task {
+            let remoteURL = await FirestoreSyncService.shared.freshAudioPlaybackURL(
+                memoryID: memoryID,
+                expectedUserID: ownerID
+            )
+            guard playbackGeneration == generation else { return }
+            guard let remoteURL else {
+                failPlayback(.localMedia, error: localError)
+                return
+            }
+            startRemotePlayback(url: remoteURL)
+        }
+    }
+
+    private func failPlayback(_ kind: AudioPlaybackFailureKind, error: Error? = nil) {
+        stopPlaybackIfNeeded()
+        audioPlaybackError = AudioPlaybackErrorPolicy.message(for: kind)
+        if let error {
+            print("Audio playback error (\(kind)): \(error.localizedDescription)")
         }
     }
 
@@ -1434,6 +1499,7 @@ struct MemoryDetailView: View {
             .shadow(color: Color.orange.opacity(0.3), radius: 8, x: 0, y: 4)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("memoryEnhancementButton")
         .onAppear {
             withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) {
                 animateEnhanceGlow = true
@@ -1519,6 +1585,7 @@ struct MemoryDetailView: View {
                     .stroke(cardStroke, lineWidth: 1)
             )
         }
+        .accessibilityIdentifier("memoryCharacterDetailsButton")
         .buttonStyle(.plain)
     }
 

@@ -180,6 +180,39 @@ enum AccountSwitchContentPolicy {
     }
 }
 
+enum LinkedAccountPolicy {
+    static let supportedProviderIDs: Set<String> = ["apple.com", "google.com", "password"]
+
+    static func shouldLinkCurrentUser(isGuest: Bool, preserveCurrentAccount: Bool) -> Bool {
+        isGuest || preserveCurrentAccount
+    }
+
+    static func canDisconnect(providerID: String, linkedProviderIDs: [String]) -> Bool {
+        let supported = Set(linkedProviderIDs).intersection(supportedProviderIDs)
+        return supported.contains(providerID) && supported.subtracting([providerID]).isEmpty == false
+    }
+}
+
+enum GuestSessionPolicy {
+    static func isGuest(
+        isNativeAnonymous: Bool,
+        hasMemoirGuestClaim: Bool = false
+    ) -> Bool {
+        isNativeAnonymous || hasMemoirGuestClaim
+    }
+}
+
+enum GuestRecoveryFailurePolicy {
+    static func shouldReplaceSavedSecret(
+        error: NSError,
+        isNativeAnonymous: Bool
+    ) -> Bool {
+        isNativeAnonymous
+            && error.domain == FunctionsErrorDomain
+            && error.code == FunctionsErrorCode.notFound.rawValue
+    }
+}
+
 /// Observable service for managing user authentication state
 @MainActor
 final class AuthenticationService: ObservableObject {
@@ -190,10 +223,13 @@ final class AuthenticationService: ObservableObject {
     @Published var isSignedIn: Bool = false
     @Published var isLoading: Bool = false
     @Published private(set) var isDeletingAccount: Bool = false
+    @Published private(set) var recoveredGuestUserID: String?
+    @Published private(set) var isSessionPrepared = false
     @Published var errorMessage: String?
     
     // For Apple Sign In nonce
     private var currentNonce: String?
+    private var sessionPreparationTask: Task<Bool, Never>?
     
     private init() {
         if UserDefaults.standard.bool(forKey: AccountLocalCleanupCoordinator.pendingKey) {
@@ -230,7 +266,7 @@ final class AuthenticationService: ObservableObject {
                     }
                 )
                 if completed {
-                    await self?.signInAnonymouslyIfNeeded()
+                    await self?.prepareAuthenticatedSessionForLaunch()
                 }
             }
         }
@@ -238,18 +274,26 @@ final class AuthenticationService: ObservableObject {
         // Listen for auth state changes
         Auth.auth().addStateDidChangeListener { [weak self] _, user in
             Task { @MainActor in
+                let previousUserID = self?.user?.uid
+                if previousUserID != user?.uid, self?.sessionPreparationTask == nil {
+                    self?.isSessionPrepared = false
+                }
                 self?.user = user
                 self?.isSignedIn = user != nil
                 
                 if let user = user {
+                    let tokenResult = try? await user.getIDTokenResult()
+                    let hasMemoirGuestClaim = tokenResult?.claims["memoirGuest"] as? Bool == true
+                    self?.recoveredGuestUserID = hasMemoirGuestClaim ? user.uid : nil
                     print("Auth state changed: signed in")
-                    if !user.isAnonymous {
+                    if self?.isGuestUser(user) == false {
                         UserDefaults.standard.removeObject(forKey: MemoirPersistenceUserDefaults.suggestAccountLinkAfterBook)
                     }
                     await RCSubscriptionManager.shared.identify(firebaseUserID: user.uid)
                     // Ensure user document exists in Firestore
                     await self?.createOrUpdateUserDocument()
                 } else {
+                    self?.recoveredGuestUserID = nil
                     RCSubscriptionManager.shared.clearIdentityState()
                     print("ℹ️ Auth state changed: signed out")
                 }
@@ -314,10 +358,88 @@ final class AuthenticationService: ObservableObject {
             print("❌ Anonymous sign-in failed: \(error.localizedDescription)")
         }
     }
+
+    /// Resolves a recoverable iCloud guest before any profile or memory store is
+    /// activated. Returning `false` keeps the temporary Firebase UID isolated
+    /// until recovery can be retried safely.
+    @discardableResult
+    func prepareAuthenticatedSessionForLaunch() async -> Bool {
+        if isSessionPrepared { return true }
+        if let sessionPreparationTask {
+            return await sessionPreparationTask.value
+        }
+        let task = Task { @MainActor [weak self] in
+            await self?.performSessionPreparation() ?? false
+        }
+        sessionPreparationTask = task
+        let result = await task.value
+        sessionPreparationTask = nil
+        return result
+    }
+
+    private func performSessionPreparation() async -> Bool {
+        isSessionPrepared = false
+        await signInAnonymouslyIfNeeded()
+        guard let initialUser = Auth.auth().currentUser else {
+            errorMessage = "Memoir could not connect to your private cloud account. Check your connection and try again."
+            return false
+        }
+
+        if isGuestUser(initialUser) {
+            do {
+                switch try await GuestRecoveryCoordinator.shared.recoverCurrentGuestIfAvailable() {
+                case .recovered:
+                    guard let recoveredUser = Auth.auth().currentUser else {
+                        throw GuestRecoveryError.notAuthenticated
+                    }
+                    await refreshRecoveredGuestClaim(for: recoveredUser)
+                case .noSavedSecret:
+                    try await GuestRecoveryCoordinator.shared.enrollCurrentGuest()
+                case .skippedNonAnonymousAccount:
+                    break
+                }
+            } catch {
+                if GuestRecoveryFailurePolicy.shouldReplaceSavedSecret(
+                    error: error as NSError,
+                    isNativeAnonymous: initialUser.isAnonymous
+                ) {
+                    do {
+                        try GuestRecoveryCoordinator.shared.discardLocalSecret()
+                        try await GuestRecoveryCoordinator.shared.enrollCurrentGuest()
+                        isSessionPrepared = true
+                        return true
+                    } catch {
+                        print("Guest recovery key replacement failed: \(error.localizedDescription)")
+                    }
+                }
+                errorMessage = "Memoir could not restore your private guest account. Your cloud data is unchanged; check your connection and reopen the app."
+                print("Guest account preparation failed: \(error.localizedDescription)")
+                return false
+            }
+        }
+
+        isSessionPrepared = true
+        return true
+    }
+
+    private func refreshRecoveredGuestClaim(for user: User) async {
+        let tokenResult = try? await user.getIDTokenResult(forcingRefresh: true)
+        recoveredGuestUserID = tokenResult?.claims["memoirGuest"] as? Bool == true
+            ? user.uid
+            : nil
+    }
     
     /// Check if current user is anonymous (not linked to Google)
     var isAnonymous: Bool {
-        Auth.auth().currentUser?.isAnonymous ?? true
+        guard let user = Auth.auth().currentUser else { return true }
+        return isGuestUser(user)
+    }
+
+    func isGuestUser(_ user: User) -> Bool {
+        GuestSessionPolicy.isGuest(
+            isNativeAnonymous: user.isAnonymous,
+            hasMemoirGuestClaim: recoveredGuestUserID == user.uid
+        )
     }
     
     // MARK: - Link Google Account (upgrade from anonymous)
@@ -337,11 +459,15 @@ final class AuthenticationService: ObservableObject {
         case signedInExistingAccount
     }
 
-    /// Links `credential` to the current anonymous user. If the credential already belongs to
-    /// a different existing account (`credentialAlreadyInUse`), signs into that existing
-    /// account instead using the updated credential Firebase supplies, so a returning user on
-    /// a reinstall lands back in their real account instead of hitting a dead-end error.
-    private func linkOrSignIn(with credential: AuthCredential) async throws -> AccountLinkOutcome {
+    /// Account management preserves the current UID, including when a credential conflicts.
+    /// Welcome flows may restore an existing account after checking the guest has no content.
+    private func linkOrSignIn(
+        with credential: AuthCredential,
+        preserveCurrentAccount: Bool
+    ) async throws -> AccountLinkOutcome {
+        guard await prepareAuthenticatedSessionForLaunch() else {
+            throw AuthError.guestRecoveryUnavailable
+        }
         // Guarantee an anonymous session exists before deciding link-vs-sign-in. Without this,
         // a caller invoked before `signInAnonymouslyIfNeeded()` finishes (e.g. a very fast tap
         // on the first-launch welcome screen) would see `currentUser == nil`, fall through to
@@ -350,21 +476,41 @@ final class AuthenticationService: ObservableObject {
             await signInAnonymouslyIfNeeded()
         }
 
-        guard let currentUser = Auth.auth().currentUser, currentUser.isAnonymous else {
+        guard let currentUser = Auth.auth().currentUser else {
+            throw AuthError.notSignedIn
+        }
+        guard LinkedAccountPolicy.shouldLinkCurrentUser(
+            isGuest: isGuestUser(currentUser),
+            preserveCurrentAccount: preserveCurrentAccount
+        ) else {
             _ = try await Auth.auth().signIn(with: credential)
             return .signedInExistingAccount
         }
 
+        let wasGuest = isGuestUser(currentUser)
         do {
-            try await currentUser.link(with: credential)
+            let result = try await currentUser.link(with: credential)
+            if wasGuest {
+                await retireGuestRecoveryAfterAccountUpgrade()
+            }
+            user = result.user
+            await createOrUpdateUserDocument()
             return .linkedNewAccount
         } catch {
             let nsError = error as NSError
-            if nsError.code == AuthErrorCode.credentialAlreadyInUse.rawValue,
+            if preserveCurrentAccount,
+               [AuthErrorCode.credentialAlreadyInUse.rawValue,
+                AuthErrorCode.accountExistsWithDifferentCredential.rawValue,
+                AuthErrorCode.emailAlreadyInUse.rawValue].contains(nsError.code) {
+                throw AuthError.providerLinkedToAnotherAccount
+            }
+            if !preserveCurrentAccount,
+               nsError.code == AuthErrorCode.credentialAlreadyInUse.rawValue,
                let updatedCredential = nsError.userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential {
                 guard try await canReplaceAnonymousAccount(currentUser) else {
                     throw AuthError.accountMergeRequired
                 }
+                await revokeGuestRecoveryBeforeAccountReplacement()
                 _ = try await Auth.auth().signIn(with: updatedCredential)
                 return .signedInExistingAccount
             }
@@ -372,10 +518,13 @@ final class AuthenticationService: ObservableObject {
         }
     }
 
-    /// Link Sign in with Apple to the current anonymous user (keeps `users/{uid}` data on reinstall when using the same Apple ID).
-    /// Returns `.signedInExistingAccount` when this Apple ID already had an account elsewhere.
+    /// Links Apple to the current session. Account management must preserve the current account.
+    /// Welcome flows may return `.signedInExistingAccount` for a returning user.
     @discardableResult
-    func linkAppleAccount(credential: ASAuthorizationAppleIDCredential) async throws -> AccountLinkOutcome {
+    func linkAppleAccount(
+        credential: ASAuthorizationAppleIDCredential,
+        preserveCurrentAccount: Bool = false
+    ) async throws -> AccountLinkOutcome {
         guard let nonce = currentNonce else {
             throw AuthError.missingNonce
         }
@@ -398,8 +547,8 @@ final class AuthenticationService: ObservableObject {
 
         let outcome: AccountLinkOutcome
         do {
-            outcome = try await linkOrSignIn(with: firebaseCredential)
-            print(outcome == .linkedNewAccount ? "✅ Linked Apple account to anonymous user" : "✅ Signed in with Apple (existing account)")
+            outcome = try await linkOrSignIn(with: firebaseCredential, preserveCurrentAccount: preserveCurrentAccount)
+            print(outcome == .linkedNewAccount ? "Linked Apple account" : "✅ Signed in with Apple (existing account)")
         } catch {
             errorMessage = error.localizedDescription
             throw error
@@ -417,17 +566,23 @@ final class AuthenticationService: ObservableObject {
         return outcome
     }
 
-    /// Link Google account to current anonymous user. Returns `.signedInExistingAccount`
-    /// when this Google account already had an account elsewhere.
+    /// Links Google to the current session. Account management must preserve the current account.
+    /// Welcome flows may return `.signedInExistingAccount` for a returning user.
     @discardableResult
-    func linkGoogleAccount() async throws -> AccountLinkOutcome {
+    func linkGoogleAccount(preserveCurrentAccount: Bool = false) async throws -> AccountLinkOutcome {
         guard let clientID = FirebaseApp.app()?.options.clientID else {
             throw AuthError.missingClientID
         }
 
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let rootViewController = windowScene.windows.first?.rootViewController else {
+        guard let windowScene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }),
+              let rootViewController = windowScene.windows.first(where: \.isKeyWindow)?.rootViewController else {
             throw AuthError.noRootViewController
+        }
+        var presentingViewController = rootViewController
+        while let presented = presentingViewController.presentedViewController {
+            presentingViewController = presented
         }
 
         isLoading = true
@@ -439,7 +594,7 @@ final class AuthenticationService: ObservableObject {
         GIDSignIn.sharedInstance.configuration = config
 
         do {
-            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: rootViewController)
+            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: presentingViewController)
 
             guard let idToken = result.user.idToken?.tokenString else {
                 throw AuthError.invalidCredential
@@ -450,9 +605,34 @@ final class AuthenticationService: ObservableObject {
                 accessToken: result.user.accessToken.tokenString
             )
 
-            let outcome = try await linkOrSignIn(with: credential)
-            print(outcome == .linkedNewAccount ? "✅ Linked Google account to anonymous user" : "✅ Signed in with Google (existing account)")
+            let outcome = try await linkOrSignIn(with: credential, preserveCurrentAccount: preserveCurrentAccount)
+            print(outcome == .linkedNewAccount ? "Linked Google account" : "✅ Signed in with Google (existing account)")
             return outcome
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
+    /// Removes a sign-in method only when another supported method can recover this account.
+    func disconnectAccount(providerID: String) async throws {
+        guard let currentUser = Auth.auth().currentUser else {
+            throw AuthError.notSignedIn
+        }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            try await currentUser.reload()
+            guard LinkedAccountPolicy.canDisconnect(
+                providerID: providerID,
+                linkedProviderIDs: currentUser.providerData.map(\.providerID)
+            ) else {
+                throw AuthError.lastSignInMethod
+            }
+            user = try await currentUser.unlink(fromProvider: providerID)
+            await createOrUpdateUserDocument()
         } catch {
             errorMessage = error.localizedDescription
             throw error
@@ -478,6 +658,9 @@ final class AuthenticationService: ObservableObject {
     func createEmailAccount(email: String, password: String) async throws {
         guard Self.isValidEmail(email) else { throw AuthError.invalidEmail }
         guard Self.isValidPassword(password) else { throw AuthError.weakPassword }
+        guard await prepareAuthenticatedSessionForLaunch() else {
+            throw AuthError.guestRecoveryUnavailable
+        }
 
         isLoading = true
         errorMessage = nil
@@ -486,8 +669,9 @@ final class AuthenticationService: ObservableObject {
         let credential = EmailAuthProvider.credential(withEmail: email, password: password)
 
         do {
-            if let currentUser = Auth.auth().currentUser, currentUser.isAnonymous {
+            if let currentUser = Auth.auth().currentUser, isGuestUser(currentUser) {
                 try await currentUser.link(with: credential)
+                await retireGuestRecoveryAfterAccountUpgrade()
                 print("✅ Linked email/password account to anonymous user")
             } else {
                 _ = try await Auth.auth().createUser(withEmail: email, password: password)
@@ -505,16 +689,20 @@ final class AuthenticationService: ObservableObject {
     /// `signIn` behavior), which is correct for a returning user reclaiming their real account.
     func signInWithEmail(email: String, password: String) async throws {
         guard Self.isValidEmail(email) else { throw AuthError.invalidEmail }
+        guard await prepareAuthenticatedSessionForLaunch() else {
+            throw AuthError.guestRecoveryUnavailable
+        }
 
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
 
         do {
-            if let currentUser = Auth.auth().currentUser, currentUser.isAnonymous {
+            if let currentUser = Auth.auth().currentUser, isGuestUser(currentUser) {
                 guard try await canReplaceAnonymousAccount(currentUser) else {
                     throw AuthError.accountMergeRequired
                 }
+                await revokeGuestRecoveryBeforeAccountReplacement()
             }
             _ = try await Auth.auth().signIn(withEmail: email, password: password)
             print("Signed in with email")
@@ -612,6 +800,7 @@ final class AuthenticationService: ObservableObject {
                   payload["status"] as? String == "complete" else {
                 throw AuthError.invalidDeletionResponse
             }
+            try? GuestRecoveryCoordinator.shared.discardLocalSecret()
 
             // Arm the cross-device barrier before any throwable local cleanup. A stale
             // device must not be able to restore profile or onboarding KVS payloads.
@@ -650,6 +839,7 @@ final class AuthenticationService: ObservableObject {
                 }
             }
             if Auth.auth().currentUser != nil {
+                isSessionPrepared = false
                 try Auth.auth().signOut()
             }
             guard localCleanupComplete else {
@@ -682,6 +872,7 @@ final class AuthenticationService: ObservableObject {
     
     func signOut() async throws {
         do {
+            await revokeGuestRecoveryBeforeAccountReplacement()
             PushTokenService.shared.unregisterCurrentUser()
             try Auth.auth().signOut()
             GIDSignIn.sharedInstance.signOut()
@@ -689,8 +880,9 @@ final class AuthenticationService: ObservableObject {
             print("✅ Signed out successfully")
             
             // Sign back in anonymously so data keeps syncing
+            isSessionPrepared = false
             Task {
-                await signInAnonymouslyIfNeeded()
+                await prepareAuthenticatedSessionForLaunch()
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -702,6 +894,28 @@ final class AuthenticationService: ObservableObject {
         PDFThumbnailCache.shared.removeAll()
         PDFThumbnailDiskCache.shared.removeAll()
         IllustrationImageDiskCache.shared.removeAll()
+    }
+
+    private func retireGuestRecoveryAfterAccountUpgrade() async {
+        do {
+            try await GuestRecoveryCoordinator.shared.revokeCurrentGuestRecovery()
+        } catch {
+            print("Guest recovery revocation after account link failed: \(error.localizedDescription)")
+            try? GuestRecoveryCoordinator.shared.discardLocalSecret()
+        }
+        recoveredGuestUserID = nil
+    }
+
+    private func revokeGuestRecoveryBeforeAccountReplacement() async {
+        do {
+            try await GuestRecoveryCoordinator.shared.revokeCurrentGuestRecovery()
+        } catch GuestRecoveryError.notAuthenticated {
+            return
+        } catch {
+            print("Guest recovery revocation before account switch failed: \(error.localizedDescription)")
+            try? GuestRecoveryCoordinator.shared.discardLocalSecret()
+        }
+        recoveredGuestUserID = nil
     }
     
     // MARK: - User Document Management
@@ -726,6 +940,8 @@ final class AuthenticationService: ObservableObject {
             if doc.exists {
                 var update = deviceFields
                 update["lastActiveAt"] = FieldValue.serverTimestamp()
+                update["isAnonymous"] = isGuestUser(user)
+                update["authProvider"] = getAuthProvider(user)
                 if let name = profileName, !name.isEmpty {
                     update["profileName"] = name
                 }
@@ -735,7 +951,7 @@ final class AuthenticationService: ObservableObject {
                     "email": user.email ?? "",
                     "displayName": user.displayName ?? "",
                     "authProvider": getAuthProvider(user),
-                    "isAnonymous": user.isAnonymous,
+                    "isAnonymous": isGuestUser(user),
                     "profileName": profileName ?? "",
                     "createdAt": FieldValue.serverTimestamp(),
                     "lastActiveAt": FieldValue.serverTimestamp(),
@@ -761,7 +977,7 @@ final class AuthenticationService: ObservableObject {
     }
 
     private func getAuthProvider(_ user: User) -> String {
-        if user.isAnonymous { return "anonymous" }
+        if isGuestUser(user) { return "anonymous" }
         for info in user.providerData {
             switch info.providerID {
             case "apple.com":
@@ -795,6 +1011,9 @@ final class AuthenticationService: ObservableObject {
         case accountMergeRequired
         case localCleanupPending
         case invalidDeletionResponse
+        case guestRecoveryUnavailable
+        case providerLinkedToAnotherAccount
+        case lastSignInMethod
         case underlying(String)
 
         var errorDescription: String? {
@@ -833,6 +1052,12 @@ final class AuthenticationService: ObservableObject {
                 return "Your online account was deleted, but this device could not finish removing its local data. Keep the app installed and reopen it to retry cleanup."
             case .invalidDeletionResponse:
                 return "The deletion service returned an invalid response. Please try again."
+            case .providerLinkedToAnotherAccount:
+                return "This sign-in is already linked to another Memoir account. Your current account has not changed. Use a different Apple or Google account to connect it here."
+            case .lastSignInMethod:
+                return "Connect another sign-in method before disconnecting this one so you can still access your memories."
+            case .guestRecoveryUnavailable:
+                return "Memoir could not restore your private guest account. Check your connection and try again."
             case .underlying(let message):
                 return message
             }

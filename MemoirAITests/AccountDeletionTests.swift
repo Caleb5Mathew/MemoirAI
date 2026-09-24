@@ -5,6 +5,57 @@ import FirebaseFunctions
 @testable import MemoirAI
 
 struct AccountDeletionTests {
+    @Test func nativeAnonymousSessionIsGuest() {
+        #expect(GuestSessionPolicy.isGuest(
+            isNativeAnonymous: true
+        ))
+    }
+
+    @Test func recoveredCustomTokenSessionIsGuest() {
+        #expect(GuestSessionPolicy.isGuest(
+            isNativeAnonymous: false,
+            hasMemoirGuestClaim: true
+        ))
+    }
+
+    @Test func linkedProviderSessionIsNotGuest() {
+        #expect(!GuestSessionPolicy.isGuest(
+            isNativeAnonymous: false
+        ))
+    }
+
+    @Test func unclaimedCustomTokenSessionIsNotGuest() {
+        #expect(!GuestSessionPolicy.isGuest(
+            isNativeAnonymous: false
+        ))
+    }
+
+    @Test func missingRecoveryMappingCanRotateOnlyForNativeGuest() {
+        let error = NSError(
+            domain: FunctionsErrorDomain,
+            code: FunctionsErrorCode.notFound.rawValue
+        )
+        #expect(GuestRecoveryFailurePolicy.shouldReplaceSavedSecret(
+            error: error,
+            isNativeAnonymous: true
+        ))
+        #expect(!GuestRecoveryFailurePolicy.shouldReplaceSavedSecret(
+            error: error,
+            isNativeAnonymous: false
+        ))
+    }
+
+    @Test func transientRecoveryFailureKeepsSavedSecret() {
+        let error = NSError(
+            domain: FunctionsErrorDomain,
+            code: FunctionsErrorCode.internal.rawValue
+        )
+        #expect(!GuestRecoveryFailurePolicy.shouldReplaceSavedSecret(
+            error: error,
+            isNativeAnonymous: true
+        ))
+    }
+
     private struct CleanupFailure: Error {}
 
     @Test func accountSwitchContentDetectorStopsAfterLocalContent() async throws {
@@ -215,5 +266,30 @@ struct AccountDeletionTests {
         let data = try JSONEncoder().encode([first, second])
         #expect(AccountLocalDataCleaner.profileIDs(fromProfileData: data) == [first.id, second.id])
         #expect(AccountLocalDataCleaner.profileIDs(fromProfileData: Data([0xFF])).isEmpty)
+    }
+}
+
+struct LinkedAccountPolicyTests {
+    @Test func managementAlwaysLinksTheCurrentAccount() {
+        #expect(LinkedAccountPolicy.shouldLinkCurrentUser(isGuest: false, preserveCurrentAccount: true))
+        #expect(LinkedAccountPolicy.shouldLinkCurrentUser(isGuest: true, preserveCurrentAccount: true))
+    }
+
+    @Test func welcomeKeepsGuestUpgradeAndReturningSignInBehavior() {
+        #expect(LinkedAccountPolicy.shouldLinkCurrentUser(isGuest: true, preserveCurrentAccount: false))
+        #expect(!LinkedAccountPolicy.shouldLinkCurrentUser(isGuest: false, preserveCurrentAccount: false))
+    }
+
+    @Test func lastProviderCannotBeDisconnected() {
+        #expect(!LinkedAccountPolicy.canDisconnect(providerID: "apple.com", linkedProviderIDs: ["apple.com"]))
+        #expect(!LinkedAccountPolicy.canDisconnect(providerID: "google.com", linkedProviderIDs: ["google.com", "custom"]))
+        #expect(!LinkedAccountPolicy.canDisconnect(providerID: "apple.com", linkedProviderIDs: ["apple.com", "apple.com"]))
+    }
+
+    @Test func anotherSupportedProviderAllowsDisconnection() {
+        #expect(LinkedAccountPolicy.canDisconnect(providerID: "apple.com", linkedProviderIDs: ["apple.com", "google.com"]))
+        #expect(LinkedAccountPolicy.canDisconnect(providerID: "google.com", linkedProviderIDs: ["google.com", "password"]))
+        #expect(!LinkedAccountPolicy.canDisconnect(providerID: "apple.com", linkedProviderIDs: ["google.com", "password"]))
+        #expect(!LinkedAccountPolicy.canDisconnect(providerID: "custom", linkedProviderIDs: ["custom", "apple.com"]))
     }
 }

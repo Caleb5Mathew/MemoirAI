@@ -149,6 +149,38 @@ struct LuluCoverTemplate {
 /// Renders the full flat cover image for print.
 struct BookCoverRenderer {
 
+    static let maximumEmbeddedRasterByteCount = 18 * 1024 * 1024
+
+    static func compressedImagePDF(
+        image: UIImage,
+        bounds: CGRect,
+        compressionQuality: CGFloat = 0.88
+    ) -> Data? {
+        guard bounds.width > 0, bounds.height > 0 else {
+            return nil
+        }
+
+        let startingQuality = min(max(compressionQuality, 0.35), 0.92)
+        var quality = startingQuality
+        var jpegData: Data?
+        while quality >= 0.35 {
+            if let candidate = image.jpegData(compressionQuality: quality),
+               candidate.count <= maximumEmbeddedRasterByteCount {
+                jpegData = candidate
+                break
+            }
+            quality -= 0.08
+        }
+        guard let jpegData,
+              let compressedImage = UIImage(data: jpegData) else { return nil }
+
+        let renderer = UIGraphicsPDFRenderer(bounds: bounds)
+        return renderer.pdfData { context in
+            context.beginPage(withBounds: bounds, pageInfo: [:])
+            compressedImage.draw(in: bounds)
+        }
+    }
+
     // Warm cream (matches interior bookPageBackground)
     static let creamColor = UIColor(red: 0.99, green: 0.97, blue: 0.94, alpha: 1)
     static let spineColor = UIColor(red: 0.6, green: 0.5, blue: 0.4, alpha: 1)
@@ -206,7 +238,8 @@ struct BookCoverRenderer {
         frontTitle: String?,
         backCoverPitch: String,
         fontPreset: CoverFontPreset,
-        useNativeFrontTitleOverlay: Bool = false
+        useNativeFrontTitleOverlay: Bool = false,
+        useNativeBackCopyOverlay: Bool = true
     ) -> UIImage? {
         // Spine scales with page count (Lulu-style table); total flat width grows beyond the legacy 0.25" spine for thick books.
         let spineInches = pageCount > 0
@@ -241,7 +274,9 @@ struct BookCoverRenderer {
             if let backCoverArt {
                 let backArtRect = CGRect(x: 0, y: 0, width: wrap + backW, height: height)
                 drawAspectFill(backCoverArt, in: backArtRect, context: cgContext)
-                drawBackCoverLegibilityOverlay(in: backPanel, context: cgContext)
+                if useNativeBackCopyOverlay {
+                    drawBackCoverLegibilityOverlay(in: backPanel, context: cgContext)
+                }
             }
 
             // 3. Spine: solid stripe
@@ -254,7 +289,9 @@ struct BookCoverRenderer {
             drawAspectFill(frontCoverArt, in: frontRect, context: cgContext)
 
             // 5. Back cover: headline + pitch + bottom-right MemoirAI imprint.
-            drawBackCoverPanel(in: backPanel, pitch: backCoverPitch, fontPreset: fontPreset, context: cgContext)
+            if useNativeBackCopyOverlay {
+                drawBackCoverPanel(in: backPanel, pitch: backCoverPitch, fontPreset: fontPreset, context: cgContext)
+            }
 
             // 6. Optional native front title (AI covers embed title in the artwork instead).
             if useNativeFrontTitleOverlay,
@@ -519,7 +556,8 @@ struct BookCoverRenderer {
         frontTitle: String?,
         backCoverPitch: String,
         fontPreset: CoverFontPreset,
-        useNativeFrontTitleOverlay: Bool = false
+        useNativeFrontTitleOverlay: Bool = false,
+        useNativeBackCopyOverlay: Bool = true
     ) -> Data? {
         guard let coverImage = render(
             frontCoverArt: frontCoverArt,
@@ -529,7 +567,8 @@ struct BookCoverRenderer {
             frontTitle: frontTitle,
             backCoverPitch: backCoverPitch,
             fontPreset: fontPreset,
-            useNativeFrontTitleOverlay: useNativeFrontTitleOverlay
+            useNativeFrontTitleOverlay: useNativeFrontTitleOverlay,
+            useNativeBackCopyOverlay: useNativeBackCopyOverlay
         ) else { return nil }
 
         let spineInches = pageCount > 0
@@ -540,11 +579,7 @@ struct BookCoverRenderer {
         let heightPt = BookCoverTemplate.totalHeightInches * 72
         let bounds = CGRect(x: 0, y: 0, width: widthPt, height: heightPt)
 
-        let renderer = UIGraphicsPDFRenderer(bounds: bounds)
-        return renderer.pdfData { ctx in
-            ctx.beginPage(withBounds: bounds, pageInfo: [:])
-            coverImage.draw(in: bounds)
-        }
+        return compressedImagePDF(image: coverImage, bounds: bounds)
     }
 
     /// Generate PDF for Lulu casewrap (0.75" wrap, 0.125" bleed, spine from page count).
@@ -556,7 +591,8 @@ struct BookCoverRenderer {
         frontTitle: String?,
         backCoverPitch: String,
         fontPreset: CoverFontPreset,
-        useNativeFrontTitleOverlay: Bool = false
+        useNativeFrontTitleOverlay: Bool = false,
+        useNativeBackCopyOverlay: Bool = true
     ) -> Data? {
         let spineW = spineWidthInches(forPageCount: pageCount)
         let totalW = LuluCoverTemplate.totalWidthInches(spineWidth: spineW)
@@ -583,7 +619,9 @@ struct BookCoverRenderer {
             if let backCoverArt {
                 let backArtRect = CGRect(x: 0, y: 0, width: wrap + faceW, height: height)
                 drawAspectFill(backCoverArt, in: backArtRect, context: cgContext)
-                drawBackCoverLegibilityOverlay(in: backPanel, context: cgContext)
+                if useNativeBackCopyOverlay {
+                    drawBackCoverLegibilityOverlay(in: backPanel, context: cgContext)
+                }
             }
 
             cgContext.setFillColor(spineColor.cgColor)
@@ -593,7 +631,9 @@ struct BookCoverRenderer {
             let frontRect = CGRect(x: frontX, y: 0, width: faceW + wrap, height: height)
             drawAspectFill(frontCoverArt, in: frontRect, context: cgContext)
 
-            drawBackCoverPanel(in: backPanel, pitch: backCoverPitch, fontPreset: fontPreset, context: cgContext)
+            if useNativeBackCopyOverlay {
+                drawBackCoverPanel(in: backPanel, pitch: backCoverPitch, fontPreset: fontPreset, context: cgContext)
+            }
 
             if useNativeFrontTitleOverlay,
                let t = frontTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
@@ -609,11 +649,7 @@ struct BookCoverRenderer {
         let widthPt = totalW * 72
         let heightPt = totalH * 72
         let bounds = CGRect(x: 0, y: 0, width: widthPt, height: heightPt)
-        let pdfRenderer = UIGraphicsPDFRenderer(bounds: bounds)
-        return pdfRenderer.pdfData { ctx in
-            ctx.beginPage(withBounds: bounds, pageInfo: [:])
-            image.draw(in: bounds)
-        }
+        return compressedImagePDF(image: image, bounds: bounds)
     }
 
     /// Generate PDF for Lulu casewrap portrait books (8.5x11"). Uses first illustration as front cover.
@@ -625,7 +661,8 @@ struct BookCoverRenderer {
         frontTitle: String?,
         backCoverPitch: String,
         fontPreset: CoverFontPreset,
-        useNativeFrontTitleOverlay: Bool = false
+        useNativeFrontTitleOverlay: Bool = false,
+        useNativeBackCopyOverlay: Bool = true
     ) -> Data? {
         let spineW = spineWidthInches(forPageCount: pageCount)
         let totalW = PortraitLuluCoverTemplate.totalWidthInches(spineWidth: spineW)
@@ -652,7 +689,9 @@ struct BookCoverRenderer {
             if let backCoverArt {
                 let backArtRect = CGRect(x: 0, y: 0, width: wrap + faceW, height: height)
                 drawAspectFill(backCoverArt, in: backArtRect, context: cgContext)
-                drawBackCoverLegibilityOverlay(in: backPanel, context: cgContext)
+                if useNativeBackCopyOverlay {
+                    drawBackCoverLegibilityOverlay(in: backPanel, context: cgContext)
+                }
             }
 
             cgContext.setFillColor(spineColor.cgColor)
@@ -662,7 +701,9 @@ struct BookCoverRenderer {
             let frontRect = CGRect(x: frontX, y: 0, width: faceW + wrap, height: height)
             drawAspectFill(frontCoverArt, in: frontRect, context: cgContext)
 
-            drawBackCoverPanel(in: backPanel, pitch: backCoverPitch, fontPreset: fontPreset, context: cgContext)
+            if useNativeBackCopyOverlay {
+                drawBackCoverPanel(in: backPanel, pitch: backCoverPitch, fontPreset: fontPreset, context: cgContext)
+            }
 
             if useNativeFrontTitleOverlay,
                let t = frontTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
@@ -678,11 +719,7 @@ struct BookCoverRenderer {
         let widthPt = totalW * 72
         let heightPt = totalH * 72
         let bounds = CGRect(x: 0, y: 0, width: widthPt, height: heightPt)
-        let pdfRenderer = UIGraphicsPDFRenderer(bounds: bounds)
-        return pdfRenderer.pdfData { ctx in
-            ctx.beginPage(withBounds: bounds, pageInfo: [:])
-            image.draw(in: bounds)
-        }
+        return compressedImagePDF(image: image, bounds: bounds)
     }
 }
 
@@ -751,5 +788,28 @@ extension BookCoverRenderer {
             let front = CGRect(x: xAfterSpine / totalW, y: 0, width: (totalW - xAfterSpine) / totalW, height: 1)
             return BookCoverFlatPanelRects(back: back, spine: spine, front: front)
         }
+    }
+
+    static func flatPanelAspectRatio(
+        for layout: BookCoverFlatLayoutKind,
+        panel: BookCoverFlatPanel
+    ) -> CGFloat? {
+        guard let panelRect = flatPanelRects(for: layout).normalizedRect(for: panel) else {
+            return nil
+        }
+        let fullCoverAspectRatio: CGFloat
+        switch layout {
+        case .kidsBook(let pageCount):
+            let spineWidth = pageCount > 0
+                ? spineWidthInches(forPageCount: pageCount)
+                : BookCoverTemplate.spineWidthInches
+            fullCoverAspectRatio = LuluCoverTemplate.totalWidthInches(spineWidth: spineWidth)
+                / LuluCoverTemplate.totalHeightInches
+        case .portraitCasewrap(let pageCount):
+            let spineWidth = spineWidthInches(forPageCount: pageCount)
+            fullCoverAspectRatio = PortraitLuluCoverTemplate.totalWidthInches(spineWidth: spineWidth)
+                / PortraitLuluCoverTemplate.totalHeightInches
+        }
+        return panelRect.width * fullCoverAspectRatio / max(panelRect.height, 0.000_001)
     }
 }

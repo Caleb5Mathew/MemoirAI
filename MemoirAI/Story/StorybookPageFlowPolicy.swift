@@ -5,8 +5,124 @@ enum StorybookPagePresentationPolicy {
         hasGeneratedStorybook && pageCount > 0
     }
 
-    static func shouldShowProfileLoadingOverlay(isLoadingProfileBook: Bool, hasLoadedBook: Bool) -> Bool {
-        isLoadingProfileBook && !hasLoadedBook
+    static func shouldShowProfileLoadingOverlay(
+        isLoadingProfileBook: Bool,
+        hasLoadedBook: Bool,
+        hasCanonicalBookMetadata: Bool
+    ) -> Bool {
+        isLoadingProfileBook && hasLoadedBook && !hasCanonicalBookMetadata
+    }
+
+    static func clampedPageIndex(_ index: Int, pageCount: Int) -> Int {
+        guard pageCount > 0 else { return 0 }
+        return min(max(index, 0), pageCount - 1)
+    }
+
+    static func loadingCopy(isLibrarySelection: Bool) -> (title: String, subtitle: String) {
+        if isLibrarySelection {
+            return ("Opening your book…", "Loading pages and illustrations.")
+        }
+        return ("", "")
+    }
+}
+
+enum StorybookReaderSlot: Equatable {
+    case cover(BookCoverFlatPanel)
+    case interiorPage(Int)
+}
+
+enum StorybookReaderSlotPolicy {
+    static func slots(interiorPageCount: Int, hasExteriorCover: Bool) -> [StorybookReaderSlot] {
+        let pages = (0..<max(interiorPageCount, 0)).map(StorybookReaderSlot.interiorPage)
+        guard hasExteriorCover else { return pages }
+        return [.cover(.front)] + pages + [.cover(.back)]
+    }
+}
+
+enum StorybookEditablePageTarget: Equatable {
+    case exteriorCover(BookCoverFlatPanel)
+    case interiorPage(Int)
+}
+
+enum StorybookPageEditDestinationPolicy {
+    static func target(for slot: StorybookReaderSlot) -> StorybookEditablePageTarget {
+        switch slot {
+        case .cover(let panel):
+            return .exteriorCover(panel)
+        case .interiorPage(let index):
+            return .interiorPage(index)
+        }
+    }
+}
+
+enum BookCatalogTitlePolicy {
+    static func displayTitle(
+        printTitle: String?,
+        bookDisplayName: String?,
+        firstPageTitle: String?
+    ) -> String {
+        for candidate in [printTitle, bookDisplayName, firstPageTitle] {
+            if let title = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !title.isEmpty {
+                return title
+            }
+        }
+        return "Story"
+    }
+}
+
+enum StorybookInteriorAnchorPolicy {
+    static func matches(memoryID: String?, anchor: UUID) -> Bool {
+        guard let memoryID = memoryID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let parsedID = UUID(uuidString: memoryID) else {
+            return false
+        }
+        return parsedID == anchor
+    }
+}
+
+enum StorybookBookendRecoveryPolicy {
+    static func recoveredMemoryID(
+        storedMemoryID: String?,
+        pageType: String,
+        title: String?,
+        textContent: String?
+    ) -> UUID? {
+        if let storedMemoryID,
+           let explicitID = UUID(uuidString: storedMemoryID.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return explicitID
+        }
+        guard pageType == "textPage" else { return nil }
+
+        let normalizedTitle = title?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        if normalizedTitle == "about this book" {
+            return BookInteriorAnchor.closingPageMemoryId
+        }
+        if normalizedTitle == "made with memoir" {
+            return BookInteriorAnchor.closingPageMemoryId
+        }
+
+        let normalizedBody = textContent?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        if normalizedBody.contains("personal memoir and life story")
+            && normalizedBody.contains("recorded and written") {
+            return BookInteriorAnchor.titlePageMemoryId
+        }
+        if normalizedBody.hasPrefix("a collection of memories from")
+            && normalizedBody.hasSuffix("’s life.") {
+            return BookInteriorAnchor.titlePageMemoryId
+        }
+        return nil
+    }
+
+    static func shouldInclude(memoryID: UUID, seenBookendIDs: Set<UUID>) -> Bool {
+        guard BookInteriorAnchor.isNonMemoryPage(memoryID) else {
+            return true
+        }
+        return !seenBookendIDs.contains(memoryID)
     }
 }
 
@@ -41,9 +157,45 @@ enum StorybookCloudJobResumeAction: Equatable {
     }
 }
 
+enum StorybookCloudPageRebuildPolicy {
+    /// In-progress snapshots exist to update progress. Rebuilding pages before the
+    /// worker reaches `aiComplete` repeatedly downloads the same illustrations.
+    static func shouldDeferPageRebuild(status: String) -> Bool {
+        ["queued", "ranking", "running"].contains(status)
+    }
+}
+
+enum StorybookCanonicalInstallPolicy {
+    /// A freshly generated book already has full-resolution local pages. Once the
+    /// matching canonical record is print-ready, only its metadata needs installing.
+    /// Cold resumes and mismatched/partial page sets must use normal cloud hydration.
+    static func canPreserveLocalPages(
+        expectedBookVersionID: String?,
+        canonicalBookVersionID: String,
+        localPageKeys: [String],
+        canonicalPageKeys: [String],
+        hasUnresolvedIllustrations: Bool,
+        hasPlaceholderIllustrations: Bool
+    ) -> Bool {
+        guard expectedBookVersionID == canonicalBookVersionID,
+              !localPageKeys.isEmpty,
+              localPageKeys == canonicalPageKeys,
+              !hasUnresolvedIllustrations,
+              !hasPlaceholderIllustrations else {
+            return false
+        }
+        return true
+    }
+}
+
 enum GlobalStorybookBannerVisibilityPolicy {
-    static func shouldShow(hasActiveJob: Bool, isStoryPageVisible: Bool, isDismissed: Bool) -> Bool {
-        hasActiveJob && !isStoryPageVisible && !isDismissed
+    static func shouldShow(
+        hasActiveJob: Bool,
+        isNavigationRoot: Bool,
+        isStoryPageVisible: Bool,
+        isDismissed: Bool
+    ) -> Bool {
+        hasActiveJob && isNavigationRoot && !isStoryPageVisible && !isDismissed
     }
 }
 
@@ -62,6 +214,12 @@ enum StorybookGenerationBatchPolicy {
 
     static func clampedTargetPageCount(_ requested: Int) -> Int {
         max(1, min(maximumPagesPerBook, requested))
+    }
+}
+
+enum StorybookGenerationStylePolicy {
+    static func supportedArtStyle(legacyStoredValue: String?) -> ArtStyle {
+        .kidsBook
     }
 }
 
@@ -175,6 +333,27 @@ enum StorybookPayloadCapacityPolicy {
 
     static func accepts(encodedByteCount: Int) -> Bool {
         encodedByteCount > 0 && encodedByteCount <= maximumEncodedBookByteCount
+    }
+}
+
+enum StorybookCoverRevealPolicy {
+    enum PreparationResult {
+        case pending
+        case ready
+        case failed
+    }
+
+    static func shouldReveal(
+        canonicalArtifactsReady: Bool,
+        coverPreparation: PreparationResult
+    ) -> Bool {
+        guard canonicalArtifactsReady else { return false }
+        switch coverPreparation {
+        case .pending:
+            return false
+        case .ready, .failed:
+            return true
+        }
     }
 }
 

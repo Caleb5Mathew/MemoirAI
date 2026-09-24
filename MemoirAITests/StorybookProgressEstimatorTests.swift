@@ -135,6 +135,19 @@ struct StorybookProgressEstimatorTests {
         #expect(eta == 185)
     }
 
+    @Test func suspendedTimeDoesNotConsumeFinalizationETA() {
+        var e = makeEstimator(pages: 1)
+        e.noteStatus("aiComplete", completed: 1, total: 1, now: t0)
+        e.setActive(false, now: t0.addingTimeInterval(10))
+
+        let whileSuspended = e.snapshot(now: t0.addingTimeInterval(190))
+        #expect(whileSuspended.etaSeconds == 200)
+
+        e.setActive(true, now: t0.addingTimeInterval(190))
+        let afterResume = e.snapshot(now: t0.addingTimeInterval(195))
+        #expect(afterResume.etaSeconds == 195)
+    }
+
     @Test func defaultFinalizeEstimateMatchesMeasuredLivePipeline() {
         #expect(StorybookProgressEstimator.Calibration.default.finalizeSeconds == 210)
     }

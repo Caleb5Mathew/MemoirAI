@@ -26,6 +26,8 @@ struct AddProfileView: View {
     @State private var showDevSheet = false
     @State private var devKey = ""
     @State private var devResult: DevUnlockResult? = nil
+    @State private var devErrorMessage: String?
+    @State private var isVerifyingDevAccess = false
     
     private enum DevUnlockResult {
         case success
@@ -50,38 +52,7 @@ struct AddProfileView: View {
             loadPhotoData(from: item)
         }
         .fullScreenCover(isPresented: $showPaywall) {
-            // Add error handling around PaywallView
-            Group {
-                if RCSubscriptionManager.shared.offerings?.current?.availablePackages.isEmpty == false {
-                    PaywallView(displayCloseButton: true)
-                } else {
-                    // Fallback view when paywall can't load
-                    VStack(spacing: 20) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 60))
-                            .foregroundColor(.orange)
-                        
-                        Text("Subscription Temporarily Unavailable")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        
-                        Text("Please try again later or contact support.")
-                            .multilineTextAlignment(.center)
-                        
-                        Button("Close") {
-                            showPaywall = false
-                        }
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
-                    }
-                    .padding()
-                    .background(Color.white)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .ignoresSafeArea()
+            SubscriptionPaywallView()
         }
         .sheet(isPresented: $showDevSheet) {
             devUnlockSheet
@@ -170,6 +141,7 @@ struct AddProfileView: View {
                     .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
                     .fontWeight(.light)
                     .onTapGesture {
+                        guard DeveloperAccessDistributionPolicy.permitsCurrentBuild else { return }
                         devTapCount += 1
                         if devTapCount >= 5 {
                             showDevSheet = true
@@ -346,40 +318,31 @@ struct AddProfileView: View {
             if let result = devResult {
                 HStack(spacing: 6) {
                     Image(systemName: result == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    Text(result == .success ? "Unlocked!" : "Incorrect")
+                    Text(result == .success ? "Unlocked!" : (devErrorMessage ?? "Access denied"))
                 }
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(result == .success ? .green : .red)
                 .transition(.opacity.combined(with: .scale))
             }
             
-            Button(action: {
-                if RCSubscriptionManager.verifyDeveloperPassword(devKey) {
-                    RCSubscriptionManager.shared.enablePersistentDevMode()
-                    withAnimation { devResult = .success }
-                    devKey = ""
-                    // Auto dismiss after success
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        showDevSheet = false
-                        devResult = nil
-                    }
-                } else {
-                    withAnimation { devResult = .incorrect }
-                    // Clear incorrect message after delay
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation { devResult = nil }
+            Button {
+                Task { await verifyDeveloperAccess() }
+            } label: {
+                Group {
+                    if isVerifyingDevAccess {
+                        ProgressView().tint(.white)
+                    } else {
+                        Text("Unlock")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.white)
                     }
                 }
-            }) {
-                Text("Unlock")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 120)
-                    .padding(.vertical, 12)
-                    .background(devKey.isEmpty ? Color.gray.opacity(0.3) : Color(red: 0.83, green: 0.45, blue: 0.14))
-                    .cornerRadius(10)
+                .frame(width: 120)
+                .padding(.vertical, 12)
+                .background(devKey.isEmpty ? Color.gray.opacity(0.3) : Color(red: 0.83, green: 0.45, blue: 0.14))
+                .cornerRadius(10)
             }
-            .disabled(devKey.isEmpty)
+            .disabled(devKey.isEmpty || isVerifyingDevAccess)
             
             Spacer()
             Spacer()
@@ -389,6 +352,26 @@ struct AddProfileView: View {
         .onDisappear {
             devKey = ""
             devResult = nil
+            devErrorMessage = nil
+            isVerifyingDevAccess = false
+        }
+    }
+
+    @MainActor
+    private func verifyDeveloperAccess() async {
+        isVerifyingDevAccess = true
+        defer { isVerifyingDevAccess = false }
+        do {
+            try await subscriptionManager.authorizeDeveloperAccess(devKey)
+            withAnimation { devResult = .success }
+            devErrorMessage = nil
+            devKey = ""
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            showDevSheet = false
+            devResult = nil
+        } catch {
+            devErrorMessage = error.localizedDescription
+            withAnimation { devResult = .incorrect }
         }
     }
 }

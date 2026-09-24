@@ -9,15 +9,16 @@ struct RecentMemoriesView: View {
     
     // Optional binding for tab selection - only set when used in MainTabView
     var selectedTab: Binding<Int>? = nil
-    /// When true, place memories that can be enhanced at the top.
-    /// Used by Storybook's "Enhance" entry point only.
-    var prioritizeEnhanceCandidates: Bool = false
+    /// When true, this becomes the scoped enhancement queue instead of the full library.
+    var enhancementMode: Bool = false
+    var initialMemoirMode: MemoirMode? = nil
 
     @State private var entries: [MemoryEntry] = []
     @State private var sortAscending = false
     @State private var showSortOptions = false
     @State private var selectedMemoryID: UUID? = nil
     @State private var showCreateMemory = false
+    @State private var selectedMemoirMode: MemoirMode? = nil
 
     // Design tokens - consistent with app theme
     private let backgroundColor = Color(red: 0.98, green: 0.96, blue: 0.89) // softCream
@@ -26,21 +27,30 @@ struct RecentMemoriesView: View {
     private let textPrimary = Color(red: 0.2, green: 0.2, blue: 0.2)
     private let textSecondary = Color(red: 0.5, green: 0.5, blue: 0.5)
 
+    private var candidateEntries: [MemoryEntry] {
+        enhancementMode ? entries.filter(isEnhanceCandidate(_:)) : entries
+    }
+
+    private var availableMemoirModes: [MemoirMode] {
+        MemoirModeFilterPolicy.availableModes(in: entries.map(\.memoirMetadata))
+    }
+
+    private var filteredEntries: [MemoryEntry] {
+        if enhancementMode, selectedMemoirMode == nil {
+            return []
+        }
+        return candidateEntries.filter {
+            MemoirModeFilterPolicy.includes($0.memoirMetadata, mode: selectedMemoirMode)
+        }
+    }
+
     // Sort entries by date
     var sortedEntries: [MemoryEntry] {
-        let dateSorted = entries.sorted {
+        filteredEntries.sorted {
             let d1 = $0.createdAt ?? .distantPast
             let d2 = $1.createdAt ?? .distantPast
             return sortAscending ? d1 < d2 : d1 > d2
         }
-
-        guard prioritizeEnhanceCandidates else {
-            return dateSorted
-        }
-
-        let enhanceable = dateSorted.filter(isEnhanceCandidate(_:))
-        let nonEnhanceable = dateSorted.filter { !isEnhanceCandidate($0) }
-        return enhanceable + nonEnhanceable
     }
 
     var body: some View {
@@ -54,8 +64,11 @@ struct RecentMemoriesView: View {
                         .padding(.top, 8)
                         .padding(.horizontal, 20)
                         .padding(.bottom, 12)
+
+                    memoirFilterBar
+                        .padding(.bottom, 10)
                     
-                    if entries.isEmpty {
+                    if sortedEntries.isEmpty {
                         Spacer()
 
                         // Enhanced empty state with gradient
@@ -80,11 +93,15 @@ struct RecentMemoriesView: View {
                             }
 
                             VStack(spacing: 12) {
-                                Text("No memories yet")
+                                Text(enhancementMode
+                                     ? "No \(selectedMemoirMode?.libraryTitle ?? "scoped") memories to enhance"
+                                     : "No memories yet")
                                     .font(.system(size: 28, weight: .bold, design: .serif))
                                     .foregroundColor(textPrimary)
 
-                                Text("Start recording or writing your stories.\nThey'll appear here.")
+                                Text(enhancementMode
+                                     ? "Choose another memoir above, or add more detail from a saved memory."
+                                     : "Start recording or writing your stories.\nThey'll appear here.")
                                     .font(.system(size: 17, weight: .regular))
                                     .foregroundColor(textSecondary)
                                     .multilineTextAlignment(.center)
@@ -124,14 +141,11 @@ struct RecentMemoriesView: View {
                         }
                     }
 
-                    createNewMemoryButton
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 24)
                 }
                 .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
                 .navigationBarHidden(true)
                 .navigationDestination(isPresented: $showCreateMemory) {
-                    RecordMemoryView()
+                    MemoirView()
                         .environmentObject(TutorialCoordinator.shared)
                 }
                 .navigationDestination(item: $selectedMemoryID) { memoryID in
@@ -159,11 +173,13 @@ struct RecentMemoriesView: View {
                 }
                 .onAppear { 
                     fetchEntries(for: profileVM.selectedProfile.id)
+                    selectInitialMemoirModeIfNeeded()
                     // Check for untranscribed memories and request permissions if needed
                     checkPermissionsAndTranscribe()
                 }
                 .onChange(of: profileVM.selectedProfile.id) { newID in
                     print("🔄 Switched profile (ID: \(newID.uuidString.prefix(8))…)")
+                    selectedMemoirMode = enhancementMode ? initialMemoirMode : nil
                     fetchEntries(for: newID)
                     // Check permissions again when switching profiles
                     checkPermissionsAndTranscribe()
@@ -180,6 +196,15 @@ struct RecentMemoriesView: View {
                         isPresented: $permissionManager.showSpeechPermissionAlert,
                         onSettingsTap: permissionManager.openSettings
                     )
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !enhancementMode {
+                    createNewMemoryButton
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
+                        .background(backgroundColor)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -224,7 +249,7 @@ struct RecentMemoriesView: View {
             Spacer()
             
             // Title - elegant, bold, serif
-            Text("Memories")
+            Text(enhancementMode ? "Enhance Memories" : "Memories")
                 .font(.system(size: 30, weight: .bold, design: .serif))
                 .foregroundColor(textPrimary)
                 .tracking(-0.5) // Tighter letter spacing for elegance
@@ -261,18 +286,54 @@ struct RecentMemoriesView: View {
         .frame(height: 50)
     }
 
+    @ViewBuilder
+    private var memoirFilterBar: some View {
+        if !availableMemoirModes.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    if !enhancementMode {
+                        memoirFilterButton(title: "All", mode: nil)
+                    }
+                    ForEach(availableMemoirModes, id: \.self) { mode in
+                        memoirFilterButton(title: mode.libraryTitle, mode: mode)
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+            .accessibilityIdentifier("memoirLibraryFilter")
+        }
+    }
+
+    private func memoirFilterButton(title: String, mode: MemoirMode?) -> some View {
+        let isSelected = selectedMemoirMode == mode
+        return Button {
+            selectedMemoirMode = mode
+        } label: {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(isSelected ? .white : textPrimary.opacity(0.78))
+                .padding(.horizontal, 16)
+                .frame(minHeight: 40)
+                .background(isSelected ? terracotta : Color.white.opacity(0.72))
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(terracotta.opacity(isSelected ? 0 : 0.25), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("memoirFilter_\(mode?.rawValue ?? "all")")
+    }
+
     private var createNewMemoryButton: some View {
         Button(action: {
             showCreateMemory = true
         }) {
-            HStack(spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
                 Image(systemName: "plus")
                     .font(.system(size: 18, weight: .bold))
                 Text("Create new memory")
                     .font(.system(size: 18, weight: .bold, design: .serif))
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
+            .frame(height: 56, alignment: .center)
             .foregroundColor(terracotta)
             .background(
                 Color(red: 1.0, green: 0.95, blue: 0.88)
@@ -284,6 +345,7 @@ struct RecentMemoriesView: View {
                     .foregroundColor(terracotta)
             )
         }
+        .accessibilityIdentifier("createNewMemoryButton")
     }
     
     // MARK: - Data Operations
@@ -304,6 +366,7 @@ struct RecentMemoriesView: View {
 
         do {
             entries = try context.fetch(request)
+            reconcileSelectedMemoirMode()
             print("📂 Fetched \(entries.count) memories for active profile")
             
             // Generate titles for existing memories that still have "Untitled Prompt"
@@ -311,6 +374,20 @@ struct RecentMemoriesView: View {
         } catch {
             print("❌ Failed to fetch: \(error)")
         }
+    }
+
+    private func selectInitialMemoirModeIfNeeded() {
+        guard enhancementMode else { return }
+        selectedMemoirMode = initialMemoirMode
+        reconcileSelectedMemoirMode()
+    }
+
+    private func reconcileSelectedMemoirMode() {
+        guard enhancementMode else { return }
+        if let selectedMemoirMode, availableMemoirModes.contains(selectedMemoirMode) {
+            return
+        }
+        selectedMemoirMode = availableMemoirModes.first
     }
     
     // MARK: - Title Generation for Existing Memories

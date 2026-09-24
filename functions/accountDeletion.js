@@ -38,6 +38,7 @@ async function findBlockingPendingCheckouts(db, userId) {
 }
 
 function isAnonymousToken(token) {
+  if (token?.memoirGuest === true) return true;
   const identities = token?.firebase?.identities;
   const hasLinkedIdentity = identities && Object.keys(identities).some((provider) => {
     const values = identities[provider];
@@ -161,7 +162,8 @@ function createDeleteOwnAccountHandler({
   auth,
   serverTimestamp,
   HttpsError,
-  nowSeconds = () => Math.floor(Date.now() / 1000)
+  nowSeconds = () => Math.floor(Date.now() / 1000),
+  revokeGuestRecovery = async () => {}
 }) {
   return async (request) => {
     if (!request.auth?.uid) {
@@ -180,6 +182,7 @@ function createDeleteOwnAccountHandler({
     }
     if (marker?.status === "deleting_auth") {
       try {
+        await revokeGuestRecovery(userId);
         await deleteAuthUserIfPresent(auth, userId);
         await markerRef.set({
           status: "complete",
@@ -225,6 +228,7 @@ function createDeleteOwnAccountHandler({
 
     let authDeletionStarted = false;
     try {
+      await revokeGuestRecovery(userId);
       // Disable both grant-based and byte-level shared-audio access before the
       // slower Firestore cleanup. Attempt both even if either operation fails.
       const accessResults = await Promise.allSettled([

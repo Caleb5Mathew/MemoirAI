@@ -2,6 +2,8 @@ import SwiftUI
 
 /// Floating toast for an active cloud storybook job; overlaid in `ContentView` so it appears above every tab and pushed destination without shifting layout.
 struct GlobalStorybookProgressBanner: View {
+    let isNavigationRoot: Bool
+
     @ObservedObject private var observer = ActiveStorybookJobObserver.shared
     @ObservedObject private var seenTracker = StorybookSeenTracker.shared
     /// Hides the banner until the job id or status changes (e.g. user dismisses a failed run, then retries and status becomes `running`).
@@ -14,6 +16,7 @@ struct GlobalStorybookProgressBanner: View {
             if let job = observer.activeJob,
                GlobalStorybookBannerVisibilityPolicy.shouldShow(
                 hasActiveJob: true,
+                isNavigationRoot: isNavigationRoot,
                 isStoryPageVisible: seenTracker.isStoryPageVisible,
                 isDismissed: isDismissed(job)
                ) {

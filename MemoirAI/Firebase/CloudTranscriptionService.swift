@@ -23,6 +23,24 @@ enum MemoryTranscriptionSyncMode: Equatable {
     case preserveServer
 }
 
+enum MemoryTranscriptionTextPolicy {
+    static func validUserEdit(_ text: String?) -> String? {
+        guard let text else { return nil }
+        if !text.isEmpty && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return nil
+        }
+        return text
+    }
+
+    static func displayText(edited: String?, canonical: String?, raw: String?) -> String {
+        if let edited = validUserEdit(edited) { return edited }
+        if let canonical, !canonical.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return canonical
+        }
+        return raw ?? ""
+    }
+}
+
 enum MemoryTranscriptionSyncPolicy {
     static func mode(
         audioChanged: Bool,
@@ -32,7 +50,9 @@ enum MemoryTranscriptionSyncPolicy {
         text: String
     ) -> MemoryTranscriptionSyncMode {
         if audioChanged && isM4A && status?.lowercased() == "queued" { return .resetForNewAudio }
-        if let editedText { return .writeEditedText(editedText) }
+        if let editedText = MemoryTranscriptionTextPolicy.validUserEdit(editedText) {
+            return .writeEditedText(editedText)
+        }
         if !isM4A || status == nil { return .writeLegacyText(text) }
         return .preserveServer
     }
@@ -94,6 +114,9 @@ enum RecordingDurationPolicy {
 enum CloudTranscriptionDisclosure {
     private static let acceptedVersionKey = "memoirai_cloud_transcription_disclosure_version"
     private static let currentVersion = 1
+
+    static let title = "Audio & Transcription Privacy"
+    static let message = "Saved voice memories are uploaded to your private MemoirAI account and sent to our transcription provider to create transcripts. You can delete a memory and its transcript at any time."
 
     static func isAccepted(defaults: UserDefaults = .standard) -> Bool {
         defaults.integer(forKey: acceptedVersionKey) >= currentVersion
@@ -197,7 +220,8 @@ actor CloudTranscriptionService {
             entry.transcriptionModel = "gpt-transcribe"
             entry.transcriptionVersion += 1
             entry.transcriptionUpdatedAt = Date()
-            if entry.transcriptionEditedText == nil {
+            if MemoryTranscriptionTextPolicy.validUserEdit(entry.transcriptionEditedText) == nil {
+                entry.transcriptionEditedText = nil
                 entry.text = text
             }
             try entry.managedObjectContext?.save()

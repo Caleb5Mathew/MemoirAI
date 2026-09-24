@@ -29,7 +29,10 @@ struct MainTabView: View {
 
             VStack(spacing: 0) {
                 TabView(selection: $selectedTab) {
-                    HomepageView()
+                    HomepageView {
+                        StorybookSeenTracker.shared.noteUserNavigationIntent()
+                        path.append(StorybookRootRoute.openBook)
+                    }
                         .environmentObject(profileVM)
                         .tabItem {
                             Image(systemName: "house.fill")

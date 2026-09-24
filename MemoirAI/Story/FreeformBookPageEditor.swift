@@ -17,8 +17,21 @@ private struct ImportedBookPagePhoto: Transferable {
 }
 
 struct FreeformBookPageEditor: View {
+    private enum InspectorField: Hashable {
+        case text
+        case caption
+    }
+
     @Binding var document: BookPageDocument
     @Binding var isImportingPhotos: Bool
+    let isSaving: Bool
+    let onCancel: () -> Void
+    let onSave: () -> Void
+    let onReset: (() -> Void)?
+    let memoryID: UUID?
+    let pageNumber: Int?
+    let isLandscapePage: Bool
+    let isIllustrationPage: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedElementID: UUID?
@@ -27,37 +40,102 @@ struct FreeformBookPageEditor: View {
     @State private var resizeStart: (id: UUID, handle: BookPageResizeHandle, frame: NormalizedPageRect)?
     @State private var importErrorMessage: String?
     @State private var photoImportTask: Task<Void, Never>?
+    @State private var history = BookPageEditorHistory()
+    @State private var cropElementID: UUID?
+    @State private var cropOriginalDocument: BookPageDocument?
+    @State private var cropDragStart: BookPageImageCropTransform?
+    @State private var cropZoomStart: Double?
+    @FocusState private var focusedInspectorField: InspectorField?
 
-    init(document: Binding<BookPageDocument>, isImportingPhotos: Binding<Bool> = .constant(false)) {
+    init(
+        document: Binding<BookPageDocument>,
+        isImportingPhotos: Binding<Bool> = .constant(false),
+        isSaving: Bool = false,
+        onCancel: @escaping () -> Void = {},
+        onSave: @escaping () -> Void = {},
+        onReset: (() -> Void)? = nil,
+        memoryID: UUID? = nil,
+        pageNumber: Int? = nil,
+        isLandscapePage: Bool = false,
+        isIllustrationPage: Bool = false
+    ) {
         _document = document
         _isImportingPhotos = isImportingPhotos
+        self.isSaving = isSaving
+        self.onCancel = onCancel
+        self.onSave = onSave
+        self.onReset = onReset
+        self.memoryID = memoryID
+        self.pageNumber = pageNumber
+        self.isLandscapePage = isLandscapePage
+        self.isIllustrationPage = isIllustrationPage
     }
 
     var body: some View {
-        VStack(spacing: 12) {
-            editorToolbar
+        VStack(spacing: 0) {
+            editorHeader
 
             GeometryReader { geometry in
-                let canvasSize = fittedCanvasSize(in: geometry.size)
+                let canvasSize = fittedCanvasSize(
+                    in: CGSize(
+                        width: max(0, geometry.size.width - 28),
+                        height: max(0, geometry.size.height - 20)
+                    )
+                )
 
                 ZStack {
-                    Color(red: 0.99, green: 0.98, blue: 0.95)
+                    Tokens.bgPrimary
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard cropElementID == nil else { return }
+                            selectedElementID = nil
+                            focusedInspectorField = nil
+                        }
 
-                    ForEach(document.elements) { element in
-                        editorElement(element, canvasSize: canvasSize)
+                    ZStack {
+                        Color(red: 0.99, green: 0.97, blue: 0.94)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                guard cropElementID == nil else { return }
+                                selectedElementID = nil
+                                focusedInspectorField = nil
+                            }
+
+                        ForEach(document.elements) { element in
+                            editorElement(element, canvasSize: canvasSize)
+                        }
+
+                        BookPageDocumentChrome(
+                            memoryID: memoryID,
+                            pageNumber: pageNumber,
+                            isLandscape: isLandscapePage,
+                            isIllustration: isIllustrationPage
+                        )
+                        .allowsHitTesting(false)
                     }
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .clipShape(Rectangle())
+                    .overlay(Rectangle().stroke(Tokens.ink.opacity(0.34), lineWidth: 1.5))
+                    .shadow(color: Tokens.ink.opacity(0.15), radius: 10, y: 4)
+                    .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                    .accessibilityLabel("Book page canvas")
                 }
-                .frame(width: canvasSize.width, height: canvasSize.height)
-                .clipShape(Rectangle())
-                .overlay(Rectangle().stroke(Color.black.opacity(0.16), lineWidth: 1))
-                .shadow(color: .black.opacity(0.14), radius: 12, y: 5)
-                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
-                .accessibilityLabel("Book page canvas")
             }
-
-            selectedElementInspector
+        }
+        .background(Tokens.bgPrimary.ignoresSafeArea())
+        .accessibilityIdentifier("freeformPageEditor")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            editorControlDock
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: selectedElementID)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    focusedInspectorField = nil
+                }
+            }
+        }
         .alert(
             "Couldn’t Add Item",
             isPresented: Binding(
@@ -91,10 +169,19 @@ struct FreeformBookPageEditor: View {
                             continue
                         }
                         defer { try? FileManager.default.removeItem(at: imported.fileURL) }
+                        let remainingPixelBudget = max(
+                            0,
+                            BookPageCapacityPolicy.maximumStoredImagePixelCount - document.storedImagePixelCount
+                        )
                         let storedImage = try await Task.detached(priority: .userInitiated) {
-                            try BookPageImagePreparation.prepareForStorage(fileURL: imported.fileURL)
+                            try BookPageImagePreparation.prepareForStorage(
+                                fileURL: imported.fileURL,
+                                maximumPixelCount: remainingPixelBudget
+                            )
                         }.value
+                        let previous = document
                         selectedElementID = try document.addImage(storedImage)
+                        history.recordMutation(from: previous, to: document)
                     } catch let error as BookPageCapacityError {
                         importErrorMessage = error.localizedDescription
                         break
@@ -116,17 +203,131 @@ struct FreeformBookPageEditor: View {
         }
     }
 
+    private var editorControlDock: some View {
+        VStack(spacing: 8) {
+            Group {
+                if selectedElementID != nil {
+                    selectedElementInspector
+                } else {
+                    Text("Select an item to move, resize, crop, or edit it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .top)
+
+            editorToolbar
+        }
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+        .frame(height: 158)
+        .background(Tokens.bgPrimary)
+        .overlay(alignment: .top) {
+            Divider().overlay(Tokens.ink.opacity(0.16))
+        }
+    }
+
+    private var editorHeader: some View {
+        HStack(spacing: 7) {
+            Button(action: {
+                if cropElementID != nil {
+                    cancelCropping()
+                } else {
+                    onCancel()
+                }
+            }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .bold))
+                    .frame(width: 36, height: 36)
+                    .background(Tokens.ink.opacity(0.08), in: Circle())
+            }
+            .accessibilityLabel("Close page editor")
+            .disabled(isSaving)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(cropElementID == nil ? "Edit Page" : "Crop Photo")
+                    .font(.system(size: 18, weight: .semibold, design: .serif))
+                    .lineLimit(1)
+                Text(editorInstruction)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                history.undo(current: &document)
+                clearSelectionIfNeeded()
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+                    .frame(width: 32, height: 36)
+            }
+            .disabled(!history.canUndo || isSaving || cropElementID != nil)
+            .accessibilityLabel("Undo")
+
+            Button {
+                history.redo(current: &document)
+                clearSelectionIfNeeded()
+            } label: {
+                Image(systemName: "arrow.uturn.forward")
+                    .frame(width: 32, height: 36)
+            }
+            .disabled(!history.canRedo || isSaving || cropElementID != nil)
+            .accessibilityLabel("Redo")
+
+            Button(action: onSave) {
+                Group {
+                    if isSaving {
+                        ProgressView().tint(Tokens.ink)
+                    } else {
+                        Text("Save").fontWeight(.semibold)
+                    }
+                }
+                .frame(minWidth: 48, minHeight: 38)
+                .padding(.horizontal, 5)
+                .foregroundStyle(Tokens.ink)
+                .background(Tokens.accentSoft, in: Capsule())
+            }
+            .disabled(isSaving || isImportingPhotos || cropElementID != nil)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Tokens.ink)
+        .padding(.horizontal, 16)
+    }
+
+    private var editorInstruction: String {
+        if cropElementID != nil {
+            return "Drag to reposition · pinch to zoom"
+        }
+        return selectedElementID == nil ? "Tap an item to select it" : "Drag to move · use corners to resize"
+    }
+
     private var editorToolbar: some View {
         HStack(spacing: 10) {
+            if cropElementID != nil {
+                Label("Drag to reposition · pinch to zoom", systemImage: "hand.draw")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 42)
+            } else {
             Button {
+                let previous = document
                 do {
                     selectedElementID = try document.addText()
+                    history.recordMutation(from: previous, to: document)
                 } catch {
                     importErrorMessage = error.localizedDescription
                 }
             } label: {
                 Label("Add Text", systemImage: "text.badge.plus")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 42)
+                    .background(Tokens.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
             }
+            .buttonStyle(.plain)
 
             PhotosPicker(
                 selection: $selectedPhotoItems,
@@ -143,6 +344,9 @@ struct FreeformBookPageEditor: View {
                 matching: .images
             ) {
                 Label(isImportingPhotos ? "Adding" : "Add Photos", systemImage: "photo.badge.plus")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 42)
+                    .background(Tokens.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
             }
             .disabled(
                 isImportingPhotos
@@ -151,33 +355,51 @@ struct FreeformBookPageEditor: View {
                     || document.storedImageByteCount >= BookPageCapacityPolicy.maximumStoredImageByteCount
             )
 
-            Spacer()
-
             if let selectedElementID {
-                Button {
-                    document.sendToBack(id: selectedElementID)
+                Menu {
+                    Button {
+                        let previous = document
+                        document.bringToFront(id: selectedElementID)
+                        history.recordMutation(from: previous, to: document)
+                    } label: {
+                        Label("Bring to Front", systemImage: "square.3.layers.3d.top.filled")
+                    }
+                    Button {
+                        let previous = document
+                        document.sendToBack(id: selectedElementID)
+                        history.recordMutation(from: previous, to: document)
+                    } label: {
+                        Label("Send to Back", systemImage: "square.2.layers.3d.bottom.filled")
+                    }
                 } label: {
-                    Image(systemName: "square.2.layers.3d.bottom.filled")
+                    Image(systemName: "square.3.layers.3d")
+                        .frame(width: 42, height: 42)
+                        .background(Tokens.ink.opacity(0.08), in: Circle())
                 }
-                .accessibilityLabel("Send selected item to back")
-
-                Button {
-                    document.bringToFront(id: selectedElementID)
-                } label: {
-                    Image(systemName: "square.3.layers.3d.top.filled")
-                }
-                .accessibilityLabel("Bring selected item to front")
+                .accessibilityLabel("Arrange selected item")
 
                 Button(role: .destructive) {
-                    document.deleteElement(id: selectedElementID)
-                    self.selectedElementID = nil
+                    deleteElement(selectedElementID)
                 } label: {
                     Image(systemName: "trash")
+                        .frame(width: 42, height: 42)
+                        .background(Color.red.opacity(0.10), in: Circle())
                 }
                 .accessibilityLabel("Delete selected item")
             }
+
+            if let onReset {
+                Button(role: .destructive, action: onReset) {
+                    Image(systemName: "arrow.counterclockwise")
+                        .frame(width: 42, height: 42)
+                        .background(Color.red.opacity(0.10), in: Circle())
+                }
+                .accessibilityLabel("Reset to original page")
+            }
+            }
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.plain)
+        .tint(Tokens.accent)
         .padding(.horizontal)
     }
 
@@ -186,30 +408,33 @@ struct FreeformBookPageEditor: View {
         if let selectedElementID,
            let element = document.elements.first(where: { $0.id == selectedElementID }),
            case .text(let textContent) = element.content {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Text")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                TextEditor(text: Binding(
+            VStack(alignment: .leading, spacing: 7) {
+                TextField("Text", text: Binding(
                     get: {
                         guard let current = document.elements.first(where: { $0.id == selectedElementID }),
                               case .text(let content) = current.content else { return "" }
                         return content.text
                     },
                     set: {
+                        let previous = document
                         if !document.updateText(id: selectedElementID, text: $0) {
                             importErrorMessage = BookPageCapacityError.maximumTextCharactersReached.localizedDescription
+                        } else {
+                            history.recordMutation(from: previous, to: document)
                         }
                     }
-                ))
-                .frame(minHeight: 72, maxHeight: 120)
-                .padding(6)
-                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                ), axis: .vertical)
+                .lineLimit(1...2)
+                .focused($focusedInspectorField, equals: .text)
+                .padding(.horizontal, 10)
+                .frame(minHeight: 38)
+                .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Tokens.ink.opacity(0.12)))
                 .accessibilityLabel("Selected text")
 
-                HStack {
-                    Text("Text size")
+                HStack(spacing: 10) {
+                    Image(systemName: "textformat.size")
+                        .foregroundStyle(.secondary)
                     Slider(
                         value: Binding(
                             get: {
@@ -219,95 +444,140 @@ struct FreeformBookPageEditor: View {
                                 }
                                 return content.fontSize
                             },
-                            set: { document.updateFontSize(id: selectedElementID, fontSize: $0) }
+                            set: {
+                                document.updateFontSize(id: selectedElementID, fontSize: $0)
+                            }
                         ),
-                        in: BookPageEditingPolicy.minimumFontSize...BookPageEditingPolicy.maximumFontSize
+                        in: BookPageEditingPolicy.minimumFontSize...BookPageEditingPolicy.maximumFontSize,
+                        onEditingChanged: { isEditing in
+                            if isEditing {
+                                history.beginMutation(from: document)
+                            } else {
+                                history.commitMutation(to: document)
+                            }
+                        }
                     )
                     .accessibilityLabel("Text size")
                     Text("\(Int((textContent.fontSize * 612).rounded())) pt")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .frame(width: 44, alignment: .trailing)
-                }
 
-                Picker(
-                    "Alignment",
-                    selection: Binding(
-                        get: {
-                            guard let current = document.elements.first(where: { $0.id == selectedElementID }),
-                                  case .text(let content) = current.content else { return BookPageTextAlignment.leading }
-                            return content.alignment
-                        },
-                        set: { document.updateTextAlignment(id: selectedElementID, alignment: $0) }
-                    )
-                ) {
-                    ForEach(BookPageTextAlignment.allCases, id: \.self) { alignment in
-                        Text(alignment.displayName).tag(alignment)
+                    Menu {
+                        ForEach(BookPageTextAlignment.allCases, id: \.self) { alignment in
+                            Button(alignment.displayName) {
+                                let previous = document
+                                document.updateTextAlignment(id: selectedElementID, alignment: alignment)
+                                history.recordMutation(from: previous, to: document)
+                            }
+                        }
+                    } label: {
+                        Label("Align", systemImage: "text.alignleft")
+                            .font(.caption.weight(.semibold))
+                            .frame(minWidth: 62, minHeight: 36)
                     }
                 }
-                .pickerStyle(.segmented)
             }
             .padding(.horizontal)
         } else if let selectedElementID,
                   let element = document.elements.first(where: { $0.id == selectedElementID }),
                   case .image = element.content {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Photo")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                Picker(
-                    "Photo sizing",
-                    selection: Binding(
-                        get: {
-                            guard let current = document.elements.first(where: { $0.id == selectedElementID }),
-                                  case .image(let content) = current.content else { return BookPageImageFit.fill }
-                            return content.fit
-                        },
-                        set: { document.updateImageFit(id: selectedElementID, fit: $0) }
-                    )
-                ) {
-                    Text("Fit").tag(BookPageImageFit.fit)
-                    Text("Fill").tag(BookPageImageFit.fill)
-                }
-                .pickerStyle(.segmented)
-
+            VStack(alignment: .leading, spacing: 7) {
                 TextField(
-                    "Photo description",
+                    "Add a caption",
                     text: Binding(
                         get: {
                             guard let current = document.elements.first(where: { $0.id == selectedElementID }),
                                   case .image(let content) = current.content else { return "" }
-                            return content.accessibilityDescription
+                            return content.caption
                         },
                         set: {
-                            document.updateImageAccessibilityDescription(
-                                id: selectedElementID,
-                                description: $0
-                            )
+                            let previous = document
+                            document.updateImageCaption(id: selectedElementID, caption: $0)
+                            history.recordMutation(from: previous, to: document)
                         }
                     )
                 )
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Photo description")
+                .focused($focusedInspectorField, equals: .caption)
+                .padding(.horizontal, 10)
+                .frame(height: 38)
+                .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Tokens.ink.opacity(0.12)))
+                .accessibilityLabel("Photo caption")
+
+                HStack(spacing: 8) {
+                    if cropElementID == selectedElementID {
+                        compactInspectorButton("Cancel", systemImage: "xmark", role: .destructive) {
+                            cancelCropping()
+                        }
+                        compactInspectorButton("Done Cropping", systemImage: "checkmark", prominent: true) {
+                            finishCropping()
+                        }
+                    } else {
+                        Menu {
+                            Button("Fit entire photo") { updateImageFit(.fit, id: selectedElementID) }
+                            Button("Fill frame") { updateImageFit(.fill, id: selectedElementID) }
+                        } label: {
+                            Label("Frame", systemImage: "rectangle.inset.filled")
+                                .font(.caption.weight(.semibold))
+                                .frame(maxWidth: .infinity, minHeight: 38)
+                                .background(Tokens.ink.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+                        }
+                        .accessibilityLabel("Photo frame style")
+
+                        compactInspectorButton("Crop", systemImage: "crop", prominent: true) {
+                            beginCropping(id: selectedElementID)
+                        }
+                    }
+                }
             }
             .padding(.horizontal)
         } else {
-            Text("Tap an item to move, resize, edit, reorder, or delete it.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
+            EmptyView()
         }
     }
 
-    private func editorElement(_ element: BookPageElement, canvasSize: CGSize) -> some View {
+    private func compactInspectorButton(
+        _ title: String,
+        systemImage: String,
+        role: ButtonRole? = nil,
+        prominent: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 38)
+                .foregroundStyle(Tokens.ink)
+                .background(
+                    prominent ? Tokens.accentSoft : Tokens.bgWash,
+                    in: RoundedRectangle(cornerRadius: 9)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func editorElement(_ element: BookPageElement, canvasSize: CGSize) -> AnyView {
         let frame = element.frame
         let width = canvasSize.width * CGFloat(frame.width)
         let height = canvasSize.height * CGFloat(frame.height)
         let isSelected = selectedElementID == element.id
 
+        if element.isLockedBackground {
+            return AnyView(
+                BookPageElementView(element: element, semanticTemplate: document.semanticTemplate)
+                    .frame(width: width, height: height)
+                    .position(
+                        x: canvasSize.width * CGFloat(frame.x + frame.width / 2),
+                        y: canvasSize.height * CGFloat(frame.y + frame.height / 2)
+                    )
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            )
+        }
+
         let interactiveElement = AnyView(
-            BookPageElementView(element: element)
+            BookPageElementView(element: element, semanticTemplate: document.semanticTemplate)
             .frame(width: width, height: height)
             .contentShape(Rectangle())
             .overlay {
@@ -320,14 +590,23 @@ struct FreeformBookPageEditor: View {
                 y: canvasSize.height * CGFloat(frame.y + frame.height / 2)
             )
             .onTapGesture {
+                guard cropElementID == nil || cropElementID == element.id else { return }
                 selectedElementID = element.id
             }
             .gesture(
                 DragGesture(minimumDistance: 2)
                     .onChanged { value in
+                        if cropElementID == element.id {
+                            updateCropDrag(for: element, translation: value.translation, elementSize: CGSize(
+                                width: width,
+                                height: height
+                            ))
+                            return
+                        }
                         if moveStart?.id != element.id {
                             moveStart = (element.id, element.frame)
                             selectedElementID = element.id
+                            history.beginMutation(from: document)
                         }
                         guard let start = moveStart, start.id == element.id else { return }
                         let translation = CGSize(
@@ -341,18 +620,39 @@ struct FreeformBookPageEditor: View {
                         )
                     }
                     .onEnded { _ in
+                        if cropElementID == element.id {
+                            cropDragStart = nil
+                            return
+                        }
                         moveStart = nil
+                        history.commitMutation(to: document)
                     }
             )
+            .simultaneousGesture(
+                MagnifyGesture()
+                    .onChanged { value in
+                        guard cropElementID == element.id else { return }
+                        updateCropZoom(
+                            for: element,
+                            magnification: value.magnification,
+                            elementSize: CGSize(width: width, height: height)
+                        )
+                    }
+                    .onEnded { _ in
+                        cropZoomStart = nil
+                    }
+            )
+            .allowsHitTesting(cropElementID == nil || cropElementID == element.id)
         )
 
-        return interactiveElement
+        return AnyView(interactiveElement
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityLabel(for: element))
             .accessibilityValue(isSelected ? "Selected" : "Not selected")
             .accessibilityHint("Double tap to select. Use actions to arrange or delete this item.")
             .accessibilityAddTraits(isSelected ? .isSelected : [])
             .accessibilityAction(named: "Select") {
+                guard cropElementID == nil || cropElementID == element.id else { return }
                 selectedElementID = element.id
             }
             .accessibilityAction(named: "Bring to Front") {
@@ -390,12 +690,21 @@ struct FreeformBookPageEditor: View {
             .accessibilityAction(named: "Delete") {
                 deleteElement(element.id)
             }
+        )
     }
 
     private func deleteElement(_ id: UUID) {
+        let previous = document
         document.deleteElement(id: id)
+        history.recordMutation(from: previous, to: document)
         guard selectedElementID == id else { return }
         selectedElementID = nil
+    }
+
+    private func clearSelectionIfNeeded() {
+        guard let selectedElementID else { return }
+        guard !document.elements.contains(where: { $0.id == selectedElementID }) else { return }
+        self.selectedElementID = nil
     }
 
     private func selectionOverlay(
@@ -404,15 +713,16 @@ struct FreeformBookPageEditor: View {
     ) -> some View {
         ZStack {
             Rectangle()
-                .stroke(Color.accentColor, lineWidth: 2)
+                .stroke(cropElementID == element.id ? Tokens.accent : Color.accentColor, lineWidth: cropElementID == element.id ? 3 : 2)
                 .allowsHitTesting(false)
 
-            ForEach(BookPageResizeHandle.allCases, id: \.self) { handle in
+            if cropElementID != element.id {
+                ForEach(BookPageResizeHandle.allCases, id: \.self) { handle in
                 Circle()
                     .fill(.white)
                     .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
-                    .frame(width: 12, height: 12)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 16, height: 16)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
                     .position(handlePosition(handle, elementSize: CGSize(
                         width: canvasSize.width * CGFloat(element.frame.width),
@@ -423,6 +733,7 @@ struct FreeformBookPageEditor: View {
                             .onChanged { value in
                                 if resizeStart?.id != element.id || resizeStart?.handle != handle {
                                     resizeStart = (element.id, handle, element.frame)
+                                    history.beginMutation(from: document)
                                 }
                                 guard let start = resizeStart,
                                       start.id == element.id,
@@ -440,12 +751,93 @@ struct FreeformBookPageEditor: View {
                             }
                             .onEnded { _ in
                                 resizeStart = nil
+                                history.commitMutation(to: document)
                             }
                     )
                     .accessibilityLabel("Resize \(handle.accessibilityName)")
                     .accessibilityHint("Drag to resize the selected item")
+                }
             }
+
         }
+    }
+
+    private func updateImageFit(_ fit: BookPageImageFit, id: UUID) {
+        let previous = document
+        document.updateImageFit(id: id, fit: fit)
+        history.recordMutation(from: previous, to: document)
+    }
+
+    private func beginCropping(id: UUID) {
+        guard cropElementID == nil,
+              let element = document.elements.first(where: { $0.id == id }),
+              case .image = element.content else { return }
+        focusedInspectorField = nil
+        cropOriginalDocument = document
+        cropElementID = id
+        document.updateImageFit(id: id, fit: .fill)
+    }
+
+    private func cancelCropping() {
+        if let cropOriginalDocument {
+            document = cropOriginalDocument
+        }
+        clearCropState()
+    }
+
+    private func finishCropping() {
+        if let cropOriginalDocument {
+            history.recordMutation(from: cropOriginalDocument, to: document)
+        }
+        clearCropState()
+    }
+
+    private func clearCropState() {
+        cropElementID = nil
+        cropOriginalDocument = nil
+        cropDragStart = nil
+        cropZoomStart = nil
+    }
+
+    private func updateCropDrag(for element: BookPageElement, translation: CGSize, elementSize: CGSize) {
+        guard case .image(let image) = element.content else { return }
+        let start = cropDragStart ?? image.cropTransform
+        cropDragStart = start
+        let mediaSize = imageMediaSize(for: image, elementSize: elementSize)
+        let candidate = BookPageImageCropTransform(
+            zoom: start.zoom,
+            offsetX: start.offsetX + Double(translation.width / max(mediaSize.width, 1)),
+            offsetY: start.offsetY + Double(translation.height / max(mediaSize.height, 1))
+        )
+        document.updateImageCropTransform(id: element.id, transform: candidate, viewportSize: mediaSize)
+    }
+
+    private func updateCropZoom(
+        for element: BookPageElement,
+        magnification: CGFloat,
+        elementSize: CGSize
+    ) {
+        guard case .image(let image) = element.content else { return }
+        let start = cropZoomStart ?? image.cropTransform.zoom
+        cropZoomStart = start
+        let candidate = BookPageImageCropTransform(
+            zoom: start * Double(magnification),
+            offsetX: image.cropTransform.offsetX,
+            offsetY: image.cropTransform.offsetY
+        )
+        document.updateImageCropTransform(
+            id: element.id,
+            transform: candidate,
+            viewportSize: imageMediaSize(for: image, elementSize: elementSize)
+        )
+    }
+
+    private func imageMediaSize(for image: BookPageStoredImage, elementSize: CGSize) -> CGSize {
+        let captionHeight = BookPageImageLayout.captionHeight(
+            caption: image.caption,
+            containerSize: elementSize
+        )
+        return CGSize(width: elementSize.width, height: max(1, elementSize.height - captionHeight))
     }
 
     private func fittedCanvasSize(in available: CGSize) -> CGSize {
@@ -461,15 +853,19 @@ struct FreeformBookPageEditor: View {
     }
 
     private func handlePosition(_ handle: BookPageResizeHandle, elementSize: CGSize) -> CGPoint {
+        let inset = min(10, max(0, min(elementSize.width, elementSize.height) / 2))
         switch handle {
         case .topLeading:
-            return CGPoint(x: 0, y: 0)
+            return CGPoint(x: inset, y: inset)
         case .topTrailing:
-            return CGPoint(x: elementSize.width, y: 0)
+            return CGPoint(x: max(inset, elementSize.width - inset), y: inset)
         case .bottomLeading:
-            return CGPoint(x: 0, y: elementSize.height)
+            return CGPoint(x: inset, y: max(inset, elementSize.height - inset))
         case .bottomTrailing:
-            return CGPoint(x: elementSize.width, y: elementSize.height)
+            return CGPoint(
+                x: max(inset, elementSize.width - inset),
+                y: max(inset, elementSize.height - inset)
+            )
         }
     }
 
@@ -485,15 +881,121 @@ struct FreeformBookPageEditor: View {
     }
 }
 
+struct PreparedBookPageEditorHost: View {
+    let request: PreparedPageEditorRequest
+    @ObservedObject var vm: StoryPageViewModel
+    let onDismiss: () -> Void
+
+    @State private var document: BookPageDocument
+    @State private var isImportingPhotos = false
+    @State private var isSaving = false
+    @State private var showResetConfirmation = false
+    @State private var errorMessage: String?
+
+    init(
+        request: PreparedPageEditorRequest,
+        vm: StoryPageViewModel,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.request = request
+        self.vm = vm
+        self.onDismiss = onDismiss
+        _document = State(initialValue: request.document)
+    }
+
+    var body: some View {
+        FreeformBookPageEditor(
+            document: $document,
+            isImportingPhotos: $isImportingPhotos,
+            isSaving: isSaving,
+            onCancel: onDismiss,
+            onSave: {
+                guard !isSaving, !isImportingPhotos else { return }
+                let savedDocument = document
+                isSaving = true
+                Task {
+                    defer { isSaving = false }
+                    var locallyApplied = false
+                    do {
+                        switch request.target {
+                        case .interiorPage:
+                            try await vm.applyFreeformDocument(
+                                savedDocument,
+                                pageID: request.pageID,
+                                onLocallyApplied: {
+                                    locallyApplied = true
+                                    onDismiss()
+                                }
+                            )
+                        case .exteriorCover(let panel):
+                            try await vm.applyExteriorCoverDocument(savedDocument, panel: panel)
+                            onDismiss()
+                        }
+                    } catch {
+                        if locallyApplied {
+                            vm.errorMessage = error.localizedDescription
+                        } else {
+                            errorMessage = error.localizedDescription
+                        }
+                    }
+                }
+            },
+            onReset: request.canReset ? { showResetConfirmation = true } : nil,
+            memoryID: request.showsChrome ? request.memoryID : nil,
+            pageNumber: request.showsChrome ? request.pageIndex + 1 : nil,
+            isLandscapePage: request.isLandscape,
+            isIllustrationPage: request.isIllustration
+        )
+        .allowsHitTesting(!isSaving)
+        .interactiveDismissDisabled()
+        .confirmationDialog(
+            "Reset this page to its original layout?",
+            isPresented: $showResetConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Reset Page", role: .destructive) {
+                guard !isSaving else { return }
+                isSaving = true
+                Task {
+                    defer { isSaving = false }
+                    do {
+                        guard case .interiorPage = request.target else {
+                            throw BookPageEditorPersistenceError.editingUnavailable
+                        }
+                        try await vm.removeFreeformDocument(pageID: request.pageID)
+                        onDismiss()
+                    } catch {
+                        errorMessage = error.localizedDescription
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your custom text and photos on this page will be removed.")
+        }
+        .alert(
+            "Page Editor",
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "The page could not be saved.")
+        }
+    }
+}
+
 struct BookPageDocumentView: View {
     let document: BookPageDocument
 
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                Color(red: 0.99, green: 0.98, blue: 0.95)
+                Color(red: 0.99, green: 0.97, blue: 0.94)
                 ForEach(document.elements) { element in
-                    BookPageElementView(element: element)
+                    BookPageElementView(element: element, semanticTemplate: document.semanticTemplate)
                         .frame(
                             width: geometry.size.width * CGFloat(element.frame.width),
                             height: geometry.size.height * CGFloat(element.frame.height)
@@ -509,41 +1011,231 @@ struct BookPageDocumentView: View {
     }
 }
 
-private struct BookPageElementView: View {
-    let element: BookPageElement
+struct BookPageDocumentChrome: View {
+    let memoryID: UUID?
+    let pageNumber: Int?
+    let isLandscape: Bool
+    var isIllustration: Bool = false
 
     var body: some View {
         GeometryReader { geometry in
-            switch element.content {
-            case .text(let content):
-                Text(content.text)
-                    .font(.system(
-                        size: max(
-                            9,
-                            geometry.size.height * CGFloat(content.fontSize / max(element.frame.height, 0.001))
-                        ),
-                        design: .serif
-                    ))
-                    .foregroundStyle(Color(red: 0.18, green: 0.16, blue: 0.14))
-                    .multilineTextAlignment(content.alignment.swiftUIAlignment)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: content.alignment.frameAlignment)
-                    .clipped()
-            case .image(let image):
+            let logicalPageWidth: CGFloat = isLandscape ? 792 : 612
+            let chromeScale = geometry.size.width / logicalPageWidth
+            ZStack {
+                if let memoryID, !BookInteriorAnchor.isNonMemoryPage(memoryID) {
+                    QRWatermark(
+                        memoryID: memoryID,
+                        topInset: isLandscape && isIllustration
+                            ? geometry.size.height * 0.065 + (6 * chromeScale)
+                            : 0,
+                        qrSide: 60 * chromeScale,
+                        imagePadding: 8 * chromeScale,
+                        trailingPadding: 12 * chromeScale,
+                        topPadding: 8 * chromeScale
+                    )
+                }
+
+                if let pageNumber {
+                    Text("\(pageNumber)")
+                        .font(.system(size: max(4, 10 * chromeScale), design: .serif))
+                        .foregroundStyle(Color(red: 0.30, green: 0.27, blue: 0.23))
+                        .position(
+                            x: isLandscape ? geometry.size.width * 0.89 : geometry.size.width * 0.50,
+                            y: isLandscape
+                                ? geometry.size.height * (isIllustration ? 0.0325 : 0.10)
+                                : geometry.size.height * 0.96
+                        )
+                }
+            }
+        }
+    }
+}
+
+enum BookPageImageLayout {
+    static func captionHeight(caption: String, containerSize: CGSize) -> CGFloat {
+        guard !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              containerSize.width > 0,
+              containerSize.height > 0 else { return 0 }
+        return min(containerSize.height * 0.24, max(containerSize.height * 0.14, containerSize.width * 0.055))
+    }
+}
+
+private struct BookPageImageContentView: View {
+    let image: BookPageStoredImage
+
+    var body: some View {
+        GeometryReader { geometry in
+            let caption = image.caption.trimmingCharacters(in: .whitespacesAndNewlines)
+            let captionHeight = BookPageImageLayout.captionHeight(
+                caption: caption,
+                containerSize: geometry.size
+            )
+            let mediaSize = CGSize(
+                width: geometry.size.width,
+                height: max(1, geometry.size.height - captionHeight)
+            )
+            let crop = BookPageImageCropPolicy.clamped(
+                image.cropTransform,
+                imageSize: CGSize(width: CGFloat(image.pixelWidth), height: CGFloat(image.pixelHeight)),
+                viewportSize: mediaSize
+            )
+
+            VStack(spacing: 0) {
                 if let uiImage = UIImage(data: image.jpegData) {
                     Image(uiImage: uiImage)
                         .resizable()
                         .aspectRatio(contentMode: image.fit == .fill ? .fill : .fit)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(width: mediaSize.width, height: mediaSize.height)
+                        .scaleEffect(image.fit == .fill ? CGFloat(crop.zoom) : 1)
+                        .offset(
+                            x: image.fit == .fill ? CGFloat(crop.offsetX) * mediaSize.width : 0,
+                            y: image.fit == .fill ? CGFloat(crop.offsetY) * mediaSize.height : 0
+                        )
                         .clipped()
-                        .accessibilityLabel(image.accessibilityDescription)
                 } else {
                     ZStack {
                         Color.secondary.opacity(0.10)
                         Image(systemName: "photo")
                             .foregroundStyle(.secondary)
                     }
+                    .frame(width: mediaSize.width, height: mediaSize.height)
+                }
+
+                if !caption.isEmpty {
+                    Text(caption)
+                        .font(.system(
+                            size: max(7, min(captionHeight * 0.44, geometry.size.width * 0.045)),
+                            design: .serif
+                        ))
+                        .foregroundStyle(Color(red: 0.18, green: 0.16, blue: 0.14))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.65)
+                        .padding(.horizontal, max(3, geometry.size.width * 0.018))
+                        .frame(width: geometry.size.width, height: captionHeight)
+                        .background(Color(red: 1.0, green: 0.992, blue: 0.965))
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(caption.isEmpty ? image.accessibilityDescription : caption)
+        }
+    }
+}
+
+private struct BookPageElementView: View {
+    let element: BookPageElement
+    let semanticTemplate: BookPageSemanticTemplate?
+
+    var body: some View {
+        GeometryReader { geometry in
+            switch element.content {
+            case .text(let content):
+                let pageHeight = geometry.size.height / max(CGFloat(element.frame.height), 0.001)
+                let fontStyle: BookFontStyle = switch content.typographyPreset {
+                case .kidsBook: .kidsBook
+                case .comic: .comic
+                case .realistic: .realistic
+                case .custom: .custom
+                }
+                let fontSize = BookPageTextSizing.pointSize(for: content, pageHeight: pageHeight)
+                let textColor: Color = switch content.color {
+                case .ink: Color(red: 0.20, green: 0.20, blue: 0.20)
+                case .brown: Color(red: 0.40, green: 0.30, blue: 0.20)
+                case .mutedBrown: Color(red: 0.40, green: 0.30, blue: 0.20).opacity(0.70)
+                case .white: .white
+                case nil:
+                    switch content.role {
+                    case .title:
+                        semanticTemplate == nil
+                            ? Color(red: 0.40, green: 0.30, blue: 0.20)
+                            : Color(red: 0.20, green: 0.18, blue: 0.15)
+                    case .subtitle: Color(red: 0.40, green: 0.30, blue: 0.20).opacity(0.70)
+                    case .body:
+                        semanticTemplate == .interiorTitle
+                            ? Color(red: 0.42, green: 0.38, blue: 0.33)
+                            : Color(red: 0.20, green: 0.20, blue: 0.20)
+                    case .custom: Color(red: 0.20, green: 0.20, blue: 0.20)
+                    }
+                }
+                Group {
+                    switch content.role {
+                    case .title:
+                        if semanticTemplate != nil {
+                            Text(content.text)
+                                .font(
+                                    content.typographyPreset.interiorTitleTypography == .rounded
+                                        ? .system(size: fontSize, weight: .semibold, design: .rounded)
+                                        : .custom("Georgia-Bold", size: fontSize)
+                                )
+                                .lineLimit(3)
+                                .minimumScaleFactor(0.65)
+                                .allowsTightening(true)
+                        } else {
+                            Text(content.text)
+                                .font(titleFont(style: fontStyle, size: fontSize))
+                                .fontWeight(.bold)
+                        }
+                    case .subtitle:
+                        Text(content.text)
+                            .font(.system(size: fontSize, weight: .regular, design: .serif))
+                            .italic()
+                    case .body:
+                        if semanticTemplate == .interiorClosing {
+                            Text(content.text)
+                                .font(.system(size: fontSize, weight: .semibold))
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.72)
+                        } else if semanticTemplate == .interiorTitle {
+                            Text(content.text)
+                                .font(
+                                    content.typographyPreset.interiorTitleTypography == .rounded
+                                        ? .system(size: fontSize, weight: .regular, design: .rounded)
+                                        : .custom("Georgia", size: fontSize)
+                                )
+                                .lineSpacing(pageHeight * 0.006)
+                                .lineLimit(3)
+                                .minimumScaleFactor(0.72)
+                        } else {
+                            Text(content.text)
+                                .font(bodyFont(style: fontStyle, size: fontSize))
+                                .lineSpacing(pageHeight * 0.006)
+                        }
+                    case .custom:
+                        Text(content.text)
+                            .font(.system(size: fontSize, design: .serif))
+                    }
+                }
+                .foregroundStyle(textColor)
+                .multilineTextAlignment(content.alignment.swiftUIAlignment)
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: semanticTemplate == nil ? content.alignment.frameAlignment : .center
+                )
+                .clipped()
+            case .image(let image):
+                BookPageImageContentView(image: image)
+            }
+        }
+    }
+
+    private func titleFont(style: BookFontStyle, size: CGFloat) -> Font {
+        switch style {
+        case .kidsBook: return .custom("TimesNewRomanPS-BoldMT", size: size)
+        case .comic: return .system(size: size, weight: .heavy, design: .serif)
+        case .realistic: return .custom("Georgia-Bold", size: size)
+        case .custom: return .system(size: size, weight: .semibold, design: .serif)
+        }
+    }
+
+    private func bodyFont(style: BookFontStyle, size: CGFloat) -> Font {
+        switch style {
+        case .kidsBook: return .custom("TimesNewRomanPSMT", size: size)
+        case .comic: return .system(size: size, weight: .semibold, design: .serif)
+        case .realistic: return .custom("Georgia", size: size)
+        case .custom: return .system(size: size, weight: .regular, design: .serif)
         }
     }
 }
@@ -553,19 +1245,24 @@ enum BookPagePrintRenderer {
     static func render(
         document: BookPageDocument,
         pixelSize: CGSize,
-        memoryID: UUID? = nil
+        memoryID: UUID? = nil,
+        pageNumber: Int? = nil,
+        isLandscape: Bool = false
     ) -> UIImage? {
         guard pixelSize.width > 0, pixelSize.height > 0 else { return nil }
         let page = BookPageDocumentView(document: document)
             .frame(width: pixelSize.width, height: pixelSize.height)
         let content: AnyView
-        if let memoryID,
-           memoryID != BookInteriorAnchor.titlePageMemoryId,
-           memoryID != BookInteriorAnchor.closingPageMemoryId {
-            content = AnyView(page.overlay(QRWatermark(memoryID: memoryID)))
-        } else {
-            content = AnyView(page)
-        }
+        content = AnyView(
+            page.overlay(
+                BookPageDocumentChrome(
+                    memoryID: memoryID,
+                    pageNumber: pageNumber,
+                    isLandscape: isLandscape,
+                    isIllustration: false
+                )
+            )
+        )
         let renderer = ImageRenderer(
             content: content
         )

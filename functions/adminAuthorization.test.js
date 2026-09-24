@@ -1,5 +1,9 @@
 const assert = require("assert");
-const { isMemoirAdminToken, normalizedAllowedEmails } = require("./adminAuthorization");
+const {
+  developerAccessResponse,
+  isMemoirAdminToken,
+  normalizedAllowedEmails
+} = require("./adminAuthorization");
 
 assert.deepStrictEqual(normalizedAllowedEmails(" A@EXAMPLE.COM, b@example.com "), [
   "a@example.com",
@@ -15,5 +19,12 @@ assert.strictEqual(isMemoirAdminToken({
 assert.strictEqual(isMemoirAdminToken({
   email: "attacker@example.com", email_verified: true
 }, "admin@example.com"), false);
+assert.deepStrictEqual(
+  developerAccessResponse({ email: "admin@example.com", email_verified: true }, "admin@example.com"),
+  { authorized: true }
+);
+assert.deepStrictEqual(developerAccessResponse(undefined, "admin@example.com"), {
+  authorized: false
+});
 
 console.log("adminAuthorization tests passed");

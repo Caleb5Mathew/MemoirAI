@@ -11,13 +11,11 @@ import Foundation
 enum BookInteriorAnchor {
     static let titlePageMemoryId = UUID(uuidString: "B00BCAFE-FEED-4000-8000-000000000001")!
     static let closingPageMemoryId = UUID(uuidString: "B00BCAFE-FEED-4000-8000-000000000002")!
-}
+    static let blankPageMemoryId = UUID(uuidString: "B00BCAFE-FEED-4000-8000-000000000003")!
 
-/// Destination for the closing page QR code. Becomes a universal link domain
-/// (App Store redirect when the app is not installed); keep every call site on
-/// this constant so that swap is one line.
-enum MemoirAppLinks {
-    static let appLinkURL = URL(string: "https://memoirai.app")!
+    static func isNonMemoryPage(_ id: UUID) -> Bool {
+        id == titlePageMemoryId || id == blankPageMemoryId || id == closingPageMemoryId
+    }
 }
 
 /// Serialized on `PersistableStorybook` / Firestore — maps to `BookCoverRenderer` fonts.
@@ -59,16 +57,7 @@ struct CoverCopyPolicy {
 
     /// Short line under the title on the interior title page.
     func interiorTitlePageBlurb() -> String {
-        switch artStyle {
-        case .kidsBook:
-            return "A storybook made from real memories, filled with heart, wonder, and you."
-        case .realistic:
-            return "A personal memoir drawn from real stories, honest, warm, and worth keeping."
-        case .comic:
-            return "A bold, colorful tale straight from your memories, ready for an epic read."
-        case .custom:
-            return "A one-of-a-kind story crafted from your memories."
-        }
+        "A collection of memories from \(shortName)’s life."
     }
 
     /// Deterministic back-cover pitch when AI is unavailable.

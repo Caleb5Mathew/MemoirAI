@@ -106,41 +106,8 @@ struct OnboardingFlow: View {
         .fullScreenCover(isPresented: $showPaywall, onDismiss: {
             finishOnboardingAfterPaywallDismissal()
         }) {
-            Group {
-                if RCSubscriptionManager.shared.offerings?.current?.availablePackages.isEmpty == false {
-                    PaywallView(displayCloseButton: true)
-                        .onAppear {
-                            // 🎯 Track paywall view for Facebook ad attribution
-                            FacebookAnalytics.logPaywallViewed()
-                        }
-                } else {
-                    // Fallback view when paywall can't load
-                    VStack(spacing: 20) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 60))
-                            .foregroundColor(.orange)
-                        
-                        Text("Subscription Temporarily Unavailable")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        
-                        Text("Please try again later or contact support.")
-                            .multilineTextAlignment(.center)
-                        
-                        Button("Close") {
-                            showPaywall = false
-                        }
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
-                    }
-                    .padding()
-                    .background(Color.white)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .ignoresSafeArea()
+            SubscriptionPaywallView()
+                .onAppear { FacebookAnalytics.logPaywallViewed() }
         }
         .onAppear {
             withAnimation(.easeOut(duration: 0.8)) {

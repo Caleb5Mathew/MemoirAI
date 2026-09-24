@@ -1,5 +1,8 @@
 const assert = require("assert");
-const { parseLeakDetectorResponse } = require("./storybookAI");
+const {
+  parseIdentityDriftDetectorResponse,
+  parseLeakDetectorResponse
+} = require("./storybookAI");
 
 function candidate(text) {
   return { candidates: [{ content: { parts: [{ text }] } }] };
@@ -24,5 +27,17 @@ assert.strictEqual(parseLeakDetectorResponse(candidate("")), false);
 assert.strictEqual(parseLeakDetectorResponse({}), false);
 assert.strictEqual(parseLeakDetectorResponse(null), false);
 assert.strictEqual(parseLeakDetectorResponse(undefined), false);
+
+assert.strictEqual(parseIdentityDriftDetectorResponse(candidate('{"identityDrift": true}')), true);
+assert.strictEqual(parseIdentityDriftDetectorResponse(candidate('{"identityDrift": false}')), false);
+assert.strictEqual(parseIdentityDriftDetectorResponse(candidate('{"identityDrift": false, "duplicateNarrator": true, "forbiddenText": false}')), true);
+assert.strictEqual(parseIdentityDriftDetectorResponse(candidate('{"identityDrift": false, "duplicateNarrator": false, "forbiddenText": true}')), true);
+assert.strictEqual(parseIdentityDriftDetectorResponse(candidate('{"identityDrift": false, "duplicateNarrator": false, "forbiddenText": false}')), false);
+assert.strictEqual(parseIdentityDriftDetectorResponse(candidate('```json\n{"identityDrift": true}\n```')), true);
+assert.strictEqual(parseIdentityDriftDetectorResponse(candidate("YES, clearly different.")), true);
+assert.strictEqual(parseIdentityDriftDetectorResponse(candidate("No, age explains the changes.")), false);
+assert.strictEqual(parseIdentityDriftDetectorResponse(candidate('{"identityDrift": "true"}')), false);
+assert.strictEqual(parseIdentityDriftDetectorResponse(candidate("uncertain")), false);
+assert.strictEqual(parseIdentityDriftDetectorResponse({}), false);
 
 console.log("leakDetectorParsing.test.js: all assertions passed");

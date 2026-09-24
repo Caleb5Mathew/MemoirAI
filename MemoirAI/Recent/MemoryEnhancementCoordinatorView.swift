@@ -52,6 +52,7 @@ struct MemoryEnhancementCoordinatorView: View {
                         memory: memory,
                         service: service,
                         profileDisplayName: profileVM.selectedProfile.name,
+                        transcriptionGlossary: CloudTranscriptionService.glossary(for: profileVM.selectedProfile),
                         relationshipStyleProfileName: CharacterDetails.isRelationshipStyleProfileName(
                             profileVM.selectedProfile.name
                         ),

@@ -205,6 +205,9 @@ async function run() {
   assertRecentAuthentication({
     auth: { token: { firebase: { sign_in_provider: "anonymous" } } }
   }, () => 50_000, FakeHttpsError);
+  assertRecentAuthentication({
+    auth: { token: { memoirGuest: true } }
+  }, () => 50_000, FakeHttpsError);
   assert.throws(
     () => assertRecentAuthentication({
       auth: { token: { auth_time: 1_000, firebase: { sign_in_provider: "google.com" } } }
@@ -268,6 +271,7 @@ async function run() {
 
   const resumedWrites = [];
   let resumedAuthDeletes = 0;
+  const revokedRecoveryUsers = [];
   const resumeAuthDeletion = createDeleteOwnAccountHandler({
     db: {
       collection(name) {
@@ -291,12 +295,14 @@ async function run() {
     auth: { async deleteUser() { resumedAuthDeletes += 1; } },
     serverTimestamp: () => "time",
     HttpsError: FakeHttpsError,
-    nowSeconds: () => 10_000
+    nowSeconds: () => 10_000,
+    revokeGuestRecovery: async (userId) => revokedRecoveryUsers.push(userId)
   });
   assert.deepStrictEqual(await resumeAuthDeletion({
     auth: { uid: "deleted-user", token: { auth_time: 1 } }
   }), { status: "complete", retainedOrderRecords: 3 });
   assert.strictEqual(resumedAuthDeletes, 1);
+  assert.deepStrictEqual(revokedRecoveryUsers, ["deleted-user"]);
   assert.strictEqual(resumedWrites[0].status, "complete");
 
   console.log("accountDeletion.test.js: all assertions passed");

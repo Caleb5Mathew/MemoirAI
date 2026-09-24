@@ -107,6 +107,16 @@ function validateTranscriptionRequest(body) {
   return { memoryId, language, glossary };
 }
 
+function validateEnhancementTranscriptionRequest(body) {
+  const uploadId = typeof body.uploadId === "string" ? body.uploadId.trim() : "";
+  const options = validateTranscriptionRequest({
+    memoryId: uploadId,
+    language: body.language,
+    glossary: body.glossary
+  });
+  return { uploadId: options.memoryId, language: options.language, glossary: options.glossary };
+}
+
 function validateTranscriptionAudio(audio) {
   if (!Buffer.isBuffer(audio) || audio.length === 0) {
     throw new HttpsError("failed-precondition", "Recording upload is empty. Please record it again.");
@@ -295,6 +305,20 @@ function buildTranscriptionAPIRequest(file, language, glossary) {
   };
   if (glossary.length) request.keywords = glossary;
   return request;
+}
+
+async function transcribeAudioWithOpenAI({ apiKey, audio, fileName, language, glossary }) {
+  const openai = new OpenAI({ apiKey, timeout: 240000, maxRetries: 1 });
+  const file = await toFile(audio, fileName, { type: "audio/mp4" });
+  const response = await openai.audio.transcriptions.create(
+    buildTranscriptionAPIRequest(file, language, glossary)
+  );
+  const text = String(response.text || "").trim();
+  if (!text) throw new HttpsError("failed-precondition", "No speech was detected in this recording.");
+  if (Buffer.byteLength(text, "utf8") > MAX_TRANSCRIPTION_TEXT_BYTES) {
+    throw new HttpsError("resource-exhausted", "Transcription is too long to save.");
+  }
+  return text;
 }
 
 /**
@@ -827,16 +851,13 @@ exports.transcribeMemoryAudio = onCall(
 
     try {
       await checkAndIncrementTranscriptionBudget(uid, audioInfo.size, audioDurationSeconds);
-      const openai = new OpenAI({ apiKey, timeout: 240000, maxRetries: 1 });
-      const file = await toFile(audio, `${memoryId}.m4a`, { type: "audio/mp4" });
-      const response = await openai.audio.transcriptions.create(
-        buildTranscriptionAPIRequest(file, language, glossary)
-      );
-      const text = String(response.text || "").trim();
-      if (!text) throw new HttpsError("failed-precondition", "No speech was detected in this recording.");
-      if (Buffer.byteLength(text, "utf8") > MAX_TRANSCRIPTION_TEXT_BYTES) {
-        throw new HttpsError("resource-exhausted", "Transcription is too long to save.");
-      }
+      const text = await transcribeAudioWithOpenAI({
+        apiKey,
+        audio,
+        fileName: `${memoryId}.m4a`,
+        language,
+        glossary
+      });
 
       let currentMetadata;
       try {
@@ -898,6 +919,100 @@ exports.transcribeMemoryAudio = onCall(
         throw new HttpsError("deadline-exceeded", "Transcription timed out. Please try again.");
       }
       throw new HttpsError("internal", "Transcription failed. Please try again.");
+    }
+  }
+);
+
+exports.transcribeEnhancementAudio = onCall(
+  {
+    secrets: [openaiSecret],
+    timeoutSeconds: 300,
+    memory: "1GiB",
+    concurrency: 4,
+    maxInstances: 5,
+    region: "us-central1",
+    enforceAppCheck: isAppCheckEnforced("ENFORCE_TRANSCRIPTION_APP_CHECK")
+  },
+  async (request) => {
+    const uid = requireAuth(request);
+    await assertAccountActive(uid);
+    const { uploadId, language, glossary } = validateEnhancementTranscriptionRequest(request.data || {});
+    await checkAndIncrementTranscriptionAttempts(uid);
+
+    const apiKey = String(openaiSecret.value() || "").trim();
+    if (!apiKey) throw new HttpsError("internal", "AI provider is not configured.");
+
+    const storagePath = `users/${uid}/enhancementAudio/${uploadId}.m4a`;
+    const storageFile = admin.storage().bucket().file(storagePath);
+    try {
+      let metadata;
+      try {
+        [metadata] = await storageFile.getMetadata();
+      } catch (error) {
+        console.error("transcribeEnhancementAudio storage metadata failed", {
+          userIdHash: safeLogIdentifier(uid),
+          uploadIdHash: safeLogIdentifier(uploadId),
+          ...safeErrorMetadata(error)
+        });
+        throw new HttpsError("failed-precondition", "Recording upload is not ready. Please try again.");
+      }
+      const audioInfo = validateTranscriptionMetadata(metadata);
+
+      let audio;
+      try {
+        [audio] = await admin.storage().bucket()
+          .file(storagePath, { generation: audioInfo.generation })
+          .download();
+      } catch (error) {
+        console.error("transcribeEnhancementAudio storage download failed", {
+          userIdHash: safeLogIdentifier(uid),
+          uploadIdHash: safeLogIdentifier(uploadId),
+          ...safeErrorMetadata(error)
+        });
+        throw new HttpsError("failed-precondition", "Recording upload is not ready. Please try again.");
+      }
+      validateTranscriptionAudio(audio);
+      const audioDurationSeconds = await validateProbedTranscriptionDuration(audio);
+      await checkAndIncrementTranscriptionBudget(uid, audioInfo.size, audioDurationSeconds);
+      const text = await transcribeAudioWithOpenAI({
+        apiKey,
+        audio,
+        fileName: `${uploadId}.m4a`,
+        language,
+        glossary
+      });
+      return { status: "completed", text, model: "gpt-transcribe", language };
+    } catch (error) {
+      console.error("transcribeEnhancementAudio failed", {
+        userIdHash: safeLogIdentifier(uid),
+        uploadIdHash: safeLogIdentifier(uploadId),
+        ...safeErrorMetadata(error)
+      });
+      if (error instanceof HttpsError) throw error;
+      const status = Number(error?.status || error?.statusCode || 0);
+      if (status === 400 || status === 415 || status === 422) {
+        throw new HttpsError("failed-precondition", "The recording could not be read. Please record it again.");
+      }
+      if (status === 429) {
+        throw new HttpsError("resource-exhausted", "The transcription service is busy. Please try again later.");
+      }
+      if (status >= 500) {
+        throw new HttpsError("unavailable", "The transcription service is temporarily unavailable. Please try again.");
+      }
+      if (error?.code === "ETIMEDOUT" || error?.code === "ECONNABORTED") {
+        throw new HttpsError("deadline-exceeded", "Transcription timed out. Please try again.");
+      }
+      throw new HttpsError("internal", "Transcription failed. Please try again.");
+    } finally {
+      try {
+        await storageFile.delete({ ignoreNotFound: true });
+      } catch (cleanupError) {
+        console.error("transcribeEnhancementAudio cleanup failed", {
+          userIdHash: safeLogIdentifier(uid),
+          uploadIdHash: safeLogIdentifier(uploadId),
+          ...safeErrorMetadata(cleanupError)
+        });
+      }
     }
   }
 );
@@ -1079,7 +1194,14 @@ function buildTranscriptionUpdate(existing, text, language) {
     transcriptionUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp()
   };
-  if (typeof existing.transcriptionEdited !== "string") update.transcription = text;
+  const edited = existing.transcriptionEdited;
+  const hasIntentionalEdit = typeof edited === "string" && (edited.length === 0 || edited.trim().length > 0);
+  if (!hasIntentionalEdit) {
+    update.transcription = text;
+    if (typeof edited === "string") {
+      update.transcriptionEdited = admin.firestore.FieldValue.delete();
+    }
+  }
   return update;
 }
 
@@ -1088,6 +1210,7 @@ Object.defineProperty(exports, "_test", {
   value: {
     transcriptionPrompt,
     validateTranscriptionRequest,
+    validateEnhancementTranscriptionRequest,
     validateTranscriptionAudio,
     m4aDurationSeconds,
     validateTranscriptionDuration,

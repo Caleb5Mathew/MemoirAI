@@ -7,8 +7,56 @@ import Mixpanel
 import UIKit
 #endif
 
+enum ChapterJourneyLayoutPolicy {
+    static let canonicalArtworkSize = CGSize(width: 1_684, height: 2_528)
+
+    static func artworkFrame(in bounds: CGRect) -> CGRect {
+        guard bounds.width > 0, bounds.height > 0,
+              bounds.width.isFinite, bounds.height.isFinite else {
+            return CGRect(origin: bounds.origin, size: .zero)
+        }
+
+        let scale = max(
+            bounds.width / canonicalArtworkSize.width,
+            bounds.height / canonicalArtworkSize.height
+        )
+        let filledSize = CGSize(
+            width: canonicalArtworkSize.width * scale,
+            height: canonicalArtworkSize.height * scale
+        )
+        return CGRect(
+            x: bounds.midX - filledSize.width / 2,
+            y: bounds.minY,
+            width: filledSize.width,
+            height: filledSize.height
+        )
+    }
+
+    static func point(normalizedX: CGFloat, normalizedY: CGFloat, in artworkFrame: CGRect) -> CGPoint {
+        CGPoint(
+            x: artworkFrame.minX + min(max(normalizedX, 0), 1) * artworkFrame.width,
+            y: artworkFrame.minY + min(max(normalizedY, 0), 1) * artworkFrame.height
+        )
+    }
+}
+
 struct ChapterJourneyView: View {
     let chapter: Chapter
+    let containerSafeAreaInsets: EdgeInsets
+    let artworkAssetNameOverride: String?
+    let memoirMode: MemoirMode
+
+    init(
+        chapter: Chapter,
+        containerSafeAreaInsets: EdgeInsets,
+        artworkAssetNameOverride: String? = nil,
+        memoirMode: MemoirMode = currentMemoirMode()
+    ) {
+        self.chapter = chapter
+        self.containerSafeAreaInsets = containerSafeAreaInsets
+        self.artworkAssetNameOverride = artworkAssetNameOverride
+        self.memoirMode = memoirMode
+    }
 
     @Environment(\.dismiss) var dismiss
     @Environment(\.managedObjectContext) var context
@@ -24,7 +72,6 @@ struct ChapterJourneyView: View {
     @State private var selectedPerChildPrompt: MemoryPrompt?
     @State private var selectedEntryID: UUID?
     @State private var refreshID = UUID() // Forces full rerender
-    @Namespace private var zoomNamespace
 
     let highlightColor = Color(red: 254/255, green: 242/255, blue: 215/255)
     let deepGreen = Color(red: 39/255, green: 60/255, blue: 34/255)
@@ -38,7 +85,7 @@ struct ChapterJourneyView: View {
         allEntries.filter {
             $0.profileID == profileVM.selectedProfile.id &&
             MemoryUserScope.belongsToCurrentUser($0) &&
-            chapterTitleMatches($0.chapter, chapter.title)
+            chapterTitleMatches($0.chapter, chapter.title, memoirMode: memoirMode)
         }
     }
 
@@ -62,7 +109,7 @@ struct ChapterJourneyView: View {
     var completedPromptIDs: Set<UUID> {
         let entriesForProfileAndChapter = chapterEntries
         let legacySameNumber = allChaptersLegacyKnownPrompts.first { $0.number == chapter.number }
-        let useLegacyIndexMatch = currentMemoirMode() == .normal
+        let useLegacyIndexMatch = memoirMode == .normal
             && allChapters.contains(where: { $0.number == chapter.number && $0.title == chapter.title })
             && legacySameNumber != nil
         return Set(
@@ -101,26 +148,38 @@ struct ChapterJourneyView: View {
 
     var body: some View {
         GeometryReader { geo in
-            ZStack {
-                backgroundImageView
+            let viewportSize = geo.size
+            let artworkFrame = ChapterJourneyLayoutPolicy.artworkFrame(
+                in: CGRect(origin: .zero, size: viewportSize)
+            )
+            ZStack(alignment: .top) {
+                ScrollView(.vertical) {
+                    ZStack {
+                        Color(red: 0.84, green: 0.80, blue: 0.68)
 
-                ZStack {
-                    chapterArtwork
+                        ZStack {
+                            chapterArtwork
 
-                    GeometryReader { canvas in
-                        promptNodesView(geo: canvas)
+                            GeometryReader { canvas in
+                                promptNodesView(geo: canvas)
+                            }
+                        }
+                        .frame(width: artworkFrame.width, height: artworkFrame.height)
+                        .position(x: artworkFrame.midX, y: artworkFrame.midY)
+
+                        floatingQuoteView
                     }
+                    .frame(width: viewportSize.width, height: artworkFrame.height)
+                    .clipped()
                 }
-                .frame(
-                    width: min(geo.size.width, AdaptiveLayoutPolicy.readableMaxWidth),
-                    height: min(geo.size.height, 1_024)
-                )
-                .clipped()
-                floatingQuoteView
+                .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(width: viewportSize.width, height: viewportSize.height)
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .overlay(alignment: .top) {
                 headerStack
+                    .padding(.top, containerSafeAreaInsets.top)
             }
 //            .navigationBarBackButtonHidden(true)
             .fullScreenCover(item: $selectedPrompt, onDismiss: {
@@ -130,7 +189,7 @@ struct ChapterJourneyView: View {
                 RecordingView(
                     prompt:        prompt,
                     chapterTitle:  chapter.title,
-                    namespace:     zoomNamespace,
+                    memoirMode:    memoirMode,
                     onRecordingDismiss: {
                         selectedPrompt = nil
                     }
@@ -148,8 +207,7 @@ struct ChapterJourneyView: View {
                 PerChildRecordingView(
                     basePrompt: basePrompt,
                     chapterTitle: chapter.title,
-                    childNames: childNames,
-                    namespace: zoomNamespace
+                    childNames: childNames
                 )
                 .environmentObject(profileVM)
                 .environmentObject(tutorialCoordinator)
@@ -189,14 +247,9 @@ struct ChapterJourneyView: View {
 
     // MARK: - View Components
 
-    private var backgroundImageView: some View {
-        chapterArtwork
-            .ignoresSafeArea()
-    }
-
     private var chapterArtwork: some View {
         Group {
-            let assetName = chapterImageAssetName(for: chapter.title)
+            let assetName = artworkAssetNameOverride ?? chapterImageAssetName(for: chapter.title)
             #if canImport(UIKit)
             if UIImage(named: assetName) != nil {
                 Image(assetName)
@@ -211,22 +264,22 @@ struct ChapterJourneyView: View {
                 .scaledToFill()
             #endif
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
     }
 
     private func promptNodesView(geo: GeometryProxy) -> some View {
         ForEach(chapter.prompts) { prompt in
             let isCompleted = completedPromptIDs.contains(prompt.id)
-            let isCurrentlySelected = prompt.id == selectedPrompt?.id
-
             MemoryPromptNodeView(
                 prompt: prompt,
                 isCompleted: isCompleted,
                 isLocked: false,
-                isSelected: isCurrentlySelected,
+                isSelected: false,
                 childCount: childCount(for: prompt),
                 completedChildCount: completedChildCount(for: prompt)
             )
-            .matchedGeometryEffect(id: prompt.id, in: zoomNamespace)
+            .accessibilityIdentifier("chapterPromptNode")
             .tutorialAnchor(.chapterPickPrompt, when: prompt.id == highlightPromptForTutorial?.id)
             .background(
                 Group {
@@ -243,10 +296,11 @@ struct ChapterJourneyView: View {
                     }
                 }
             )
-            .position(
-                x: prompt.x * geo.size.width,
-                y: prompt.y * geo.size.height
-            )
+            .position(ChapterJourneyLayoutPolicy.point(
+                normalizedX: prompt.x,
+                normalizedY: prompt.y,
+                in: CGRect(origin: .zero, size: geo.size)
+            ))
             .onTapGesture {
                 handlePromptTap(prompt: prompt, isCompleted: isCompleted)
             }
@@ -254,27 +308,7 @@ struct ChapterJourneyView: View {
     }
 
     private var headerStack: some View {
-        VStack(spacing: 6) {
-            HStack {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 26, weight: .semibold))
-                        .foregroundColor(deepGreen)
-                        .frame(width: 44, height: 44)
-                        .background(
-                            Circle()
-                                .fill(headerSurface.opacity(0.96))
-                                .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
-                        )
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                Spacer()
-            }
-            .padding(.leading, 8)
-
+        ZStack(alignment: .leading) {
             VStack(spacing: 6) {
                 Text("Chapter \(chapter.number): \(chapter.title)")
                     .font(.customSerifFallback(size: 28))
@@ -284,6 +318,7 @@ struct ChapterJourneyView: View {
                     .minimumScaleFactor(0.58)
                     .layoutPriority(1)
                     .frame(maxWidth: .infinity, alignment: .center)
+                    .accessibilityIdentifier("chapterJourneyTitle")
 
                 Text("\(completedPromptIDs.count) of \(chapter.prompts.count) memories recorded")
                     .font(.subheadline)
@@ -292,16 +327,30 @@ struct ChapterJourneyView: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.85)
                     .frame(maxWidth: .infinity, alignment: .center)
+                    .accessibilityIdentifier("chapterJourneyProgress")
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 56)
             .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(headerSurface.opacity(0.96))
-                    .shadow(color: .black.opacity(0.16), radius: 12, y: 5)
-            )
-            .padding(.horizontal, 16)
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(deepGreen)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("chapterJourneyBack")
+            .padding(.leading, 8)
         }
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(headerSurface.opacity(0.96))
+                .shadow(color: .black.opacity(0.16), radius: 12, y: 5)
+        )
+        .padding(.horizontal, 16)
         .zIndex(100)
     }
 
@@ -378,13 +427,17 @@ struct ChapterJourneyView: View {
             // select existing entry to push detail (including pre-rename prompt text at same index)
             let promptIndex = chapter.prompts.firstIndex { $0.id == prompt.id }
             let legacyChapter = allChaptersLegacyKnownPrompts.first { $0.number == chapter.number }
-            let useLegacyIndexMatch = currentMemoirMode() == .normal
+            let useLegacyIndexMatch = memoirMode == .normal
                 && allChapters.contains(where: { $0.number == chapter.number && $0.title == chapter.title })
                 && legacyChapter != nil
             if let entry = allEntries.first(where: { e in
                 guard e.profileID == profileVM.selectedProfile.id,
                       MemoryUserScope.belongsToCurrentUser(e),
-                      chapterTitleMatches(e.chapter, chapter.title) else { return false }
+                      chapterTitleMatches(
+                        e.chapter,
+                        chapter.title,
+                        memoirMode: memoirMode
+                      ) else { return false }
                 if e.prompt == prompt.text { return true }
                 if let i = promptIndex, useLegacyIndexMatch, let leg = legacyChapter,
                    i < leg.prompts.count, e.prompt == leg.prompts[i].text {

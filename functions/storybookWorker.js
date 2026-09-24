@@ -23,6 +23,7 @@ const {
   validateSubjectPhotoForWorker
 } = require("./storybookAdmission");
 const { assertAccountNotDeleting } = require("./accountStateGuards");
+const { chapterMemories } = require("./storybookMemorySelection");
 const {
   privacySafeLogDetails,
   safeErrorMetadata,
@@ -371,7 +372,7 @@ exports.processStorybookJob = onDocumentCreated(
         if (document.exists) candidateDocuments.set(document.id, document);
       }
       const profileIdNorm = String(profileId || "").toLowerCase();
-      const memories = Array.from(candidateDocuments.values())
+      const profileMemories = Array.from(candidateDocuments.values())
         .filter((document) => UUID_PATTERN.test(document.id))
         .map((d) => {
           const x = d.data();
@@ -381,14 +382,17 @@ exports.processStorybookJob = onDocumentCreated(
             transcription: String(x.transcription || "").slice(0, 50_000),
             prompt: String(x.prompt || "").slice(0, 2_000),
             characterDetails: x.characterDetails != null ? String(x.characterDetails).slice(0, 20_000) : "",
-            chapter: x.chapter != null ? String(x.chapter).slice(0, 500) : ""
+            chapter: x.chapter != null ? String(x.chapter).slice(0, 500) : "",
+            memoirMode: x.memoirMode != null ? String(x.memoirMode).slice(0, 100) : ""
           };
         })
         .filter((m) => m.profileID.toLowerCase() === profileIdNorm);
+      const memories = chapterMemories(profileMemories, pinnedIds);
 
       logJob("storybook.fetchedMemories", {
         candidateCount: candidateDocuments.size,
-        forProfile: memories.length,
+        forProfile: profileMemories.length,
+        withChapter: memories.length,
         nonEmptyTranscriptions: memories.filter((m) => m.transcription.trim().length > 0).length
       });
 
@@ -403,8 +407,8 @@ exports.processStorybookJob = onDocumentCreated(
       if (memories.length === 0) {
         await ref.update({
           status: "failed",
-          error: "No synced memories match this profile yet. Save a memory for this person, then try again.",
-          "progress.currentStatus": "No cloud memories for this profile.",
+          error: "No synced chapter memories match this profile yet. Complete a chapter memory, then try again.",
+          "progress.currentStatus": "No chapter memories for this profile.",
           lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
@@ -694,8 +698,8 @@ exports.processStorybookJob = onDocumentCreated(
           const filteredCanonRows = ai.filterCanonRowsForEntry(castCanon, entry);
           const canonLines = filteredCanonRows.map((r) => ai.canonRowToPromptLine(r, { forImagePrompt: true, job }));
           const referenceImageOrder = [];
-          if (styleRefBuf) referenceImageOrder.push("style");
           if (attachHeadshot && headshotBuf) referenceImageOrder.push("headshot");
+          if (styleRefBuf) referenceImageOrder.push("style");
 
           const assembled = ai.assembleFinalPrompt(
             raw,
@@ -723,8 +727,8 @@ exports.processStorybookJob = onDocumentCreated(
           });
 
           const refs = [];
-          if (styleRefBuf) refs.push(styleRefBuf);
           if (attachHeadshot && headshotBuf) refs.push(headshotBuf);
+          if (styleRefBuf) refs.push(styleRefBuf);
 
           stage = "image";
           phaseLog(entry.id, stage, {
@@ -752,7 +756,9 @@ exports.processStorybookJob = onDocumentCreated(
                   (event, details) => logJob(event, { memoryId: entry.id, ...details }),
                   {
                     deadlineAtMs: workerDeadlineAtMs,
-                    beforeAttempt: verifyAccountAvailable
+                    beforeAttempt: verifyAccountAvailable,
+                    identityReferenceBuffer: attachHeadshot ? headshotBuf : null,
+                    expectedNarratorAge: ai.explicitAge(raw)
                   }
                 ),
               {

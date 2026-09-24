@@ -14,4 +14,12 @@ function isMemoirAdminToken(token, allowedEmailsRaw) {
     && allowedEmails.includes(email);
 }
 
-module.exports = { isMemoirAdminToken, normalizedAllowedEmails };
+function developerAccessResponse(token, allowedEmailsRaw) {
+  return { authorized: isMemoirAdminToken(token, allowedEmailsRaw) };
+}
+
+module.exports = {
+  developerAccessResponse,
+  isMemoirAdminToken,
+  normalizedAllowedEmails
+};

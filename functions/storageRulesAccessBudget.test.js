@@ -41,6 +41,19 @@ assert.ok(
     && !sharedAudioReadRule.includes("hasBlockingAccountOperation(userId)"),
   "the canonical shared-audio path must use the tombstone and grant without an extra lock lookup"
 );
+const enhancementAudioRule = rules.match(
+  /match \/users\/\{userId\}\/enhancementAudio\/\{audioFile\} \{([\s\S]*?)\n    \}/
+)?.[1] || "";
+assert.ok(
+  enhancementAudioRule.includes("allow create: if isOwner(userId)")
+    && enhancementAudioRule.includes("!hasBlockingAccountOperation(userId)")
+    && enhancementAudioRule.includes("audioFile.matches('[0-9A-Fa-f-]{36}\\\\.m4a')")
+    && enhancementAudioRule.includes("request.resource.contentType == 'audio/mp4'")
+    && enhancementAudioRule.includes("request.resource.size <= 25 * 1024 * 1024")
+    && !enhancementAudioRule.includes("allow read")
+    && !enhancementAudioRule.includes("allow update"),
+  "enhancement audio must be owner-only, UUID-scoped, bounded M4A temporary storage"
+);
 assert.ok(
   rules.includes("allow list: if isActiveOwner(userId);")
     && (rules.match(/allow read: if isActiveOwner\(userId\);/g) || []).length >= 7,

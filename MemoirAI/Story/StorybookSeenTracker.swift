@@ -30,6 +30,10 @@ final class StorybookSeenTracker: ObservableObject {
     /// True while `StoryPage` is on screen; the auto-route is a no-op then.
     @Published private(set) var isStoryPageVisible = false
 
+    /// True from the moment either the user or auto-router commits to opening StoryPage.
+    /// This closes the short window before `onAppear` where a second route could be pushed.
+    private(set) var isStoryPageNavigationPending = false
+
     /// Set just before ContentView pushes the storybook route; consumed by `StoryPage.onAppear`
     /// so a job only counts as seen once the destination actually appeared.
     private var pendingRoute: (jobId: String, isComplete: Bool)?
@@ -79,7 +83,12 @@ final class StorybookSeenTracker: ObservableObject {
     // MARK: - Route handshake
 
     func notePendingRoute(jobId: String, isComplete: Bool) {
+        isStoryPageNavigationPending = true
         pendingRoute = (jobId, isComplete)
+    }
+
+    func noteUserNavigationIntent() {
+        isStoryPageNavigationPending = true
     }
 
     /// Returns the exact job selected by the router. In-flight jobs count as seen when
@@ -97,6 +106,9 @@ final class StorybookSeenTracker: ObservableObject {
 
     func setStoryPageVisible(_ visible: Bool) {
         isStoryPageVisible = visible
+        if visible {
+            isStoryPageNavigationPending = false
+        }
     }
 
     /// In-flight seen-state only lasts one foreground session: exiting the app means the
@@ -104,6 +116,7 @@ final class StorybookSeenTracker: ObservableObject {
     func resetForegroundSession() {
         seenThisForeground.removeAll()
         pendingRoute = nil
+        isStoryPageNavigationPending = false
     }
 
     private func storedCompletedSeen() -> [String] {

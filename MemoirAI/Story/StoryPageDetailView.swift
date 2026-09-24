@@ -81,7 +81,6 @@ struct StoryPageDetailView: View {
     @ObservedObject var vm: StoryPageViewModel
     let artStyle: ArtStyle
     let printSpec: BookPrintSpec
-    let startEditingOnAppear: Bool
     var onRequestImageEdit: ((Int) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     
@@ -94,9 +93,6 @@ struct StoryPageDetailView: View {
     @State private var isEditingImageInline = false
     @State private var imageRevisionText = ""
     @State private var isImageSendPressed = false
-    @State private var showCoverArtEditSheet = false
-    @State private var coverArtEditPanel: BookCoverFlatPanel = .front
-    @State private var coverArtRevisionText = ""
     @State private var showTitleBlurbEditor = false
     @State private var showFreeformEditor = false
     @State private var freeformDraft = BookPageDocument()
@@ -150,76 +146,24 @@ struct StoryPageDetailView: View {
         }
         .allowsHitTesting(!isSavingTextEdits)
         .interactiveDismissDisabled(isSavingTextEdits)
-        .sheet(isPresented: $showCoverArtEditSheet) {
-            StoryPage.CoverArtEditSheet(
-                panel: coverArtEditPanel,
-                revisionText: $coverArtRevisionText,
-                isPresented: $showCoverArtEditSheet,
-                onSend: { text in
-                    Task {
-                        await vm.editCoverPanel(coverArtEditPanel, revisionPrompt: text)
-                    }
-                },
-                isEditing: vm.isEditingCoverArt(for: coverArtEditPanel),
-                onEditTitleBlurb: {
-                    showCoverArtEditSheet = false
-                    showTitleBlurbEditor = true
-                }
-            )
-            .adaptiveSheetDetents(preferredHeight: 196)
-            .presentationDragIndicator(Visibility.visible)
-        }
-        .sheet(isPresented: $showTitleBlurbEditor) {
+        .fullScreenCover(isPresented: $showTitleBlurbEditor) {
             StorybookCoverEditorSheet(vm: vm)
         }
         .fullScreenCover(isPresented: $showFreeformEditor) {
-            NavigationStack {
-                FreeformBookPageEditor(
-                    document: $freeformDraft,
-                    isImportingPhotos: $isImportingFreeformPhotos
-                )
-                    .allowsHitTesting(!isSavingFreeformPage)
-                    .overlay {
-                        if isSavingFreeformPage {
-                            ProgressView("Saving page")
-                                .padding(18)
-                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                        }
-                    }
-                    .navigationTitle("Arrange Page")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") { showFreeformEditor = false }
-                                .disabled(isSavingFreeformPage)
-                        }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Save") {
-                                guard let pageID = freeformEditingPageID else { return }
-                                isSavingFreeformPage = true
-                                Task {
-                                    defer { isSavingFreeformPage = false }
-                                    do {
-                                        try await vm.applyFreeformDocument(freeformDraft, pageID: pageID)
-                                        showFreeformEditor = false
-                                    } catch {
-                                        freeformEditorError = error.localizedDescription
-                                    }
-                                }
-                            }
-                            .fontWeight(.semibold)
-                            .disabled(isSavingFreeformPage || isImportingFreeformPhotos)
-                        }
-                        if vm.freeformDocument(at: currentPageIndex) != nil {
-                            ToolbarItem(placement: .bottomBar) {
-                                Button("Reset to Original", role: .destructive) {
-                                    showFreeformResetConfirmation = true
-                                }
-                                .disabled(isSavingFreeformPage || isImportingFreeformPhotos)
-                            }
-                        }
-                    }
-            }
+            FreeformBookPageEditor(
+                document: $freeformDraft,
+                isImportingPhotos: $isImportingFreeformPhotos,
+                isSaving: isSavingFreeformPage,
+                onCancel: { showFreeformEditor = false },
+                onSave: saveFreeformDraft,
+                onReset: vm.freeformDocument(at: currentPageIndex) == nil
+                    ? nil
+                    : { showFreeformResetConfirmation = true },
+                memoryID: currentItem?.memoryID,
+                pageNumber: currentPageIndex + 1,
+                isLandscapePage: printSpec.orientation == "landscape"
+            )
+            .allowsHitTesting(!isSavingFreeformPage)
             .interactiveDismissDisabled()
             .confirmationDialog(
                 "Reset this page to its original layout?",
@@ -266,39 +210,22 @@ struct StoryPageDetailView: View {
         } message: {
             Text(vm.errorMessage ?? "The edit could not be completed.")
         }
-        .onChange(of: vm.coverPanelEditing) { oldVal, newVal in
-            if oldVal != nil && newVal == nil && showCoverArtEditSheet {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    coverArtRevisionText = ""
-                    showCoverArtEditSheet = false
-                }
-            }
-        }
         .onAppear {
             let lastIndex = max(0, vm.pageItems.count - 1)
             currentPageIndex = min(max(0, initialPageIndex), lastIndex)
             syncEditedFieldsFromCurrentPage()
-            if startEditingOnAppear {
-                if vm.freeformDocument(at: currentPageIndex) != nil {
-                    beginFreeformEditing()
-                } else if case .illustration = currentItem {
-                    beginInlineImageEdit()
-                } else if case .textPage(_, _, _, _, _, let memoryID) = currentItem,
-                          (memoryID == BookInteriorAnchor.titlePageMemoryId || memoryID == BookInteriorAnchor.closingPageMemoryId),
-                          vm.hasPrintCoverPDF {
-                    coverArtEditPanel = memoryID == BookInteriorAnchor.titlePageMemoryId ? .front : .back
-                    coverArtRevisionText = ""
-                    showCoverArtEditSheet = true
-                } else {
-                    isEditing = true
-                }
-            }
         }
         .onChange(of: currentPageIndex) { _ in
             syncEditedFieldsFromCurrentPage()
             isEditingImageInline = false
             imageRevisionText = ""
             imageRevisionFieldFocused = false
+        }
+        .onChange(of: vm.pageItems.count) { _, pageCount in
+            currentPageIndex = StorybookPagePresentationPolicy.clampedPageIndex(
+                currentPageIndex,
+                pageCount: pageCount
+            )
         }
         .onDisappear {
             imageEditTask?.cancel()
@@ -626,12 +553,12 @@ struct StoryPageDetailView: View {
             } else {
                 HStack(spacing: 10) {
                     if canAIEditCurrentIllustration {
-                        actionPill(title: "AI Edit", systemImage: "wand.and.stars", isProminent: false) {
+                        actionPill(title: "Edit Image", systemImage: "wand.and.stars", isProminent: false) {
                             beginInlineImageEdit()
                         }
                     }
                     actionPill(
-                        title: isPreparingFreeformEditor ? "Opening…" : "Arrange Page",
+                        title: isPreparingFreeformEditor ? "Opening…" : "Edit Page",
                         systemImage: "square.on.square",
                         isProminent: true
                     ) {
@@ -642,29 +569,10 @@ struct StoryPageDetailView: View {
                 .padding(.bottom, 12)
             }
         } else if case .textPage(_, _, _, _, _, let memoryID) = currentItem,
-                  memoryID == BookInteriorAnchor.titlePageMemoryId || memoryID == BookInteriorAnchor.closingPageMemoryId {
-            if vm.hasPrintCoverPDF {
-                VStack(spacing: 10) {
-                    compactFloatingEditPill(
-                        title: memoryID == BookInteriorAnchor.titlePageMemoryId ? "Edit cover art" : "Edit back cover",
-                        systemImage: "wand.and.stars"
-                    ) {
-                        coverArtEditPanel = memoryID == BookInteriorAnchor.titlePageMemoryId ? .front : .back
-                        coverArtRevisionText = ""
-                        showCoverArtEditSheet = true
-                    }
-                    Button {
-                        showTitleBlurbEditor = true
-                    } label: {
-                        Text("Edit book title & back cover text")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.white.opacity(0.9))
-                    }
-                    .buttonStyle(.plain)
-                }
-            } else {
-                compactFloatingEditPill(title: "Edit", systemImage: "pencil") {
-                    isEditing = true
+                  BookInteriorAnchor.isNonMemoryPage(memoryID) {
+            if memoryID == BookInteriorAnchor.titlePageMemoryId {
+                compactFloatingEditPill(title: "Edit book title", systemImage: "pencil") {
+                    showTitleBlurbEditor = true
                 }
             }
         } else if case .textPage = currentItem {
@@ -675,7 +583,7 @@ struct StoryPageDetailView: View {
                     }
                 }
                 actionPill(
-                    title: isPreparingFreeformEditor ? "Opening…" : "Arrange Page",
+                    title: isPreparingFreeformEditor ? "Opening…" : "Edit Page",
                     systemImage: "square.on.square",
                     isProminent: true
                 ) {
@@ -799,45 +707,15 @@ struct StoryPageDetailView: View {
         )
         
         if memoryID == BookInteriorAnchor.titlePageMemoryId {
-            if let pdfURL = printCoverPDFURL() {
-                RemotePDFThumbnailView(
-                    url: pdfURL,
-                    targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
-                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook(pageCount: max(1, vm.pageItems.count)),
-                    panel: .front,
-                    cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
-                    cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""
-                ) {
-                    DetailTitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
-                }
-                .frame(width: frameWidth, height: frameHeight)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            } else {
-                fallbackFrontCover
-            }
+            fallbackFrontCover
+        } else if memoryID == BookInteriorAnchor.blankPageMemoryId {
+            MemoirBlankPage(frameWidth: frameWidth, frameHeight: frameHeight)
         } else if memoryID == BookInteriorAnchor.closingPageMemoryId {
-            if let pdfURL = printCoverPDFURL() {
-                RemotePDFThumbnailView(
-                    url: pdfURL,
-                    targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
-                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook(pageCount: max(1, vm.pageItems.count)),
-                    panel: .back,
-                    cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
-                    cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""
-                ) {
-                    DetailTitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
-                }
-                .frame(width: frameWidth, height: frameHeight)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            } else {
-                MemoirCoverBackPage(
-                    subtitle: subtitle,
-                    frameWidth: frameWidth,
-                    frameHeight: frameHeight
-                )
-            }
+            MemoirCoverBackPage(
+                subtitle: subtitle,
+                frameWidth: frameWidth,
+                frameHeight: frameHeight
+            )
         } else {
             Group {
                 if isKidsBook {
@@ -1230,26 +1108,22 @@ struct StoryPageDetailView: View {
             }
         }
     }
-    
-    private func printCoverPDFURL() -> URL? {
-        vm.currentBookVersionRecord?.printCoverPDFURL
-    }
-    
-}
 
-private struct DetailTitleCoverLoadingPlaceholder: View {
-    let frameWidth: CGFloat
-    let frameHeight: CGFloat
-    
-    private let paper = Color(red: 0.965, green: 0.94, blue: 0.89)
-    
-    var body: some View {
-        ZStack {
-            paper
-            ProgressView()
-                .scaleEffect(1.05)
+    private func saveFreeformDraft() {
+        guard let pageID = freeformEditingPageID,
+              !isSavingFreeformPage,
+              !isImportingFreeformPhotos else { return }
+        let draft = freeformDraft
+        isSavingFreeformPage = true
+        Task {
+            defer { isSavingFreeformPage = false }
+            do {
+                try await vm.applyFreeformDocument(draft, pageID: pageID)
+                showFreeformEditor = false
+            } catch {
+                freeformEditorError = error.localizedDescription
+            }
         }
-        .frame(width: frameWidth, height: frameHeight)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
+
 }

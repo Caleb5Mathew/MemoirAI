@@ -109,6 +109,31 @@ struct BookVersionPersistOrderingTests {
         #expect(PendingBookSyncRetryPolicy.delay(forRetryCount: 20) == 24 * 60 * 60)
     }
 
+    @Test func pendingSyncRetryIncludesEveryProfileForCurrentUser() {
+        let first = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        let second = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+        let otherUser = UUID(uuidString: "33333333-3333-4333-8333-333333333333")!
+        let invalid = PendingSyncProfileReference(
+            profileID: "not-a-uuid",
+            firebaseUserID: "user-a"
+        )
+
+        let result = PendingSyncProfileRetryPolicy.profileIDs(
+            currentUserID: "user-a",
+            memoryReferences: [
+                PendingSyncProfileReference(profileID: second.uuidString, firebaseUserID: "user-a"),
+                PendingSyncProfileReference(profileID: first.uuidString, firebaseUserID: "user-a"),
+                invalid
+            ],
+            bookReferences: [
+                PendingSyncProfileReference(profileID: first.uuidString, firebaseUserID: "user-a"),
+                PendingSyncProfileReference(profileID: otherUser.uuidString, firebaseUserID: "user-b")
+            ]
+        )
+
+        #expect(result == [first, second])
+    }
+
     @Test func pendingBookRetryPolicy_retriesOnlyWhenDue() {
         let attempt = Date(timeIntervalSince1970: 10_000)
         #expect(PendingBookSyncRetryPolicy.shouldRetry(retryCount: 1, lastAttemptAt: nil, now: attempt))
@@ -180,6 +205,22 @@ struct BookVersionPersistOrderingTests {
         #expect(StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: "user-a", currentUserID: "user-a"))
         #expect(!StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: "user-a", currentUserID: "user-b"))
         #expect(!StorageUploadOwnerPolicy.isCurrentOwner(expectedUserID: "user-a", currentUserID: nil))
+    }
+
+    @Test func oversizedBookPagePNGScalesBelowTheStorageRuleCeiling() {
+        #expect(BookPagePNGUploadPolicy.nextPixelSize(
+            current: CGSize(width: 2_550, height: 3_300),
+            encodedBytes: BookPagePNGUploadPolicy.maximumBytes
+        ) == nil)
+
+        let reduced = BookPagePNGUploadPolicy.nextPixelSize(
+            current: CGSize(width: 2_550, height: 3_300),
+            encodedBytes: 36 * 1024 * 1024
+        )
+        #expect(reduced != nil)
+        #expect((reduced?.width ?? 0) < 2_550)
+        #expect((reduced?.height ?? 0) < 3_300)
+        #expect(abs((reduced?.width ?? 0) / (reduced?.height ?? 1) - (2_550.0 / 3_300.0)) < 0.001)
     }
 
     @MainActor

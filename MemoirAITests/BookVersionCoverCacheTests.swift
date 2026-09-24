@@ -8,6 +8,17 @@ import Testing
 @testable import MemoirAI
 
 struct BookVersionCoverCacheTests {
+    @Test func coverPreviewRejectsOversizedDownloads() {
+        #expect(CoverPDFPreviewDownloadPolicy.acceptsExpectedByteCount(-1))
+        #expect(CoverPDFPreviewDownloadPolicy.acceptsDownloadedByteCount(1))
+        #expect(CoverPDFPreviewDownloadPolicy.acceptsDownloadedByteCount(41_064_694))
+        #expect(!CoverPDFPreviewDownloadPolicy.acceptsExpectedByteCount(
+            Int64(CoverPDFPreviewDownloadPolicy.maximumByteCount + 1)
+        ))
+        #expect(!CoverPDFPreviewDownloadPolicy.acceptsDownloadedByteCount(
+            CoverPDFPreviewDownloadPolicy.maximumByteCount + 1
+        ))
+    }
     @Test func coverThumbnailCacheRevision_prefersCoverArtRevisionOverSyncedAt() {
         let synced = Date(timeIntervalSince1970: 1_700_000_000)
         let r = makeRecord(coverArtRevision: 3, syncedAt: synced, coverStoragePath: "users/x/book/y/cover.pdf")

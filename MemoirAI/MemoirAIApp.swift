@@ -153,6 +153,18 @@ struct MemoirAIApp: App {
     
     let persistenceController = PersistenceController.shared
 
+    #if DEBUG
+    private var relationshipJourneyUITestChapter: Chapter? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flagIndex = arguments.firstIndex(of: "-UITestRelationshipChapter"),
+              arguments.indices.contains(flagIndex + 1),
+              let chapterNumber = Int(arguments[flagIndex + 1]) else {
+            return nil
+        }
+        return allRelationshipChapters.first { $0.number == chapterNumber }
+    }
+    #endif
+
     @UIApplicationDelegateAdaptor(FBAppDelegate.self) var fbDelegate
 
     init() {
@@ -220,7 +232,21 @@ struct MemoirAIApp: App {
                     }
                     .padding(32)
                 case .ready:
+                    #if DEBUG
+                    if let chapter = relationshipJourneyUITestChapter {
+                        GeometryReader { container in
+                            RelationshipJourneyView(
+                                chapter: chapter,
+                                containerSafeAreaInsets: container.safeAreaInsets
+                            )
+                            .ignoresSafeArea()
+                        }
+                    } else {
+                        ContentView()
+                    }
+                    #else
                     ContentView()
+                    #endif
                 }
             }
                 .environmentObject(profileVM)
@@ -228,6 +254,7 @@ struct MemoirAIApp: App {
                 .environmentObject(RCSubscriptionManager.shared)
                 .environmentObject(TutorialCoordinator.shared)
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
+                .dismissKeyboardOnBackgroundTap()
                 // Our custom UI uses light backgrounds; force a light appearance so dynamic text stays dark
                 .preferredColorScheme(.light)
                 .task(id: persistenceLoadMonitor.state) {
@@ -273,7 +300,7 @@ struct MemoirAIApp: App {
                     }
                     Task {
                         await profileVM.retryPendingProfileMutations()
-                        await FirestoreSyncService.shared.retryPendingSyncs(for: profileVM.selectedProfile.id)
+                        await FirestoreSyncService.shared.retryPendingSyncsForCurrentUser()
                         await verifyPendingCheckoutReturnIfNeeded()
                     }
                 }

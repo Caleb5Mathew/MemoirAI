@@ -135,6 +135,7 @@ struct StorybookProgressEstimator {
     // Finalizing signals
     private var finalizeStep: FinalizeStep = .rebuildPages
     private var finalizeStartedAt: Date?
+    private var pausedAt: Date?
 
     /// Monotonic clamp: the bar never moves backwards.
     private var displayedProgress: Double = 0
@@ -197,6 +198,20 @@ struct StorybookProgressEstimator {
         advance(to: .done, now: now)
     }
 
+    mutating func setActive(_ isActive: Bool, now: Date = Date()) {
+        if !isActive {
+            if pausedAt == nil { pausedAt = now }
+            return
+        }
+        guard let pausedAt else { return }
+        let pauseDuration = max(0, now.timeIntervalSince(pausedAt))
+        phaseStartedAt = phaseStartedAt.addingTimeInterval(pauseDuration)
+        rankingStartedAt = rankingStartedAt?.addingTimeInterval(pauseDuration)
+        lastCompletionAt = lastCompletionAt?.addingTimeInterval(pauseDuration)
+        finalizeStartedAt = finalizeStartedAt?.addingTimeInterval(pauseDuration)
+        self.pausedAt = nil
+    }
+
     // MARK: - Output
 
     /// Overall 0...1 progress (monotonic) and a remaining-time estimate.
@@ -206,9 +221,10 @@ struct StorybookProgressEstimator {
             displayedProgress = 1.0
             return (1.0, 0)
         }
-        let raw = overallFraction(now: now)
+        let effectiveNow = pausedAt ?? now
+        let raw = overallFraction(now: effectiveNow)
         displayedProgress = min(0.99, max(displayedProgress, raw))
-        return (displayedProgress, remainingSeconds(now: now))
+        return (displayedProgress, remainingSeconds(now: effectiveNow))
     }
 
     /// Observed timings for `Calibration.record` — only meaningful after a successful run.

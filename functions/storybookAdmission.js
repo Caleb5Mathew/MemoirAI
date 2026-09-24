@@ -1,6 +1,10 @@
 const crypto = require("crypto");
 
 const REVENUECAT_PUBLIC_API_KEY = "appl_HTtNKyhVPddJOKrcqGCnWtvZcto";
+const STORYBOOK_SUBSCRIPTION_PRODUCTS = [
+  "com.Buildr.MemoirAI.ProMonthly",
+  "com.Buildr.MemoirAI.ProYearly"
+];
 const PAID_PAGE_LIMIT = 100;
 const MAX_PAGES_PER_JOB = 9;
 // The app offers three preview images plus one one-time tutorial image. The
@@ -216,11 +220,39 @@ async function releaseStorybookActiveLease({ db, userId, jobId }) {
 
 function activeRevenueCatEntitlement(response, now = new Date()) {
   const entitlements = response?.subscriber?.entitlements || {};
+  const basicEntitlement = entitlements.Basic;
+  if (basicEntitlement && STORYBOOK_SUBSCRIPTION_PRODUCTS.includes(basicEntitlement.product_identifier)) {
+    const expiresAt = new Date(basicEntitlement.expires_date);
+    if (Number.isFinite(expiresAt.getTime()) && expiresAt > now) return basicEntitlement;
+  }
   const entitlement = entitlements.image_generation;
-  if (!entitlement) return null;
-  if (!entitlement.expires_date) return entitlement;
-  const expiresAt = new Date(entitlement.expires_date);
-  return Number.isFinite(expiresAt.getTime()) && expiresAt > now ? entitlement : null;
+  if (entitlement) {
+    if (!entitlement.expires_date) return entitlement;
+    const expiresAt = new Date(entitlement.expires_date);
+    if (Number.isFinite(expiresAt.getTime()) && expiresAt > now) return entitlement;
+  }
+
+  // A purchased app subscription still grants access if its RevenueCat
+  // entitlement association is missing. Never infer access from other products.
+  const subscriptions = response?.subscriber?.subscriptions || {};
+  for (const productIdentifier of STORYBOOK_SUBSCRIPTION_PRODUCTS) {
+    const subscription = subscriptions[productIdentifier];
+    if (!subscription || subscription.refunded_at) continue;
+    const expiresAt = new Date(subscription.expires_date);
+    const graceExpiresAt = new Date(subscription.grace_period_expires_date);
+    const active = Number.isFinite(expiresAt.getTime()) && expiresAt > now;
+    const inGracePeriod = Number.isFinite(graceExpiresAt.getTime()) && graceExpiresAt > now;
+    if (active || inGracePeriod) {
+      return {
+        product_identifier: productIdentifier,
+        purchase_date: subscription.purchase_date,
+        expires_date: inGracePeriod && (!active || graceExpiresAt > expiresAt)
+          ? subscription.grace_period_expires_date
+          : subscription.expires_date
+      };
+    }
+  }
+  return null;
 }
 
 function countSuccessfulStorybookPages(data) {
@@ -287,7 +319,7 @@ async function settleStorybookReservation({ db, jobRef, userId, serverTimestamp 
   });
 }
 
-async function fetchRevenueCatEntitlement(userId, fetchImpl = fetch) {
+async function fetchRevenueCatEntitlement(userId, fetchImpl = fetch, now = new Date()) {
   const response = await fetchImpl(
     `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
     {
@@ -296,17 +328,17 @@ async function fetchRevenueCatEntitlement(userId, fetchImpl = fetch) {
     }
   );
   if (!response.ok) throw new Error(`revenuecat ${response.status}`);
-  return activeRevenueCatEntitlement(await response.json());
+  return activeRevenueCatEntitlement(await response.json(), now);
 }
 
-async function fetchLegacyRevenueCatEntitlement(db, userId, fetchImpl = fetch) {
-  const currentEntitlement = await fetchRevenueCatEntitlement(userId, fetchImpl);
+async function fetchLegacyRevenueCatEntitlement(db, userId, fetchImpl = fetch, now = new Date()) {
+  const currentEntitlement = await fetchRevenueCatEntitlement(userId, fetchImpl, now);
   if (currentEntitlement) return currentEntitlement;
 
   const userSnapshot = await db.collection("users").doc(userId).get();
   const legacyUserId = String(userSnapshot.data()?.rcUserId || "").trim();
   if (!UUID_PATTERN.test(legacyUserId) || legacyUserId === userId) return null;
-  return fetchRevenueCatEntitlement(legacyUserId, fetchImpl);
+  return fetchRevenueCatEntitlement(legacyUserId, fetchImpl, now);
 }
 
 async function admitLegacyStorybookJob({
@@ -335,7 +367,7 @@ async function admitLegacyStorybookJob({
   payload.clientVersion = Math.max(minimumClientVersion, Number(payload.clientVersion) || 0);
   const requestHash = stableHash(payload);
 
-  const entitlement = await fetchLegacyRevenueCatEntitlement(db, userId, fetchImpl);
+  const entitlement = await fetchLegacyRevenueCatEntitlement(db, userId, fetchImpl, now);
   const isPaid = Boolean(entitlement);
   if (!isPaid && payload.pageCountTarget > FREE_PAGE_LIMIT) {
     const error = new Error("A subscription is required for this book size.");
@@ -478,9 +510,10 @@ function createStorybookJobHandler({
       throw new HttpsError("already-exists", "A different job already uses this identifier.");
     }
 
+    const now = nowDate();
     let entitlement;
     try {
-      entitlement = await fetchRevenueCatEntitlement(userId, fetchImpl);
+      entitlement = await fetchRevenueCatEntitlement(userId, fetchImpl, now);
     } catch (error) {
       console.error("storybook RevenueCat verification failed", String(error?.message || error));
       throw new HttpsError("unavailable", "Subscription verification is temporarily unavailable.");
@@ -491,7 +524,6 @@ function createStorybookJobHandler({
       throw new HttpsError("permission-denied", "A subscription is required for this book size.");
     }
 
-    const now = nowDate();
     const dayKey = now.toISOString().slice(0, 10);
     const paidPeriod = isPaid ? paidStorybookUsagePeriod(now) : null;
     const periodKey = paidPeriod?.periodKey || "free_lifetime";

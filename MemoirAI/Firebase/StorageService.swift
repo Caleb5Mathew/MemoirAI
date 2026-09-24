@@ -16,11 +16,35 @@ enum StorageOwnershipPolicy {
         let normalizedExtension = fileExtension.lowercased() == "m4a" ? "m4a" : "caf"
         return "users/\(userID)/audio/\(memoryID).\(normalizedExtension)"
     }
+
+    static func isOwnedAudioPath(_ path: String, userID: String, memoryID: String) -> Bool {
+        path == audioPath(userID: userID, memoryID: memoryID, fileExtension: "m4a")
+            || path == audioPath(userID: userID, memoryID: memoryID, fileExtension: "caf")
+    }
 }
 
 enum StorageUploadOwnerPolicy {
     static func isCurrentOwner(expectedUserID: String, currentUserID: String?) -> Bool {
         currentUserID == expectedUserID
+    }
+}
+
+enum BookPagePNGUploadPolicy {
+    // Production Storage rules allow 32 MiB. Leave headroom for metadata and
+    // rule changes while retaining nearly all of the 300-DPI source pixels.
+    static let maximumBytes = 30 * 1024 * 1024
+
+    static func nextPixelSize(current: CGSize, encodedBytes: Int) -> CGSize? {
+        guard current.width > 1, current.height > 1, encodedBytes > maximumBytes else {
+            return nil
+        }
+        let byteRatio = Double(maximumBytes) / Double(encodedBytes)
+        let scale = min(0.92, sqrt(byteRatio) * 0.96)
+        guard scale.isFinite, scale > 0, scale < 1 else { return nil }
+        return CGSize(
+            width: max(1, floor(current.width * scale)),
+            height: max(1, floor(current.height * scale))
+        )
     }
 }
 
@@ -86,6 +110,27 @@ final class StorageService {
             )
             image.draw(in: drawRect)
         }
+    }
+
+    private func pngArtifactForBookUpload(_ image: UIImage) -> (image: UIImage, data: Data)? {
+        var candidate = image
+        guard var data = candidate.pngData() else { return nil }
+
+        while let nextSize = BookPagePNGUploadPolicy.nextPixelSize(
+            current: candidate.size,
+            encodedBytes: data.count
+        ) {
+            let format = UIGraphicsImageRendererFormat.default()
+            format.scale = 1
+            format.opaque = true
+            candidate = UIGraphicsImageRenderer(size: nextSize, format: format).image { _ in
+                candidate.draw(in: CGRect(origin: .zero, size: nextSize))
+            }
+            guard let resizedData = candidate.pngData() else { return nil }
+            data = resizedData
+        }
+
+        return (candidate, data)
     }
     
     // MARK: - Audio Upload
@@ -354,11 +399,13 @@ final class StorageService {
         ) else {
             throw StorageError.notAuthenticated
         }
-        let preparedImage = resizedForBookUpload(image, isKidsBook: isKidsBook)
-        guard let pngData = preparedImage.pngData(),
-              let jpegData = preparedImage.jpegData(compressionQuality: 0.90) else {
+        let fullResolutionImage = resizedForBookUpload(image, isKidsBook: isKidsBook)
+        guard let encodedPNG = pngArtifactForBookUpload(fullResolutionImage),
+              let jpegData = encodedPNG.image.jpegData(compressionQuality: 0.90) else {
             throw StorageError.invalidImageData
         }
+        let preparedImage = encodedPNG.image
+        let pngData = encodedPNG.data
 
         let pngPath = String(format: "users/%@/bookVersions/%@/pages/page_%03d.png", userId, bookId, pageIndex)
         let pngRef = storage.reference().child(pngPath)

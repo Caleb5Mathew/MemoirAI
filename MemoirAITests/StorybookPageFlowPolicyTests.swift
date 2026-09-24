@@ -3,6 +3,34 @@ import Testing
 @testable import MemoirAI
 
 struct StorybookPageFlowPolicyTests {
+    @Test func generatedBookWaitsForCoverPreparationButDoesNotStrandOnFailure() {
+        #expect(!StorybookCoverRevealPolicy.shouldReveal(
+            canonicalArtifactsReady: false,
+            coverPreparation: .ready
+        ))
+        #expect(!StorybookCoverRevealPolicy.shouldReveal(
+            canonicalArtifactsReady: true,
+            coverPreparation: .pending
+        ))
+        #expect(StorybookCoverRevealPolicy.shouldReveal(
+            canonicalArtifactsReady: true,
+            coverPreparation: .ready
+        ))
+        #expect(StorybookCoverRevealPolicy.shouldReveal(
+            canonicalArtifactsReady: true,
+            coverPreparation: .failed
+        ))
+    }
+
+    @Test func galleryImageDownloadsRejectFailuresAndOversizedPayloads() {
+        #expect(StorybookReaderImagePolicy.accepts(statusCode: 200, byteCount: 1))
+        #expect(!StorybookReaderImagePolicy.accepts(statusCode: 404, byteCount: 1))
+        #expect(!StorybookReaderImagePolicy.accepts(statusCode: 200, byteCount: 0))
+        #expect(!StorybookReaderImagePolicy.accepts(
+            statusCode: 200,
+            byteCount: StorybookReaderImagePolicy.maximumByteCount + 1
+        ))
+    }
     @Test func loadedBookPresentationUsesViewModelState() {
         #expect(StorybookPagePresentationPolicy.shouldShowLoadedBook(
             hasGeneratedStorybook: true,
@@ -18,19 +46,179 @@ struct StorybookPageFlowPolicyTests {
         ))
     }
 
-    @Test func localBookRemainsVisibleDuringProfileCloudReconciliation() {
-        #expect(!StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
-            isLoadingProfileBook: true,
-            hasLoadedBook: true
-        ))
+    @Test func restoredInteriorWaitsForCanonicalCoverMetadata() {
+        let localSlots = StorybookReaderSlotPolicy.slots(interiorPageCount: 9, hasExteriorCover: false)
+        #expect(localSlots.first == .interiorPage(0))
         #expect(StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
             isLoadingProfileBook: true,
-            hasLoadedBook: false
+            hasLoadedBook: true,
+            hasCanonicalBookMetadata: false
+        ))
+
+        let canonicalSlots = StorybookReaderSlotPolicy.slots(interiorPageCount: 9, hasExteriorCover: true)
+        #expect(canonicalSlots.first == .cover(.front))
+        #expect(!StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
+            isLoadingProfileBook: true,
+            hasLoadedBook: true,
+            hasCanonicalBookMetadata: true
+        ))
+    }
+
+    @Test func resolvedCoverlessBooksAndOfflineFallbackRemainReadable() {
+        #expect(!StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
+            isLoadingProfileBook: true,
+            hasLoadedBook: true,
+            hasCanonicalBookMetadata: true
         ))
         #expect(!StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
             isLoadingProfileBook: false,
-            hasLoadedBook: false
+            hasLoadedBook: true,
+            hasCanonicalBookMetadata: false
         ))
+    }
+
+    @Test func profileReconciliationDoesNotBlockAnEmptyBook() {
+        for isLoading in [true, false] {
+            #expect(!StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
+                isLoadingProfileBook: isLoading,
+                hasLoadedBook: false,
+                hasCanonicalBookMetadata: false
+            ))
+        }
+    }
+
+    @Test func pageSelectionClampsWhenBookPagesChange() {
+        #expect(StorybookPagePresentationPolicy.clampedPageIndex(6, pageCount: 6) == 5)
+        #expect(StorybookPagePresentationPolicy.clampedPageIndex(-1, pageCount: 6) == 0)
+        #expect(StorybookPagePresentationPolicy.clampedPageIndex(3, pageCount: 0) == 0)
+    }
+
+    @Test func loadingCopyExistsOnlyForExplicitLibraryOpen() {
+        let library = StorybookPagePresentationPolicy.loadingCopy(isLibrarySelection: true)
+        let initial = StorybookPagePresentationPolicy.loadingCopy(isLibrarySelection: false)
+
+        #expect(library.title == "Opening your book…")
+        #expect(initial.title.isEmpty)
+        #expect(initial.subtitle.isEmpty)
+    }
+
+    @Test func interiorMemoirSubtitleUsesTheStorytellersName() {
+        let policy = CoverCopyPolicy(artStyle: .kidsBook, profileDisplayName: "Caleb")
+        #expect(policy.interiorTitlePageBlurb() == "A collection of memories from Caleb’s life.")
+    }
+
+    @Test func catalogUsesTheHumanPrintTitleBeforeTheInternalBookKey() {
+        #expect(BookCatalogTitlePolicy.displayTitle(
+            printTitle: "Evelyn Hart's Memoir",
+            bookDisplayName: "user392_book37",
+            firstPageTitle: "First Memory"
+        ) == "Evelyn Hart's Memoir")
+        #expect(BookCatalogTitlePolicy.displayTitle(
+            printTitle: " ",
+            bookDisplayName: "user392_book37",
+            firstPageTitle: "First Memory"
+        ) == "user392_book37")
+    }
+
+    @Test func readerWrapsInteriorPagesWithTheGeneratedExteriorCover() {
+        #expect(StorybookReaderSlotPolicy.slots(
+            interiorPageCount: 3,
+            hasExteriorCover: true
+        ) == [
+            .cover(.front),
+            .interiorPage(0),
+            .interiorPage(1),
+            .interiorPage(2),
+            .cover(.back)
+        ])
+        #expect(StorybookReaderSlotPolicy.slots(
+            interiorPageCount: 2,
+            hasExteriorCover: false
+        ) == [.interiorPage(0), .interiorPage(1)])
+    }
+
+    @Test func allInteriorAnchorsAreRecognizedAsNonMemoryPages() {
+        #expect(BookInteriorAnchor.isNonMemoryPage(BookInteriorAnchor.titlePageMemoryId))
+        #expect(BookInteriorAnchor.isNonMemoryPage(BookInteriorAnchor.blankPageMemoryId))
+        #expect(BookInteriorAnchor.isNonMemoryPage(BookInteriorAnchor.closingPageMemoryId))
+        #expect(!BookInteriorAnchor.isNonMemoryPage(UUID()))
+    }
+
+    @Test func everyVisibleReaderSlotUsesTheUnifiedPageEditor() {
+        #expect(StorybookPageEditDestinationPolicy.target(for: .cover(.front)) == .exteriorCover(.front))
+        #expect(StorybookPageEditDestinationPolicy.target(for: .interiorPage(0)) == .interiorPage(0))
+        #expect(StorybookPageEditDestinationPolicy.target(for: .interiorPage(4)) == .interiorPage(4))
+        #expect(StorybookPageEditDestinationPolicy.target(for: .interiorPage(8)) == .interiorPage(8))
+        #expect(StorybookPageEditDestinationPolicy.target(for: .interiorPage(9)) == .interiorPage(9))
+        #expect(StorybookPageEditDestinationPolicy.target(for: .cover(.back)) == .exteriorCover(.back))
+    }
+
+    @Test func interiorBookendIDsAcceptNormalizedFirestoreUUIDStrings() {
+        let lowercaseClosingID = BookInteriorAnchor.closingPageMemoryId.uuidString.lowercased()
+        #expect(StorybookInteriorAnchorPolicy.matches(
+            memoryID: "  \(lowercaseClosingID)\n",
+            anchor: BookInteriorAnchor.closingPageMemoryId
+        ))
+        #expect(!StorybookInteriorAnchorPolicy.matches(
+            memoryID: BookInteriorAnchor.titlePageMemoryId.uuidString,
+            anchor: BookInteriorAnchor.closingPageMemoryId
+        ))
+        #expect(!StorybookInteriorAnchorPolicy.matches(
+            memoryID: "not-a-uuid",
+            anchor: BookInteriorAnchor.closingPageMemoryId
+        ))
+        #expect(!StorybookInteriorAnchorPolicy.matches(
+            memoryID: nil,
+            anchor: BookInteriorAnchor.closingPageMemoryId
+        ))
+    }
+
+    @Test func persistedPageLinksPreserveMemoryAndBookendIdentifiers() {
+        let memoryID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        #expect(BookVersionRecordFactory.memoryId(
+            from: MemoryLinks.universalLink(memoryID: memoryID).absoluteString
+        ) == memoryID.uuidString)
+        #expect(BookVersionRecordFactory.memoryId(
+            from: "memoirai://memory/\(BookInteriorAnchor.titlePageMemoryId.uuidString)"
+        ) == BookInteriorAnchor.titlePageMemoryId.uuidString)
+    }
+
+    @Test func missingCloudBookendIdentifiersAreRecoveredAndDeduplicated() {
+        let opening = StorybookBookendRecoveryPolicy.recoveredMemoryID(
+            storedMemoryID: nil,
+            pageType: "textPage",
+            title: "Caleb’s Memoir",
+            textContent: "Caleb’s personal memoir and life story, recorded and written."
+        )
+        let closing = StorybookBookendRecoveryPolicy.recoveredMemoryID(
+            storedMemoryID: nil,
+            pageType: "textPage",
+            title: "About this book",
+            textContent: "A life story."
+        )
+
+        #expect(opening == BookInteriorAnchor.titlePageMemoryId)
+        #expect(closing == BookInteriorAnchor.closingPageMemoryId)
+        #expect(StorybookBookendRecoveryPolicy.recoveredMemoryID(
+            storedMemoryID: nil,
+            pageType: "textPage",
+            title: "Caleb’s Memoir",
+            textContent: "A collection of memories from Caleb’s life."
+        ) == BookInteriorAnchor.titlePageMemoryId)
+        #expect(StorybookBookendRecoveryPolicy.shouldInclude(
+            memoryID: BookInteriorAnchor.titlePageMemoryId,
+            seenBookendIDs: []
+        ))
+        #expect(!StorybookBookendRecoveryPolicy.shouldInclude(
+            memoryID: BookInteriorAnchor.titlePageMemoryId,
+            seenBookendIDs: [BookInteriorAnchor.titlePageMemoryId]
+        ))
+        #expect(StorybookBookendRecoveryPolicy.recoveredMemoryID(
+            storedMemoryID: nil,
+            pageType: "illustration",
+            title: "About this book",
+            textContent: nil
+        ) == nil)
     }
 
     @Test func duplicateStorybookFinalizationTreatsTerminalJobsAsSuccess() {
@@ -50,19 +238,86 @@ struct StorybookPageFlowPolicyTests {
         #expect(StorybookCloudJobResumeAction.action(for: "failed") == .showFailure)
     }
 
-    @Test func globalProgressBannerIsHiddenOnStorybookScreen() {
+    @Test func inProgressCloudSnapshotsDoNotRebuildCompletedPages() {
+        #expect(StorybookCloudPageRebuildPolicy.shouldDeferPageRebuild(status: "queued"))
+        #expect(StorybookCloudPageRebuildPolicy.shouldDeferPageRebuild(status: "ranking"))
+        #expect(StorybookCloudPageRebuildPolicy.shouldDeferPageRebuild(status: "running"))
+        #expect(!StorybookCloudPageRebuildPolicy.shouldDeferPageRebuild(status: "aiComplete"))
+    }
+
+    @Test func matchingCanonicalBookPreservesCompleteGeneratedPages() {
+        let keys = [
+            "textPage:11111111-1111-4111-8111-111111111111",
+            "illustration:11111111-1111-4111-8111-111111111111"
+        ]
+        #expect(StorybookCanonicalInstallPolicy.canPreserveLocalPages(
+            expectedBookVersionID: "book-a",
+            canonicalBookVersionID: "book-a",
+            localPageKeys: keys,
+            canonicalPageKeys: keys,
+            hasUnresolvedIllustrations: false,
+            hasPlaceholderIllustrations: false
+        ))
+    }
+
+    @Test func canonicalInstallHydratesColdMismatchedOrPartialBooks() {
+        let keys = ["illustration:11111111-1111-4111-8111-111111111111"]
+        #expect(!StorybookCanonicalInstallPolicy.canPreserveLocalPages(
+            expectedBookVersionID: "book-a",
+            canonicalBookVersionID: "book-a",
+            localPageKeys: [],
+            canonicalPageKeys: keys,
+            hasUnresolvedIllustrations: false,
+            hasPlaceholderIllustrations: false
+        ))
+        #expect(!StorybookCanonicalInstallPolicy.canPreserveLocalPages(
+            expectedBookVersionID: "book-a",
+            canonicalBookVersionID: "book-b",
+            localPageKeys: keys,
+            canonicalPageKeys: keys,
+            hasUnresolvedIllustrations: false,
+            hasPlaceholderIllustrations: false
+        ))
+        #expect(!StorybookCanonicalInstallPolicy.canPreserveLocalPages(
+            expectedBookVersionID: "book-a",
+            canonicalBookVersionID: "book-a",
+            localPageKeys: keys,
+            canonicalPageKeys: keys,
+            hasUnresolvedIllustrations: true,
+            hasPlaceholderIllustrations: false
+        ))
+        #expect(!StorybookCanonicalInstallPolicy.canPreserveLocalPages(
+            expectedBookVersionID: "book-a",
+            canonicalBookVersionID: "book-a",
+            localPageKeys: keys,
+            canonicalPageKeys: keys,
+            hasUnresolvedIllustrations: false,
+            hasPlaceholderIllustrations: true
+        ))
+    }
+
+    @Test func globalProgressBannerAppearsOnlyOnRootScreens() {
         #expect(GlobalStorybookBannerVisibilityPolicy.shouldShow(
             hasActiveJob: true,
+            isNavigationRoot: true,
             isStoryPageVisible: false,
             isDismissed: false
         ))
         #expect(!GlobalStorybookBannerVisibilityPolicy.shouldShow(
             hasActiveJob: true,
+            isNavigationRoot: true,
             isStoryPageVisible: true,
             isDismissed: false
         ))
         #expect(!GlobalStorybookBannerVisibilityPolicy.shouldShow(
             hasActiveJob: true,
+            isNavigationRoot: false,
+            isStoryPageVisible: false,
+            isDismissed: false
+        ))
+        #expect(!GlobalStorybookBannerVisibilityPolicy.shouldShow(
+            hasActiveJob: true,
+            isNavigationRoot: true,
             isStoryPageVisible: false,
             isDismissed: true
         ))
@@ -84,6 +339,21 @@ struct StorybookPageFlowPolicyTests {
         #expect(StorybookGenerationBatchPolicy.maximumSelectablePages(remainingAllowance: 4) == 4)
         #expect(StorybookGenerationBatchPolicy.maximumSelectablePages(remainingAllowance: 0) == 1)
         #expect(StorybookGenerationBatchPolicy.clampedTargetPageCount(100) == 9)
+    }
+
+    @Test func generationStyleIgnoresLegacyStoredSelections() {
+        #expect(
+            StorybookGenerationStylePolicy.supportedArtStyle(legacyStoredValue: ArtStyle.realistic.rawValue)
+                == .kidsBook
+        )
+        #expect(
+            StorybookGenerationStylePolicy.supportedArtStyle(legacyStoredValue: ArtStyle.comic.rawValue)
+                == .kidsBook
+        )
+        #expect(
+            StorybookGenerationStylePolicy.supportedArtStyle(legacyStoredValue: nil)
+                == .kidsBook
+        )
     }
 
     @Test func unavailableLayoutRecoveryIsTransactional() {
@@ -250,5 +520,26 @@ struct StorybookPageFlowPolicyTests {
             pendingBookID: "\(profileID.uuidString)_1725000000000_legacy",
             profileID: profileID
         ))
+    }
+
+    @Test func printAvailabilityExplainsBooksBelowTheMinimumWithoutSelectingAnInvalidFormat() {
+        let ranges = [24...800]
+
+        #expect(PrintProductAvailabilityPolicy.bookStatus(
+            pageCount: 5,
+            supportedPageRanges: ranges
+        ) == .needsPages(current: 5, minimum: 24, remaining: 19))
+        #expect(PrintProductAvailabilityPolicy.bookStatus(
+            pageCount: 24,
+            supportedPageRanges: ranges
+        ) == .ready)
+        #expect(PrintProductAvailabilityPolicy.bookStatus(
+            pageCount: 801,
+            supportedPageRanges: ranges
+        ) == .unavailable)
+        #expect(PrintProductAvailabilityPolicy.bookStatus(
+            pageCount: 5,
+            supportedPageRanges: []
+        ) == .unavailable)
     }
 }

@@ -4,7 +4,7 @@ struct MemoryEnhancementIntroView: View {
     let onStartVoice: () -> Void
     let onEnhanceByTyping: () -> Void
     let onClose: () -> Void
-    /// Guided enhancement (voice or typing) requires OpenAI; both buttons disable when false.
+    /// Guided enhancement requires its cloud service; both buttons disable when false.
     let voiceGuideAvailable: Bool
 
     private var accent: Color { Color(red: 0.88, green: 0.52, blue: 0.28) }
@@ -56,7 +56,7 @@ struct MemoryEnhancementIntroView: View {
                     .padding(.horizontal, 8)
 
                     if !voiceGuideAvailable {
-                        Text("Guided enhancement needs an OpenAI key in Info.plist. Add one to enable voice or typing enhancement.")
+                        Text("Guided enhancement is temporarily unavailable. Try again later.")
                             .font(.footnote)
                             .foregroundStyle(.orange)
                             .multilineTextAlignment(.center)

@@ -45,9 +45,15 @@ const {
   memoryIndexClaimDecision
 } = require("./memoryIndexOwnership");
 const { createDeleteOwnAccountHandler } = require("./accountDeletion");
+const {
+  createEnrollGuestRecoveryHandler,
+  createRecoverGuestAccountHandler,
+  createRevokeGuestRecoveryHandler,
+  revokeGuestRecoveryMappings
+} = require("./guestRecovery");
 const { assertAccountAvailableForCheckout } = require("./accountStateGuards");
 const { acquireCheckoutLease, releaseCheckoutLease } = require("./accountOperationLock");
-const { isMemoirAdminToken } = require("./adminAuthorization");
+const { developerAccessResponse, isMemoirAdminToken } = require("./adminAuthorization");
 const { createStorybookJobHandler } = require("./storybookAdmission");
 const { safeErrorMetadata, safeLogIdentifier } = require("./privacyLogging");
 const { verifyLuluWebhookSignature } = require("./luluWebhookAuth");
@@ -115,6 +121,24 @@ function assertMemoirAdmin(request) {
   if (isMemoirAdminToken(request.auth.token, process.env.ADMIN_EMAILS)) return;
   throw new HttpsError("permission-denied", "Admin only");
 }
+
+/** TestFlight developer access: authority comes from the signed-in Firebase admin account. */
+exports.verifyDeveloperAccess = onCall(
+  { enforceAppCheck: isAppCheckEnforced() },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in");
+    }
+    const response = developerAccessResponse(
+      request.auth.token,
+      process.env.DEVELOPER_ACCESS_EMAILS || process.env.ADMIN_EMAILS
+    );
+    if (!response.authorized) {
+      throw new HttpsError("permission-denied", "Developer access only");
+    }
+    return response;
+  }
+);
 
 /** When false (default), paid orders wait for manual Print via ops UI / fulfillOrder. Set AUTO_FULFILL_PAID_ORDERS=true to restore immediate Lulu submit. */
 function isAutoFulfillPaidOrdersEnabled() {
@@ -5346,6 +5370,39 @@ exports.deleteOwnAccount = onCall(
     db,
     bucket,
     auth: admin.auth(),
+    serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+    HttpsError,
+    revokeGuestRecovery: (guestUid) => revokeGuestRecoveryMappings({
+      db,
+      guestUid,
+      serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
+    })
+  })
+);
+
+exports.enrollGuestRecovery = onCall(
+  { timeoutSeconds: 30, enforceAppCheck: isAppCheckEnforced() },
+  createEnrollGuestRecoveryHandler({
+    db,
+    serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+    HttpsError
+  })
+);
+
+exports.recoverGuestAccount = onCall(
+  { timeoutSeconds: 30, enforceAppCheck: isAppCheckEnforced() },
+  createRecoverGuestAccountHandler({
+    db,
+    auth: admin.auth(),
+    serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+    HttpsError
+  })
+);
+
+exports.revokeGuestRecovery = onCall(
+  { timeoutSeconds: 30, enforceAppCheck: isAppCheckEnforced() },
+  createRevokeGuestRecoveryHandler({
+    db,
     serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
     HttpsError
   })

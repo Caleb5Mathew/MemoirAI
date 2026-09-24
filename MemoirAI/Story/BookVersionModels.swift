@@ -348,13 +348,8 @@ enum BookVersionRecordFactory {
     static func memoryId(from urlString: String?) -> String? {
         guard let urlString,
               let url = URL(string: urlString),
-              url.scheme == "memoirai",
-              url.host == "memory" else {
-            return nil
-        }
-
-        let trimmed = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return trimmed.isEmpty ? nil : trimmed
+              let memoryID = MemoryLinks.parseMemoryDeepLink(url) else { return nil }
+        return memoryID.uuidString
     }
 
     static func fromPersistable(
@@ -434,12 +429,13 @@ enum BookVersionRecordFactory {
 }
 
 extension BookVersionRecord {
-    /// Title for library / cart rows: cloud `bookDisplayName`, then print title, then first page title.
+    /// Human-facing title for library and cart rows.
     var bookCatalogDisplayTitle: String {
-        if let d = bookDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty { return d }
-        if let p = printTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty { return p }
-        if let t = pages.first?.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { return t }
-        return "Story"
+        BookCatalogTitlePolicy.displayTitle(
+            printTitle: printTitle,
+            bookDisplayName: bookDisplayName,
+            firstPageTitle: pages.first?.title
+        )
     }
 
     /// Layout used when generating `cover.pdf` for this version (kids `BookCoverTemplate` vs portrait `PortraitLuluCoverTemplate`).

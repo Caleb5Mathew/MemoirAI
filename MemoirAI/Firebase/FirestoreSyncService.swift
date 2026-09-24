@@ -130,6 +130,24 @@ actor PendingSyncRetryGate {
     }
 }
 
+struct PendingSyncProfileReference: Equatable {
+    let profileID: String
+    let firebaseUserID: String?
+}
+
+enum PendingSyncProfileRetryPolicy {
+    static func profileIDs(
+        currentUserID: String,
+        memoryReferences: [PendingSyncProfileReference],
+        bookReferences: [PendingSyncProfileReference]
+    ) -> [UUID] {
+        Array(Set((memoryReferences + bookReferences).compactMap { reference in
+            guard reference.firebaseUserID == currentUserID else { return nil }
+            return UUID(uuidString: reference.profileID)
+        })).sorted { $0.uuidString < $1.uuidString }
+    }
+}
+
 /// Chains `syncBook` / Storage for the same `bookVersionId` so concurrent in-place saves do not interleave.
 private actor BookVersionSyncSequencer {
     private struct Tail {
@@ -215,6 +233,35 @@ final class FirestoreSyncService {
     private var coverHealSessionAttempts: [String: Int] = [:]
     private var coverRepairLock = NSLock()
     private var coverRepairsInFlight: Set<String> = []
+
+    func freshAudioPlaybackURL(memoryID: UUID, expectedUserID: String) async -> URL? {
+        guard Auth.auth().currentUser?.uid == expectedUserID else { return nil }
+        let reference = db.collection("users").document(expectedUserID)
+            .collection("memories").document(memoryID.uuidString)
+
+        do {
+            let data = try await reference.getDocument().data() ?? [:]
+            guard Auth.auth().currentUser?.uid == expectedUserID else { return nil }
+
+            if let storagePath = data["audioStoragePath"] as? String,
+               StorageOwnershipPolicy.isOwnedAudioPath(
+                    storagePath,
+                    userID: expectedUserID,
+                    memoryID: memoryID.uuidString
+               ),
+               let freshURL = try? await StorageService.shared.freshDownloadURL(
+                    forStoragePath: storagePath
+               ) {
+                return freshURL
+            }
+            return MemoryAudioAvailabilityPolicy.remoteURL(
+                storedReference: data["audioURL"] as? String
+            )
+        } catch {
+            print("Audio playback fallback lookup failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
     private static let maxCoverHealAttemptsPerVersionPerSession = 2
 
     private init() {
@@ -428,6 +475,38 @@ final class FirestoreSyncService {
         }
         await retryPendingSyncsClaimed(for: profileID, firebaseUserId: firebaseUserId)
         await pendingSyncRetryGate.release(retryKey)
+    }
+
+    /// Retries durable work for every profile owned by the active Firebase account.
+    func retryPendingSyncsForCurrentUser() async {
+        guard let firebaseUserID = Auth.auth().currentUser?.uid else { return }
+        await retryPendingMemoryDeletions(firebaseUserId: firebaseUserID)
+        guard Auth.auth().currentUser?.uid == firebaseUserID else { return }
+        let memoryReferences = memorySyncPersistenceLock.withLock {
+            loadPendingMemorySyncRecords().map {
+                PendingSyncProfileReference(
+                    profileID: $0.profileId,
+                    firebaseUserID: $0.firebaseUserId
+                )
+            }
+        }
+        let bookReferences = bookSyncPersistenceLock.withLock {
+            loadPendingBookSyncRecords().map {
+                PendingSyncProfileReference(
+                    profileID: $0.profileId,
+                    firebaseUserID: $0.firebaseUserId
+                )
+            }
+        }
+        let profileIDs = PendingSyncProfileRetryPolicy.profileIDs(
+            currentUserID: firebaseUserID,
+            memoryReferences: memoryReferences,
+            bookReferences: bookReferences
+        )
+        for profileID in profileIDs {
+            guard Auth.auth().currentUser?.uid == firebaseUserID else { return }
+            await retryPendingSyncs(for: profileID)
+        }
     }
 
     private func retryPendingSyncsClaimed(for profileID: UUID, firebaseUserId: String) async {
@@ -997,12 +1076,15 @@ final class FirestoreSyncService {
         let text = entry.text ?? ""
         let createdAt = entry.createdAt ?? Date()
         let chapter = entry.chapter ?? ""
+        let memoirModeRaw = entry.memoirModeRaw
         let profileID = entry.profileID?.uuidString ?? ""
         let characterDetails = entry.characterDetails
         let audioData = entry.audioData
         let audioFileURL = entry.audioFileURL
         let transcriptionStatus = entry.transcriptionStatus
-        let transcriptionEditedText = entry.transcriptionEditedText
+        let transcriptionEditedText = MemoryTranscriptionTextPolicy.validUserEdit(
+            entry.transcriptionEditedText
+        )
 
         do {
             var memoryData: [String: Any] = [
@@ -1012,6 +1094,9 @@ final class FirestoreSyncService {
                 "profileID": profileID,
                 "syncedAt": FieldValue.serverTimestamp()
             ]
+            if let memoirModeRaw, MemoirMode(rawValue: memoirModeRaw) != nil {
+                memoryData["memoirMode"] = memoirModeRaw
+            }
 
             // A transient read failure must not look like a missing document: doing
             // so would treat unchanged audio as new and reset a completed transcript.
@@ -1224,14 +1309,27 @@ final class FirestoreSyncService {
             let syncStart = Date()
             let baseRecord = BookVersionRecordFactory.fromPersistable(book, bookVersionId: bookId)
             let existingSnapshot = try? await bookRef.getDocument()
-            let existingCoverRevision = existingSnapshot?.data().flatMap(BookVersionRecord.fromFirestoreData)?.coverArtRevision
+            let existingRecord = existingSnapshot?.data().flatMap(BookVersionRecord.fromFirestoreData)
+            if let existingRecord,
+               BookRenderCompletionPolicy.isComplete(
+                   status: existingRecord.renderStatus,
+                   pdfURL: existingRecord.pdfURL
+               ),
+               StorybookCloudApplyPolicy.hasPrintCoverArtifact(existingRecord) {
+                clearPendingBookSync(bookId: bookId, firebaseUserId: userId)
+                print("[CoverFlow] syncBook already complete bookId=\(bookId.prefix(28))…")
+                return true
+            }
+            let existingCoverRevision = existingRecord?.coverArtRevision
             let isLandscapeTrim = baseRecord.pageWidth > baseRecord.pageHeight
             var coverStoragePath: String?
             var coverURL: String?
 
-            // Relaunch recovery must reuse a cover that already reached Storage. The
-            // previous attempt may have failed before the Firestore record was written.
-            if renderedPageImages == nil, renderedPageProvider == nil, coverPDFOverride == nil {
+            // Any non-cover-edit sync must reuse a cover that already reached Storage.
+            // Relaunch can start a pending retry before cloud finalization reconnects;
+            // probing first keeps those serialized passes idempotent and avoids a
+            // second upload to the same Storage task.
+            if coverPDFOverride == nil {
                 let expectedPath = "users/\(userId)/bookVersions/\(bookId)/cover.pdf"
                 if let freshURL = try? await StorageService.shared.freshDownloadURL(
                     forStoragePath: expectedPath
@@ -1510,7 +1608,9 @@ final class FirestoreSyncService {
                                 width: CGFloat(baseRecord.pageWidth) * 2,
                                 height: CGFloat(baseRecord.pageHeight) * 2
                             ),
-                            memoryID: memoryID
+                            memoryID: memoryID,
+                            pageNumber: index + 1,
+                            isLandscape: baseRecord.orientation == "landscape"
                         )
                     }
                 } else {
@@ -1662,7 +1762,10 @@ final class FirestoreSyncService {
                 "syncedAt": FieldValue.serverTimestamp()
             ], merge: true)
 
-            if Auth.auth().currentUser?.isAnonymous == true {
+            let shouldSuggestAccountLink = await MainActor.run {
+                AuthenticationService.shared.isAnonymous
+            }
+            if shouldSuggestAccountLink {
                 UserDefaults.standard.set(true, forKey: MemoirPersistenceUserDefaults.suggestAccountLinkAfterBook)
             }
             
@@ -2450,12 +2553,29 @@ final class FirestoreSyncService {
                 if let transcriptionTimestamp = data["transcriptionUpdatedAt"] as? Timestamp {
                     entry.transcriptionUpdatedAt = transcriptionTimestamp.dateValue()
                 }
-                if entry.transcriptionEditedText == nil {
-                    entry.transcriptionEditedText = data["transcriptionEdited"] as? String
-                    entry.text = entry.transcriptionEditedText ?? (data["transcription"] as? String) ?? ""
+                if MemoryTranscriptionTextPolicy.validUserEdit(entry.transcriptionEditedText) == nil {
+                    let remoteEdited = MemoryTranscriptionTextPolicy.validUserEdit(
+                        data["transcriptionEdited"] as? String
+                    )
+                    entry.transcriptionEditedText = remoteEdited
+                    entry.text = MemoryTranscriptionTextPolicy.displayText(
+                        edited: remoteEdited,
+                        canonical: data["transcription"] as? String,
+                        raw: data["transcriptionRaw"] as? String
+                    )
                 }
             }
             entry.chapter = data["chapter"] as? String
+            if let remoteMemoirMode = data["memoirMode"] as? String,
+               MemoirMode(rawValue: remoteMemoirMode) != nil {
+                entry.memoirModeRaw = remoteMemoirMode
+            } else if existingEntry == nil {
+                entry.memoirModeRaw = MemoirModeClassifier.classify(MemoryMemoirMetadata(
+                    storedModeRawValue: nil,
+                    chapter: entry.chapter,
+                    prompt: entry.prompt
+                ))?.rawValue
+            }
             entry.characterDetails = data["characterDetails"] as? String
             if let ts = data["createdAt"] as? Timestamp {
                 entry.createdAt = ts.dateValue()
@@ -3004,6 +3124,7 @@ extension FirestoreSyncService {
 
     /// Jobs older than this are ignored for auto-resume / banner so stale `failed` rows from old deployments do not route the app forever.
     static let storybookCloudJobMaxActiveAge: TimeInterval = 7 * 24 * 60 * 60
+    static let storybookCloudJobMaxHeartbeatAge: TimeInterval = 30 * 60
 
     /// Returns whether a job document's `createdAt` is recent enough to treat as "active" for routing and UI.
     static func isStorybookJobRecentForActiveUI(createdAt: Any?, referenceNow: Date = Date()) -> Bool {
@@ -3012,6 +3133,17 @@ extension FirestoreSyncService {
         let age = referenceNow.timeIntervalSince(created)
         if age < 0 { return true }
         return age <= storybookCloudJobMaxActiveAge
+    }
+
+    static func hasRecentStorybookJobHeartbeat(
+        data: [String: Any],
+        referenceNow: Date = Date()
+    ) -> Bool {
+        let timestamps = [data["lastHeartbeatAt"], data["updatedAt"], data["createdAt"]]
+            .compactMap { ($0 as? Timestamp)?.dateValue() }
+        guard let latest = timestamps.max() else { return false }
+        let age = referenceNow.timeIntervalSince(latest)
+        return age < 0 || age <= storybookCloudJobMaxHeartbeatAge
     }
 
     /// Rows must be newest-first (Firestore `order(by: "createdAt", descending: true)`).
@@ -3029,6 +3161,10 @@ extension FirestoreSyncService {
             guard p == pid else { continue }
             let st = String(describing: d["status"] ?? "")
             if st == "dismissedFailed" { continue }
+            if ["queued", "ranking", "running"].contains(st),
+               !Self.hasRecentStorybookJobHeartbeat(data: d, referenceNow: referenceNow) {
+                continue
+            }
             filtered.append((row.documentID, d, st))
         }
         let supersedeNewer = Set(["queued", "ranking", "running", "aiComplete", "complete"])

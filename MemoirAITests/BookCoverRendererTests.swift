@@ -1,5 +1,7 @@
 import CoreGraphics
+import PDFKit
 import Testing
+import UIKit
 @testable import MemoirAI
 
 struct BookCoverRendererTests {
@@ -34,6 +36,28 @@ struct BookCoverRendererTests {
         #expect(abs(rects.front.maxX - 1) < 0.000_001)
     }
 
+    @Test func flatPanelAspectRatiosMatchPhysicalWrapGeometry() throws {
+        let landscape = try #require(BookCoverRenderer.flatPanelAspectRatio(
+            for: .kidsBook(pageCount: 85),
+            panel: .front
+        ))
+        let portrait = try #require(BookCoverRenderer.flatPanelAspectRatio(
+            for: .portraitCasewrap(pageCount: 85),
+            panel: .back
+        ))
+
+        let expectedLandscape = (BookCoverTemplate.wrapInches + BookCoverTemplate.backCoverWidthInches)
+            / LuluCoverTemplate.totalHeightInches
+        let expectedPortrait = (PortraitLuluCoverTemplate.wrapInches + PortraitLuluCoverTemplate.faceWidthInches)
+            / PortraitLuluCoverTemplate.totalHeightInches
+        #expect(abs(landscape - expectedLandscape) < 0.000_001)
+        #expect(abs(portrait - expectedPortrait) < 0.000_001)
+        #expect(BookCoverRenderer.flatPanelAspectRatio(
+            for: .kidsBook(pageCount: 85),
+            panel: .full
+        ) == nil)
+    }
+
     @Test func aspectFillPreservesRatioAndCoversTarget() {
         let bounds = CGRect(x: 10, y: 20, width: 300, height: 500)
         let result = BookCoverRenderer.aspectFillRect(
@@ -46,5 +70,27 @@ struct BookCoverRendererTests {
         #expect(result.height >= bounds.height)
         #expect(abs(result.midX - bounds.midX) < 0.000_001)
         #expect(abs(result.midY - bounds.midY) < 0.000_001)
+    }
+
+    @Test func coverPDFEmbedsACompressedRaster() throws {
+        let size = CGSize(width: 640, height: 320)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { context in
+            UIColor.systemOrange.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 80, y: 60, width: 420, height: 170))
+        }
+
+        let pdf = try #require(BookCoverRenderer.compressedImagePDF(
+            image: image,
+            bounds: CGRect(origin: .zero, size: size)
+        ))
+
+        #expect(pdf.starts(with: Data("%PDF".utf8)))
+        #expect(pdf.count < Int(size.width * size.height))
+        let document = try #require(PDFDocument(data: pdf))
+        #expect(document.pageCount == 1)
+        #expect(pdf.count <= BookCoverRenderer.maximumEmbeddedRasterByteCount + 1_000_000)
     }
 }

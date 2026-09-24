@@ -76,6 +76,28 @@ struct StorybookSeenTrackerTests {
         #expect(!tracker.hasSeenCompleted(jobId: "job-e"))
     }
 
+    @Test func userNavigationIntentBlocksCompetingRouteUntilStoryPageAppears() {
+        let (tracker, defaults, suite) = makeTracker()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        tracker.noteUserNavigationIntent()
+        #expect(tracker.isStoryPageNavigationPending)
+
+        tracker.setStoryPageVisible(true)
+        #expect(!tracker.isStoryPageNavigationPending)
+        #expect(tracker.isStoryPageVisible)
+    }
+
+    @Test func foregroundResetClearsPendingNavigationIntent() {
+        let (tracker, defaults, suite) = makeTracker()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        tracker.noteUserNavigationIntent()
+        tracker.resetForegroundSession()
+
+        #expect(!tracker.isStoryPageNavigationPending)
+    }
+
     @Test func completedSeenListIsCapped() {
         let (tracker, defaults, suite) = makeTracker()
         defer { defaults.removePersistentDomain(forName: suite) }

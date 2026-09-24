@@ -1891,6 +1891,67 @@ function parseLeakDetectorResponse(data) {
   return false;
 }
 
+function parseIdentityDriftDetectorResponse(data) {
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) return false;
+  const raw = String(text).trim();
+  try {
+    const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, ""));
+    const verdicts = [parsed?.identityDrift, parsed?.duplicateNarrator, parsed?.forbiddenText];
+    if (verdicts.every((value) => typeof value === "boolean")) return verdicts.some(Boolean);
+    if (typeof parsed?.identityDrift === "boolean") return parsed.identityDrift;
+  } catch {
+    // fall through to the conservative token check
+  }
+  const lower = raw.toLowerCase();
+  if (lower.startsWith("yes")) return true;
+  if (lower.startsWith("no")) return false;
+  return false;
+}
+
+async function detectHeadshotIdentityDrift(
+  geminiApiKey,
+  headshotBuf,
+  illustrationBuf,
+  { expectedAge, deadlineAtMs, beforeAttempt } = {}
+) {
+  if (beforeAttempt) await beforeAttempt();
+  try {
+    if (!headshotBuf?.length || !illustrationBuf?.length) return false;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TEXT_MODEL}:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
+    const ageClause = Number.isFinite(expectedAge)
+      ? ` The illustrated narrator is intentionally shown at age ${expectedAge}; ignore normal age-related changes.`
+      : " Ignore normal age-related changes.";
+    const question =
+      "Image 1 is the memoir narrator's present-day identity reference. Image 2 is a stylized storybook scene that should contain that same person, possibly at a different age." +
+      ageClause +
+      " Evaluate three publication defects: (1) identityDrift: the most likely narrator has a CLEAR mismatch in stable ancestry-linked traits such as skin-tone family, ethnic facial structure, eye shape, or core face proportions; do not flag changes caused only by age, hairstyle, facial hair, expression, pose, clothing, or watercolor stylization. (2) duplicateNarrator: the same narrator appears more than once in the scene, including a montage showing two moments. (3) forbiddenText: the artwork contains a caption, paragraph, speech bubble, watermark, signature, or gibberish writing; ordinary short real-world signage named by the scene is allowed. If multiple people appear, compare the person whose age and role best fit the scene. Flag identity only for a strong mismatch; uncertainty is false. Answer ONLY with JSON containing all three booleans: {\"identityDrift\": false, \"duplicateNarrator\": false, \"forbiddenText\": false}.";
+    const body = {
+      contents: [{ parts: [
+        { inline_data: { mime_type: mimeTypeForImageBuffer(headshotBuf) || "image/jpeg", data: headshotBuf.toString("base64") } },
+        { inline_data: { mime_type: mimeTypeForImageBuffer(illustrationBuf) || "image/png", data: illustrationBuf.toString("base64") } },
+        { text: question }
+      ] }],
+      generationConfig: { temperature: 0, maxOutputTokens: 64, responseMimeType: "application/json" }
+    };
+    const timeoutMs = deadlineAtMs == null
+      ? 30_000
+      : boundedProviderRequestTimeoutMs({ maximumTimeoutMs: 30_000, nowMs: Date.now(), deadlineMs: deadlineAtMs });
+    if (timeoutMs == null) return false;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return false;
+    return parseIdentityDriftDetectorResponse(data);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Best-effort check for the known Gemini failure mode where an attached reference
  * headshot is echoed into the artwork as a pasted photo / inset portrait, despite the
@@ -1948,6 +2009,8 @@ async function detectReferenceLeak(
 
 const LEAK_RETRY_CLAUSE =
   "CRITICAL RETRY: the previous render illegally embedded the attached reference photo as a visible inset/thumbnail inside the scene. This attempt must render ONLY the described scene as one seamless illustration with no embedded reference anywhere.";
+const IDENTITY_RETRY_CLAUSE =
+  "CRITICAL PUBLICATION RETRY: the previous render failed the final page-quality check. Re-render one coherent moment with the memoir narrator appearing exactly once. Preserve the attached headshot subject's stable skin-tone family, ethnic facial structure, eye shape, and core face proportions; change only age-appropriate features required by the FINAL NARRATOR AGE LOCK. Do not substitute another character's face or ethnicity for the narrator. The illustration must be completely wordless: no caption, paragraph, speech bubble, watermark, signature, or gibberish writing. Only a short real-world sign explicitly named in the scene may contain text.";
 
 /**
  * `generateIllustrationBuffer` plus a post-generation reference-leak check. On a
@@ -1962,7 +2025,7 @@ async function generateIllustrationBufferGuarded(
   size,
   referenceImageBuffers,
   log,
-  { deadlineAtMs, beforeAttempt } = {}
+  { deadlineAtMs, beforeAttempt, identityReferenceBuffer, expectedNarratorAge } = {}
 ) {
   const emit = (event, details) => {
     try {
@@ -1981,13 +2044,20 @@ async function generateIllustrationBufferGuarded(
   const hasRefs = Array.isArray(referenceImageBuffers) && referenceImageBuffers.some((b) => b && b.length);
   if (!hasRefs) return first;
 
-  const leaked = await detectReferenceLeak(geminiApiKey, first, {
-    deadlineAtMs,
-    beforeAttempt
-  });
-  if (!leaked) return first;
+  const [leaked, identityDrift] = await Promise.all([
+    detectReferenceLeak(geminiApiKey, first, { deadlineAtMs, beforeAttempt }),
+    identityReferenceBuffer?.length
+      ? detectHeadshotIdentityDrift(geminiApiKey, identityReferenceBuffer, first, {
+          expectedAge: expectedNarratorAge,
+          deadlineAtMs,
+          beforeAttempt
+        })
+      : false
+  ]);
+  if (!leaked && !identityDrift) return first;
 
-  emit("storybook.leakDetected", { promptLen: prompt.length, size });
+  if (leaked) emit("storybook.leakDetected", { promptLen: prompt.length, size });
+  if (identityDrift) emit("storybook.identityDriftDetected", { promptLen: prompt.length, size });
   if (deadlineAtMs != null && !canStartProviderAttempt({
     nowMs: Date.now(),
     deadlineMs: deadlineAtMs,
@@ -1998,9 +2068,13 @@ async function generateIllustrationBufferGuarded(
   }
   try {
     if (beforeAttempt) await beforeAttempt();
+    const retryClauses = [
+      leaked ? LEAK_RETRY_CLAUSE : "",
+      identityDrift ? IDENTITY_RETRY_CLAUSE : ""
+    ].filter(Boolean).join("\n\n");
     const retry = await generateIllustrationBuffer(
       geminiApiKey,
-      `${prompt}\n\n${LEAK_RETRY_CLAUSE}`,
+      `${prompt}\n\n${retryClauses}`,
       size,
       referenceImageBuffers,
       { deadlineAtMs }
@@ -2522,7 +2596,8 @@ Extract title and featuring list.`;
     shouldAttachHeadshot,
     nameMatchesProfileFirstToken,
     isUsableBackCoverPitch,
-    fallbackBackCoverPitch
+    fallbackBackCoverPitch,
+    explicitAge
   };
 }
 
@@ -2537,6 +2612,8 @@ module.exports = {
   generateIllustrationBufferGuarded,
   detectReferenceLeak,
   parseLeakDetectorResponse,
+  detectHeadshotIdentityDrift,
+  parseIdentityDriftDetectorResponse,
   editImageWithGemini,
   uploadPngWithDownloadURL,
   buildCoverIllustrationPrompt,

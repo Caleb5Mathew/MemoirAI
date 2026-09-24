@@ -1,5 +1,15 @@
 import SwiftUI
 
+struct MemoirBlankPage: View {
+    let frameWidth: CGFloat
+    let frameHeight: CGFloat
+
+    var body: some View {
+        Color(red: 0.985, green: 0.975, blue: 0.95)
+            .frame(width: frameWidth, height: frameHeight)
+    }
+}
+
 /// Shared front/back cover page styling used in preview + rendered page images.
 struct MemoirCoverFrontPage: View {
     let title: String
@@ -14,6 +24,11 @@ struct MemoirCoverFrontPage: View {
     private let bodyColor = Color(red: 0.42, green: 0.38, blue: 0.33)
 
     var body: some View {
+        let typographyPreset: BookPageTypographyPreset = isKidsBook ? .kidsBook : .realistic
+        let layout = BookInteriorPageDocumentFactory.layout(
+            pageAspectRatio: Double(frameWidth / max(frameHeight, 1)),
+            isKidsBook: isKidsBook
+        )
         ZStack {
             background
 
@@ -25,34 +40,66 @@ struct MemoirCoverFrontPage: View {
                 )
                 .padding(frameWidth * 0.055)
 
-            VStack(spacing: 0) {
-                Spacer()
+            HStack(spacing: frameWidth * 0.018) {
+                Rectangle()
+                    .fill(Color(red: 0.72, green: 0.48, blue: 0.31).opacity(0.55))
+                    .frame(width: frameWidth * 0.12, height: max(1, frameHeight * 0.003))
+                Circle()
+                    .fill(Color(red: 0.72, green: 0.48, blue: 0.31).opacity(0.72))
+                    .frame(width: frameHeight * 0.018, height: frameHeight * 0.018)
+                Rectangle()
+                    .fill(Color(red: 0.72, green: 0.48, blue: 0.31).opacity(0.55))
+                    .frame(width: frameWidth * 0.12, height: max(1, frameHeight * 0.003))
+            }
+            .position(x: frameWidth * 0.5, y: frameHeight * 0.245)
 
-                VStack(spacing: frameHeight * 0.03) {
-                    Text(title)
-                        .font(.system(size: isKidsBook ? frameHeight * 0.1 : frameHeight * 0.075, weight: .bold, design: .serif))
-                        .foregroundColor(titleColor)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(3)
-                        .minimumScaleFactor(0.72)
-                        .padding(.horizontal, frameWidth * 0.11)
+            Text(title)
+                .font(
+                    typographyPreset.interiorTitleTypography == .rounded
+                        ? .system(size: frameHeight * layout.titleFontSize, weight: .semibold, design: .rounded)
+                        : .custom("Georgia-Bold", size: frameHeight * layout.titleFontSize)
+                )
+                .foregroundColor(titleColor)
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+                .minimumScaleFactor(0.65)
+                .allowsTightening(true)
+                .frame(
+                    width: frameWidth * layout.titleFrame.width,
+                    height: frameHeight * layout.titleFrame.height,
+                    alignment: .center
+                )
+                .position(
+                    x: frameWidth * (layout.titleFrame.x + layout.titleFrame.width / 2),
+                    y: frameHeight * (layout.titleFrame.y + layout.titleFrame.height / 2)
+                )
 
-                    if !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(subtitle)
-                            .font(.system(size: frameHeight * 0.032, weight: .medium, design: .serif))
-                            .foregroundColor(bodyColor)
-                            .multilineTextAlignment(.center)
-                            .lineSpacing(4)
-                            .padding(.horizontal, frameWidth * 0.14)
-                    }
-                }
-
-                Spacer()
+            if !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(subtitle)
+                    .font(
+                        typographyPreset.interiorTitleTypography == .rounded
+                            ? .system(size: frameHeight * layout.titleBodyFontSize, weight: .regular, design: .rounded)
+                            : .custom("Georgia", size: frameHeight * layout.titleBodyFontSize)
+                    )
+                    .foregroundColor(bodyColor)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.72)
+                    .frame(
+                        width: frameWidth * layout.titleBodyFrame.width,
+                        height: frameHeight * layout.titleBodyFrame.height,
+                        alignment: .center
+                    )
+                    .position(
+                        x: frameWidth * (layout.titleBodyFrame.x + layout.titleBodyFrame.width / 2),
+                        y: frameHeight * (layout.titleBodyFrame.y + layout.titleBodyFrame.height / 2)
+                    )
             }
         }
         .frame(width: frameWidth, height: frameHeight)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
+
 }
 
 struct MemoirCoverBackPage: View {
@@ -62,19 +109,66 @@ struct MemoirCoverBackPage: View {
     let frameWidth: CGFloat
     let frameHeight: CGFloat
 
-    private let background = Color(red: 0.955, green: 0.925, blue: 0.875)
-    private let panel = Color(red: 0.99, green: 0.98, blue: 0.955)
     private let headingColor = Color(red: 0.20, green: 0.18, blue: 0.15)
-    private let bodyColor = Color(red: 0.36, green: 0.33, blue: 0.29)
-
-    private var subjectName: String {
-        let t = (subtitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? "this storyteller" : t
-    }
-
-    private var badgeSide: CGFloat { frameHeight * 0.09 }
 
     var body: some View {
+        let layout = BookInteriorPageDocumentFactory.layout(
+            pageAspectRatio: Double(frameWidth / max(frameHeight, 1)),
+            isKidsBook: false
+        )
+        ZStack {
+            MemoirCoverBackBackgroundPage(frameWidth: frameWidth, frameHeight: frameHeight)
+
+            Text("Made with Memoir")
+                .font(.custom("Georgia-Bold", size: frameHeight * layout.closingHeadingFontSize))
+                .foregroundColor(headingColor)
+                .multilineTextAlignment(.center)
+                .frame(
+                    width: frameWidth * layout.closingHeadingFrame.width,
+                    height: frameHeight * layout.closingHeadingFrame.height,
+                    alignment: .center
+                )
+                .position(
+                    x: frameWidth * (layout.closingHeadingFrame.x + layout.closingHeadingFrame.width / 2),
+                    y: frameHeight * (layout.closingHeadingFrame.y + layout.closingHeadingFrame.height / 2)
+                )
+
+            Text("Download on the App Store")
+                .font(.system(size: frameHeight * layout.closingStoreFontSize, weight: .semibold))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+                .frame(
+                    width: frameWidth * layout.closingStoreTextFrame.width,
+                    height: frameHeight * layout.closingStoreTextFrame.height,
+                    alignment: .center
+                )
+                .position(
+                    x: frameWidth * (layout.closingStoreTextFrame.x + layout.closingStoreTextFrame.width / 2),
+                    y: frameHeight * (layout.closingStoreTextFrame.y + layout.closingStoreTextFrame.height / 2)
+                )
+        }
+        .frame(width: frameWidth, height: frameHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+/// Decorative closing-page layer. Keeping copy out of this view lets the page editor
+/// seed the same artwork while exposing every visible word as an editable element.
+struct MemoirCoverBackBackgroundPage: View {
+    let frameWidth: CGFloat
+    let frameHeight: CGFloat
+
+    private let background = Color(red: 0.955, green: 0.925, blue: 0.875)
+    private let panel = Color(red: 0.99, green: 0.98, blue: 0.955)
+    var body: some View {
+        let layout = BookInteriorPageDocumentFactory.layout(
+            pageAspectRatio: Double(frameWidth / max(frameHeight, 1)),
+            isKidsBook: false
+        )
+        let iconWidth = frameWidth * layout.closingIconFrame.width
+        let iconHeight = frameHeight * layout.closingIconFrame.height
+        let badgeWidth = frameWidth * layout.closingBadgeFrame.width
+        let badgeHeight = frameHeight * layout.closingBadgeFrame.height
         ZStack {
             background
 
@@ -86,69 +180,59 @@ struct MemoirCoverBackPage: View {
                 )
                 .padding(frameWidth * 0.065)
 
-            VStack(spacing: frameHeight * 0.04) {
-                Spacer()
+            MemoirAppIcon(side: min(iconWidth, iconHeight))
+                .position(
+                    x: frameWidth * (layout.closingIconFrame.x + layout.closingIconFrame.width / 2),
+                    y: frameHeight * (layout.closingIconFrame.y + layout.closingIconFrame.height / 2)
+                )
 
-                Text("This book was a life memoir of\n\(subjectName)")
-                    .font(.system(size: frameHeight * 0.042, weight: .semibold, design: .serif))
-                    .foregroundColor(bodyColor)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(frameHeight * 0.012)
-                    .padding(.horizontal, frameWidth * 0.12)
+            Capsule()
+                .fill(Color.black)
+                .frame(width: badgeWidth, height: badgeHeight)
+                .position(
+                    x: frameWidth * (layout.closingBadgeFrame.x + layout.closingBadgeFrame.width / 2),
+                    y: frameHeight * (layout.closingBadgeFrame.y + layout.closingBadgeFrame.height / 2)
+                )
 
-                HStack(spacing: frameWidth * 0.02) {
-                    Text("produced by")
-                        .font(.system(size: frameHeight * 0.03, weight: .medium, design: .serif))
-                        .foregroundColor(bodyColor)
-                    MemoirLogoMark(side: badgeSide)
-                    Text("Memoir")
-                        .font(.system(size: frameHeight * 0.036, weight: .bold, design: .serif))
-                        .foregroundColor(headingColor)
-                }
-
-                Image(uiImage: QRCodeCache.image(for: MemoirAppLinks.appLinkURL.absoluteString, size: badgeSide * 6))
-                    .interpolation(.none)
-                    .resizable()
-                    .frame(width: badgeSide, height: badgeSide)
-                    .padding(frameHeight * 0.012)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: badgeSide * 0.18, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: badgeSide * 0.18, style: .continuous)
-                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                    )
-
-                Spacer()
-            }
+            Image(systemName: "apple.logo")
+                .font(.system(size: badgeHeight * 0.42, weight: .medium))
+                .foregroundColor(.white)
+                .position(
+                    x: frameWidth * (layout.closingBadgeFrame.x + layout.closingBadgeFrame.width * 0.12),
+                    y: frameHeight * (layout.closingBadgeFrame.y + layout.closingBadgeFrame.height / 2)
+                )
         }
         .frame(width: frameWidth, height: frameHeight)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
-/// The Memoir logo mark for in-content use. Renders the dedicated asset when it
-/// exists; falls back to a styled monogram until the artwork lands.
-struct MemoirLogoMark: View {
+struct MemoirAppIcon: View {
     let side: CGFloat
 
     var body: some View {
-        if let logo = UIImage(named: "MemoirLogoMark") {
-            Image(uiImage: logo)
-                .resizable()
-                .scaledToFit()
-                .frame(width: side, height: side)
-                .clipShape(RoundedRectangle(cornerRadius: side * 0.22, style: .continuous))
-        } else {
-            RoundedRectangle(cornerRadius: side * 0.22, style: .continuous)
-                .fill(Color(red: 0.20, green: 0.18, blue: 0.15))
-                .frame(width: side, height: side)
-                .overlay(
-                    Image(systemName: "book.closed.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .padding(side * 0.24)
-                        .foregroundColor(Color(red: 0.955, green: 0.925, blue: 0.875))
-                )
+        Group {
+            if let image = Self.installedAppIcon {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image("AppIcon")
+                    .resizable()
+                    .scaledToFill()
+            }
         }
+        .frame(width: side, height: side)
+        .clipShape(RoundedRectangle(cornerRadius: side * 0.22, style: .continuous))
+    }
+
+    private static var installedAppIcon: UIImage? {
+        guard let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+              let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+              let files = primary["CFBundleIconFiles"] as? [String],
+              let name = files.last else {
+            return nil
+        }
+        return UIImage(named: name)
     }
 }

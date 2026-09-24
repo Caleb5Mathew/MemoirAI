@@ -40,6 +40,18 @@ assert.deepStrictEqual(
   }),
   { memoryId: "00000000-0000-0000-0000-000000000000", language: "en", glossary: ["Rosalie"] }
 );
+assert.deepStrictEqual(
+  _test.validateEnhancementTranscriptionRequest({
+    uploadId: "00000000-0000-0000-0000-000000000000",
+    language: "EN",
+    glossary: ["Rosalie", "Rosalie"]
+  }),
+  { uploadId: "00000000-0000-0000-0000-000000000000", language: "en", glossary: ["Rosalie"] }
+);
+assert.throws(
+  () => _test.validateEnhancementTranscriptionRequest({ uploadId: "../audio/memory" }),
+  (error) => error.code === "invalid-argument"
+);
 
 assertInvalid({ memoryId: "00000000-0000-0000-0000-00000000000x" });
 assertInvalid({ memoryId: "000000000000-0000-0000-0000-000000000000" });
@@ -104,6 +116,8 @@ assert.throws(
 );
 
 const apiRequest = _test.buildTranscriptionAPIRequest("file", "en", ["Rosalie"]);
+assert.strictEqual(apiRequest.model, "gpt-transcribe");
+assert.strictEqual(apiRequest.prompt, _test.transcriptionPrompt());
 assert.deepStrictEqual(apiRequest.languages, ["en"]);
 assert.deepStrictEqual(apiRequest.keywords, ["Rosalie"]);
 assert.strictEqual(apiRequest.language, undefined);
@@ -128,6 +142,14 @@ const clearedUpdate = _test.buildTranscriptionUpdate(
   "en"
 );
 assert.strictEqual(clearedUpdate.transcription, undefined);
+
+const whitespacePlaceholderUpdate = _test.buildTranscriptionUpdate(
+  { transcriptionEdited: "\n" },
+  "Recovered transcript",
+  "en"
+);
+assert.strictEqual(whitespacePlaceholderUpdate.transcription, "Recovered transcript");
+assert.notStrictEqual(whitespacePlaceholderUpdate.transcriptionEdited, undefined);
 
 assert.strictEqual(_test.normalizedTranscriptionVersion("bad"), 0);
 assert.strictEqual(_test.normalizedTranscriptionVersion(-1), 0);

@@ -185,14 +185,20 @@ struct ReRecordAudioView: View {
                 clearRecording()
             }
         }
-        .alert("Private Cloud Transcription", isPresented: $showCloudTranscriptionDisclosure) {
+        .alert(CloudTranscriptionDisclosure.title, isPresented: $showCloudTranscriptionDisclosure) {
             Button("Not Now", role: .cancel) { }
             Button("Continue") {
                 CloudTranscriptionDisclosure.accept()
                 startRecording()
             }
         } message: {
-            Text("Saved recordings are uploaded to your private MemoirAI account and sent to OpenAI to create a transcript. You can delete the recording and transcript at any time.")
+            Text(CloudTranscriptionDisclosure.message)
+        }
+        .fullScreenCover(isPresented: $permissionManager.showMicrophonePermissionAlert) {
+            MicrophonePermissionAlert(
+                isPresented: $permissionManager.showMicrophonePermissionAlert,
+                onSettingsTap: permissionManager.openSettings
+            )
         }
     }
 
@@ -255,7 +261,9 @@ struct ReRecordAudioView: View {
             return
         }
         guard permissionManager.isMicrophoneAuthorized else {
-            permissionManager.requestMicrophonePermission()
+            permissionManager.requestMicrophonePermission {
+                startRecording()
+            }
             return
         }
         setupAudioSession()

@@ -9,6 +9,7 @@ struct HomepageView: View {
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
     @Environment(\.managedObjectContext) private var context
+    let openStorybook: () -> Void
 
     // MARK: – State
     @State private var selectedTab = 0
@@ -52,7 +53,7 @@ struct HomepageView: View {
     // MARK: – Body
 
     var body: some View {
-        NavigationStack {
+        Group {
             VStack(spacing: 0) {
                 // ─── TOP BAR ─────────────────────────────────────
                 HStack {
@@ -144,10 +145,7 @@ struct HomepageView: View {
                         .accessibilityIdentifier("tutorialContinueYourMemoir")
                         
                         // YOUR BOOK (Premium Gradient Outline)
-                        NavigationLink(destination: StoryPage()
-                            .environmentObject(profileVM)
-                            .environmentObject(tutorialCoordinator)
-                        ) {
+                        Button(action: openStorybook) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Your Book")
@@ -191,6 +189,7 @@ struct HomepageView: View {
                                 }
                             }
                         }
+                        .buttonStyle(.plain)
                         .tutorialAnchor(.homeYourBook)
                         .background(
                             GeometryReader { geo in
@@ -379,7 +378,7 @@ struct HomepageView: View {
 
 struct HomepageView_Previews: PreviewProvider {
     static var previews: some View {
-        HomepageView()
+        HomepageView(openStorybook: {})
             .environmentObject(ProfileViewModel())
             .environmentObject(TutorialCoordinator.shared)
     }

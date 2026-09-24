@@ -8,6 +8,7 @@
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="firebaseUserId" optional="YES" attributeType="String"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="memoirModeRaw" optional="YES" attributeType="String"/>
         <attribute name="profileID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="prompt" optional="YES" attributeType="String"/>
         <attribute name="text" optional="YES" attributeType="String"/>

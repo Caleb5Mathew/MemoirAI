@@ -8,7 +8,6 @@ struct PerChildRecordingView: View {
     let basePrompt: MemoryPrompt
     let chapterTitle: String
     let childNames: [String]
-    let namespace: Namespace.ID
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var context
@@ -24,11 +23,10 @@ struct PerChildRecordingView: View {
     @State private var expandedPrompts: [MemoryPrompt]
     @State private var didInitStart: Bool = false
 
-    init(basePrompt: MemoryPrompt, chapterTitle: String, childNames: [String], namespace: Namespace.ID) {
+    init(basePrompt: MemoryPrompt, chapterTitle: String, childNames: [String]) {
         self.basePrompt = basePrompt
         self.chapterTitle = chapterTitle
         self.childNames = childNames
-        self.namespace = namespace
         // Seed the queue eagerly so the first render already has a prompt to show.
         _expandedPrompts = State(initialValue: expandedChildPrompts(for: basePrompt, childNames: childNames))
     }
@@ -55,7 +53,6 @@ struct PerChildRecordingView: View {
                 RecordingView(
                     prompt: prompt,
                     chapterTitle: chapterTitle,
-                    namespace: namespace,
                     onRecordingDismiss: nil,
                     onSaveComplete: advanceQueue,
                     progressLabel: expandedPrompts.count > 1

@@ -44,6 +44,15 @@ final class PersistenceLoadMonitor: ObservableObject {
 }
 
 enum PersistenceConfigurationPolicy {
+    static func isRunningTests(
+        environment: [String: String],
+        arguments: [String]
+    ) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil
+            || arguments.contains("-UITest")
+            || arguments.contains("-UITestRelationshipChapter")
+    }
+
     static func allowsApplicationContent(state: PersistenceLoadMonitor.State) -> Bool {
         state == .ready
     }
@@ -140,7 +149,10 @@ struct PersistenceController {
         description.shouldMigrateStoreAutomatically = true
         description.shouldInferMappingModelAutomatically = true
         
-        let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let isRunningTests = PersistenceConfigurationPolicy.isRunningTests(
+            environment: ProcessInfo.processInfo.environment,
+            arguments: ProcessInfo.processInfo.arguments
+        )
         if PersistenceConfigurationPolicy.usesCloudKit(
             inMemory: inMemory,
             isRunningTests: isRunningTests

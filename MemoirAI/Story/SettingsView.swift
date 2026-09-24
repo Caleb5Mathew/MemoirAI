@@ -108,6 +108,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var subscriptionManager: RCSubscriptionManager
     @EnvironmentObject var profileVM: ProfileViewModel
+    @ObservedObject private var authService = AuthenticationService.shared
     @ObservedObject private var notificationManager = NotificationManager.shared
     
     // Colors
@@ -118,27 +119,26 @@ struct SettingsView: View {
     // Settings States
     @AppStorage("memoirPageCount") var pageCountSetting: Int = 2
     @AppStorage("memoirArtStyle") private var selectedArtStyleRawValue: String = ArtStyle.kidsBook.rawValue
-    @AppStorage("memoirCustomArtStyleText") private var customArtStyleText: String = ""
-    @AppStorage("memoirMemorySource") var memorySourceSetting: String = "all"
+    @AppStorage("memoirMemorySource") private var memorySourceSetting: String = "memoir"
     @AppStorage("memoirGeminiModelOverride") private var geminiModelOverrideRawValue: String = GeminiImageModelOption.gemini3ProPreview.rawValue
     @AppStorage("memoirStyleReferencePreset") private var styleReferencePresetRawValue: String = StyleReferencePreset.normal.rawValue
     
     @State private var sliderPageCount: Double = 2.0
     
-    #if DEBUG
     @State private var devKey: String = ""
     @State private var showDevSheet: Bool = false
     @State private var devResult: DevUnlockResult? = nil
     @State private var devTapCount: Int = 0
     @State private var showDevDashboard: Bool = false
     @State private var showDevOpsDashboard: Bool = false
-    #endif
+    @State private var devErrorMessage: String?
+    @State private var isVerifyingDevAccess = false
     
     // Paywall
     @State private var showPaywall: Bool = false
     
-    // Character Management
-    @State private var showCharacterManagement: Bool = false
+    // Memory enhancement
+    @State private var showMemoryEnhancement: Bool = false
     @State private var hasUnseenOrders = false
     @State private var orderBadgeListener: ListenerRegistration?
     @State private var showOrderHistory = false
@@ -148,33 +148,18 @@ struct SettingsView: View {
     @State private var isDeletingAccount = false
     @State private var accountDeletionError: String?
     @State private var accountDeletionRequiresReauthentication = false
-    @State private var accountLinkError: String?
     
-    #if DEBUG
     private enum DevUnlockResult {
         case success
         case incorrect
     }
-    #endif
     
-    private var currentSelectedArtStyle: ArtStyle {
-        ArtStyle(rawValue: selectedArtStyleRawValue) ?? .kidsBook
-    }
-
     private var canAccessDeveloperGeminiToggle: Bool {
-        #if DEBUG
         subscriptionManager.isDeveloperUnlocked
-        #else
-        false
-        #endif
     }
 
     private var canAccessDevDashboard: Bool {
-        #if DEBUG
         subscriptionManager.isDeveloperUnlocked
-        #else
-        false
-        #endif
     }
 
     private var isSubscribed: Bool {
@@ -241,19 +226,13 @@ struct SettingsView: View {
                         // Page Count Section
                         pageCountSection
                         
-                        // Art Style Section
-                        artStyleSection
-
                         // Developer-only model override
                         if canAccessDeveloperGeminiToggle {
                             geminiModelSection
                         }
                         
-                        // Memory Source Section
-                        memorySourceSection
-                        
                         // Characters Section
-                        charactersSection
+                        memoryEnhancementSection
                         
                         // Account Section
                         accountSection
@@ -261,12 +240,10 @@ struct SettingsView: View {
                         // Support Section
                         supportSection
 
-                        #if DEBUG
                         if canAccessDevDashboard {
                             devDashboardSection
                             printOpsDashboardSection
                         }
-                        #endif
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
@@ -301,8 +278,10 @@ struct SettingsView: View {
         .onAppear {
             sliderPageCount = Double(pageCountSetting)
             clampPageCountIfNeeded()
-            // Temporarily only Kid's Book is offered in Art Style; keep storage aligned.
+            // Generation currently has one supported style and one supported memory source.
+            // Normalize legacy choices so hidden settings cannot affect a new book.
             selectedArtStyleRawValue = ArtStyle.kidsBook.rawValue
+            memorySourceSetting = "memoir"
             if !canAccessDeveloperGeminiToggle {
                 geminiModelOverrideRawValue = GeminiImageModelOption.gemini3ProPreview.rawValue
             }
@@ -316,20 +295,20 @@ struct SettingsView: View {
         .onDisappear {
             orderBadgeListener?.remove()
         }
-        .onChange(of: subscriptionManager.hasActiveSubscription) { _, _ in
+        .onChange(of: subscriptionManager.remainingAllowance) { _, _ in
             clampPageCountIfNeeded()
         }
-        #if DEBUG
         .sheet(isPresented: $showDevSheet) { devUnlockSheet }
-        #endif
         .fullScreenCover(isPresented: $showPaywall) {
-            PaywallView(displayCloseButton: true)
+            SubscriptionPaywallView()
         }
-        .sheet(isPresented: $showCharacterManagement) {
-            CharacterManagementView()
+        .sheet(isPresented: $showMemoryEnhancement) {
+            RecentMemoriesView(
+                enhancementMode: true,
+                initialMemoirMode: currentMemoirMode()
+            )
                 .environmentObject(profileVM)
         }
-        #if DEBUG
         .fullScreenCover(isPresented: $showDevDashboard) {
             NavigationStack {
                 DevDashboardView()
@@ -340,7 +319,6 @@ struct SettingsView: View {
                 DevOpsDashboardView()
             }
         }
-        #endif
         .fullScreenCover(isPresented: $showOrderHistory) {
             OrderHistoryView()
         }
@@ -349,10 +327,10 @@ struct SettingsView: View {
         } message: {
             Text("We couldn't open Mail, so we copied \(SupportContact.email) to your clipboard.")
         }
-        .alert("Audio & Transcription Privacy", isPresented: $showAudioPrivacyAlert) {
+        .alert(CloudTranscriptionDisclosure.title, isPresented: $showAudioPrivacyAlert) {
             Button("Done", role: .cancel) { }
         } message: {
-            Text("Saved voice memories are uploaded to your private MemoirAI account and sent to OpenAI to create transcripts. You can delete a memory at any time; deletion removes its cloud recording and blocks stale devices from restoring it.")
+            Text(CloudTranscriptionDisclosure.message)
         }
         .alert("Delete Account?", isPresented: $showDeleteAccountConfirmation) {
             Button("Delete Account", role: .destructive) {
@@ -381,20 +359,9 @@ struct SettingsView: View {
         } message: {
             Text(accountDeletionError ?? "Please try again.")
         }
-        .alert(
-            "Account Could Not Be Linked",
-            isPresented: Binding(
-                get: { accountLinkError != nil },
-                set: { if !$0 { accountLinkError = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) { accountLinkError = nil }
-        } message: {
-            Text(accountLinkError ?? "Please try again.")
-        }
+
     }
     
-    #if DEBUG
     // MARK: - Dev Unlock Sheet
     private var devUnlockSheet: some View {
         VStack(spacing: 20) {
@@ -420,41 +387,32 @@ struct SettingsView: View {
             if let result = devResult {
                 HStack(spacing: 6) {
                     Image(systemName: result == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    Text(result == .success ? "Unlocked!" : "Incorrect")
+                    Text(result == .success ? "Unlocked!" : (devErrorMessage ?? "Access denied"))
                 }
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(result == .success ? .green : .red)
                 .transition(.opacity.combined(with: .scale))
             }
             
-            Button(action: {
-                if RCSubscriptionManager.verifyDeveloperPassword(devKey) {
-                    RCSubscriptionManager.shared.enablePersistentDevMode()
-                    withAnimation { devResult = .success }
-                    devKey = ""
-                    // Auto dismiss after success
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        showDevSheet = false
-                        devResult = nil
-                    }
-                } else {
-                    withAnimation { devResult = .incorrect }
-                    // Clear incorrect message after delay
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation { devResult = nil }
+            Button {
+                Task { await verifyDeveloperAccess() }
+            } label: {
+                Group {
+                    if isVerifyingDevAccess {
+                        ProgressView().tint(.white)
+                    } else {
+                        Text("Unlock")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.white)
                     }
                 }
-            }) {
-                Text("Unlock")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 120)
-                    .padding(.vertical, 12)
-                    .background(devKey.isEmpty ? Color.gray.opacity(0.3) : terracotta)
-                    .cornerRadius(10)
+                .frame(width: 120)
+                .padding(.vertical, 12)
+                .background(devKey.isEmpty ? Color.gray.opacity(0.3) : terracotta)
+                .cornerRadius(10)
             }
             .accessibilityIdentifier("devUnlockButton")
-            .disabled(devKey.isEmpty)
+            .disabled(devKey.isEmpty || isVerifyingDevAccess)
             
             Spacer()
             Spacer()
@@ -464,9 +422,28 @@ struct SettingsView: View {
         .onDisappear {
             devKey = ""
             devResult = nil
+            devErrorMessage = nil
+            isVerifyingDevAccess = false
         }
     }
-    #endif
+
+    @MainActor
+    private func verifyDeveloperAccess() async {
+        isVerifyingDevAccess = true
+        defer { isVerifyingDevAccess = false }
+        do {
+            try await subscriptionManager.authorizeDeveloperAccess(devKey)
+            withAnimation { devResult = .success }
+            devErrorMessage = nil
+            devKey = ""
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            showDevSheet = false
+            devResult = nil
+        } catch {
+            devErrorMessage = error.localizedDescription
+            withAnimation { devResult = .incorrect }
+        }
+    }
     
     // MARK: - Header
     private var headerView: some View {
@@ -492,9 +469,9 @@ struct SettingsView: View {
             
             Color.clear
                 .frame(width: 40, height: 40)
-                #if DEBUG
                 .contentShape(Rectangle())
                 .onTapGesture {
+                    guard DeveloperAccessDistributionPolicy.permitsCurrentBuild else { return }
                     devTapCount += 1
                     if devTapCount >= 5 {
                         showDevSheet = true
@@ -504,7 +481,6 @@ struct SettingsView: View {
                         if devTapCount < 5 { devTapCount = 0 }
                     }
                 }
-                #endif
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -525,10 +501,10 @@ struct SettingsView: View {
                     
                     VStack(spacing: 2) {
                         if isSubscribed {
-                            Text("\(subscriptionManager.remainingAllowance)")
+                            Text(subscriptionManager.isDeveloperUnlockedSession ? "∞" : "\(subscriptionManager.remainingAllowance)")
                                 .font(.system(size: 24, weight: .bold, design: .rounded))
                                 .foregroundColor(darkText)
-                            Text("left")
+                            Text(subscriptionManager.isDeveloperUnlockedSession ? "Unlimited" : "left")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.gray)
                         } else {
@@ -550,11 +526,11 @@ struct SettingsView: View {
                         .foregroundColor(darkText)
                     
                     if isSubscribed {
-                        Text("\(subscriptionManager.remainingAllowance) of 100 images")
+                        Text(subscriptionManager.isDeveloperUnlockedSession ? "Unlimited images" : "\(subscriptionManager.remainingAllowance) of 100 images")
                             .font(.system(size: 14))
                             .foregroundColor(.gray)
                         
-                        Text("Resets \(subscriptionManager.getRenewalDateString())")
+                        Text(subscriptionManager.isDeveloperUnlockedSession ? "Developer access" : "Resets \(subscriptionManager.getRenewalDateString())")
                             .font(.system(size: 12))
                             .foregroundColor(.gray.opacity(0.8))
                     } else {
@@ -660,92 +636,7 @@ struct SettingsView: View {
         .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
     }
     
-    // MARK: - Art Style Section
-    private var artStyleSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Art Style")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(darkText)
-
-            // Temporarily only Kid's Book — restore grid below when re-enabling other styles.
-            ArtStyleChip(
-                style: .kidsBook,
-                isSelected: true,
-                accentColor: terracotta
-            ) {
-                selectedArtStyleRawValue = ArtStyle.kidsBook.rawValue
-            }
-            .frame(maxWidth: .infinity)
-
-            /*
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                ForEach(ArtStyle.allCases) { style in
-                    ArtStyleChip(
-                        style: style,
-                        isSelected: currentSelectedArtStyle == style,
-                        accentColor: terracotta
-                    ) {
-                        selectedArtStyleRawValue = style.rawValue
-                    }
-                }
-            }
-            */
-
-            // Custom style input (hidden while only Kid's Book is offered)
-            /*
-            if currentSelectedArtStyle == .custom {
-                TextField("Describe your style...", text: $customArtStyleText, axis: .vertical)
-                    .font(.system(size: 14))
-                    .padding(12)
-                    .background(Color.white.opacity(0.8))
-                    .cornerRadius(10)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-                    )
-                    .lineLimit(1...3)
-                    .tint(terracotta)
-                    .padding(.top, 4)
-            }
-            */
-        }
-        .padding(20)
-        .background(Color.white.opacity(0.6))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
-        .animation(.easeInOut(duration: 0.2), value: currentSelectedArtStyle)
-    }
-
-    private var styleReferenceSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Style Reference")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(darkText)
-
-            Picker("Style reference", selection: $styleReferencePresetRawValue) {
-                ForEach(StyleReferencePreset.allCases) { preset in
-                    Text(preset.displayName).tag(preset.rawValue)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            Text("When enabled, Gemini receives an additional style image reference. Use this for more consistent storybook styling across pages.")
-                .font(.system(size: 12))
-                .foregroundColor(.gray)
-
-            if currentSelectedArtStyle != .kidsBook {
-                Text("Tip: This has the strongest effect with Kid's Book style.")
-                    .font(.system(size: 12))
-                    .foregroundColor(.gray.opacity(0.85))
-            }
-        }
-        .padding(20)
-        .background(Color.white.opacity(0.6))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
-    }
-    
-    // MARK: - Memory Source Section
+    // MARK: - Developer Model Section
     private var geminiModelSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Developer: Gemini Model")
@@ -769,35 +660,10 @@ struct SettingsView: View {
         .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
     }
 
-    // MARK: - Memory Source Section
-    private var memorySourceSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Memory Source")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(darkText)
-            
-            Picker("Source", selection: $memorySourceSetting) {
-                Text("All").tag("all")
-                Text("Chapters").tag("memoir")
-                Text("Recordings").tag("recordings")
-            }
-            .pickerStyle(.segmented)
-            
-            Text("Choose which memories to include when generating your book")
-                .font(.system(size: 13))
-                .foregroundColor(.gray)
-                .padding(.top, 4)
-        }
-        .padding(20)
-        .background(Color.white.opacity(0.6))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
-    }
-    
-    // MARK: - Characters Section
-    private var charactersSection: some View {
+    // MARK: - Memory Enhancement Section
+    private var memoryEnhancementSection: some View {
         Button(action: {
-            showCharacterManagement = true
+            showMemoryEnhancement = true
         }) {
             HStack(spacing: 16) {
                 ZStack {
@@ -805,17 +671,17 @@ struct SettingsView: View {
                         .fill(terracotta.opacity(0.15))
                         .frame(width: 44, height: 44)
                     
-                    Image(systemName: "person.2.fill")
+                    Image(systemName: "wand.and.stars")
                         .font(.system(size: 18))
                         .foregroundColor(terracotta)
                 }
                 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("My Characters")
+                    Text("Enhance Memories")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundColor(darkText)
                     
-                    Text("Manage characters across memories")
+                    Text("Add details for better storybook images")
                         .font(.system(size: 12))
                         .foregroundColor(.gray)
                 }
@@ -859,104 +725,58 @@ struct SettingsView: View {
 
     // MARK: - Support Section
     private var supportSection: some View {
-        VStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             notificationSettingsRow
 
             Button {
                 guard let privacyURL = URL(string: "https://memoirai-7db06.web.app/privacy") else { return }
                 openURL(privacyURL)
             } label: {
-                HStack(spacing: 16) {
-                    ZStack {
-                        Circle()
-                            .fill(terracotta.opacity(0.15))
-                            .frame(width: 44, height: 44)
-                        Image(systemName: "hand.raised.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(terracotta)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Privacy Policy")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(darkText)
-                        Text("How MemoirAI handles your information")
-                            .font(.system(size: 12))
-                            .foregroundColor(.gray)
-                    }
+                HStack(spacing: 8) {
+                    Image(systemName: "hand.raised")
+                        .frame(width: 22)
+                    Text("Privacy Policy")
                     Spacer()
                     Image(systemName: "arrow.up.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.gray.opacity(0.5))
+                        .frame(width: 16)
                 }
-                .padding(16)
-                .background(Color.white.opacity(0.6))
-                .cornerRadius(16)
-                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
             }
 
             Button {
                 showAudioPrivacyAlert = true
             } label: {
-                HStack(spacing: 16) {
-                    ZStack {
-                        Circle()
-                            .fill(terracotta.opacity(0.15))
-                            .frame(width: 44, height: 44)
-                        Image(systemName: "waveform.badge.shield")
-                            .font(.system(size: 18))
-                            .foregroundColor(terracotta)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Audio & Transcription Privacy")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(darkText)
-                        Text("How saved recordings are processed")
-                            .font(.system(size: 12))
-                            .foregroundColor(.gray)
-                    }
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform")
+                        .frame(width: 22)
+                    Text("Audio & Transcription Privacy")
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.gray.opacity(0.5))
+                        .frame(width: 16)
                 }
-                .padding(16)
-                .background(Color.white.opacity(0.6))
-                .cornerRadius(16)
-                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
             }
 
             Button {
                 SupportContact.contact { showSupportCopiedAlert = true }
             } label: {
-                HStack(spacing: 16) {
-                    ZStack {
-                        Circle()
-                            .fill(terracotta.opacity(0.15))
-                            .frame(width: 44, height: 44)
-                        Image(systemName: "envelope.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(terracotta)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Contact Support")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(darkText)
-                        Text(SupportContact.email)
-                            .font(.system(size: 12))
-                            .foregroundColor(.gray)
-                    }
+                HStack(spacing: 8) {
+                    Image(systemName: "envelope")
+                        .frame(width: 22)
+                    Text("Contact Support")
                     Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.gray.opacity(0.5))
+                    Image(systemName: "arrow.up.right")
+                        .frame(width: 16)
                 }
-                .padding(16)
-                .background(Color.white.opacity(0.6))
-                .cornerRadius(16)
-                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
             }
+
+            Text("MemoirAI keeps your memories private and gives you control over saved recordings.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary.opacity(0.8))
+                .padding(.top, 2)
         }
-        .buttonStyle(PlainButtonStyle())
+        .font(.system(size: 13, weight: .medium))
+        .foregroundColor(.secondary)
+        .padding(.horizontal, 6)
+        .buttonStyle(.plain)
     }
 
     // MARK: - Account Section
@@ -966,8 +786,8 @@ struct SettingsView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(darkText)
             
-            if let user = Auth.auth().currentUser {
-                if user.isAnonymous {
+            if let user = authService.user {
+                if AuthenticationService.shared.isGuestUser(user) {
                     // Anonymous user - show link option
                     HStack(spacing: 12) {
                         Circle()
@@ -984,7 +804,7 @@ struct SettingsView: View {
                                 .font(.system(size: 15, weight: .medium))
                                 .foregroundColor(darkText)
                             
-                            Text("Link Google to access on other devices")
+                            Text("Link Apple or Google to access on other devices")
                                 .font(.system(size: 12))
                                 .foregroundColor(.gray)
                         }
@@ -1002,53 +822,10 @@ struct SettingsView: View {
                     
                     printOrdersLibraryRow
 
-                    SignInWithAppleButton(.signIn) { request in
-                        request.nonce = AuthenticationService.shared.prepareAppleSignIn()
-                        request.requestedScopes = [.fullName, .email]
-                    } onCompletion: { result in
-                        switch result {
-                        case .success(let authorization):
-                            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else { return }
-                            Task { await linkAppleAccount(credential: credential) }
-                        case .failure(let error):
-                            accountLinkError = error.localizedDescription
-                        }
+                    if DeveloperAccessDistributionPolicy.permitsCurrentBuild {
+                        developerModeRow
                     }
-                    .signInWithAppleButtonStyle(.black)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                    Button(action: linkGoogleAccount) {
-                        HStack(spacing: 10) {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.white)
-                                    .frame(width: 22, height: 22)
-                                Text("G")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundColor(.blue)
-                            }
-                            Text("Link Google Account")
-                                .font(.system(size: 15, weight: .semibold))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
-                        .background(Color.white.opacity(0.95))
-                        .foregroundColor(Color.black.opacity(0.75))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.black.opacity(0.12), lineWidth: 1)
-                        )
-                    }
-                    .buttonStyle(.plain)
-
-                    #if DEBUG
-                    developerModeRow
-                    #endif
                 } else {
-                    // Signed in with Google
                     HStack(spacing: 12) {
                         Circle()
                             .fill(terracotta.opacity(0.2))
@@ -1091,13 +868,17 @@ struct SettingsView: View {
                         .foregroundColor(.red.opacity(0.8))
                     }
                     
-                    #if DEBUG
-                    developerModeRow
-                    #endif
+                    if DeveloperAccessDistributionPolicy.permitsCurrentBuild {
+                        developerModeRow
+                    }
                 }
 
                 Divider()
                     .padding(.vertical, 8)
+
+                LinkedAccountsView()
+
+                Divider().padding(.vertical, 8)
 
                 Button(role: .destructive) {
                     showDeleteAccountConfirmation = true
@@ -1134,7 +915,6 @@ struct SettingsView: View {
         .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
     }
 
-    #if DEBUG
     private var developerModeRow: some View {
         Button {
             showDevSheet = true
@@ -1227,17 +1007,6 @@ struct SettingsView: View {
         }
         .buttonStyle(PlainButtonStyle())
     }
-    #endif
-
-    private func linkGoogleAccount() {
-        Task {
-            do {
-                try await AuthenticationService.shared.linkGoogleAccount()
-            } catch {
-                accountLinkError = error.localizedDescription
-            }
-        }
-    }
 
     private var notificationSettingsRow: some View {
         let action = NotificationPermissionPolicy.action(for: notificationManager.authorizationStatus)
@@ -1253,34 +1022,16 @@ struct SettingsView: View {
                 break
             }
         } label: {
-            HStack(spacing: 16) {
-                ZStack {
-                    Circle()
-                        .fill(terracotta.opacity(0.15))
-                        .frame(width: 44, height: 44)
-                    Image(systemName: action == .none ? "bell.badge.fill" : "bell.slash.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(terracotta)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Notifications")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(darkText)
-                    Text(action == .none ? "Family request alerts are enabled" : "Enable alerts for family requests")
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray)
-                }
+            HStack(spacing: 8) {
+                Image(systemName: action == .none ? "bell.badge" : "bell.slash")
+                    .frame(width: 22)
+                Text(action == .none ? "Notifications enabled" : "Enable notifications")
                 Spacer()
                 if action != .none {
                     Image(systemName: "arrow.up.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.gray.opacity(0.5))
+                        .frame(width: 16)
                 }
             }
-            .padding(16)
-            .background(Color.white.opacity(0.6))
-            .cornerRadius(16)
-            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .disabled(action == .none)
@@ -1289,14 +1040,7 @@ struct SettingsView: View {
         }
     }
 
-    private func linkAppleAccount(credential: ASAuthorizationAppleIDCredential) async {
-        do {
-            try await AuthenticationService.shared.linkAppleAccount(credential: credential)
-        } catch {
-            accountLinkError = error.localizedDescription
-        }
-    }
-    
+
     private func loadOrderBadge() {
         guard let userId = Auth.auth().currentUser?.uid else { return }
         orderBadgeListener?.remove()
@@ -1327,7 +1071,7 @@ struct SettingsView: View {
             do {
                 try await AuthenticationService.shared.deleteAccount()
                 profileVM.resetAfterAccountDeletion(userID: deletedUserID)
-                await AuthenticationService.shared.signInAnonymouslyIfNeeded()
+                await AuthenticationService.shared.prepareAuthenticatedSessionForLaunch()
                 dismiss()
             } catch {
                 if let authError = error as? AuthenticationService.AuthError,
@@ -1340,39 +1084,6 @@ struct SettingsView: View {
         }
     }
     
-}
-
-// MARK: - Art Style Chip
-struct ArtStyleChip: View {
-    let style: ArtStyle
-    let isSelected: Bool
-    let accentColor: Color
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: style.placeholderSymbolName)
-                    .font(.system(size: 16))
-                
-                Text(style.rawValue)
-                    .font(.system(size: 14, weight: .medium))
-            }
-            .foregroundColor(isSelected ? .white : Color.black.opacity(0.7))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(isSelected ? accentColor : Color.white.opacity(0.8))
-            .cornerRadius(12)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? accentColor : Color.gray.opacity(0.15), lineWidth: 1)
-            )
-        }
-        .buttonStyle(PlainButtonStyle())
-        .accessibilityIdentifier("artStyle_\(style.rawValue)")
-        .scaleEffect(isSelected ? 1.02 : 1.0)
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
-    }
 }
 
 // Keep existing ArtStyleButton for backward compatibility

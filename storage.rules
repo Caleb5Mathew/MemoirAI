@@ -169,6 +169,20 @@ service firebase.storage {
         && !hasBlockingAccountOperation(userId);
     }
 
+    // Temporary guided-enhancement answers. The transcription callable reads
+    // and deletes these with Admin credentials; clients may only create or
+    // clean up their own UUID-named M4A uploads.
+    match /users/{userId}/enhancementAudio/{audioFile} {
+      allow create: if isOwner(userId)
+        && !hasBlockingAccountOperation(userId)
+        && audioFile.matches('[0-9A-Fa-f-]{36}\\.m4a')
+        && request.resource.contentType == 'audio/mp4'
+        && request.resource.size > 0
+        && request.resource.size <= 25 * 1024 * 1024;
+      allow delete: if isOwner(userId)
+        && !hasBlockingAccountOperation(userId);
+    }
+
     match /users/{userId}/images/{imageFile} {
       allow read: if isActiveOwner(userId);
       allow delete: if isOwner(userId)

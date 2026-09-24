@@ -6,11 +6,104 @@ import Speech
 import Mixpanel
 import UIKit
 
+enum RecordingLayoutPolicy {
+    static func contentWidth(
+        availableWidth: CGFloat,
+        maximumWidth: CGFloat = AdaptiveLayoutPolicy.readableMaxWidth
+    ) -> CGFloat {
+        guard availableWidth.isFinite, maximumWidth.isFinite,
+              availableWidth > 0, maximumWidth > 0 else { return 0 }
+        return min(availableWidth, maximumWidth)
+    }
+
+    static func showsVoiceControls(isTextFocused: Bool) -> Bool {
+        !isTextFocused
+    }
+
+    static func minimumTopSpacing(safeAreaTop: CGFloat) -> CGFloat {
+        guard safeAreaTop.isFinite else { return 72 }
+        return max(72, safeAreaTop + 44)
+    }
+
+    static func backButtonTopPadding(safeAreaTop: CGFloat) -> CGFloat {
+        guard safeAreaTop.isFinite else { return 16 }
+        return max(16, safeAreaTop + 12)
+    }
+}
+
+struct RecordingExitConfirmationOverlay: View {
+    let discard: () -> Void
+    let keepEditing: () -> Void
+
+    private let cream = Color(red: 1.0, green: 0.97, blue: 0.90)
+    private let deepGreen = Color(red: 0.10, green: 0.22, blue: 0.14)
+    private let terracotta = Color(red: 210/255, green: 112/255, blue: 45/255)
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.48)
+                .ignoresSafeArea()
+                .onTapGesture(perform: keepEditing)
+
+            VStack(spacing: 18) {
+                Text("Exit without saving?")
+                    .font(.customSerifFallback(size: 24))
+                    .foregroundColor(deepGreen)
+                    .multilineTextAlignment(.center)
+
+                Text("Your current recording and text will be lost.")
+                    .font(.system(size: 16, design: .serif))
+                    .foregroundColor(deepGreen.opacity(0.72))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(spacing: 12) {
+                    Button(action: discard) {
+                        Text("Discard and Exit")
+                            .font(.system(size: 17, weight: .semibold, design: .serif))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(terracotta)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: keepEditing) {
+                        Text("Keep Editing")
+                            .font(.system(size: 17, weight: .semibold, design: .serif))
+                            .foregroundColor(deepGreen)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(deepGreen.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(26)
+            .background(cream)
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(deepGreen.opacity(0.12), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.2), radius: 24, y: 10)
+            .padding(.horizontal, 28)
+            .frame(maxWidth: 440)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Exit without saving")
+        .transition(.opacity)
+        .zIndex(1_000)
+    }
+}
+
 struct RecordingView: View {
     @State private var debugBanner: String?
     let prompt: MemoryPrompt
     let chapterTitle: String
-    var namespace: Namespace.ID
+    var memoirMode: MemoirMode? = nil
     /// Called first on `onDisappear` so the chapter map can clear selection before the full-screen dismiss animation ends (avoids hidden prompt node / stale border).
     var onRecordingDismiss: (() -> Void)? = nil
     /// When set, runs after a successful save instead of the default `dismiss()`. Used by the per-child queue wrapper to advance between child variants without tearing the cover down.
@@ -31,6 +124,7 @@ struct RecordingView: View {
     @StateObject private var interruptionObserver = AudioSessionInterruptionObserver()
 
     @State private var typedText: String = ""
+    @FocusState private var isTextFocused: Bool
     @State private var audioRecorder: AVAudioRecorder?
     @State private var audioURL: URL?
     @State private var isRecording = false
@@ -72,11 +166,21 @@ struct RecordingView: View {
 
     var body: some View {
         GeometryReader { geo in
+            let contentWidth = RecordingLayoutPolicy.contentWidth(
+                availableWidth: geo.size.width
+            )
+            let showsVoiceControls = RecordingLayoutPolicy.showsVoiceControls(
+                isTextFocused: isTextFocused
+            )
             ZStack {
-                // Background: chapter art when available; Relationships chapters use same gradient as journey map
+                // Background: use the same chapter artwork people saw before opening this prompt.
                 Group {
                     let chapterAsset = chapterImageAssetName(for: chapterTitle)
-                    if UIImage(named: chapterAsset) != nil {
+                    if let relationshipAsset = relationshipChapterImageAssetName(forChapterTitle: chapterTitle) {
+                        Image(relationshipAsset)
+                            .resizable()
+                            .scaledToFill()
+                    } else if UIImage(named: chapterAsset) != nil {
                         Image(chapterAsset)
                             .resizable()
                             .scaledToFill()
@@ -86,12 +190,19 @@ struct RecordingView: View {
                         Color(red: 0.22, green: 0.22, blue: 0.24)
                     }
                 }
+                .frame(
+                    width: geo.size.width,
+                    height: geo.size.height + geo.safeAreaInsets.top + geo.safeAreaInsets.bottom
+                )
                 .ignoresSafeArea()
                 overlayBlack.ignoresSafeArea()
 
                 ScrollView {
                     VStack(spacing: 24) {
-                        Spacer(minLength: max(72, geo.size.height * 0.08))
+                        Spacer(minLength: RecordingLayoutPolicy.minimumTopSpacing(
+                            safeAreaTop: geo.safeAreaInsets.top
+                        ))
+                            .accessibilityHidden(true)
 
                     // Prompt & audio controls
                     VStack(spacing: 12) {
@@ -126,7 +237,6 @@ struct RecordingView: View {
                                     .clipShape(Capsule())
                             }
                             Text(activePromptText.isEmpty ? prompt.text : activePromptText)
-                                .matchedGeometryEffect(id: prompt.id, in: namespace)
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundColor(.white)
                                 .multilineTextAlignment(.center)
@@ -145,25 +255,27 @@ struct RecordingView: View {
                             }
                         }
 
-                        Button {
-                            triggerHaptic(.selection)
-                            showCustomQuestionSheet = true
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .font(.system(size: 12, weight: .medium))
-                                Text("Try a different question")
-                                    .font(.system(size: 13, weight: .medium))
+                        if showsVoiceControls {
+                            Button {
+                                triggerHaptic(.selection)
+                                showCustomQuestionSheet = true
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                        .font(.system(size: 12, weight: .medium))
+                                    Text("Try a different question")
+                                        .font(.system(size: 13, weight: .medium))
+                                }
+                                .foregroundColor(.white.opacity(0.85))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 7)
+                                .background(Color.white.opacity(0.15))
+                                .cornerRadius(20)
                             }
-                            .foregroundColor(.white.opacity(0.85))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .background(Color.white.opacity(0.15))
-                            .cornerRadius(20)
                         }
 
                         // Main Recording Button
-                        if !isRecording && !isPaused && audioURL == nil {
+                        if showsVoiceControls && !isRecording && !isPaused && audioURL == nil {
                             Button(action: startRecording) {
                                 VStack(spacing: 8) {
                                     ZStack {
@@ -185,12 +297,14 @@ struct RecordingView: View {
                         }
 
                         // Real-time Waveform Visualization
-                        RealTimeWaveformView(
-                            audioMonitor: audioMonitor,
-                            isRecording: isRecording,
-                            isPaused: isPaused
-                        )
-                        .frame(maxWidth: geo.size.width * 0.8)
+                        if showsVoiceControls {
+                            RealTimeWaveformView(
+                                audioMonitor: audioMonitor,
+                                isRecording: isRecording,
+                                isPaused: isPaused
+                            )
+                            .frame(maxWidth: geo.size.width * 0.8)
+                        }
                         
                         // Real-time transcription display
                         if realTimeTranscription.isTranscribing && !realTimeTranscription.currentTranscript.isEmpty {
@@ -257,6 +371,8 @@ struct RecordingView: View {
                             .padding(.leading, 32)
                             .scrollContentBackground(.hidden)
                             .background(softCream)
+                            .focused($isTextFocused)
+                            .accessibilityIdentifier("recordingTextEditor")
                             .onTapGesture {
                                 triggerHaptic(.selection)
                             }
@@ -295,8 +411,8 @@ struct RecordingView: View {
 
                         Spacer(minLength: 24)
                     }
+                    .frame(width: contentWidth)
                     .frame(minHeight: geo.size.height)
-                    .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
                     .tutorialAnchor(.recordingSaveMemory)
                     .background(
                         GeometryReader { inner in
@@ -306,8 +422,10 @@ struct RecordingView: View {
                         }
                     )
                 }
+                .frame(width: geo.size.width)
                 .scrollDismissesKeyboard(.interactively)
                 .scrollBounceBehavior(.basedOnSize)
+                .animation(.easeInOut(duration: 0.2), value: isTextFocused)
 
                 // Back button
                 VStack {
@@ -327,12 +445,15 @@ struct RecordingView: View {
                                 .background(Color.black.opacity(0.25))
                                 .clipShape(Circle())
                         }
+                        .accessibilityIdentifier("recordingBackButton")
                         Spacer()
                     }
                     Spacer()
                 }
                 .padding(.horizontal)
-                .padding(.top, 16)
+                .padding(.top, RecordingLayoutPolicy.backButtonTopPadding(
+                    safeAreaTop: geo.safeAreaInsets.top
+                ))
 
                 // Save toast — full-screen frame + HStack so the pill stays horizontally centered
                 if showSaveToast {
@@ -365,23 +486,27 @@ struct RecordingView: View {
                         message: "Recording will save soon to protect your memory"
                     )
                 }
-            }
-            .allowsHitTesting(!isSaving)
-            .confirmationDialog("Exit without saving?", isPresented: $showExitConfirm) {
-                Button("Discard and Exit", role: .destructive) {
-                    clearRecording()
-                    dismiss()
+
+                if showExitConfirm {
+                    RecordingExitConfirmationOverlay(
+                        discard: {
+                            clearRecording()
+                            dismiss()
+                        },
+                        keepEditing: { showExitConfirm = false }
+                    )
                 }
-                Button("Cancel", role: .cancel) {}
             }
-            .alert("Private Cloud Transcription", isPresented: $showCloudTranscriptionDisclosure) {
+            .frame(width: geo.size.width, height: geo.size.height)
+            .allowsHitTesting(!isSaving)
+            .alert(CloudTranscriptionDisclosure.title, isPresented: $showCloudTranscriptionDisclosure) {
                 Button("Not Now", role: .cancel) { }
                 Button("Continue") {
                     CloudTranscriptionDisclosure.accept()
                     startRecording()
                 }
             } message: {
-                Text("Saved recordings are uploaded to your private MemoirAI account and sent to OpenAI to create a transcript. You can delete the recording and transcript at any time.")
+                Text(CloudTranscriptionDisclosure.message)
             }
             .alert(
                 "Recording Unavailable",
@@ -441,6 +566,7 @@ struct RecordingView: View {
                 )
             }
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
     // MARK: - Control Button Helper
@@ -586,6 +712,7 @@ struct RecordingView: View {
     }
 
     func startRecording() {
+        isTextFocused = false
         if let failureMessage = MemoryUserScope.recordingStartFailureMessage(
             firebaseUserID: MemoryUserScope.currentFirebaseUserId
         ) {
@@ -742,9 +869,12 @@ struct RecordingView: View {
 
         // Capture current values before we mutate UI state
         let promptToSave      = activePromptText.isEmpty ? prompt.text : activePromptText
-        let textToSave        = typedText
+        let textToSave        = typedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil
+            : typedText
         let audioURLToSave    = audioURL
         let profile = profileVM.selectedProfile
+        let memoirModeToSave = memoirMode ?? MemoirModeClassifier.mode(forCurrentChapterTitle: chapterTitle)
 
         // 1️⃣ Spin up a private background context so we never block the UI
         let bgContext = PersistenceController.shared.container.newBackgroundContext()
@@ -765,14 +895,15 @@ struct RecordingView: View {
             let entry = MemoryEntry(context: bgContext)
             entry.id           = UUID()
             entry.prompt       = promptToSave
-            entry.text         = textToSave.isEmpty ? nil : textToSave
+            entry.text         = textToSave
             entry.audioData    = nil
             entry.audioFileURL = audioURLToSave?.absoluteString
-            entry.transcriptionEditedText = audioURLToSave == nil || textToSave.isEmpty ? nil : textToSave
+            entry.transcriptionEditedText = audioURLToSave == nil ? nil : textToSave
             entry.transcriptionStatus = audioURLToSave == nil ? nil : "queued"
             entry.transcriptionLanguage = "en"
             entry.createdAt    = Date()
             entry.chapter      = chapterTitle
+            entry.memoirModeRaw = memoirModeToSave?.rawValue
             entry.profileID    = profile.id
             entry.firebaseUserId = firebaseUserId
 
@@ -811,15 +942,6 @@ struct RecordingView: View {
         }
     }
     
-    // MARK: - Permission Management
-    
-    private func checkMicrophonePermission() {
-        if !permissionManager.isMicrophoneAuthorized {
-            permissionManager.requestMicrophonePermission()
-        }
-    }
-
-
     // Helper – writes image data to disk, returns URL
     func writeImageDataToDisk(data: Data) -> URL? {
         let fileName = UUID().uuidString + ".jpg"

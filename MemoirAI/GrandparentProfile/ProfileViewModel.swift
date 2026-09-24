@@ -131,9 +131,8 @@ class ProfileViewModel: ObservableObject {
         saveProfiles()
         await replayPendingProfileMutations(for: normalizedUserID)
 
-        let activatedProfileID = selectedProfile.id
         Task {
-            await FirestoreSyncService.shared.retryPendingSyncs(for: activatedProfileID)
+            await FirestoreSyncService.shared.retryPendingSyncsForCurrentUser()
         }
     }
 

@@ -29,6 +29,7 @@ struct ColorTheme {
 
 struct MemoirView: View {
     let colors = ColorTheme()
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
     @StateObject private var subscriptionManager = RCSubscriptionManager.shared
@@ -54,13 +55,6 @@ struct MemoirView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
-                Text(memoirPageTitle)
-                    .font(.customSerifFallback(size: 22))
-                    .foregroundColor(colors.deepGreen)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.horizontal)
-                    .padding(.top, 12)
-
                 header
                 modeToggle
                 if let ch = firstIncompleteChapter { currentChapterCard(for: ch) }
@@ -93,12 +87,26 @@ struct MemoirView: View {
         }
         .toolbarBackground(colors.softCream, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar(.visible, for: .navigationBar)
         .navigationDestination(item: $navigateToChapter) { chapterNumber in
             Group {
                 if memoirMode == .relationships {
-                    RelationshipJourneyView(chapter: preparedChapter(for: chapterNumber))
+                    GeometryReader { container in
+                        RelationshipJourneyView(
+                            chapter: preparedChapter(for: chapterNumber),
+                            containerSafeAreaInsets: container.safeAreaInsets
+                        )
+                        .ignoresSafeArea()
+                    }
                 } else {
-                    ChapterJourneyView(chapter: preparedChapter(for: chapterNumber))
+                    let destinationChapter = preparedChapter(for: chapterNumber)
+                    GeometryReader { container in
+                        ChapterJourneyView(
+                            chapter: destinationChapter,
+                            containerSafeAreaInsets: container.safeAreaInsets
+                        )
+                        .ignoresSafeArea()
+                    }
                 }
             }
             .environmentObject(profileVM)
@@ -107,6 +115,15 @@ struct MemoirView: View {
         }
         .tint(.black)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(memoirPageTitle)
+                    .font(.customSerifFallback(size: 22))
+                    .foregroundColor(colors.deepGreen)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .accessibilityIdentifier("memoirPickerTitle")
+            }
+
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -116,45 +133,17 @@ struct MemoirView: View {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(colors.deepGreen)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 36, height: 36)
                         .background(colors.tileBackground)
                         .clipShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Change memoir type")
+                .accessibilityIdentifier("memoirModeChangeButton")
             }
         }
         .fullScreenCover(isPresented: $showPaywall) {
-            // Add error handling around PaywallView
-            Group {
-                if RCSubscriptionManager.shared.offerings?.current?.availablePackages.isEmpty == false {
-                    PaywallView(displayCloseButton: true)
-                } else {
-                    // Fallback view when paywall can't load
-                    VStack(spacing: 20) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 60))
-                            .foregroundColor(.orange)
-                        
-                        Text("Subscription Temporarily Unavailable")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        
-                        Text("Please try again later or contact support.")
-                            .multilineTextAlignment(.center)
-                        
-                        Button("Close") {
-                            showPaywall = false
-                        }
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
-                    }
-                    .padding()
-                    .background(Color.white)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .ignoresSafeArea()
+            SubscriptionPaywallView()
         }
     }
 
@@ -177,34 +166,34 @@ struct MemoirView: View {
                 .foregroundColor(colors.deepGreen)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 32)
+        .padding(.top, 12)
     }
 
     private func currentChapterCard(for chapter: Chapter) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Image(systemName: "heart.fill")
-                    .foregroundColor(colors.terracotta)
+        Button {
+            navigateToChapter = chapter.number
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    Image(systemName: "heart.fill")
+                        .foregroundColor(colors.terracotta)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Chapter \(chapter.number): \(chapter.title)")
-                        .font(.headline)
-                        .foregroundColor(colors.deepGreen)
-                        .lineLimit(3)
-                        .minimumScaleFactor(0.75)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Chapter \(chapter.number): \(chapter.title)")
+                            .font(.headline)
+                            .foregroundColor(colors.deepGreen)
+                            .lineLimit(3)
+                            .minimumScaleFactor(0.75)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                    Text("\(filledPromptSlotsForChapter(entries: entries, chapter: chapter)) of \(chapter.prompts.count) memories recorded")
-                        .font(.subheadline)
-                        .foregroundColor(colors.deepGreen)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.85)
+                        Text("\(filledPromptSlotsForChapter(entries: entries, chapter: chapter)) of \(chapter.prompts.count) memories recorded")
+                            .font(.subheadline)
+                            .foregroundColor(colors.deepGreen)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.85)
+                    }
                 }
-            }
 
-            Button(action: {
-                navigateToChapter = chapter.number
-            }) {
                 Text("Continue Chapter")
                     .foregroundColor(.white)
                     .font(.system(size: 16, weight: .semibold))
@@ -213,11 +202,16 @@ struct MemoirView: View {
                     .background(colors.terracotta)
                     .clipShape(Capsule())
             }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(colors.tileBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+            .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 6)
         }
-        .padding()
-        .background(colors.tileBackground)
-        .cornerRadius(32)
-        .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 6)
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("currentChapterCard")
+        .accessibilityHint("Opens this chapter")
         .padding(.horizontal)
     }
 
@@ -256,14 +250,17 @@ struct MemoirView: View {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .background(isSelected ? colors.tileBackground : Color.clear)
                         .cornerRadius(16)
                         .overlay(
                             RoundedRectangle(cornerRadius: 16)
                                 .stroke(isSelected ? colors.terracotta.opacity(0.3) : Color.clear, lineWidth: 1)
                         )
+                        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                     .buttonStyle(PlainButtonStyle())
+                    .accessibilityIdentifier("memoirModeOption_\(mode.rawValue)")
                 }
 
                 if memoirMode == .parent {
@@ -315,7 +312,6 @@ struct MemoirView: View {
             )
             .padding(.horizontal, 16)
             .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .top)))
-            .accessibilityIdentifier("memoirSwitchModeMenu")
         }
     }
 
@@ -352,7 +348,7 @@ struct MemoirView: View {
     }
 
     private var chaptersGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
+        LazyVGrid(columns: chapterGridColumns, spacing: 16) {
             ForEach(1...chapters.count, id: \.self) { chapterNumber in
                 if let chapter = chapters.first(where: { $0.number == chapterNumber }) {
                     let isDone = filledPromptSlotsForChapter(entries: entries, chapter: chapter) >= chapter.prompts.count
@@ -371,6 +367,8 @@ struct MemoirView: View {
                         )
                     }
                     .buttonStyle(PlainButtonStyle())
+                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .accessibilityIdentifier("chapterTile\(chapterNumber)")
                     .overlay(
                         Group {
                             if chapterNumber == 1 {
@@ -394,6 +392,14 @@ struct MemoirView: View {
         .padding(.horizontal)
     }
 
+    private var chapterGridColumns: [GridItem] {
+        let columnCount = dynamicTypeSize.isAccessibilitySize ? 1 : 2
+        return Array(
+            repeating: GridItem(.flexible(), spacing: 16, alignment: .top),
+            count: columnCount
+        )
+    }
+
     // MARK: — Data helpers
        private var firstIncompleteChapter: Chapter? {
         chapters.first { filledPromptSlotsForChapter(entries: entries, chapter: $0) < $0.prompts.count }
@@ -410,7 +416,7 @@ struct MemoirView: View {
         catch { print("Fetch error:", error) }
     }
 
-    /// Chapter data for journey: image-based layout uses fixed 4 coordinates; Relationships uses raw prompts (layout in `RelationshipJourneyView`).
+    /// Chapter data for journey: image-based layout follows each artwork's trail; Relationships uses its own map layout.
     private func preparedChapter(for idx: Int) -> Chapter {
         guard let base = chapters.first(where: { $0.number == idx }) else {
             return .init(number: idx, title: "Unknown", prompts: [])
@@ -418,9 +424,9 @@ struct MemoirView: View {
         if memoirMode == .relationships {
             return base
         }
-        let coords: [(CGFloat, CGFloat)] = [(0.88,0.80),(0.55,0.63),(0.85,0.43),(0.68,0.28)]
-        let prompts = zip(base.prompts, coords).map { (p,c) in
-            MemoryPrompt(text: p.text, x: c.0, y: c.1, isPerChild: p.isPerChild)
+        let coordinates = ChapterJourneyNodeLayoutPolicy.coordinates(forChapterTitle: base.title)
+        let prompts = zip(base.prompts, coordinates).map { prompt, point in
+            MemoryPrompt(text: prompt.text, x: point.x, y: point.y, isPerChild: prompt.isPerChild)
         }
         return .init(number: base.number, title: base.title, prompts: prompts)
     }
@@ -439,6 +445,7 @@ struct ChapterTileView: View {
     let isCurrent: Bool
     let isCompleted: Bool
     let colors: ColorTheme
+    @ScaledMetric(relativeTo: .caption) private var reservedTitleHeight: CGFloat = 30
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -455,14 +462,16 @@ struct ChapterTileView: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.72)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: reservedTitleHeight, alignment: .topLeading)
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
         .background(colors.tileBackground)
-        .cornerRadius(16)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 2)
     }
 }

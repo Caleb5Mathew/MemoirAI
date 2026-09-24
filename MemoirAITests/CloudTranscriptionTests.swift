@@ -110,6 +110,23 @@ struct CloudTranscriptionTests {
         ) == .writeEditedText(""))
     }
 
+    @Test func syncPolicy_ignoresWhitespaceOnlyEditorPlaceholders() {
+        #expect(MemoryTranscriptionTextPolicy.validUserEdit("\n") == nil)
+        #expect(MemoryTranscriptionTextPolicy.validUserEdit("") == "")
+        #expect(MemoryTranscriptionSyncPolicy.mode(
+            audioChanged: false,
+            isM4A: true,
+            status: "completed",
+            editedText: "\n",
+            text: "\n"
+        ) == .preserveServer)
+        #expect(MemoryTranscriptionTextPolicy.displayText(
+            edited: "\n",
+            canonical: "\n",
+            raw: "Recovered transcript"
+        ) == "Recovered transcript")
+    }
+
     @Test func failurePolicy_requiresRerecordingForPermanentAudioErrors() {
         #expect(TranscriptionFailurePolicy.status(
             for: "The recording could not be read. Please record it again."
@@ -140,5 +157,21 @@ struct CloudTranscriptionTests {
         #expect(!CloudTranscriptionDisclosure.isAccepted(defaults: defaults))
         CloudTranscriptionDisclosure.accept(defaults: defaults)
         #expect(CloudTranscriptionDisclosure.isAccepted(defaults: defaults))
+    }
+
+    @Test func enhancementVoiceUploadPolicy_usesOwnerScopedUUIDM4APath() throws {
+        let uploadID = try #require(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        #expect(EnhancementVoiceUploadPolicy.path(userID: "owner", uploadID: uploadID) ==
+            "users/owner/enhancementAudio/00000000-0000-0000-0000-000000000001.m4a")
+    }
+
+    @Test func enhancementVoiceUploadPolicy_rejectsInvalidFiles() {
+        #expect(EnhancementVoiceUploadPolicy.isValidFile(byteCount: 1, pathExtension: "M4A"))
+        #expect(!EnhancementVoiceUploadPolicy.isValidFile(byteCount: 0, pathExtension: "m4a"))
+        #expect(!EnhancementVoiceUploadPolicy.isValidFile(
+            byteCount: EnhancementVoiceUploadPolicy.maximumBytes + 1,
+            pathExtension: "m4a"
+        ))
+        #expect(!EnhancementVoiceUploadPolicy.isValidFile(byteCount: 1, pathExtension: "caf"))
     }
 }

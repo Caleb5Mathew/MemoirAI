@@ -23,6 +23,8 @@ struct MemoryEnhancementGuidedTypingSessionView: View {
 
     @State private var isMemoryTextExpanded = false
     @State private var memoryAudioPlayer: AVAudioPlayer?
+    @State private var remoteMemoryAudioPlayer: AVPlayer?
+    @State private var remoteMemoryPlaybackObserver: NSObjectProtocol?
     @State private var isMemoryAudioPlaying = false
 
     @Environment(\.scenePhase) private var scenePhase
@@ -219,7 +221,7 @@ struct MemoryEnhancementGuidedTypingSessionView: View {
                 .foregroundStyle(header)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if memory.hasAudio, let url = memory.playbackURL {
+            if let url = memory.availableAudioURL {
                 compactMemoryAudioRow(url: url)
             }
 
@@ -435,6 +437,26 @@ struct MemoryEnhancementGuidedTypingSessionView: View {
     // MARK: - Memory playback
 
     private func toggleMemoryPlayback(url: URL) {
+        if !url.isFileURL {
+            if isMemoryAudioPlaying {
+                stopMemoryPlayback()
+                return
+            }
+            let player = AVPlayer(url: url)
+            remoteMemoryAudioPlayer = player
+            remoteMemoryPlaybackObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: player.currentItem,
+                queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    stopMemoryPlayback()
+                }
+            }
+            player.play()
+            isMemoryAudioPlaying = true
+            return
+        }
         if isMemoryAudioPlaying {
             memoryAudioPlayer?.pause()
             isMemoryAudioPlaying = false
@@ -461,6 +483,12 @@ struct MemoryEnhancementGuidedTypingSessionView: View {
     private func stopMemoryPlayback() {
         memoryAudioPlayer?.stop()
         memoryAudioPlayer = nil
+        remoteMemoryAudioPlayer?.pause()
+        remoteMemoryAudioPlayer = nil
+        if let remoteMemoryPlaybackObserver {
+            NotificationCenter.default.removeObserver(remoteMemoryPlaybackObserver)
+            self.remoteMemoryPlaybackObserver = nil
+        }
         isMemoryAudioPlaying = false
     }
 

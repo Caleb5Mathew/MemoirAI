@@ -9,14 +9,22 @@
 
 cd "$(dirname "$0")/.."
 RESULT_BUNDLE="/tmp/MemoirAI-TestResult.xcresult"
+SIMULATOR_ID="${MEMOIRAI_SIMULATOR_ID:-$(xcrun simctl list devices booted | sed -nE 's/.*\(([0-9A-F-]{36})\) \(Booted\).*/\1/p' | head -1)}"
+
+if [ -z "$SIMULATOR_ID" ]; then
+  echo "FAILED: boot an iOS simulator or set MEMOIRAI_SIMULATOR_ID"
+  exit 1
+fi
 
 # Remove existing result bundle so xcodebuild doesn't fail
-rm -rf "$RESULT_BUNDLE"
+if [ -e "$RESULT_BUNDLE" ]; then
+  find "$RESULT_BUNDLE" -depth -delete
+fi
 
 echo "Running Kids Book dev portal UI test..."
 set -o pipefail
 xcodebuild test -scheme MemoirAI \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.2' \
+  -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
   -only-testing:MemoirAIUITests/KidsBookDevPortalFlowTests/testKidsBookDevPortalFlow \
   -resultBundlePath "$RESULT_BUNDLE" \
   2>&1 | tee /tmp/memoir-ui-test.log | tail -40

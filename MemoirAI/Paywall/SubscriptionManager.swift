@@ -27,6 +27,53 @@ enum Tier: String, CaseIterable {
     }
 }
 
+struct DeveloperAccessDistributionPolicy {
+    static func permitsRemoteUnlock(receiptLastPathComponent _: String?) -> Bool {
+        true
+    }
+
+    static var permitsCurrentBuild: Bool { true }
+}
+
+struct DeveloperEntitlementSyncPolicy {
+    static func shouldSync(isDeveloperUnlocked: Bool) -> Bool {
+        !isDeveloperUnlocked
+    }
+}
+
+struct GenerationAllowancePolicy {
+    static func canGenerate(pages: Int, remaining: Int, hasSubscription: Bool, developerUnlocked: Bool) -> Bool {
+        developerUnlocked || pages <= 0 || (hasSubscription && remaining >= pages)
+    }
+
+    static func remainingAfterConsumption(pages: Int, remaining: Int, developerUnlocked: Bool) -> Int {
+        guard !developerUnlocked, pages > 0 else { return remaining }
+        return pages >= remaining ? 0 : remaining - pages
+    }
+}
+
+struct DeveloperAccessCodePolicy {
+    static func constantTimeMatches(candidateDigest: String, expectedDigest: String) -> Bool {
+        guard candidateDigest.utf8.count == expectedDigest.utf8.count else { return false }
+        var result: UInt8 = 0
+        for (candidate, expected) in zip(candidateDigest.utf8, expectedDigest.utf8) {
+            result |= candidate ^ expected
+        }
+        return result == 0
+    }
+}
+
+enum DeveloperAccessError: LocalizedError {
+    case incorrectCode
+
+    var errorDescription: String? {
+        switch self {
+        case .incorrectCode:
+            return "Incorrect access code."
+        }
+    }
+}
+
 enum RevenueCatIdentityPolicy {
     static func shouldIdentify(currentAppUserID: String, firebaseUserID: String) -> Bool {
         !firebaseUserID.isEmpty && currentAppUserID != firebaseUserID
@@ -94,6 +141,27 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     @Published var nextRenewalDate: Date?
     @Published private(set) var identifiedFirebaseUserID: String?
     @Published private(set) var identityErrorMessage: String?
+    @Published private(set) var activationErrorMessage: String?
+
+    private var storage = UserDefaults.standard
+    private var firebaseUserIDProvider: () -> String? = { Auth.auth().currentUser?.uid }
+    private var revenueCatUserIDProvider: () -> String = {
+        Purchases.isConfigured ? Purchases.shared.appUserID : ""
+    }
+    private var syncsToFirestore = true
+    private var latestCustomerInfoDate: Date?
+    private var customerInfoUserID: String?
+
+    /// Isolated storage and identities allow purchase state transitions to be tested without network services.
+    init(storage: UserDefaults, firebaseUserID: @escaping () -> String?,
+         revenueCatUserID: @escaping () -> String, identifiedUserID: String) {
+        self.storage = storage
+        self.firebaseUserIDProvider = firebaseUserID
+        self.revenueCatUserIDProvider = revenueCatUserID
+        self.syncsToFirestore = false
+        super.init()
+        identifiedFirebaseUserID = identifiedUserID
+    }
 
     // 🔥 BACK TO USERDEFAULTS - Simple and reliable
     private let allowanceKeyPrefix = "memoirai_image_allowance_"
@@ -114,15 +182,11 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     private override init() {
         super.init()
 
-        #if DEBUG
-        isPersistentDevMode = UserDefaults.standard.bool(forKey: persistentDevModeKey)
+        isPersistentDevMode = storage.bool(forKey: persistentDevModeKey)
         if isPersistentDevMode {
             unlockDeveloperMode()
             print("RCManager: Restored persistent developer mode from storage.")
         }
-        #else
-        UserDefaults.standard.removeObject(forKey: persistentDevModeKey)
-        #endif
 
         // Add a small delay to ensure RevenueCat is fully configured
         Task {
@@ -138,40 +202,39 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             } else {
                 await MainActor.run {
                     print("RCManager: RevenueCat not configured - using development mode")
-                    // In development, simulate no subscription
+                    guard !isDeveloperUnlockedSession else { return }
                     activeTier = nil
                     remainingAllowance = 0
                     nextRenewalDate = nil
                 }
             }
 
-            #if DEBUG
             await MainActor.run {
-                if UserDefaults.standard.bool(forKey: persistentDevModeKey) {
+                if storage.bool(forKey: persistentDevModeKey) {
                     unlockDeveloperMode()
                 }
             }
-            #endif
         }
     }
 
     /// Enables developer unlock and persists it across app restarts until `disablePersistentDevMode()`.
     func enablePersistentDevMode() {
-        #if DEBUG
-        UserDefaults.standard.set(true, forKey: persistentDevModeKey)
-        UserDefaults.standard.synchronize()
+        storage.set(true, forKey: persistentDevModeKey)
+        storage.synchronize()
         isPersistentDevMode = true
         unlockDeveloperMode()
         print("RCManager: Persistent developer mode enabled – survives app restart until disabled.")
-        #endif
     }
 
     /// Turns off persisted dev unlock and re-evaluates real subscription state.
     func disablePersistentDevMode() {
-        UserDefaults.standard.set(false, forKey: persistentDevModeKey)
-        UserDefaults.standard.synchronize()
+        storage.set(false, forKey: persistentDevModeKey)
+        storage.synchronize()
         isPersistentDevMode = false
         isDeveloperUnlockedSession = false
+        activeTier = nil
+        remainingAllowance = 0
+        nextRenewalDate = nil
         Task { await refreshCustomerInfo() }
         print("RCManager: Persistent developer mode disabled.")
     }
@@ -228,6 +291,9 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
 
     func clearIdentityState() {
         identifiedFirebaseUserID = nil
+        latestCustomerInfoDate = nil
+        customerInfoUserID = nil
+        activationErrorMessage = nil
         identityErrorMessage = nil
         if !isDeveloperUnlockedSession {
             activeTier = nil
@@ -238,7 +304,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
 
     @discardableResult
     func identify(firebaseUserID: String) async -> Bool {
-        guard !firebaseUserID.isEmpty else { return false }
+        guard !firebaseUserID.isEmpty, firebaseUserIDProvider() == firebaseUserID else { return false }
         if let identifiedFirebaseUserID, identifiedFirebaseUserID != firebaseUserID {
             self.identifiedFirebaseUserID = nil
             if !isDeveloperUnlockedSession {
@@ -255,19 +321,20 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         if Purchases.shared.appUserID == firebaseUserID {
             do {
                 let info = try await Purchases.shared.customerInfo()
-                guard Auth.auth().currentUser?.uid == firebaseUserID else { return false }
+                guard firebaseUserIDProvider() == firebaseUserID else { return false }
                 identifiedFirebaseUserID = firebaseUserID
                 identityErrorMessage = nil
                 guard RevenueCatIdentityPolicy.canApplyCustomerInfo(
                     capturedFirebaseUserID: firebaseUserID,
                     capturedAppUserID: firebaseUserID,
-                    currentFirebaseUserID: Auth.auth().currentUser?.uid,
+                    currentFirebaseUserID: firebaseUserIDProvider(),
                     currentAppUserID: Purchases.shared.appUserID,
                     identifiedFirebaseUserID: identifiedFirebaseUserID
                 ) else { return false }
-                evaluateEntitlements(from: info, for: firebaseUserID)
+                _ = try applyPurchaseResult(info, for: firebaseUserID)
                 return true
             } catch {
+                guard firebaseUserIDProvider() == firebaseUserID else { return false }
                 identifiedFirebaseUserID = nil
                 identityErrorMessage = "Subscription verification failed. Check your connection and try again."
                 return false
@@ -284,20 +351,21 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         defer { identifyingFirebaseUserID = nil }
         do {
             let result = try await Purchases.shared.logIn(firebaseUserID)
-            guard Auth.auth().currentUser?.uid == firebaseUserID else { return false }
+            guard firebaseUserIDProvider() == firebaseUserID else { return false }
             identifiedFirebaseUserID = firebaseUserID
             identityErrorMessage = nil
             guard RevenueCatIdentityPolicy.canApplyCustomerInfo(
                 capturedFirebaseUserID: firebaseUserID,
                 capturedAppUserID: firebaseUserID,
-                currentFirebaseUserID: Auth.auth().currentUser?.uid,
+                currentFirebaseUserID: firebaseUserIDProvider(),
                 currentAppUserID: Purchases.shared.appUserID,
                 identifiedFirebaseUserID: identifiedFirebaseUserID
             ) else { return false }
-            evaluateEntitlements(from: result.customerInfo, for: firebaseUserID)
+            _ = try applyPurchaseResult(result.customerInfo, for: firebaseUserID)
             print("RCManager: RevenueCat identity linked to Firebase user.")
             return true
         } catch {
+            guard firebaseUserIDProvider() == firebaseUserID else { return false }
             identifiedFirebaseUserID = nil
             identityErrorMessage = "Subscription verification failed. Check your connection and try again."
             print("RCManager: RevenueCat identity link failed: \(error.localizedDescription)")
@@ -305,24 +373,24 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         }
     }
 
-    func refreshCustomerInfo() async {
+    func refreshCustomerInfo(forceRefresh: Bool = false) async {
         guard Purchases.isConfigured else {
             print("⚠️ RevenueCat not configured - skipping customer info refresh")
             return
         }
-        guard let firebaseUserID = Auth.auth().currentUser?.uid else { return }
+        guard let firebaseUserID = firebaseUserIDProvider() else { return }
         if !isIdentityReady(for: firebaseUserID) {
-            _ = await identify(firebaseUserID: firebaseUserID)
-            return
+            guard await identify(firebaseUserID: firebaseUserID) else { return }
+            if !forceRefresh { return }
         }
         let appUserID = Purchases.shared.appUserID
         
         do {
-            let info = try await Purchases.shared.customerInfo()
+            let info = try await Purchases.shared.customerInfo(fetchPolicy: forceRefresh ? .fetchCurrent : .cachedOrFetched)
             guard RevenueCatIdentityPolicy.canApplyCustomerInfo(
                 capturedFirebaseUserID: firebaseUserID,
                 capturedAppUserID: appUserID,
-                currentFirebaseUserID: Auth.auth().currentUser?.uid,
+                currentFirebaseUserID: firebaseUserIDProvider(),
                 currentAppUserID: Purchases.shared.appUserID,
                 identifiedFirebaseUserID: identifiedFirebaseUserID
             ) else {
@@ -330,8 +398,12 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
                 return
             }
             print("RCManager: CustomerInfo refreshed. Entitlements: \(info.entitlements.active.keys)")
-            evaluateEntitlements(from: info, for: firebaseUserID)
+            _ = try applyPurchaseResult(info, for: firebaseUserID)
         } catch {
+            guard firebaseUserIDProvider() == firebaseUserID,
+                  revenueCatUserIDProvider() == appUserID,
+                  identifiedFirebaseUserID == firebaseUserID else { return }
+            activationErrorMessage = "Subscription verification failed. Check your connection and try again."
             print("❌ RCManager: CustomerInfo refresh failed: \(error).")
             if isDeveloperUnlockedSession {
                 // Keep dev access active for this app session.
@@ -349,19 +421,56 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         }
     }
 
-    private func evaluateEntitlements(from info: CustomerInfo, for firebaseUserID: String) {
-        var determinedTier: Tier? = nil
-        var renewalDate: Date? = nil
-        var purchaseDate: Date? = nil
-
-        if let ent = info.entitlements["image_generation"], ent.isActive {
-            let tier = mapProductIdToTier(ent.productIdentifier)
-            if let tier = tier {
-                determinedTier = tier
-                renewalDate = ent.expirationDate
-                purchaseDate = ent.latestPurchaseDate
+    @discardableResult
+    func applyPurchaseResult(_ info: CustomerInfo, for firebaseUserID: String) throws -> Bool {
+        guard RevenueCatIdentityPolicy.canApplyCustomerInfo(
+            capturedFirebaseUserID: firebaseUserID,
+            capturedAppUserID: firebaseUserID,
+            currentFirebaseUserID: firebaseUserIDProvider(),
+            currentAppUserID: revenueCatUserIDProvider(),
+            identifiedFirebaseUserID: identifiedFirebaseUserID
+        ) else {
+            let message = "Your account changed. Sign in again to refresh your subscription."
+            activationErrorMessage = message
+            throw NSError(domain: "MemoirAI.Subscription", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        if customerInfoUserID == firebaseUserID, let latestCustomerInfoDate {
+            if info.requestDate < latestCustomerInfoDate {
+                return hasActiveSubscription
+            }
+            // Cache and purchase callbacks can share a timestamp. Only a newer response may revoke access.
+            if info.requestDate == latestCustomerInfoDate, hasActiveSubscription,
+               activeSubscriptionProductID(in: info) == nil {
+                return true
             }
         }
+        customerInfoUserID = firebaseUserID
+        latestCustomerInfoDate = info.requestDate
+        activationErrorMessage = nil
+        evaluateEntitlements(from: info, for: firebaseUserID)
+        if !hasActiveSubscription && !info.activeSubscriptions.isEmpty {
+            activationErrorMessage = "Your purchase could not be matched to a MemoirAI subscription. Restore purchases or contact support."
+        }
+        return hasActiveSubscription
+    }
+
+    private func activeSubscriptionProductID(in info: CustomerInfo) -> String? {
+        for entitlementID in ["Basic", "image_generation"] {
+            if let entitlement = info.entitlements[entitlementID], entitlement.isActive,
+               mapProductIdToTier(entitlement.productIdentifier) != nil {
+                return entitlement.productIdentifier
+            }
+        }
+        // A verified subscription remains valid if its dashboard entitlement mapping is missing.
+        return info.activeSubscriptions.sorted().first { mapProductIdToTier($0) != nil }
+    }
+
+    private func evaluateEntitlements(from info: CustomerInfo, for firebaseUserID: String) {
+        let productID = activeSubscriptionProductID(in: info)
+        let determinedTier = productID.flatMap { mapProductIdToTier($0) }
+        let renewalDate = productID.flatMap { info.expirationDate(forProductIdentifier: $0) }
+        let purchaseDate = productID.flatMap { info.purchaseDate(forProductIdentifier: $0) }
 
         if let newTier = determinedTier {
             print("RCManager: Active subscription found for tier: \(newTier.displayName)")
@@ -381,8 +490,11 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     }
 
     private func syncSubscriptionToFirestore(for uid: String) {
-        guard Auth.auth().currentUser?.uid == uid,
+        guard syncsToFirestore, firebaseUserIDProvider() == uid,
               identifiedFirebaseUserID == uid,
+              DeveloperEntitlementSyncPolicy.shouldSync(
+                isDeveloperUnlocked: isDeveloperUnlockedSession
+              ),
               !Purchases.isConfigured || Purchases.shared.appUserID == uid else { return }
         let data: [String: Any] = [
             "hasActiveSubscription": activeTier != nil,
@@ -412,7 +524,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
 
     // 🔥 COMPLETELY FIXED: This is the core fix for the 50/50 vs 45/50 issue
     private func setActiveTier(_ tier: Tier, renewalDate: Date?, latestPurchaseDate _: Date?) {
-        guard let firebaseUserID = Auth.auth().currentUser?.uid else {
+        guard let firebaseUserID = firebaseUserIDProvider() else {
             activeTier = nil
             remainingAllowance = 0
             nextRenewalDate = nil
@@ -424,7 +536,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         
         // Store renewal date
         if let renewalDate = renewalDate {
-            UserDefaults.standard.set(renewalDate, forKey: SubscriptionStorageScope.key(
+            storage.set(renewalDate, forKey: SubscriptionStorageScope.key(
                 prefix: renewalDateKeyPrefix,
                 userID: firebaseUserID
             ))
@@ -448,22 +560,23 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         let currentPeriod = SubscriptionAllowancePeriod.utcMonthKey(for: Date())
         
         // Check if this is the first time we're setting up this tier
-        let isFirstTimeSetup = !UserDefaults.standard.bool(forKey: initKey)
+        let isFirstTimeSetup = !storage.bool(forKey: initKey)
         
         if isFirstTimeSetup {
             // 🔥 FIRST TIME: Set up with full allowance and mark as initialized
             remainingAllowance = maxImagesPerPeriod
-            UserDefaults.standard.set(remainingAllowance, forKey: allowanceUDKey)
-            UserDefaults.standard.set(true, forKey: initKey)
+            storage.set(remainingAllowance, forKey: allowanceUDKey)
+            storage.set(true, forKey: initKey)
             
-            UserDefaults.standard.set(currentPeriod, forKey: resetPeriodKey)
+            storage.set(currentPeriod, forKey: resetPeriodKey)
             
             print("RCManager: First-time setup for \(tier.displayName). Starting allowance: \(remainingAllowance)")
-            UserDefaults.standard.synchronize()
+            storage.synchronize()
+            if isDeveloperUnlockedSession { unlockDeveloperMode() }
             return
         }
         
-        let shouldReset = UserDefaults.standard.string(forKey: resetPeriodKey) != currentPeriod
+        let shouldReset = storage.string(forKey: resetPeriodKey) != currentPeriod
         
         // 🔥 CHECK FOR TIER CHANGE
         let tierChanged = oldTierID != nil && oldTierID != tier.rawValue
@@ -472,25 +585,25 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             // Reset allowance
             remainingAllowance = maxImagesPerPeriod
             
-            UserDefaults.standard.set(currentPeriod, forKey: resetPeriodKey)
+            storage.set(currentPeriod, forKey: resetPeriodKey)
             
-            UserDefaults.standard.set(remainingAllowance, forKey: allowanceUDKey)
+            storage.set(remainingAllowance, forKey: allowanceUDKey)
             print("RCManager: Allowance reset for \(tier.displayName). Reason: \(tierChanged ? "Tier changed" : "Period reset"). New allowance: \(remainingAllowance)")
         } else {
             // 🔥 NORMAL CASE: Load existing allowance (this preserves 45/50)
-            if let storedValue = UserDefaults.standard.object(forKey: allowanceUDKey) as? Int {
+            if let storedValue = storage.object(forKey: allowanceUDKey) as? Int {
                 remainingAllowance = storedValue
                 print("RCManager: Loaded existing allowance for \(tier.displayName): \(remainingAllowance)")
             } else {
                 // Fallback if somehow we lost the data
                 remainingAllowance = maxImagesPerPeriod
-                UserDefaults.standard.set(remainingAllowance, forKey: allowanceUDKey)
+                storage.set(remainingAllowance, forKey: allowanceUDKey)
                 print("RCManager: Fallback setup for \(tier.displayName). Starting allowance: \(remainingAllowance)")
             }
         }
         
         // Force save
-        UserDefaults.standard.synchronize()
+        storage.synchronize()
 
         // Apply developer override for current app session only.
         if isDeveloperUnlockedSession {
@@ -499,7 +612,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     }
 
     func purchase(package: Package) async throws {
-        guard let firebaseUserID = Auth.auth().currentUser?.uid,
+        guard let firebaseUserID = firebaseUserIDProvider(),
               isIdentityReady(for: firebaseUserID) else {
             throw NSError(
                 domain: "MemoirAI.Subscription",
@@ -521,7 +634,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         guard RevenueCatIdentityPolicy.canApplyCustomerInfo(
             capturedFirebaseUserID: firebaseUserID,
             capturedAppUserID: appUserID,
-            currentFirebaseUserID: Auth.auth().currentUser?.uid,
+            currentFirebaseUserID: firebaseUserIDProvider(),
             currentAppUserID: Purchases.shared.appUserID,
             identifiedFirebaseUserID: identifiedFirebaseUserID
         ) else {
@@ -531,7 +644,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "Your account changed during purchase. Sign in again to refresh your subscription."]
             )
         }
-        evaluateEntitlements(from: result.customerInfo, for: firebaseUserID)
+        _ = try applyPurchaseResult(result.customerInfo, for: firebaseUserID)
         
         // ✅ RevenueCat handles purchase events server-side via Conversions API
         // No client-side purchase logging needed to avoid duplicates
@@ -539,6 +652,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
 
     // 🔥 ENHANCED: Better consumption tracking
     func consume(pages: Int) {
+        guard !isDeveloperUnlockedSession else { return }
         guard pages > 0 else {
             print("RCManager: Consume called with 0 pages. No action taken.")
             return
@@ -548,7 +662,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             print("RCManager: Cannot consume images. No active subscription.")
             return
         }
-        guard let firebaseUserID = Auth.auth().currentUser?.uid else {
+        guard let firebaseUserID = firebaseUserIDProvider() else {
             print("RCManager: Cannot consume images without a Firebase identity.")
             return
         }
@@ -559,8 +673,11 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         }
 
         let oldAllowance = remainingAllowance
-        let newAllowance = remainingAllowance - pages
-        remainingAllowance = max(0, newAllowance)
+        remainingAllowance = GenerationAllowancePolicy.remainingAfterConsumption(
+            pages: pages,
+            remaining: remainingAllowance,
+            developerUnlocked: isDeveloperUnlockedSession
+        )
         
         // Save immediately with verification
         let allowanceUDKey = SubscriptionStorageScope.key(
@@ -568,11 +685,11 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             userID: firebaseUserID,
             tierRawValue: currentTier.rawValue
         )
-        UserDefaults.standard.set(remainingAllowance, forKey: allowanceUDKey)
-        UserDefaults.standard.synchronize()
+        storage.set(remainingAllowance, forKey: allowanceUDKey)
+        storage.synchronize()
         
         // Verify the save worked
-        let verification = UserDefaults.standard.integer(forKey: allowanceUDKey)
+        let verification = storage.integer(forKey: allowanceUDKey)
         if verification != remainingAllowance {
             print("⚠️ WARNING: Save verification failed! Expected: \(remainingAllowance), Got: \(verification)")
         } else {
@@ -581,23 +698,14 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     }
 
     func canGenerate(pages pagesToGenerate: Int) -> Bool {
-        guard pagesToGenerate > 0 else { return true }
-
-        // Must have active subscription to generate any images
-        guard activeTier != nil else {
-            print("RCManager: Cannot generate. No active subscription.")
-            return false
-        }
-
-        if remainingAllowance >= pagesToGenerate {
-            print("RCManager: Can generate \(pagesToGenerate) images. Remaining: \(remainingAllowance)")
-            return true
-        } else {
-            print("RCManager: Cannot generate. Insufficient allowance. Remaining: \(remainingAllowance), Requested: \(pagesToGenerate)")
-            return false
-        }
+        GenerationAllowancePolicy.canGenerate(
+            pages: pagesToGenerate,
+            remaining: remainingAllowance,
+            hasSubscription: hasActiveSubscription,
+            developerUnlocked: isDeveloperUnlockedSession
+        )
     }
-    
+
     // Get formatted renewal date string
     func getRenewalDateString() -> String {
         guard activeTier != nil else { return "N/A" }
@@ -621,11 +729,12 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     
     // Check if user has reached image limit
     var hasReachedImageLimit: Bool {
-        return hasActiveSubscription && remainingAllowance <= 0
+        return !isDeveloperUnlockedSession && hasActiveSubscription && remainingAllowance <= 0
     }
 
     // ✨ Smart generation advice based on remaining monthly allowance
     func getGenerationAdvice(for requestedPages: Int) -> String? {
+        guard !isDeveloperUnlockedSession else { return nil }
         guard hasActiveSubscription else { return "Subscription required for image generation." }
         
         let remaining = remainingAllowance
@@ -646,6 +755,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     }
     
     var monthlyAllowanceStatus: String {
+        if isDeveloperUnlockedSession { return "Unlimited developer access" }
         guard hasActiveSubscription else { return "No active subscription" }
         return "\(remainingAllowance)/100 monthly allowance remaining"
     }
@@ -657,58 +767,58 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
 
     // MARK: – Developer mode unlock
 
-    #if DEBUG
     /// SHA-256 digest (hex) of the developer unlock password. Never store the plaintext.
     private static let developerPasswordDigestHex =
         "03a3f52f7b1fbdbd8224152e8fcc06e7eff398f63c9961fce7d032f560002128"
-    #endif
 
     /// Verifies a candidate developer unlock password against the stored digest
     /// using a constant-time comparison to avoid timing side-channels.
     static func verifyDeveloperPassword(_ input: String) -> Bool {
-        #if DEBUG
         let inputDigest = SHA256.hash(data: Data(input.utf8))
         let inputDigestHex = inputDigest.map { String(format: "%02x", $0) }.joined()
 
-        guard inputDigestHex.utf8.count == developerPasswordDigestHex.utf8.count else {
-            return false
-        }
-
-        var result: UInt8 = 0
-        for (a, b) in zip(inputDigestHex.utf8, developerPasswordDigestHex.utf8) {
-            result |= a ^ b
-        }
-        return result == 0
-        #else
-        return false
-        #endif
+        return DeveloperAccessCodePolicy.constantTimeMatches(
+            candidateDigest: inputDigestHex,
+            expectedDigest: developerPasswordDigestHex
+        )
     }
 
-    func unlockDeveloperMode() {
-        #if DEBUG
+    func authorizeDeveloperAccess(_ input: String) async throws {
+        guard Self.verifyDeveloperPassword(input) else {
+            throw DeveloperAccessError.incorrectCode
+        }
+
+        enablePersistentDevMode()
+    }
+
+    private func unlockDeveloperMode() {
         isDeveloperUnlockedSession = true
         activeTier = .monthly
-        remainingAllowance = 2000
-        print("🚀 Developer mode unlocked for this session – 2000 images")
-        #endif
+        remainingAllowance = Int.max
+        print("RCManager: Developer mode unlocked for this session.")
     }
 }
 
 extension RCSubscriptionManager: PurchasesDelegate {
     nonisolated func purchases(_ purchases: Purchases,
                                receivedUpdated customerInfo: CustomerInfo) {
+        let callbackAppUserID = purchases.appUserID
         Task { @MainActor in
             print("RCManager (Delegate): Received updated customer info. Refreshing state...")
             let manager = RCSubscriptionManager.shared
-            guard let firebaseUserID = Auth.auth().currentUser?.uid,
+            guard let firebaseUserID = manager.firebaseUserIDProvider(),
                   RevenueCatIdentityPolicy.canApplyCustomerInfo(
                     capturedFirebaseUserID: firebaseUserID,
-                    capturedAppUserID: purchases.appUserID,
+                    capturedAppUserID: callbackAppUserID,
                     currentFirebaseUserID: firebaseUserID,
                     currentAppUserID: Purchases.shared.appUserID,
                     identifiedFirebaseUserID: manager.identifiedFirebaseUserID
                   ) else { return }
-            manager.evaluateEntitlements(from: customerInfo, for: firebaseUserID)
+            do {
+                _ = try manager.applyPurchaseResult(customerInfo, for: firebaseUserID)
+            } catch {
+                print("RCManager: Could not apply subscription update: \(error.localizedDescription)")
+            }
         }
     }
 }

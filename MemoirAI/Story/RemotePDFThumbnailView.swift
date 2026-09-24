@@ -27,6 +27,20 @@ private struct PDFCoverDownloadResult: Sendable {
     let status: Int?
 }
 
+enum CoverPDFPreviewDownloadPolicy {
+    // 3.29 produced valid cover PDFs a little over 40 MB. Preserve those books
+    // while keeping an explicit ceiling for memory and disk use.
+    static let maximumByteCount = 64 * 1024 * 1024
+
+    static func acceptsExpectedByteCount(_ byteCount: Int64) -> Bool {
+        byteCount <= 0 || byteCount <= Int64(maximumByteCount)
+    }
+
+    static func acceptsDownloadedByteCount(_ byteCount: Int) -> Bool {
+        byteCount > 0 && byteCount <= maximumByteCount
+    }
+}
+
 enum CoverPDFThumbnailService {
     static func cacheKey(
         url: URL,
@@ -115,8 +129,18 @@ enum CoverPDFThumbnailService {
 
     private static func downloadPDFBytes(from url: URL) async -> PDFCoverDownloadResult {
         do {
-            let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
+            var headRequest = URLRequest(url: url, timeoutInterval: 10)
+            headRequest.httpMethod = "HEAD"
+            if let headResponse = try? await URLSession.shared.data(for: headRequest).1,
+               !CoverPDFPreviewDownloadPolicy.acceptsExpectedByteCount(headResponse.expectedContentLength) {
+                return PDFCoverDownloadResult(data: nil, status: nil)
+            }
+            let request = URLRequest(url: url, timeoutInterval: 60)
+            let (data, response) = try await URLSession.shared.data(for: request)
             let code = (response as? HTTPURLResponse)?.statusCode
+            guard CoverPDFPreviewDownloadPolicy.acceptsDownloadedByteCount(data.count) else {
+                return PDFCoverDownloadResult(data: nil, status: code)
+            }
             return PDFCoverDownloadResult(data: data, status: code)
         } catch {
             return PDFCoverDownloadResult(data: nil, status: nil)
@@ -288,6 +312,22 @@ struct RemotePDFThumbnailView<Placeholder: View>: View {
                     placeholder()
                     if isLoading {
                         ProgressView()
+                    } else if loadFailed {
+                        Button {
+                            loadFailed = false
+                            Task { await load() }
+                        } label: {
+                            ViewThatFits(in: .horizontal) {
+                                Label("Retry cover", systemImage: "arrow.clockwise")
+                                    .lineLimit(1)
+                                Image(systemName: "arrow.clockwise")
+                                    .accessibilityLabel("Retry cover")
+                            }
+                            .font(.caption.weight(.semibold))
+                            .padding(8)
+                            .background(.regularMaterial, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }

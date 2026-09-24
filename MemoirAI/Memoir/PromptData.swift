@@ -10,7 +10,7 @@ import SwiftUI
 
 // MARK: - Memoir mode (Normal / Parent / Relationships)
 
-enum MemoirMode: String, CaseIterable {
+enum MemoirMode: String, CaseIterable, Codable, Hashable {
     case normal = "normal"
     case parent = "parent"
     case relationships = "relationships"
@@ -30,6 +30,111 @@ enum MemoirMode: String, CaseIterable {
         case .parent: return "Parenthood"
         case .relationships: return "Love & Relationships"
         }
+    }
+
+    var libraryTitle: String {
+        switch self {
+        case .normal: return "My Life Story"
+        case .parent: return "Parent Memoir"
+        case .relationships: return "Love & Relationships"
+        }
+    }
+}
+
+struct MemoryMemoirMetadata: Equatable {
+    let storedModeRawValue: String?
+    let chapter: String?
+    let prompt: String?
+}
+
+enum MemoirModeClassifier {
+    static func classify(_ memory: MemoryMemoirMetadata) -> MemoirMode? {
+        if let rawValue = normalized(memory.storedModeRawValue) {
+            return MemoirMode(rawValue: rawValue)
+        }
+
+        let chapter = normalized(memory.chapter)
+        let prompt = normalized(memory.prompt)
+        guard chapter != nil else { return nil }
+
+        let promptMatches = MemoirMode.allCases.filter { mode in
+            guard let prompt else { return false }
+            return chapters(for: mode).contains { candidate in
+                normalized(candidate.title) == chapter
+                    && candidate.prompts.contains { normalized($0.text) == prompt }
+            }
+        }
+        if promptMatches.count == 1 {
+            return promptMatches[0]
+        }
+
+        // Custom guided questions are still classifiable when the stored chapter
+        // title belongs to exactly one memoir. Shared legacy titles stay unclassified.
+        let chapterMatches = MemoirMode.allCases.filter { mode in
+            chapters(for: mode).contains { normalized($0.title) == chapter }
+        }
+        return chapterMatches.count == 1 ? chapterMatches[0] : nil
+    }
+
+    static func mode(forCurrentChapterTitle chapterTitle: String) -> MemoirMode? {
+        let chapter = normalized(chapterTitle)
+        let matches = MemoirMode.allCases.filter { mode in
+            currentChapters(for: mode).contains { normalized($0.title) == chapter }
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private static func currentChapters(for mode: MemoirMode) -> [Chapter] {
+        switch mode {
+        case .normal: return allChapters
+        case .parent: return allParentChapters
+        case .relationships: return allRelationshipChapters
+        }
+    }
+
+    private static func chapters(for mode: MemoirMode) -> [Chapter] {
+        let legacy: [Chapter]
+        switch mode {
+        case .normal:
+            legacy = allChaptersLegacyKnownPrompts.filter { (1...10).contains($0.number) }
+        case .parent:
+            legacy = allChaptersLegacyKnownPrompts.filter { (101...110).contains($0.number) }
+        case .relationships:
+            legacy = allChaptersLegacyKnownPrompts.filter { (201...299).contains($0.number) }
+        }
+        return currentChapters(for: mode) + legacy
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.isEmpty ? nil : normalized
+    }
+}
+
+enum MemoirModeFilterPolicy {
+    static func availableModes(in memories: [MemoryMemoirMetadata]) -> [MemoirMode] {
+        let populated = Set(memories.compactMap(MemoirModeClassifier.classify))
+        return MemoirMode.allCases.filter(populated.contains)
+    }
+
+    static func includes(_ memory: MemoryMemoirMetadata, mode: MemoirMode?) -> Bool {
+        guard let mode else { return true }
+        return MemoirModeClassifier.classify(memory) == mode
+    }
+}
+
+extension MemoryEntry {
+    var memoirMetadata: MemoryMemoirMetadata {
+        MemoryMemoirMetadata(
+            storedModeRawValue: memoirModeRaw,
+            chapter: chapter,
+            prompt: prompt
+        )
+    }
+
+    var classifiedMemoirMode: MemoirMode? {
+        MemoirModeClassifier.classify(memoirMetadata)
     }
 }
 
@@ -103,18 +208,58 @@ let relationshipChapterTitleAliases: [String: [String]] = [
     "Your Places": ["Home Together"],
     "The Everyday": ["Everyday Love"],
     "What Makes You Laugh": ["Everyday Love"],
-    "Through the Storms": ["Growth, Depth, and Future"],
+    "Through the Hard Parts": ["Growth, Depth, and Future"],
+    "Seeing Them Clearly": ["Growth, Depth, and Future"],
     "Who You're Becoming": ["Growth, Depth, and Future"],
     "One Memory to Keep": ["If One Memory Could Say It All", "Growth, Depth, and Future"]
 ]
 
+private let relationshipChapterArtworkByNumber: [Int: String] = [
+    1: "relationship-first-glimpse",
+    2: "relationship-falling",
+    3: "relationship-choosing-each-other",
+    4: "relationship-your-places",
+    5: "relationship-everyday",
+    6: "relationship-laugh",
+    7: "relationship-hard-parts",
+    8: "relationship-seeing-clearly",
+    9: "relationship-becoming",
+    10: "relationship-one-memory"
+]
+
+func relationshipChapterImageAssetName(forChapterNumber number: Int) -> String? {
+    relationshipChapterArtworkByNumber[number]
+}
+
+func relationshipChapterImageAssetName(forChapterTitle title: String) -> String? {
+    let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let chapter = allRelationshipChapters.first(where: {
+        $0.title.caseInsensitiveCompare(normalizedTitle) == .orderedSame
+    }) else {
+        return nil
+    }
+    return relationshipChapterImageAssetName(forChapterNumber: chapter.number)
+}
+
 /// True when `entryChapter` (stored on a memory) should count toward the chapter identified by `chapterTitle` (current UI chapter).
 func chapterTitleMatches(_ entryChapter: String?, _ chapterTitle: String) -> Bool {
+    chapterTitleMatches(
+        entryChapter,
+        chapterTitle,
+        memoirMode: currentMemoirMode()
+    )
+}
+
+func chapterTitleMatches(
+    _ entryChapter: String?,
+    _ chapterTitle: String,
+    memoirMode: MemoirMode
+) -> Bool {
     let ct = chapterTitle.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let ec = entryChapter?.trimmingCharacters(in: .whitespacesAndNewlines), !ec.isEmpty, !ct.isEmpty else { return false }
     if ec.caseInsensitiveCompare(ct) == .orderedSame { return true }
     let aliasesTable: [String: [String]]
-    switch currentMemoirMode() {
+    switch memoirMode {
     case .normal: aliasesTable = normalChapterTitleAliases
     case .parent: aliasesTable = parentChapterTitleAliases
     case .relationships: aliasesTable = relationshipChapterTitleAliases
@@ -191,6 +336,80 @@ func chapterImageAssetName(for title: String) -> String {
         "for when they're older": "legacy"
     ]
     return mapping[key] ?? key
+}
+
+enum ChapterJourneyNodeLayoutPolicy {
+    private static let fallbackCoordinates = [
+        CGPoint(x: 0.57, y: 0.80), CGPoint(x: 0.39, y: 0.62),
+        CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.47, y: 0.30)
+    ]
+
+    private static let trailCoordinatesByArtwork: [String: [CGPoint]] = [
+        "beginnings": [
+            CGPoint(x: 0.57, y: 0.80), CGPoint(x: 0.39, y: 0.62),
+            CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.47, y: 0.30)
+        ],
+        "growing up": [
+            CGPoint(x: 0.53, y: 0.80), CGPoint(x: 0.36, y: 0.60),
+            CGPoint(x: 0.73, y: 0.45), CGPoint(x: 0.47, y: 0.30)
+        ],
+        "belonging": [
+            CGPoint(x: 0.44, y: 0.78), CGPoint(x: 0.55, y: 0.62),
+            CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.55, y: 0.28)
+        ],
+        "becoming": [
+            CGPoint(x: 0.48, y: 0.80), CGPoint(x: 0.62, y: 0.63),
+            CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.52, y: 0.28)
+        ],
+        "love": [
+            CGPoint(x: 0.62, y: 0.78), CGPoint(x: 0.38, y: 0.63),
+            CGPoint(x: 0.73, y: 0.45), CGPoint(x: 0.48, y: 0.28)
+        ],
+        "care": [
+            CGPoint(x: 0.41, y: 0.80), CGPoint(x: 0.61, y: 0.60),
+            CGPoint(x: 0.38, y: 0.43), CGPoint(x: 0.56, y: 0.28)
+        ],
+        "work & purpose": [
+            CGPoint(x: 0.43, y: 0.80), CGPoint(x: 0.60, y: 0.63),
+            CGPoint(x: 0.38, y: 0.46), CGPoint(x: 0.58, y: 0.30)
+        ],
+        "hard seasons": [
+            CGPoint(x: 0.43, y: 0.80), CGPoint(x: 0.42, y: 0.63),
+            CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.45, y: 0.30)
+        ],
+        "change": [
+            CGPoint(x: 0.58, y: 0.78), CGPoint(x: 0.42, y: 0.61),
+            CGPoint(x: 0.75, y: 0.45), CGPoint(x: 0.45, y: 0.29)
+        ],
+        "legacy": [
+            CGPoint(x: 0.35, y: 0.78), CGPoint(x: 0.60, y: 0.60),
+            CGPoint(x: 0.36, y: 0.45), CGPoint(x: 0.71, y: 0.30)
+        ]
+    ]
+
+    /// Normalized against each generated Love artwork, so placement scales with
+    /// the shared artwork frame instead of any particular phone dimensions.
+    private static let relationshipTrailCoordinatesByChapter: [Int: [CGPoint]] = [
+        1: [CGPoint(x: 0.57, y: 0.80), CGPoint(x: 0.39, y: 0.62), CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.47, y: 0.30)],
+        2: [CGPoint(x: 0.53, y: 0.80), CGPoint(x: 0.36, y: 0.60), CGPoint(x: 0.73, y: 0.45), CGPoint(x: 0.47, y: 0.30)],
+        3: [CGPoint(x: 0.52, y: 0.78), CGPoint(x: 0.55, y: 0.62), CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.55, y: 0.28)],
+        4: [CGPoint(x: 0.48, y: 0.80), CGPoint(x: 0.48, y: 0.63), CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.52, y: 0.28)],
+        5: [CGPoint(x: 0.50, y: 0.78), CGPoint(x: 0.38, y: 0.63), CGPoint(x: 0.73, y: 0.45), CGPoint(x: 0.48, y: 0.28)],
+        6: [CGPoint(x: 0.50, y: 0.80), CGPoint(x: 0.42, y: 0.60), CGPoint(x: 0.50, y: 0.43), CGPoint(x: 0.54, y: 0.28)],
+        7: [CGPoint(x: 0.52, y: 0.80), CGPoint(x: 0.41, y: 0.63), CGPoint(x: 0.49, y: 0.46), CGPoint(x: 0.58, y: 0.30)],
+        8: [CGPoint(x: 0.49, y: 0.80), CGPoint(x: 0.42, y: 0.63), CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.45, y: 0.30)],
+        9: [CGPoint(x: 0.58, y: 0.78), CGPoint(x: 0.42, y: 0.61), CGPoint(x: 0.75, y: 0.45), CGPoint(x: 0.45, y: 0.29)],
+        10: [CGPoint(x: 0.55, y: 0.78), CGPoint(x: 0.40, y: 0.60), CGPoint(x: 0.63, y: 0.45), CGPoint(x: 0.40, y: 0.30)]
+    ]
+
+    static func coordinates(forChapterTitle title: String) -> [CGPoint] {
+        trailCoordinatesByArtwork[chapterImageAssetName(for: title)]
+            ?? fallbackCoordinates
+    }
+
+    static func coordinates(forRelationshipChapterNumber number: Int) -> [CGPoint] {
+        relationshipTrailCoordinatesByChapter[number] ?? fallbackCoordinates
+    }
 }
 
 /// Old normal chapter set (titles + prompts) kept so `isKnownMemoirPrompt` still recognizes pre-update memories.

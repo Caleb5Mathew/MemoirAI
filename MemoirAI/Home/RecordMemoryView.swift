@@ -530,6 +530,16 @@ struct RecordMemoryView: View {
                     message: "Recording will save soon to protect your memory"
                 )
             }
+
+            if showExitConfirm {
+                RecordingExitConfirmationOverlay(
+                    discard: {
+                        clearRecording()
+                        dismiss()
+                    },
+                    keepEditing: { showExitConfirm = false }
+                )
+            }
         }
         .background(Color(red: 1.0, green: 0.96, blue: 0.89)
             .ignoresSafeArea())
@@ -596,23 +606,14 @@ struct RecordMemoryView: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Saving your memory")
         }
-        .alert("Exit without saving?", isPresented: $showExitConfirm) {
-            Button("Discard and Exit", role: .destructive) {
-                clearRecording()
-                dismiss()
-            }
-            Button("Keep Editing", role: .cancel) { }
-        } message: {
-            Text("You have an unsaved memory in progress. If you exit now, your current recording and text will be lost.")
-        }
-        .alert("Private Cloud Transcription", isPresented: $showCloudTranscriptionDisclosure) {
+        .alert(CloudTranscriptionDisclosure.title, isPresented: $showCloudTranscriptionDisclosure) {
             Button("Not Now", role: .cancel) { }
             Button("Continue") {
                 CloudTranscriptionDisclosure.accept()
                 startRecording()
             }
         } message: {
-            Text("Saved recordings are uploaded to your private MemoirAI account and sent to OpenAI to create a transcript. You can delete the recording and transcript at any time.")
+            Text(CloudTranscriptionDisclosure.message)
         }
         .alert(
             "Recording Unavailable",
@@ -766,6 +767,7 @@ struct RecordMemoryView: View {
     
     // MARK: - Recording
     func startRecording() {
+        isTextFocused = false
         if let failureMessage = MemoryUserScope.recordingStartFailureMessage(
             firebaseUserID: MemoryUserScope.currentFirebaseUserId
         ) {
@@ -940,7 +942,9 @@ struct RecordMemoryView: View {
         isSaving = true
         
         let promptToSave  = selectedPrompt ?? "Untitled Prompt"
-        let textToSave    = typedText          // capture before UI reset
+        let textToSave    = typedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil
+            : typedText
         let audioURLToSave = audioURL          // capture
         let profile = profileVM.selectedProfile
         
@@ -963,9 +967,9 @@ struct RecordMemoryView: View {
             let newEntry = MemoryEntry(context: bgContext)
             newEntry.id           = UUID()
             newEntry.prompt       = promptToSave
-            newEntry.text         = textToSave.isEmpty ? nil : textToSave
+            newEntry.text         = textToSave
             newEntry.audioFileURL = audioURLToSave?.absoluteString
-            newEntry.transcriptionEditedText = audioURLToSave == nil || textToSave.isEmpty ? nil : textToSave
+            newEntry.transcriptionEditedText = audioURLToSave == nil ? nil : textToSave
             newEntry.transcriptionStatus = audioURLToSave == nil ? nil : "queued"
             newEntry.transcriptionLanguage = "en"
             newEntry.audioData    = nil
@@ -998,10 +1002,8 @@ struct RecordMemoryView: View {
             
             // 3️⃣ Generate title if needed (if prompt is "Untitled Prompt" and we have text)
             if promptToSave == "Untitled Prompt" || promptToSave == "Untitled" {
-                let textForTitle = textToSave.isEmpty ? nil : textToSave
-                
                 // If we have text now, generate title immediately
-                if let text = textForTitle, !text.isEmpty {
+                if let text = textToSave {
                     let entryObjectID = newEntry.objectID
                     Task {
                         await generateAndUpdateTitle(for: entryObjectID, text: text, profile: profile)

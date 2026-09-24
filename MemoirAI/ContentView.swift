@@ -71,11 +71,14 @@ struct ContentView: View {
                     .onReceive(NotificationCenter.default.publisher(for: .navigateToCloudStorybookGeneration)) { _ in
                         Task { await routeToActiveCloudStorybookIfNeeded(force: true) }
                     }
-                    .navigationDestination(for: StorybookRootRoute.self) { _ in
+                    .navigationDestination(for: StorybookRootRoute.self) { route in
                         StoryPage()
                             .environmentObject(profileVM)
                             .environmentObject(tutorialCoordinator)
-                            .environment(\.storybookScreenEntry, .autoResumePendingGeneration)
+                            .environment(
+                                \.storybookScreenEntry,
+                                route == .resumeInProgressGeneration ? .autoResumePendingGeneration : .standard
+                            )
                     }
                     .navigationDestination(for: UUID.self) { id in
                         if let entry = PersistenceController.shared.entry(id: id) {
@@ -92,7 +95,7 @@ struct ContentView: View {
                     }
                 }
                 .overlay(alignment: .top) {
-                    GlobalStorybookProgressBanner()
+                    GlobalStorybookProgressBanner(isNavigationRoot: path.isEmpty)
                 }
                 .environmentObject(nav)
                 .task {
@@ -113,8 +116,12 @@ struct ContentView: View {
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
+                        Task { await RCSubscriptionManager.shared.refreshCustomerInfo(forceRefresh: true) }
                         Task { await routeToActiveCloudStorybookIfNeeded() }
                     }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .tutorialDismissToHome)) { _ in
+                    path = NavigationPath()
                 }
                 .onAppear {
                     syncStorybookJobObserverBinding()
@@ -123,14 +130,14 @@ struct ContentView: View {
                         print("🔗 Processing pending deep link: \(pendingID.uuidString.prefix(8))…")
                         pendingDeepLinkID = nil
                         Task {
-                            await authService.signInAnonymouslyIfNeeded()
+                            guard await authService.prepareAuthenticatedSessionForLaunch() else { return }
                             await routeParsedMemory(memoryID: pendingID, source: "pendingOnboarding")
                         }
                     }
                     
                     // Auto sign-in anonymously and trigger migration
                     Task {
-                        await authService.signInAnonymouslyIfNeeded()
+                        guard await authService.prepareAuthenticatedSessionForLaunch() else { return }
                         if let userID = MemoryUserScope.currentFirebaseUserId {
                             await profileVM.activateUser(userID)
                         }
@@ -165,9 +172,11 @@ struct ContentView: View {
             path = NavigationPath()
             nav.clear()
             syncStorybookJobObserverBinding()
-            guard let newUserID else { return }
+            guard newUserID != nil else { return }
             Task {
-                await profileVM.activateUser(newUserID)
+                guard await authService.prepareAuthenticatedSessionForLaunch(),
+                      let finalUserID = MemoryUserScope.currentFirebaseUserId else { return }
+                await profileVM.activateUser(finalUserID)
                 await FirestoreSyncService.shared.hydrateMemoriesFromFirestoreIfStoreEmpty(
                     context: PersistenceController.shared.container.viewContext
                 )
@@ -180,12 +189,10 @@ struct ContentView: View {
             // CRITICAL: Establish link between ad clicks and app opens
             AppEvents.shared.activateApp()
 
-            // Anonymous sign-in must exist *before* WelcomeAuthView can offer to link an
-            // Apple/Google/email credential to it. Previously this only ran inside the
-            // post-onboarding branch below; `signInAnonymouslyIfNeeded()` is a no-op once
-            // already signed in, so calling it here too is safe and idempotent.
+            // Resolve guest recovery before WelcomeAuthView can link credentials or any
+            // profile store can activate under a temporary reinstall UID.
             Task {
-                await authService.signInAnonymouslyIfNeeded()
+                await authService.prepareAuthenticatedSessionForLaunch()
             }
         }
         // 🔗 DEEP LINK HANDLER: Catch QR code scans
@@ -359,7 +366,7 @@ struct ContentView: View {
         }
         await MainActor.run {
             let tracker = StorybookSeenTracker.shared
-            if tracker.isStoryPageVisible { return }
+            if tracker.isStoryPageVisible || tracker.isStoryPageNavigationPending { return }
             if !force {
                 if job.status == "complete" {
                     guard !tracker.hasSeenCompleted(jobId: job.jobId) else { return }
@@ -375,8 +382,9 @@ struct ContentView: View {
             tracker.notePendingRoute(jobId: job.jobId, isComplete: job.status == "complete")
             programmaticNavigationReset = true
             nav.clear()
-            path = NavigationPath()
-            path.append(StorybookRootRoute.resumeInProgressGeneration)
+            var destinationPath = NavigationPath()
+            destinationPath.append(StorybookRootRoute.resumeInProgressGeneration)
+            path = destinationPath
             DispatchQueue.main.async {
                 programmaticNavigationReset = false
             }

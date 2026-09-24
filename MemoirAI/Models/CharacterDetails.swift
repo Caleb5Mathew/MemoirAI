@@ -8,6 +8,16 @@ enum MemoryAudioAvailabilityPolicy {
     ) -> Bool {
         localFileExists || (embeddedAudioByteCount ?? 0) > 0 || hasRemoteAudio
     }
+
+    static func remoteURL(storedReference: String?) -> URL? {
+        guard let storedReference,
+              let url = URL(string: storedReference),
+              url.scheme?.lowercased() == "https",
+              url.host?.isEmpty == false else {
+            return nil
+        }
+        return url
+    }
 }
 
 extension MemoryEntry {
@@ -39,6 +49,11 @@ extension MemoryEntry {
         return temporaryURL
     }
 
+    /// Returns either playable local audio or the private HTTPS download URL restored from Firestore.
+    var availableAudioURL: URL? {
+        playbackURL ?? MemoryAudioAvailabilityPolicy.remoteURL(storedReference: audioFileURL)
+    }
+
     var hasAudio: Bool {
         if let urlString = audioFileURL,
            let url = URL(string: urlString),
@@ -48,9 +63,9 @@ extension MemoryEntry {
         }
 
         let embeddedAudioByteCount = (value(forKey: "audioData") as? Data)?.count
-        let hasRemoteAudio = audioFileURL
-            .flatMap(URL.init(string:))
-            .map { $0.scheme?.lowercased() == "https" } ?? false
+        let hasRemoteAudio = MemoryAudioAvailabilityPolicy.remoteURL(
+            storedReference: audioFileURL
+        ) != nil
         return MemoryAudioAvailabilityPolicy.hasAudio(
             localFileExists: false,
             embeddedAudioByteCount: embeddedAudioByteCount,

@@ -60,7 +60,7 @@ enum BookFontStyle {
     func titleFont(for frameHeight: CGFloat) -> Font {
         let size = frameHeight * 0.035  // ~28pt at 792pt, ~21pt at 612pt
         switch self {
-        case .kidsBook:  return .custom("TimesNewRomanPS-BoldMT", size: 18) ?? .system(size: 18, weight: .bold, design: .serif)
+        case .kidsBook:  return .custom("TimesNewRomanPS-BoldMT", size: size)
         case .comic:     return .system(size: size, weight: .heavy, design: .serif)
         case .realistic: return .custom("Georgia-Bold", size: size) ?? .system(size: size, weight: .bold, design: .serif)
         case .custom:    return .system(size: size, weight: .semibold, design: .serif)
@@ -71,7 +71,7 @@ enum BookFontStyle {
     func bodyFont(for frameHeight: CGFloat) -> Font {
         let size = frameHeight * 0.020  // ~16pt at 792pt, ~12pt at 612pt
         switch self {
-        case .kidsBook:  return .custom("TimesNewRomanPSMT", size: 12) ?? .system(size: 12, weight: .regular, design: .serif)
+        case .kidsBook:  return .custom("TimesNewRomanPSMT", size: size)
         case .comic:     return .system(size: size, weight: .semibold, design: .serif)
         case .realistic: return .custom("Georgia", size: size) ?? .system(size: size, weight: .regular, design: .serif)
         case .custom:    return .system(size: size, weight: .regular, design: .serif)
@@ -82,7 +82,7 @@ enum BookFontStyle {
     func pageNumberFont(for frameHeight: CGFloat) -> Font {
         let size = frameHeight * 0.015  // ~12pt at 792pt, ~9pt at 612pt
         switch self {
-        case .kidsBook:  return .custom("TimesNewRomanPSMT", size: 10) ?? .system(size: 10, weight: .regular, design: .serif)
+        case .kidsBook:  return .custom("TimesNewRomanPSMT", size: size)
         case .comic:     return .system(size: size, weight: .regular, design: .serif)
         case .realistic: return .custom("Georgia", size: size) ?? .system(size: size, weight: .regular, design: .serif)
         case .custom:    return .system(size: size, weight: .regular, design: .serif)
@@ -96,7 +96,10 @@ struct QRWatermark: View {
     let memoryID: UUID
     /// When non-zero (e.g. Kids book bar height), QR sits below this so it doesn't overlap the top bar.
     var topInset: CGFloat = 0
-    private let qrSide: CGFloat = 60
+    var qrSide: CGFloat = 60
+    var imagePadding: CGFloat = 8
+    var trailingPadding: CGFloat = 12
+    var topPadding: CGFloat = 8
     
     var body: some View {
         VStack(spacing: 0) {
@@ -112,23 +115,27 @@ struct QRWatermark: View {
                 .interpolation(.none)
                 .resizable()
                 .frame(width: qrSide, height: qrSide)
-                .padding(8)
+                .padding(imagePadding)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
             }
-            .padding(.trailing, 12)
-            .padding(.top, 8)
+            .padding(.trailing, trailingPadding)
+            .padding(.top, topPadding)
             Spacer()
         }
     }
 }
 
-// MARK: - Page Detail Presentation
-/// Identifiable payload for `.fullScreenCover(item:)` so the detail view always
-/// receives the tapped page index (a Bool-driven cover can capture stale state).
-struct PageDetailRequest: Identifiable {
+struct PreparedPageEditorRequest: Identifiable {
     let id = UUID()
+    let target: StorybookEditablePageTarget
     let pageIndex: Int
-    let startInEditMode: Bool
+    let pageID: String
+    let memoryID: UUID
+    let document: BookPageDocument
+    let canReset: Bool
+    let isLandscape: Bool
+    let isIllustration: Bool
+    let showsChrome: Bool
 }
 
 // Enhanced font system with distinct styles
@@ -139,15 +146,15 @@ extension Font {
     
     // Kids book fonts - Times New Roman 12pt for publisher standard (11×8.5" print)
     static func kidsBookTitleFont(for frameHeight: CGFloat) -> Font {
-        return .custom("TimesNewRomanPS-BoldMT", size: 18) ?? .system(size: 18, weight: .bold, design: .serif)
+        .custom("TimesNewRomanPS-BoldMT", size: frameHeight * 0.035)
     }
     
     static func kidsBookBodyFont(for frameHeight: CGFloat) -> Font {
-        return .custom("TimesNewRomanPSMT", size: 12) ?? .system(size: 12, weight: .regular, design: .serif)
+        .custom("TimesNewRomanPSMT", size: frameHeight * 0.020)
     }
     
     static func kidsBookPageNumberFont(for frameHeight: CGFloat) -> Font {
-        return .custom("TimesNewRomanPSMT", size: 10) ?? .system(size: 10, weight: .regular, design: .serif)
+        .custom("TimesNewRomanPSMT", size: frameHeight * 0.015)
     }
     
     // Professional vertical book fonts - elegant serif fonts
@@ -198,18 +205,16 @@ struct StoryPage: View {
     @State private var showGallery = false
     @State private var selectedImageForFullScreen: UIImage? = nil
     @State private var hasRequestedGeneration = false
-    @State private var pageDetailRequest: PageDetailRequest? = nil
+    @State private var isOpeningBook = true
+    @State private var pageEditorRequest: PreparedPageEditorRequest? = nil
+    @State private var isPreparingPageEditor = false
     @State private var showCoverEditor = false
-    @State private var showCoverArtEditSheet = false
-    @State private var coverArtEditPanel: BookCoverFlatPanel = .front
-    @State private var coverArtEditRevisionText = ""
     @State private var showCoverPDFMissingAlert = false
     
     // NEW: Download and regenerate functionality
     @State private var showDownloadSuccess = false
     @State private var showRegenerateConfirmation = false
     @State private var isDownloading = false
-    @State private var isRegenerationFlow = false
     
     // Track actual preview dimensions for accurate PDF generation
     @State private var actualPreviewWidth: CGFloat = 0
@@ -239,16 +244,16 @@ struct StoryPage: View {
     @State private var orderNotReadyAlertTitle = "Book PDF Still Preparing"
     @State private var orderNotReadyAlertMessage = ""
     @State private var showSkippedMemoriesExplanation = false
-    @ObservedObject private var printOrderCart = OrderCartStore.shared
     @State private var debugSessionID: String = String(UUID().uuidString.prefix(8))
     /// When free preview is exhausted, tutorial may allow one bonus image (tracked separately from `FreePreviewConfig`).
     @State private var pendingTutorialBonusGeneration: Bool = false
+    @State private var isCheckingSubscription = false
     
     @Environment(\.managedObjectContext) private var context
     
     // NEW: Subscription check - exactly like MemoirView
     private var isSubscribed: Bool {
-        subscriptionManager.activeTier != nil
+        subscriptionManager.hasActiveSubscription
     }
     
     // MARK: - Incomplete Memories Banner Component
@@ -328,6 +333,17 @@ struct StoryPage: View {
         }
     }
     
+    private var isShowingOpeningBook: Bool {
+        isOpeningBook || StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
+            isLoadingProfileBook: vm.isLoadingProfileBook,
+            hasLoadedBook: StorybookPagePresentationPolicy.shouldShowLoadedBook(
+                hasGeneratedStorybook: vm.hasGeneratedStorybook,
+                pageCount: vm.pageItems.count
+            ),
+            hasCanonicalBookMetadata: vm.currentBookVersionRecord != nil
+        )
+    }
+
     @ViewBuilder
     private func storybookContentView(
         bookFrameWidth: CGFloat,
@@ -339,13 +355,10 @@ struct StoryPage: View {
         )
         if vm.isLoading {
             makeLoadingView()
+        } else if isShowingOpeningBook {
+            makeOpeningLibraryBookView(isLibrarySelection: true)
         } else if vm.isLoadingGalleryBook {
-            makeOpeningLibraryBookView()
-        } else if StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
-            isLoadingProfileBook: vm.isLoadingProfileBook,
-            hasLoadedBook: hasLoadedBook
-        ) {
-            makeOpeningLibraryBookView()
+            makeOpeningLibraryBookView(isLibrarySelection: true)
         } else if hasLoadedBook && vm.requiresVisualReadyGate && !vm.isVisualBookReady {
             makeFinalizingAssetsView()
         } else if let error = vm.errorMessage {
@@ -389,7 +402,7 @@ struct StoryPage: View {
                     .foregroundColor(.gray)
             }
 
-            Text("Generating in the cloud. You can close the app and come back, and we’ll keep working on your storybook.")
+            Text("Creating your storybook. Keep MemoirAI open to watch it come together.")
                 .font(.caption2)
                 .foregroundColor(.gray.opacity(0.8))
         }
@@ -423,15 +436,16 @@ struct StoryPage: View {
 
     /// Shown in the book preview while a My Library selection downloads/applies (avoids empty-state flash).
     @ViewBuilder
-    private func makeOpeningLibraryBookView() -> some View {
+    private func makeOpeningLibraryBookView(isLibrarySelection: Bool) -> some View {
+        let copy = StorybookPagePresentationPolicy.loadingCopy(isLibrarySelection: isLibrarySelection)
         VStack(spacing: 14) {
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: localColors.terracotta))
                 .scaleEffect(1.15)
-            Text("Opening your book…")
+            Text(copy.title)
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .foregroundColor(localColors.terracotta)
-            Text("Loading pages and illustrations from the cloud.")
+            Text(copy.subtitle)
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -456,7 +470,7 @@ struct StoryPage: View {
             if error.contains("Maximum images reached") || error.contains("Not enough images") {
                 // Show subscription status
                 VStack(spacing: 8) {
-                    Text("Images remaining: \(subscriptionManager.remainingAllowance)/100")
+                    Text(subscriptionManager.isDeveloperUnlockedSession ? "Unlimited images" : "Images remaining: \(subscriptionManager.remainingAllowance)/100")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.gray)
                     
@@ -485,8 +499,8 @@ struct StoryPage: View {
     @ViewBuilder
     private func makeBookContent(bookFrameWidth: CGFloat, bookContentHeightInsideFrame: CGFloat) -> some View {
         let bookAspectRatio = vm.currentPrintSpec.aspectRatio
-        let contentWidth = bookFrameWidth * 0.9
-        let contentHeight = contentWidth / bookAspectRatio
+        let contentWidth = bookFrameWidth
+        let contentHeight = bookContentHeightInsideFrame
         
         ZStack {
             makeTabViewContent(
@@ -520,25 +534,39 @@ struct StoryPage: View {
         contentHeight: CGFloat,
         printSpec: BookPrintSpec
     ) -> some View {
+        let slots = StorybookReaderSlotPolicy.slots(
+            interiorPageCount: vm.pageItems.count,
+            hasExteriorCover: vm.hasPrintCoverPDF
+        )
         TabView(selection: $currentPageIndex) {
-            ForEach(Array(vm.pageItems.enumerated()), id: \.offset) { idx, item in
+            ForEach(Array(slots.enumerated()), id: \.offset) { readerIndex, slot in
                 let renderScale = min(
                     contentWidth / max(printSpec.widthPt, 1),
                     contentHeight / max(printSpec.heightPt, 1)
                 )
-                pageView(
-                    for: item,
-                    at: idx,
-                    frameWidth: printSpec.widthPt,
-                    frameHeight: printSpec.heightPt
-                )
+                Group {
+                    switch slot {
+                    case .cover(let panel):
+                        exteriorCoverPage(
+                            panel: panel,
+                            width: printSpec.widthPt,
+                            height: printSpec.heightPt
+                        )
+                        .onTapGesture { openEditor(for: slot) }
+                    case .interiorPage(let pageIndex):
+                        pageView(
+                            for: vm.pageItems[pageIndex],
+                            at: pageIndex,
+                            frameWidth: printSpec.widthPt,
+                            frameHeight: printSpec.heightPt
+                        )
+                        .onTapGesture { openEditor(for: slot) }
+                    }
+                }
                 .frame(width: printSpec.widthPt, height: printSpec.heightPt)
                 .scaleEffect(renderScale, anchor: .center)
                 .frame(width: contentWidth, height: contentHeight)
-                .tag(idx)
-                .onTapGesture {
-                    pageDetailRequest = PageDetailRequest(pageIndex: idx, startInEditMode: false)
-                }
+                .tag(readerIndex)
             }
         }
         .id(vm.tabViewCoverRefreshIdentity)
@@ -546,7 +574,52 @@ struct StoryPage: View {
         .frame(width: contentWidth, height: contentHeight)
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
-    
+
+    @ViewBuilder
+    private func exteriorCoverPage(panel: BookCoverFlatPanel, width: CGFloat, height: CGFloat) -> some View {
+        if let record = vm.currentBookVersionRecord,
+           let url = record.printCoverPDFURL {
+            RemotePDFThumbnailView(
+                url: url,
+                targetSize: CGSize(width: width * 2, height: height * 2),
+                layout: record.coverFlatLayoutKind,
+                panel: panel,
+                cacheRevision: record.coverThumbnailCacheRevision,
+                cacheIdentity: record.coverStoragePath ?? ""
+            ) {
+                fallbackExteriorCover(panel: panel, width: width, height: height)
+            }
+        } else {
+            fallbackExteriorCover(panel: panel, width: width, height: height)
+        }
+    }
+
+    @ViewBuilder
+    private func fallbackExteriorCover(panel: BookCoverFlatPanel, width: CGFloat, height: CGFloat) -> some View {
+        if panel == .front {
+            MemoirCoverFrontPage(
+                title: vm.bookDisplayTitle,
+                subtitle: "",
+                frameWidth: width,
+                frameHeight: height,
+                isKidsBook: vm.currentArtStyle == .kidsBook
+            )
+        } else {
+            MemoirCoverBackPage(
+                subtitle: vm.backCoverPitch,
+                frameWidth: width,
+                frameHeight: height
+            )
+        }
+    }
+
+    private var readerSlots: [StorybookReaderSlot] {
+        StorybookReaderSlotPolicy.slots(
+            interiorPageCount: vm.pageItems.count,
+            hasExteriorCover: vm.hasPrintCoverPDF
+        )
+    }
+
     private func handleImageTap(at idx: Int) {
         if case .illustration = vm.pageItems[idx] {
             // Check if this image is being edited
@@ -562,11 +635,11 @@ struct StoryPage: View {
     
     @ViewBuilder
     private func makeLoadingOverlays(contentWidth: CGFloat, contentHeight: CGFloat) -> some View {
-        ForEach(vm.pageItems.indices, id: \.self) { idx in
-            if vm.isEditingImage(at: idx) && currentPageIndex == idx {
+        if readerSlots.indices.contains(currentPageIndex),
+           case .interiorPage(let pageIndex) = readerSlots[currentPageIndex],
+           vm.isEditingImage(at: pageIndex) {
                 makeLoadingOverlay()
                     .transition(.opacity)
-            }
         }
     }
     
@@ -597,7 +670,7 @@ struct StoryPage: View {
     
     @ViewBuilder
     private func makeNavigationButtons(bookFrameWidth: CGFloat) -> some View {
-        if vm.pageItems.count > 1 {
+        if readerSlots.count > 1 {
             HStack {
                 makePreviousButton()
                 Spacer()
@@ -622,20 +695,22 @@ struct StoryPage: View {
         }
         .disabled(currentPageIndex == 0)
         .opacity(currentPageIndex == 0 ? 0.3 : 1.0)
+        .accessibilityIdentifier("storybookPreviousPage")
     }
     
     @ViewBuilder
     private func makeNextButton() -> some View {
         Button {
-            if currentPageIndex < vm.pageItems.count - 1 {
+            if currentPageIndex < readerSlots.count - 1 {
                 withAnimation(.easeInOut) { currentPageIndex += 1 }
             }
         } label: {
             Image(systemName: "arrow.right.circle.fill")
                 .shadow(radius: 3)
         }
-        .disabled(currentPageIndex == vm.pageItems.count - 1)
-        .opacity(currentPageIndex == vm.pageItems.count - 1 ? 0.3 : 1.0)
+        .disabled(currentPageIndex == readerSlots.count - 1)
+        .opacity(currentPageIndex == readerSlots.count - 1 ? 0.3 : 1.0)
+        .accessibilityIdentifier("storybookNextPage")
     }
     
     @ViewBuilder
@@ -701,26 +776,34 @@ struct StoryPage: View {
     }
         
     private func generateStorybookWithPaywallCheck() {
+        guard !isCheckingSubscription else { return }
         guard let firebaseUserID = Auth.auth().currentUser?.uid else {
             vm.errorMessage = "Sign in before creating a storybook. Your memories are still saved on this device."
             return
         }
-        if !subscriptionManager.isIdentityReady(for: firebaseUserID) {
-            vm.isLoading = true
-            vm.currentStatus = "Verifying subscription…"
-            Task { @MainActor in
-                let ready = await subscriptionManager.identify(firebaseUserID: firebaseUserID)
-                vm.isLoading = false
-                guard ready, Auth.auth().currentUser?.uid == firebaseUserID else {
-                    vm.errorMessage = subscriptionManager.identityErrorMessage
-                        ?? "Subscription verification did not finish. Check your connection and try again."
-                    return
-                }
-                generateStorybookWithPaywallCheck()
+        isCheckingSubscription = true
+        vm.isLoading = true
+        vm.currentStatus = "Verifying subscription…"
+        Task { @MainActor in
+            defer { isCheckingSubscription = false }
+            await subscriptionManager.refreshCustomerInfo(forceRefresh: true)
+            vm.isLoading = false
+            guard Auth.auth().currentUser?.uid == firebaseUserID,
+                  subscriptionManager.isIdentityReady(for: firebaseUserID) else {
+                vm.errorMessage = subscriptionManager.identityErrorMessage
+                    ?? "Subscription verification did not finish. Check your connection and try again."
+                return
             }
-            return
+            if !subscriptionManager.hasActiveSubscription,
+               let error = subscriptionManager.activationErrorMessage {
+                vm.errorMessage = error
+                return
+            }
+            generateStorybookAfterSubscriptionCheck()
         }
+    }
 
+    private func generateStorybookAfterSubscriptionCheck() {
         var pagesToAttempt = vm.expectedPageCount()
         
         // Debug: Print current free preview status
@@ -835,21 +918,19 @@ struct StoryPage: View {
     var body: some View {
         let mainContent = makeMainContent()
         
-        return NavigationStack {
-            mainContent
-                .navigationBarHidden(true)
-                .onAppear {
-                    tutorialCoordinator.setVisibleScreen(.storyPage)
-                    tutorialCoordinator.onStoryPageAppeared(profileID: profileVM.selectedProfile.id)
-                    tutorialCoordinator.reloadBonusState(profileID: profileVM.selectedProfile.id)
+        return mainContent
+            .navigationBarHidden(true)
+            .onAppear {
+                tutorialCoordinator.setVisibleScreen(.storyPage)
+                tutorialCoordinator.onStoryPageAppeared(profileID: profileVM.selectedProfile.id)
+                tutorialCoordinator.reloadBonusState(profileID: profileVM.selectedProfile.id)
+            }
+            .onDisappear {
+                tutorialCoordinator.clearAnchor(.storybookCreate)
+                if tutorialCoordinator.visibleScreen == .storyPage {
+                    tutorialCoordinator.setVisibleScreen(.unknown)
                 }
-                .onDisappear {
-                    tutorialCoordinator.clearAnchor(.storybookCreate)
-                    if tutorialCoordinator.visibleScreen == .storyPage {
-                        tutorialCoordinator.setVisibleScreen(.unknown)
-                    }
-                }
-        }
+            }
         .addAllSheetsAndModifiers(
             showSettings: $showSettings,
             showProfileSetup: $showProfileSetup,
@@ -880,36 +961,22 @@ struct StoryPage: View {
             showSubscriptionTooltip: $showSubscriptionTooltip,
             actualPreviewWidth: $actualPreviewWidth,
             actualPreviewHeight: $actualPreviewHeight,
-            pageDetailRequest: $pageDetailRequest,
             showCoverEditor: $showCoverEditor,
-            storybookScreenEntry: storybookScreenEntry
+            storybookScreenEntry: storybookScreenEntry,
+            isOpeningBook: $isOpeningBook
         )
-        .sheet(isPresented: $showCoverArtEditSheet) {
-            CoverArtEditSheet(
-                panel: coverArtEditPanel,
-                revisionText: $coverArtEditRevisionText,
-                isPresented: $showCoverArtEditSheet,
-                onSend: { text in
-                    Task {
-                        await vm.editCoverPanel(coverArtEditPanel, revisionPrompt: text)
-                    }
-                },
-                isEditing: vm.isEditingCoverArt(for: coverArtEditPanel),
-                onEditTitleBlurb: {
-                    showCoverArtEditSheet = false
-                    showCoverEditor = true
-                }
+        .onChange(of: vm.pageItems.count) { _, _ in
+            currentPageIndex = StorybookPagePresentationPolicy.clampedPageIndex(
+                currentPageIndex,
+                pageCount: readerSlots.count
             )
-            .adaptiveSheetDetents(preferredHeight: 196)
-            .presentationDragIndicator(Visibility.visible)
         }
-        .onChange(of: vm.coverPanelEditing) { oldVal, newVal in
-            if oldVal != nil && newVal == nil && showCoverArtEditSheet {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    coverArtEditRevisionText = ""
-                    showCoverArtEditSheet = false
-                }
-            }
+        .fullScreenCover(item: $pageEditorRequest) { request in
+            PreparedBookPageEditorHost(
+                request: request,
+                vm: vm,
+                onDismiss: { pageEditorRequest = nil }
+            )
         }
         .alert("Print cover not ready", isPresented: $showCoverPDFMissingAlert) {
             Button("OK", role: .cancel) { }
@@ -999,6 +1066,9 @@ struct StoryPage: View {
                     makeHeader(usesCompactChrome: usesCompactChrome)
                     makeStorybookContentArea()
                     makeBottomActionArea(usesCompactChrome: usesCompactChrome)
+                        .opacity(isShowingOpeningBook ? 0 : 1)
+                        .allowsHitTesting(!isShowingOpeningBook)
+                        .accessibilityHidden(isShowingOpeningBook)
                 }
                 .safeAreaInset(edge: .bottom) {
                     Color.clear.frame(height: usesCompactChrome ? 0 : 5)
@@ -1084,7 +1154,7 @@ struct StoryPage: View {
                 showSubscriptionTooltip = false
             }
         }) {
-            Text("\(subscriptionManager.remainingAllowance)/100 images")
+            Text(subscriptionManager.isDeveloperUnlockedSession ? "Unlimited images" : "\(subscriptionManager.remainingAllowance)/100 images")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(subscriptionManager.remainingAllowance <= 5 ? .red : .gray)
         }
@@ -1105,6 +1175,9 @@ struct StoryPage: View {
             }
         }
         .frame(minWidth: 44)
+        .opacity(isShowingOpeningBook ? 0 : 1)
+        .allowsHitTesting(!isShowingOpeningBook)
+        .accessibilityHidden(isShowingOpeningBook)
     }
 
     @ViewBuilder
@@ -1127,41 +1200,11 @@ struct StoryPage: View {
 
             if hasGeneratedStorybook {
                 makeDownloadButton()
-                makePrintCartButton()
             } else {
                 makeSettingsButton()
             }
 
             makeGalleryButton()
-    }
-
-    /// Opens the same print-order sheet as **Print** (cart + checkout live here).
-    @ViewBuilder
-    private func makePrintCartButton() -> some View {
-        Button(action: orderBookTapped) {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: "bag.fill")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(localColors.defaultBlack.opacity(0.7))
-                    .padding(10)
-                    .background(localColors.subtleControlBackground)
-                    .clipShape(Circle())
-
-                if printOrderCart.totalLineCount > 0 {
-                    Text("\(printOrderCart.totalLineCount)")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(localColors.terracotta))
-                        .offset(x: 10, y: -4)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Print order and cart")
-        .disabled(isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud)
-        .opacity((isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud) ? 0.55 : 1)
     }
 
     private var hasGeneratedStorybook: Bool {
@@ -1234,32 +1277,26 @@ struct StoryPage: View {
     private func makeBookFrame(geo: GeometryProxy) -> some View {
         let printSpec = vm.currentPrintSpec
         let exportAspectRatio = printSpec.aspectRatio
-        let isEmptyState = !vm.isLoading && vm.errorMessage == nil && (!hasRequestedGeneration || vm.pageItems.isEmpty)
-        
-        // Scale to fit screen while maintaining exact export aspect ratio
-        let maxWidth = geo.size.width * 0.92
-        let maxHeight = geo.size.height * 0.75
-        let scaledWidth = min(maxWidth, maxHeight * exportAspectRatio)
-        let scaledHeight = scaledWidth / exportAspectRatio
-        
-        // Use scaled dimensions for display (matches export aspect ratio exactly)
-        let bookFrameWidth = scaledWidth
-        let bookContentAreaWidth = scaledWidth * 0.92
-        let bookContentHeightInsideFrame = scaledHeight * 0.92
-        let verticalPad: CGFloat = geo.size.height >= 700 ? 30 : 20
-        let bookFrameHeight = bookContentHeightInsideFrame + (verticalPad * 2)
+        let cardInset: CGFloat = geo.size.height < 520 ? 12 : 16
+        let availableContentSize = CGSize(
+            width: max(0, geo.size.width * 0.94 - cardInset * 2),
+            height: max(0, geo.size.height * 0.90 - cardInset * 2)
+        )
+        let pageSize = AdaptiveLayoutPolicy.aspectFitSize(
+            aspectRatio: exportAspectRatio,
+            inside: availableContentSize
+        )
+        let bookFrameWidth = pageSize.width + cardInset * 2
+        let bookFrameHeight = pageSize.height + cardInset * 2
         let bookFrameX = geo.size.width / 2
-        // Nudge empty-state card slightly upward so it visually centers with header controls.
-        let emptyStateVerticalOffset: CGFloat = isEmptyState ? -18 : 0
-        let bookFrameY = (geo.size.height / 2) + emptyStateVerticalOffset
-        let bookFrameTop = bookFrameY - (bookFrameHeight / 2)
+        let bookFrameY = (geo.size.height / 2) + 4
         
         ZStack {
             makeBookPreviewBox(
                 bookFrameWidth: bookFrameWidth,
                 bookFrameHeight: bookFrameHeight,
-                bookContentAreaWidth: bookContentAreaWidth,
-                bookContentHeightInsideFrame: bookContentHeightInsideFrame,
+                bookContentAreaWidth: pageSize.width,
+                bookContentHeightInsideFrame: pageSize.height,
                 bookFrameX: bookFrameX,
                 bookFrameY: bookFrameY
             )
@@ -1316,103 +1353,49 @@ struct StoryPage: View {
     @ViewBuilder
     private func makeBottomActionArea(usesCompactChrome: Bool) -> some View {
         if hasRequestedGeneration && !vm.pageItems.isEmpty && !vm.isLoading && (!vm.requiresVisualReadyGate || vm.isVisualBookReady) {
-            if usesCompactChrome {
+            ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) {
+                if canEditCurrentPage {
                     compactStorybookAction(
-                        title: "Edit",
-                        systemImage: "pencil",
+                        title: isPreparingPageEditor ? "Opening…" : "Edit",
+                        systemImage: isPreparingPageEditor ? nil : "pencil",
                         filled: false,
                         action: handleCurrentPageEditTapped
                     )
-                    compactStorybookAction(
-                        title: "Regenerate",
-                        systemImage: "arrow.clockwise",
-                        filled: false,
-                        action: { showRegenerateConfirmation = true }
-                    )
-                    compactStorybookAction(
-                        title: "Order",
-                        systemImage: isOrderPreparing ? nil : "printer",
-                        filled: true,
-                        showsProgress: isOrderPreparing,
-                        action: orderBookTapped
-                    )
-                    .disabled(isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud || vm.hasUnpublishedBookChanges)
-                    .opacity((isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud || vm.hasUnpublishedBookChanges) ? 0.7 : 1.0)
+                    .accessibilityIdentifier("storybookEditCurrentPage")
+                    .disabled(isPreparingPageEditor)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth)
-            } else {
-                VStack(spacing: 14) {
-                Button(action: handleCurrentPageEditTapped) {
-                    HStack(spacing: 7) {
-                        Image(systemName: "pencil")
-                            .font(.system(size: 14, weight: .medium))
-                        Text("Edit")
-                            .font(.system(size: 15, weight: .semibold))
-                    }
-                    .foregroundColor(localColors.terracotta)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 11)
-                    .background(localColors.terracotta.opacity(0.14))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(localColors.terracotta.opacity(0.25), lineWidth: 1)
-                    )
+                compactStorybookAction(title: "New Book", systemImage: "plus", filled: false, action: { showRegenerateConfirmation = true })
+                compactStorybookAction(
+                    title: "Order",
+                    systemImage: isOrderPreparing ? nil : "printer",
+                    filled: true,
+                    showsProgress: isOrderPreparing,
+                    action: orderBookTapped
+                )
+                .disabled(isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud)
+                .opacity((isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud) ? 0.7 : 1.0)
                 }
 
-                HStack(spacing: 10) {
-                    Button(action: { showRegenerateConfirmation = true }) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 15, weight: .medium))
-                            Text("Regenerate")
-                                .font(.system(size: 16, weight: .semibold))
-                        }
-                        .foregroundColor(localColors.terracotta)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 13)
-                        .background(localColors.terracotta.opacity(0.15))
-                        .cornerRadius(12)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(localColors.terracotta.opacity(0.3), lineWidth: 1)
+                HStack(spacing: 8) {
+                    if canEditCurrentPage {
+                        compactStorybookAction(
+                            title: isPreparingPageEditor ? "Opening…" : "Edit",
+                            systemImage: nil,
+                            filled: false,
+                            action: handleCurrentPageEditTapped
                         )
+                            .accessibilityIdentifier("storybookEditCurrentPage")
+                            .disabled(isPreparingPageEditor)
                     }
-
-                    Button(action: orderBookTapped) {
-                        HStack(spacing: 8) {
-                            if isOrderPreparing {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.9)
-                            } else {
-                                Image(systemName: "printer")
-                                    .font(.system(size: 15, weight: .semibold))
-                            }
-                            Text("Order")
-                                .font(.system(size: 16, weight: .semibold))
-                        }
-                        .foregroundColor(.white)
-                        .frame(minWidth: 112)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 13)
-                        .background(localColors.terracotta)
-                        .cornerRadius(12)
-                    }
-                    .accessibilityLabel("Order")
-                    .disabled(isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud || vm.hasUnpublishedBookChanges)
-                    .opacity((isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud || vm.hasUnpublishedBookChanges) ? 0.7 : 1.0)
+                    compactStorybookAction(title: "New", systemImage: "plus", filled: false, action: { showRegenerateConfirmation = true })
+                    compactStorybookAction(title: "Order", systemImage: isOrderPreparing ? nil : "printer", filled: true, showsProgress: isOrderPreparing, action: orderBookTapped)
+                        .disabled(isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud)
                 }
-                .frame(maxWidth: 360)
-                .frame(maxWidth: .infinity)
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 16)
-                .padding(.bottom, 20)
             }
+            .padding(.horizontal, usesCompactChrome ? 12 : 20)
+            .padding(.vertical, 10)
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth)
         }
     }
 
@@ -1525,48 +1508,86 @@ struct StoryPage: View {
     }
 
     private func handleCurrentPageEditTapped() {
-        guard currentPageIndex >= 0, currentPageIndex < vm.pageItems.count else { return }
+        guard readerSlots.indices.contains(currentPageIndex) else { return }
+        openEditor(for: readerSlots[currentPageIndex])
+    }
 
-        if case .textPage(_, _, _, _, _, let memoryID) = vm.pageItems[currentPageIndex] {
-            if memoryID == BookInteriorAnchor.titlePageMemoryId {
-                if vm.hasPrintCoverPDF {
-                    coverArtEditPanel = .front
-                    coverArtEditRevisionText = ""
-                    showCoverArtEditSheet = true
-                } else {
-                    showCoverPDFMissingAlert = true
+    private func openEditor(for slot: StorybookReaderSlot) {
+        switch StorybookPageEditDestinationPolicy.target(for: slot) {
+        case .interiorPage(let pageIndex):
+            handleInteriorPageEditTapped(at: pageIndex)
+        case .exteriorCover(let panel):
+            handleExteriorCoverEditTapped(panel: panel)
+        }
+    }
+
+    private func handleInteriorPageEditTapped(at pageIndex: Int) {
+        guard vm.pageItems.indices.contains(pageIndex), !isPreparingPageEditor else { return }
+        let item = vm.pageItems[pageIndex]
+        let pageID = item.id
+        let hadExistingLayout = vm.freeformDocument(at: pageIndex) != nil
+        isPreparingPageEditor = true
+        Task {
+            defer { isPreparingPageEditor = false }
+            do {
+                let document = try await vm.makeEditableFreeformDocument(at: pageIndex)
+                guard vm.pageID(at: pageIndex) == pageID else {
+                    throw BookPageEditorPersistenceError.pageChanged
                 }
-                return
-            }
-            if memoryID == BookInteriorAnchor.closingPageMemoryId {
-                if vm.hasPrintCoverPDF {
-                    coverArtEditPanel = .back
-                    coverArtEditRevisionText = ""
-                    showCoverArtEditSheet = true
-                } else {
-                    showCoverPDFMissingAlert = true
-                }
-                return
+                pageEditorRequest = PreparedPageEditorRequest(
+                    target: .interiorPage(pageIndex),
+                    pageIndex: pageIndex,
+                    pageID: pageID,
+                    memoryID: item.memoryID,
+                    document: document,
+                    canReset: hadExistingLayout,
+                    isLandscape: vm.currentPrintSpec.orientation == "landscape",
+                    isIllustration: {
+                        if case .illustration = item { return true }
+                        return false
+                    }(),
+                    showsChrome: !BookInteriorAnchor.isNonMemoryPage(item.memoryID)
+                        && !vm.isPrecomposedIllustration(memoryID: item.memoryID)
+                )
+            } catch {
+                vm.errorMessage = error.localizedDescription
             }
         }
+    }
 
-        switch vm.pageItems[currentPageIndex] {
-        case .illustration, .textPage:
-            pageDetailRequest = PageDetailRequest(pageIndex: currentPageIndex, startInEditMode: true)
+    private func handleExteriorCoverEditTapped(panel: BookCoverFlatPanel) {
+        guard !isPreparingPageEditor else { return }
+        isPreparingPageEditor = true
+        Task {
+            defer { isPreparingPageEditor = false }
+            do {
+                let document = try await vm.makeEditableExteriorCoverDocument(panel: panel)
+                pageEditorRequest = PreparedPageEditorRequest(
+                    target: .exteriorCover(panel),
+                    pageIndex: 0,
+                    pageID: "cover:\(panel)",
+                    memoryID: BookInteriorAnchor.blankPageMemoryId,
+                    document: document,
+                    canReset: false,
+                    isLandscape: vm.currentPrintSpec.orientation == "landscape",
+                    isIllustration: false,
+                    showsChrome: false
+                )
+            } catch {
+                vm.errorMessage = error.localizedDescription
+            }
         }
+    }
+
+    private var canEditCurrentPage: Bool {
+        readerSlots.indices.contains(currentPageIndex)
     }
     
     private func handleProfileSetupDismiss() {
         if didCompleteProfileSetup {
-            // Only clear after the user completes the setup+settings flow for regeneration.
-            if isRegenerationFlow {
-                vm.clearCurrentStorybook()
-                hasRequestedGeneration = false
-            }
             generateStorybookWithPaywallCheck()
             didCompleteProfileSetup = false
         }
-        isRegenerationFlow = false
     }
 
     // NEW: Download functionality
@@ -1626,16 +1647,12 @@ struct StoryPage: View {
     private func regenerateStorybook() {
         // Route through the same setup path as first-time creation:
         // ProfileSetupView -> Review Settings -> Save & Generate.
-        isRegenerationFlow = true
         didCompleteProfileSetup = false
         showProfileSetup = true
     }
     
     // MARK: – Helper to count memories needing enhancement
     private func updateIncompleteCount() {
-        // Refresh context to ensure we have latest data
-        context.refreshAllObjects()
-        
         let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
         request.predicate = MemoryUserScope.profilePredicate(profileID: profileVM.selectedProfile.id)
         if let all = try? context.fetch(request) {
@@ -1688,13 +1705,13 @@ struct StoryPage: View {
     /// Instruction-based edit for print cover PDF panels (front / back), matching interior `ImageEditSheet` UX.
     struct CoverArtEditSheet: View {
         let panel: BookCoverFlatPanel
+        let record: BookVersionRecord?
         @Binding var revisionText: String
         @Binding var isPresented: Bool
         let onSend: (String) -> Void
         let isEditing: Bool
         let onEditTitleBlurb: () -> Void
 
-        @FocusState private var isTextFieldFocused: Bool
         @State private var isSendPressed: Bool = false
 
         private var trimmedRevisionText: String {
@@ -1718,20 +1735,69 @@ struct StoryPage: View {
 
         private let localColors = StoryPageLocalColors()
 
+        private var previewAspectRatio: CGFloat {
+            AdaptiveLayoutPolicy.validatedAspectRatio(
+                width: record?.pageWidth ?? 11,
+                height: record?.pageHeight ?? 8.5,
+                fallback: 11 / 8.5
+            )
+        }
+
         var body: some View {
             VStack(spacing: 0) {
-                Text(panelTitle)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 10)
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(panelTitle)
+                            .font(.headline)
+                        Text("Preview the current cover, then describe one clear change.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer(minLength: 12)
+                    Button {
+                        isPresented = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .bold))
+                            .frame(width: 32, height: 32)
+                            .background(Color.secondary.opacity(0.12), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close cover editor")
+                    .accessibilityIdentifier("coverEditorClose")
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
 
+                GeometryReader { geometry in
+                    let previewSize = AdaptiveLayoutPolicy.aspectFitSize(
+                        aspectRatio: previewAspectRatio,
+                        inside: geometry.size
+                    )
+
+                    coverPreview
+                        .frame(width: previewSize.width, height: previewSize.height)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+
+                Button(action: onEditTitleBlurb) {
+                    Text("Edit book title & back cover text")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(localColors.terracotta)
+                    }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 HStack(spacing: 10) {
                     TextField("Describe the changes you want...", text: $revisionText, axis: .vertical)
                         .textFieldStyle(.plain)
                         .font(.system(size: 15))
                         .padding(.leading, 4)
-                        .focused($isTextFieldFocused)
                         .lineLimit(1...3)
                         .disabled(isEditing)
                         .submitLabel(.send)
@@ -1762,35 +1828,57 @@ struct StoryPage: View {
                         isSendPressed = pressing
                     }, perform: {})
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .background(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.55), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.12), radius: 16, x: 0, y: 8)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 8)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                .background(.ultraThinMaterial)
+            }
+            .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+        }
 
-                Button(action: onEditTitleBlurb) {
-                    Text("Edit book title & back cover text")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(localColors.terracotta)
+        @ViewBuilder
+        private var coverPreview: some View {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(red: 0.965, green: 0.94, blue: 0.89))
+
+                if let record,
+                   let url = record.printCoverPDFURL {
+                    RemotePDFThumbnailView(
+                        url: url,
+                        targetSize: CGSize(width: 1_200, height: 900),
+                        layout: record.coverFlatLayoutKind,
+                        panel: panel,
+                        cacheRevision: record.coverThumbnailCacheRevision,
+                        cacheIdentity: record.coverStoragePath ?? ""
+                    ) {
+                        Color(red: 0.965, green: 0.94, blue: 0.89)
+                    }
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "book.closed")
+                            .font(.system(size: 30))
+                        Text("Cover preview unavailable")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .padding(.bottom, 14)
-            }
-            .background(Color.clear)
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    isTextFieldFocused = true
+
+                if isEditing {
+                    Color.black.opacity(0.28)
+                    ProgressView("Updating cover…")
+                        .tint(.white)
+                        .foregroundStyle(.white)
+                        .padding(14)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
+            .aspectRatio(previewAspectRatio, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+            )
+            .accessibilityLabel(panel == .front ? "Current front cover preview" : "Current back cover preview")
         }
     }
 }
@@ -1958,77 +2046,11 @@ extension StoryPage {
         )
 
         if memoryID == BookInteriorAnchor.titlePageMemoryId {
-            if let pdfURL = printCoverPDFURL() {
-                RemotePDFThumbnailView(
-                    url: pdfURL,
-                    targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
-                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook(pageCount: max(1, vm.pageItems.count)),
-                    panel: .front,
-                    cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
-                    cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""
-                ) {
-                    TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
-                }
-                .frame(width: frameWidth, height: frameHeight)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            } else if let rasterURL = rasterCoverDisplayURL() {
-                AsyncImage(url: rasterURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .empty:
-                        TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
-                    case .failure:
-                        fallbackFrontCover
-                    @unknown default:
-                        TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
-                    }
-                }
-                .frame(width: frameWidth, height: frameHeight)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            } else {
-                fallbackFrontCover
-            }
+            fallbackFrontCover
+        } else if memoryID == BookInteriorAnchor.blankPageMemoryId {
+            MemoirBlankPage(frameWidth: frameWidth, frameHeight: frameHeight)
         } else if memoryID == BookInteriorAnchor.closingPageMemoryId {
-            if let pdfURL = printCoverPDFURL() {
-                RemotePDFThumbnailView(
-                    url: pdfURL,
-                    targetSize: CGSize(width: max(frameWidth, 200), height: max(frameHeight, 200)),
-                    layout: vm.currentBookVersionRecord?.coverFlatLayoutKind ?? .kidsBook(pageCount: max(1, vm.pageItems.count)),
-                    panel: .back,
-                    cacheRevision: vm.currentBookVersionRecord?.coverThumbnailCacheRevision ?? "",
-                    cacheIdentity: vm.currentBookVersionRecord?.coverStoragePath ?? ""
-                ) {
-                    TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
-                }
-                .frame(width: frameWidth, height: frameHeight)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            } else if let rasterURL = rasterCoverDisplayURL() {
-                AsyncImage(url: rasterURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .empty:
-                        TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
-                    case .failure:
-                        fallbackBackCover
-                    @unknown default:
-                        TitleCoverLoadingPlaceholder(frameWidth: frameWidth, frameHeight: frameHeight)
-                    }
-                }
-                .frame(width: frameWidth, height: frameHeight)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            } else {
-                fallbackBackCover
-            }
+            fallbackBackCover
         } else {
             Group {
                 if isKidsBook {
@@ -2065,23 +2087,6 @@ extension StoryPage {
         }
     }
 
-    private func printCoverPDFURL() -> URL? {
-        vm.currentBookVersionRecord?.printCoverPDFURL
-    }
-
-    /// When `printCoverPDFURL` is nil but `coverURL` is an http(s) raster, match `OrderBookView` so the in-book cover matches checkout preview.
-    private func rasterCoverDisplayURL() -> URL? {
-        guard let raw = vm.currentBookVersionRecord?.coverURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
-        guard shouldAttemptRemoteRasterCoverImage(urlString: raw) else { return nil }
-        return URL(string: raw)
-    }
-
-    private func shouldAttemptRemoteRasterCoverImage(urlString: String) -> Bool {
-        let lower = urlString.lowercased()
-        guard lower.hasPrefix("http://") || lower.hasPrefix("https://") else { return false }
-        if lower.contains(".pdf") { return false }
-        return true
-    }
 }
 
 struct GalleryBookLoadingOverlay: View {
@@ -2115,46 +2120,130 @@ struct StorybookCoverEditorSheet: View {
     @State private var isSaving = false
     @State private var saveError: String?
 
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section(header: Text("Book Title")) {
-                    TextField("Memoir title", text: $titleDraft)
-                        .textInputAutocapitalization(.words)
-                }
-                Section(header: Text("Back Cover Blurb"),
-                        footer: Text("Shown on the back cover of the printed book.")) {
-                    TextEditor(text: $pitchDraft)
-                        .frame(minHeight: 120)
-                }
-            }
-            .navigationTitle("Edit Cover")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .disabled(isSaving)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        isSaving = true
-                        Task {
-                            let succeeded = await vm.updateCoverCopy(
-                                title: titleDraft,
-                                backCoverPitch: pitchDraft
-                            )
-                            isSaving = false
-                            if succeeded {
-                                dismiss()
-                            } else {
-                                saveError = "The cover changes could not be published. Check your connection and try again."
-                            }
-                        }
-                    }
-                    .disabled(isSaving)
-                }
+    private let paper = Color(red: 0.98, green: 0.96, blue: 0.89)
+    private let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
+    private let ink = Color.black.opacity(0.84)
+
+    private var canSave: Bool {
+        !titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
+    }
+
+    private var titlePageSubtitle: String {
+        for item in vm.pageItems {
+            if case .textPage(_, _, let text, _, _, let memoryID) = item,
+               memoryID == BookInteriorAnchor.titlePageMemoryId {
+                return text
             }
         }
+        return ""
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .foregroundStyle(ink.opacity(0.7))
+                    .disabled(isSaving)
+
+                Spacer()
+
+                Text("Edit Book Details")
+                    .font(.system(size: 18, weight: .semibold, design: .serif))
+                    .foregroundStyle(ink)
+
+                Spacer()
+
+                Button {
+                    isSaving = true
+                    Task {
+                        let succeeded = await vm.updateCoverCopy(
+                            title: titleDraft,
+                            backCoverPitch: pitchDraft
+                        )
+                        isSaving = false
+                        if succeeded {
+                            dismiss()
+                        } else {
+                            saveError = "The book changes could not be published. Check your connection and try again."
+                        }
+                    }
+                } label: {
+                    if isSaving {
+                        ProgressView()
+                            .tint(.white)
+                            .frame(width: 42)
+                    } else {
+                        Text("Save")
+                    }
+                }
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .frame(height: 36)
+                .background(canSave ? terracotta : Color.gray.opacity(0.45), in: Capsule())
+                .disabled(!canSave)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    GeometryReader { geometry in
+                        let spec = vm.currentPrintSpec
+                        let previewSize = AdaptiveLayoutPolicy.aspectFitSize(
+                            aspectRatio: spec.aspectRatio,
+                            inside: geometry.size
+                        )
+                        let scale = min(
+                            previewSize.width / max(spec.widthPt, 1),
+                            previewSize.height / max(spec.heightPt, 1)
+                        )
+                        MemoirCoverFrontPage(
+                            title: titleDraft,
+                            subtitle: titlePageSubtitle,
+                            frameWidth: spec.widthPt,
+                            frameHeight: spec.heightPt,
+                            isKidsBook: vm.currentArtStyle == .kidsBook
+                        )
+                        .scaleEffect(scale)
+                        .frame(width: previewSize.width, height: previewSize.height)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(height: 240)
+                    .accessibilityIdentifier("storybookCoverCopyPreview")
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Book title")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(ink.opacity(0.68))
+                    TextField("Memoir title", text: $titleDraft)
+                        .textInputAutocapitalization(.words)
+                        .font(.system(size: 17, weight: .medium, design: .serif))
+                        .padding(14)
+                        .background(.white.opacity(0.82), in: RoundedRectangle(cornerRadius: 14))
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Printed back-cover blurb")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(ink.opacity(0.68))
+                        TextEditor(text: $pitchDraft)
+                            .font(.system(size: 15, design: .serif))
+                            .scrollContentBackground(.hidden)
+                            .padding(10)
+                            .frame(minHeight: 128)
+                            .background(.white.opacity(0.82), in: RoundedRectangle(cornerRadius: 14))
+                        Text("This appears only on the printed book cover, not the closing Memoir credit page.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+            }
+        }
+        .background(paper.ignoresSafeArea())
+        .accessibilityIdentifier("storybookCoverCopyEditor")
         .interactiveDismissDisabled(isSaving)
         .alert(
             "Couldn’t Save Cover",
@@ -2281,7 +2370,7 @@ struct KidsBookTextPage: View {
             // Body text with book-like spacing below header
             Text(text)
                 .font(fontStyle.bodyFont(for: frameHeight))
-                .lineSpacing(12)
+                .lineSpacing(frameHeight * 0.006)
                 .multilineTextAlignment(.leading)
                 .foregroundColor(colors.bookTextColor)
                 .padding(.leading, sideMargin)
@@ -2701,9 +2790,9 @@ extension View {
         showSubscriptionTooltip: Binding<Bool>,
         actualPreviewWidth: Binding<CGFloat>,
         actualPreviewHeight: Binding<CGFloat>,
-        pageDetailRequest: Binding<PageDetailRequest?>,
         showCoverEditor: Binding<Bool>,
-        storybookScreenEntry: StorybookScreenEntry
+        storybookScreenEntry: StorybookScreenEntry,
+        isOpeningBook: Binding<Bool>
     ) -> some View {
         let withSheets = addSheets(
             showSettings: showSettings,
@@ -2726,7 +2815,6 @@ extension View {
             localColors: localColors,
             onProfileSetupDismissed: onProfileSetupDismissed,
             hasRequestedGeneration: hasRequestedGeneration,
-            pageDetailRequest: pageDetailRequest,
             showCoverEditor: showCoverEditor
         )
 
@@ -2746,7 +2834,8 @@ extension View {
             headshotImage: headshotImage,
             hasRequestedGeneration: hasRequestedGeneration,
             updateIncompleteCount: updateIncompleteCount,
-            storybookScreenEntry: storybookScreenEntry
+            storybookScreenEntry: storybookScreenEntry,
+            isOpeningBook: isOpeningBook
         )
         
         withLifecycle.addOverlays(
@@ -2776,13 +2865,15 @@ extension View {
         localColors: StoryPageLocalColors,
         onProfileSetupDismissed: @escaping () -> Void,
         hasRequestedGeneration: Binding<Bool>,
-        pageDetailRequest: Binding<PageDetailRequest?>,
         showCoverEditor: Binding<Bool>
     ) -> some View {
         self
             .background(
                 NavigationLink(
-                    destination: RecentMemoriesView(prioritizeEnhanceCandidates: true).environmentObject(profileVM),
+                    destination: RecentMemoriesView(
+                        enhancementMode: true,
+                        initialMemoirMode: currentMemoirMode()
+                    ).environmentObject(profileVM),
                     isActive: navigateToRecent
                 ) {
                     EmptyView()
@@ -2858,23 +2949,9 @@ extension View {
                 }
             }
             .fullScreenCover(isPresented: showPaywall) {
-                makePaywallFallback()
+                SubscriptionPaywallView()
             }
-            .fullScreenCover(item: pageDetailRequest) { request in
-                StoryPageDetailView(
-                    initialPageIndex: request.pageIndex,
-                    vm: vm,
-                    artStyle: vm.currentArtStyle,
-                    printSpec: vm.currentPrintSpec,
-                    startEditingOnAppear: request.startInEditMode,
-                    onRequestImageEdit: {
-                        pageDetailRequest.wrappedValue = nil
-                        editingImageIndex.wrappedValue = $0
-                        showImageEditSheet.wrappedValue = true
-                    }
-                )
-            }
-            .sheet(isPresented: showCoverEditor) {
+            .fullScreenCover(isPresented: showCoverEditor) {
                 StorybookCoverEditorSheet(vm: vm)
             }
     }
@@ -2894,13 +2971,13 @@ extension View {
             } message: {
                 Text("Your storybook has been saved to your device.")
             }
-            .alert("Regenerate Storybook?", isPresented: showRegenerateConfirmation) {
+            .alert("Create a New Book?", isPresented: showRegenerateConfirmation) {
                 Button("Cancel", role: .cancel) { }
-                Button("Regenerate", role: .destructive) {
+                Button("Create New Book") {
                     regenerateStorybook()
                 }
             } message: {
-                Text("This will clear your current storybook and create a new one. This action cannot be undone.")
+                Text("Your current book will stay in your Library while you create a new one.")
             }
             .alert("Enhance Memories for Better Images", isPresented: showIncompleteMemoriesAlert) {
                 Button("Cancel", role: .cancel) { }
@@ -2920,26 +2997,44 @@ extension View {
         headshotImage: Binding<UIImage?>,
         hasRequestedGeneration: Binding<Bool>,
         updateIncompleteCount: @escaping () -> Void,
-        storybookScreenEntry: StorybookScreenEntry
+        storybookScreenEntry: StorybookScreenEntry,
+        isOpeningBook: Binding<Bool>
     ) -> some View {
         self
             .onAppear {
                 print("🧭 StoryPage lifecycle onAppear; profile=\(profileVM.selectedProfile.id.uuidString.prefix(8))…, hasGenerated=\(vm.hasGeneratedStorybook), hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count), entry=\(storybookScreenEntry)")
                 StorybookSeenTracker.shared.setStoryPageVisible(true)
-                let routedJobID = StorybookSeenTracker.shared.consumePendingRouteForAttachment()
                 if let bookId = vm.currentBookVersionRecord?.bookVersionId {
                     StorybookSeenTracker.shared.markCompletedSeen(jobId: bookId)
                 }
+            }
+            .background(StorybookAppearanceObserver {
+                print("[StorybookEntry] Navigation finished; starting book restoration")
+                vm.restoreSettingsFromCloud()
+                let routedJobID = storybookScreenEntry.resumesPendingGeneration
+                    ? StorybookSeenTracker.shared.consumePendingRouteForAttachment()
+                    : nil
                 Task { @MainActor in
-                    let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
-                        profileID: profileVM.selectedProfile.id,
-                        profileName: profileVM.selectedProfile.name,
-                        profileEthnicity: profileVM.selectedProfile.ethnicity,
-                        routedJobID: routedJobID
-                    )
-                    if resuming {
+                    defer { isOpeningBook.wrappedValue = false }
+                    if ProcessInfo.processInfo.arguments.contains("-UITestSeedStorybook") {
+                        vm.seedStorybookForUITesting(
+                            profileID: profileVM.selectedProfile.id,
+                            profileName: profileVM.selectedProfile.name
+                        )
                         hasRequestedGeneration.wrappedValue = true
                     } else {
+                        if storybookScreenEntry.resumesPendingGeneration {
+                            let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
+                                profileID: profileVM.selectedProfile.id,
+                                profileName: profileVM.selectedProfile.name,
+                                profileEthnicity: profileVM.selectedProfile.ethnicity,
+                                routedJobID: routedJobID
+                            )
+                            if resuming {
+                                hasRequestedGeneration.wrappedValue = true
+                                return
+                            }
+                        }
                         vm.loadStorybookForProfile(
                             profileVM.selectedProfile.id,
                             name: profileVM.selectedProfile.name,
@@ -2968,9 +3063,16 @@ extension View {
                 Task { await subscriptionManager.refreshCustomerInfo() }
                 updateIncompleteCount()
             }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true))
             .onDisappear {
                 print("🧭 StoryPage lifecycle onDisappear; hasRequested=\(hasRequestedGeneration.wrappedValue), pageItems=\(vm.pageItems.count)")
                 StorybookSeenTracker.shared.setStoryPageVisible(false)
+            }
+            .onChange(of: subscriptionManager.hasActiveSubscription) { _, isActive in
+                if isActive, vm.errorMessage?.contains("free preview") == true {
+                    vm.errorMessage = nil
+                }
             }
             .onChange(of: vm.currentBookVersionRecord?.bookVersionId) { _, newBookId in
                 // Displaying a finished book (job id == book version id) counts as seeing it,
@@ -3037,40 +3139,6 @@ extension View {
     }
     
     @ViewBuilder
-    private func makePaywallFallback() -> some View {
-        Group {
-            if RCSubscriptionManager.shared.offerings?.current?.availablePackages.isEmpty == false {
-                PaywallView(displayCloseButton: true)
-            } else {
-                VStack(spacing: 20) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 60))
-                        .foregroundColor(.orange)
-                    
-                    Text("Subscription Temporarily Unavailable")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    
-                    Text("Please try again later or contact support.")
-                        .multilineTextAlignment(.center)
-                    
-                    Button("Close") {
-                        // Close handled by binding
-                    }
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
-                }
-                .padding()
-                .background(Color.white)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .ignoresSafeArea()
-    }
-    
-    @ViewBuilder
     private func makeSubscriptionTooltip() -> some View {
         VStack {
             HStack {
@@ -3080,7 +3148,7 @@ extension View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.white)
                     
-                    Text("Each subscription includes 50 AI-generated images per billing period. This counter shows how many you have remaining.")
+                    Text("Each subscription includes 100 images per calendar month. This counter shows how many you have remaining.")
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.9))
                         .multilineTextAlignment(.leading)

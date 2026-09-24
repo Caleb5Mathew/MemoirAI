@@ -10,6 +10,7 @@ import SwiftUI
 
 /// Pushes the storybook editor from the root `NavigationStack` when the user has an in-flight generation to resume.
 enum StorybookRootRoute: Hashable {
+    case openBook
     case resumeInProgressGeneration
 }
 
@@ -17,6 +18,10 @@ enum StorybookRootRoute: Hashable {
 enum StorybookScreenEntry: Hashable {
     case standard
     case autoResumePendingGeneration
+
+    var resumesPendingGeneration: Bool {
+        self == .autoResumePendingGeneration
+    }
 }
 
 private struct StorybookScreenEntryKey: EnvironmentKey {

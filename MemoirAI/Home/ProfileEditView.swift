@@ -44,6 +44,8 @@ struct ProfileEditView: View {
     @State private var showDevModeSheet = false
     @State private var devPassword = ""
     @State private var devUnlockResult: ProfileEditDevUnlockResult?
+    @State private var devUnlockErrorMessage: String?
+    @State private var isVerifyingDevAccess = false
 
     private enum ProfileEditDevUnlockResult {
         case success, incorrect
@@ -173,8 +175,15 @@ struct ProfileEditView: View {
                 transcriptionCard
                     .staggerIn(appeared: appeared, delay: 0.10)
 
-                developerOptionsEntry
+                LinkedAccountsView()
+                    .padding(16)
+                    .background(DS.card, in: RoundedRectangle(cornerRadius: 16))
                     .staggerIn(appeared: appeared, delay: 0.12)
+
+                if DeveloperAccessDistributionPolicy.permitsCurrentBuild {
+                    developerOptionsEntry
+                        .staggerIn(appeared: appeared, delay: 0.12)
+                }
 
                 Spacer(minLength: 80)
             }
@@ -518,36 +527,29 @@ struct ProfileEditView: View {
                         if let result = devUnlockResult {
                             HStack(spacing: 6) {
                                 Image(systemName: result == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                Text(result == .success ? "Unlocked!" : "Incorrect")
+                                Text(result == .success ? "Unlocked!" : (devUnlockErrorMessage ?? "Access denied"))
                             }
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(result == .success ? .green : .red)
                         }
                         Button {
-                            if RCSubscriptionManager.verifyDeveloperPassword(devPassword) {
-                                subscriptionManager.enablePersistentDevMode()
-                                withAnimation { devUnlockResult = .success }
-                                devPassword = ""
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                                    showDevModeSheet = false
-                                    devUnlockResult = nil
-                                }
-                            } else {
-                                withAnimation { devUnlockResult = .incorrect }
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                                    withAnimation { devUnlockResult = nil }
+                            Task { await verifyDeveloperAccess() }
+                        } label: {
+                            Group {
+                                if isVerifyingDevAccess {
+                                    ProgressView().tint(.white)
+                                } else {
+                                    Text("Unlock")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundColor(.white)
                                 }
                             }
-                        } label: {
-                            Text("Unlock")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.white)
-                                .frame(width: 120)
-                                .padding(.vertical, 12)
-                                .background(devPassword.isEmpty ? Color.gray.opacity(0.3) : DS.accent)
-                                .cornerRadius(10)
+                            .frame(width: 120)
+                            .padding(.vertical, 12)
+                            .background(devPassword.isEmpty ? Color.gray.opacity(0.3) : DS.accent)
+                            .cornerRadius(10)
                         }
-                        .disabled(devPassword.isEmpty)
+                        .disabled(devPassword.isEmpty || isVerifyingDevAccess)
                         Spacer()
                         Spacer()
                     }
@@ -571,6 +573,26 @@ struct ProfileEditView: View {
         .onDisappear {
             devPassword = ""
             devUnlockResult = nil
+            devUnlockErrorMessage = nil
+            isVerifyingDevAccess = false
+        }
+    }
+
+    @MainActor
+    private func verifyDeveloperAccess() async {
+        isVerifyingDevAccess = true
+        defer { isVerifyingDevAccess = false }
+        do {
+            try await subscriptionManager.authorizeDeveloperAccess(devPassword)
+            withAnimation { devUnlockResult = .success }
+            devUnlockErrorMessage = nil
+            devPassword = ""
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            showDevModeSheet = false
+            devUnlockResult = nil
+        } catch {
+            devUnlockErrorMessage = error.localizedDescription
+            withAnimation { devUnlockResult = .incorrect }
         }
     }
 

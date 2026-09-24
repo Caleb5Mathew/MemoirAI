@@ -12,6 +12,36 @@ import FirebaseAuth
 import AuthenticationServices
 
 enum PrintProductAvailabilityPolicy {
+    enum BookStatus: Equatable {
+        case ready
+        case needsPages(current: Int, minimum: Int, remaining: Int)
+        case unavailable
+    }
+
+    static func bookStatus(
+        pageCount: Int,
+        supportedPageRanges: [ClosedRange<Int>]
+    ) -> BookStatus {
+        guard let minimum = supportedPageRanges.map(\.lowerBound).min(),
+              let maximum = supportedPageRanges.map(\.upperBound).max() else {
+            return .unavailable
+        }
+        if supportedPageRanges.contains(where: { $0.contains(pageCount) }) {
+            return .ready
+        }
+        if pageCount < minimum {
+            return .needsPages(
+                current: max(0, pageCount),
+                minimum: minimum,
+                remaining: minimum - pageCount
+            )
+        }
+        if pageCount > maximum {
+            return .unavailable
+        }
+        return .unavailable
+    }
+
     static func unavailableReason(optionID: String) -> String? {
         switch optionID {
         case "kids_coil_bound":
@@ -151,10 +181,11 @@ struct OrderBookView: View {
         ("EXPRESS", "Express")
     ]
     
-    private var cardBackground: Color { Color(UIColor.systemBackground) }
-    private var cardStroke: Color { Color.black.opacity(0.08) }
-    private var fieldBackground: Color { Color(UIColor.secondarySystemGroupedBackground) }
-    private var accentColor: Color { Color(red: 0.17, green: 0.42, blue: 0.78) }
+    private var pageBackground: Color { Color(red: 0.98, green: 0.94, blue: 0.86) }
+    private var cardBackground: Color { Color(red: 1.0, green: 0.985, blue: 0.95) }
+    private var cardStroke: Color { Color(red: 0.40, green: 0.29, blue: 0.20).opacity(0.14) }
+    private var fieldBackground: Color { Color(red: 0.96, green: 0.91, blue: 0.82) }
+    private var accentColor: Color { Color(red: 0.80, green: 0.32, blue: 0.20) }
     private var mutedTextColor: Color { Color.secondary.opacity(0.9) }
     private var isLandscapeBook: Bool { book.pageWidth > book.pageHeight }
     private var coverAspectRatio: CGFloat {
@@ -173,6 +204,23 @@ struct OrderBookView: View {
 
     private var productOptions: [PrintProductOption] {
         Self.printProductOptions(isLandscape: isLandscapeBook)
+    }
+
+    private var printAvailabilityStatus: PrintProductAvailabilityPolicy.BookStatus {
+        let ranges = productOptions.compactMap { option -> ClosedRange<Int>? in
+            guard PrintProductAvailabilityPolicy.unavailableReason(optionID: option.id) == nil else {
+                return nil
+            }
+            return option.minPages...option.maxPages
+        }
+        return PrintProductAvailabilityPolicy.bookStatus(
+            pageCount: book.pageCount,
+            supportedPageRanges: ranges
+        )
+    }
+
+    private var showsPrintUnavailableState: Bool {
+        activeStep == .formatQuantity && !hasAnyEligibleProductOption
     }
 
     /// Shared catalog for cart line validation (page count vs format).
@@ -223,54 +271,55 @@ struct OrderBookView: View {
 
     private var bodyContent: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    compactOrderSummaryCard
-                    wizardProgressHeader
-                    wizardStepPanel
-                    if let msg = errorMessage {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(msg)
-                                .font(.footnote)
-                                .foregroundColor(.red)
-                            #if DEBUG
-                            if let dbg = checkoutErrorDebugFootnote {
-                                Text(dbg)
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                    .textSelection(.enabled)
+            Group {
+                if showsPrintUnavailableState {
+                    printUnavailableContent
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            compactOrderSummaryCard
+                            wizardProgressHeader
+                            wizardStepPanel
+                            if let msg = errorMessage {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(msg)
+                                        .font(.footnote)
+                                        .foregroundColor(.red)
+                                    #if DEBUG
+                                    if let dbg = checkoutErrorDebugFootnote {
+                                        Text(dbg)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                            .textSelection(.enabled)
+                                    }
+                                    #endif
+                                }
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.red.opacity(0.08))
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
                             }
-                            #endif
                         }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.red.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 16)
+                        .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth, alignment: .leading)
                     }
-                    Text("Secure checkout powered by Stripe. Printing fulfilled by Lulu.")
-                        .font(.caption)
-                        .foregroundColor(mutedTextColor)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.bottom, 8)
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        wizardBottomActionBar
+                            .padding(.horizontal, 20)
+                            .padding(.top, 10)
+                            .padding(.bottom, 12)
+                            .frame(maxWidth: .infinity)
+                            .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth)
+                            .background(
+                                pageBackground
+                                    .ignoresSafeArea(edges: .bottom)
+                                    .shadow(color: Color.black.opacity(0.06), radius: 8, y: -2)
+                            )
+                    }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
-                .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth, alignment: .leading)
             }
-            .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                wizardBottomActionBar
-                    .padding(.horizontal, 20)
-                    .padding(.top, 10)
-                    .padding(.bottom, 12)
-                    .frame(maxWidth: .infinity)
-                    .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth)
-                    .background(
-                        Color(UIColor.systemGroupedBackground)
-                            .ignoresSafeArea(edges: .bottom)
-                            .shadow(color: Color.black.opacity(0.06), radius: 8, y: -2)
-                    )
-            }
+            .background(pageBackground.ignoresSafeArea())
             .navigationTitle("Order Print")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -294,6 +343,92 @@ struct OrderBookView: View {
                 }
             }
         }
+    }
+
+    private var printUnavailableContent: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                HStack(alignment: .top, spacing: 12) {
+                    orderCoverThumbnail(urls: coverPreviewURLs, pdfURL: coverPDFURL)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(displayBookTitle)
+                            .font(.headline)
+                            .lineLimit(2)
+                        Text("\(book.pageCount) pages · \(isLandscapeBook ? "11 × 8.5\"" : "8.5 × 11\"")")
+                            .font(.subheadline)
+                            .foregroundColor(mutedTextColor)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                VStack(spacing: 18) {
+                    Image(systemName: "book.pages.fill")
+                        .font(.system(size: 38, weight: .medium))
+                        .foregroundColor(accentColor)
+
+                    switch printAvailabilityStatus {
+                    case .needsPages(let current, let minimum, let remaining):
+                        VStack(spacing: 8) {
+                            Text("\(remaining) more pages needed to print")
+                                .font(.customSerifFallback(size: 25))
+                                .multilineTextAlignment(.center)
+                            Text("Hardcover printing starts at \(minimum) pages. Keep adding memories and your book will become available here automatically.")
+                                .font(.subheadline)
+                                .foregroundColor(mutedTextColor)
+                                .multilineTextAlignment(.center)
+                        }
+
+                        VStack(spacing: 8) {
+                            GeometryReader { geometry in
+                                let progress = min(1, max(0, CGFloat(current) / CGFloat(minimum)))
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(fieldBackground)
+                                    Capsule()
+                                        .fill(accentColor)
+                                        .frame(width: geometry.size.width * progress)
+                                }
+                            }
+                            .frame(height: 8)
+                            Text("\(current) of \(minimum) pages")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(mutedTextColor)
+                        }
+                    case .ready:
+                        EmptyView()
+                    case .unavailable:
+                        VStack(spacing: 8) {
+                            Text("This book isn’t ready for print yet")
+                                .font(.customSerifFallback(size: 25))
+                                .multilineTextAlignment(.center)
+                            Text("Its page count doesn’t currently match an available print format.")
+                                .font(.subheadline)
+                                .foregroundColor(mutedTextColor)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+
+                    Button("Back to your book") { dismiss() }
+                        .font(.headline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(accentColor)
+                        .foregroundColor(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .accessibilityIdentifier("returnToStorybookButton")
+                }
+                .padding(22)
+                .background(cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(cardStroke, lineWidth: 1)
+                )
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 24)
+            .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth)
+        }
+        .accessibilityIdentifier("printUnavailableState")
     }
 
     private var bodyWithLifecycleHandlers: some View {
@@ -494,7 +629,7 @@ struct OrderBookView: View {
     }
 
     private var isAnonymousUser: Bool {
-        Auth.auth().currentUser?.isAnonymous == true
+        AuthenticationService.shared.isAnonymous
     }
 
     private var showAccountLinkBanner: Bool {
@@ -890,61 +1025,91 @@ struct OrderBookView: View {
 
     private var printOptionsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Print Format Options")
+            Text("Print format")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(mutedTextColor)
-            ForEach(productOptions) { option in
-                let availability = optionAvailability(option)
-                let isSelected = selectedProductOptionId == option.id
-                Button {
-                    guard availability.available else { return }
-                    selectedProductOptionId = option.id
-                } label: {
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 8) {
-                            Text(option.title)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(availability.available ? .primary : .secondary)
-                            if isSelected {
-                                Text("Selected")
-                                    .font(.caption2.weight(.semibold))
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 2)
-                                    .background(accentColor.opacity(0.15))
-                                    .foregroundColor(accentColor)
-                                    .clipShape(Capsule())
-                            }
-                            Spacer()
-                        }
-                        Text(option.subtitle)
+
+            Menu {
+                ForEach(productOptions) { option in
+                    let availability = optionAvailability(option)
+                    Button {
+                        selectedProductOptionId = option.id
+                    } label: {
+                        Label(
+                            availability.available ? option.title : "\(option.title) — unavailable",
+                            systemImage: selectedProductOptionId == option.id ? "checkmark" : "book.closed"
+                        )
+                    }
+                    .disabled(!availability.available)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "book.closed.fill")
+                        .foregroundColor(accentColor)
+                    Text(selectedProductOption?.title ?? "Choose a format")
+                        .font(.body.weight(.semibold))
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .frame(minHeight: 48)
+                .background(fieldBackground, in: RoundedRectangle(cornerRadius: 11))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 11)
+                        .stroke(cardStroke, lineWidth: 1)
+                )
+            }
+            .accessibilityLabel("Print format")
+            .accessibilityValue(selectedProductOption?.title ?? "No format selected")
+
+            if let selectedProductOption {
+                let availability = optionAvailability(selectedProductOption)
+                HStack(alignment: .top, spacing: 12) {
+                    orderCoverThumbnail(urls: coverPreviewURLs, pdfURL: coverPDFURL)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(selectedProductOption.subtitle)
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        Text("\(isLandscapeBook ? "11 × 8.5\"" : "8.5 × 11\"") · Full color · Matte finish")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        Text(option.requirementsText)
-                            .font(.caption2)
+                        Text(selectedProductOption.requirementsText)
+                            .font(.caption)
                             .foregroundColor(.secondary)
                         if let reason = availability.reason {
-                            Text(reason)
-                                .font(.caption2.weight(.semibold))
+                            Label(reason, systemImage: "info.circle.fill")
+                                .font(.caption.weight(.medium))
                                 .foregroundColor(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.top, 2)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(availability.available ? fieldBackground : Color(UIColor.tertiarySystemFill))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(
-                                isSelected ? accentColor : cardStroke,
-                                lineWidth: isSelected ? 1.5 : 1
-                            )
-                    )
-                    .opacity(availability.available ? 1.0 : 0.65)
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.plain)
-                .disabled(!availability.available)
+                .padding(.top, 2)
+            }
+
+            let unavailableOptions = productOptions.filter { optionAvailability($0).available == false }
+            if unavailableOptions.contains(where: { $0.id != selectedProductOptionId }) {
+                DisclosureGroup("Why some formats are unavailable") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(unavailableOptions) { option in
+                            if option.id != selectedProductOptionId,
+                               let reason = optionAvailability(option).reason {
+                                Text("\(option.title): \(reason)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundColor(mutedTextColor)
             }
         }
         .padding(14)
@@ -1725,7 +1890,7 @@ struct OrderBookView: View {
             selectedProductOptionId = firstAvailable.id
             return
         }
-        selectedProductOptionId = productOptions.first?.id
+        selectedProductOptionId = nil
     }
 
     private func scheduleEstimate() {
@@ -1739,12 +1904,12 @@ struct OrderBookView: View {
         if cartSnapshot.isEmpty {
             guard hasAnyEligibleProductOption else {
                 cartEstimate = nil
-                errorMessage = "No available print formats for \(book.pageCount) pages. Adjust page count to match a listed format."
+                errorMessage = nil
                 return
             }
             guard selectedProductIsEligible, let selectedProductOptionId else {
                 cartEstimate = nil
-                errorMessage = "Choose an available print format to continue."
+                errorMessage = nil
                 return
             }
             guard isFormValid else {

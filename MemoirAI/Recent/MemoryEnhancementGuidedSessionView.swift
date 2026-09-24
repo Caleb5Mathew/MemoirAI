@@ -6,6 +6,7 @@ struct MemoryEnhancementGuidedSessionView: View {
     let memory: MemoryEntry
     let service: MemoryEnhancementService
     let profileDisplayName: String?
+    let transcriptionGlossary: [String]
     let relationshipStyleProfileName: Bool
     let onComplete: (CharacterDetails) -> Void
     let onBack: () -> Void
@@ -25,9 +26,15 @@ struct MemoryEnhancementGuidedSessionView: View {
     @State private var showReviewSheet = false
     @State private var pendingTranscript: String = ""
     @State private var isAwaitingFileTranscription = false
+    @State private var pendingTranscriptionError: String?
+    @State private var showCloudTranscriptionDisclosure = false
+    @State private var transcriptionTask: Task<Void, Never>?
+    @State private var transcriptionRequestID = UUID()
 
     @State private var isMemoryTextExpanded = false
     @State private var memoryAudioPlayer: AVAudioPlayer?
+    @State private var remoteMemoryAudioPlayer: AVPlayer?
+    @State private var remoteMemoryPlaybackObserver: NSObjectProtocol?
     @State private var isMemoryAudioPlaying = false
 
     @Environment(\.scenePhase) private var scenePhase
@@ -43,6 +50,7 @@ struct MemoryEnhancementGuidedSessionView: View {
         memory: MemoryEntry,
         service: MemoryEnhancementService,
         profileDisplayName: String?,
+        transcriptionGlossary: [String],
         relationshipStyleProfileName: Bool,
         onComplete: @escaping (CharacterDetails) -> Void,
         onBack: @escaping () -> Void,
@@ -51,6 +59,7 @@ struct MemoryEnhancementGuidedSessionView: View {
         self.memory = memory
         self.service = service
         self.profileDisplayName = profileDisplayName
+        self.transcriptionGlossary = transcriptionGlossary
         self.relationshipStyleProfileName = relationshipStyleProfileName
         self.onComplete = onComplete
         self.onBack = onBack
@@ -177,6 +186,15 @@ struct MemoryEnhancementGuidedSessionView: View {
         .sheet(isPresented: $showReviewSheet) {
             reviewTranscriptSheet
         }
+        .alert(CloudTranscriptionDisclosure.title, isPresented: $showCloudTranscriptionDisclosure) {
+            Button("Not Now", role: .cancel) {}
+            Button("Continue") {
+                CloudTranscriptionDisclosure.accept()
+                startRecording()
+            }
+        } message: {
+            Text(CloudTranscriptionDisclosure.message)
+        }
     }
 
     private var progressRow: some View {
@@ -205,7 +223,7 @@ struct MemoryEnhancementGuidedSessionView: View {
                 .foregroundStyle(header)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if memory.hasAudio, let url = memory.playbackURL {
+            if let url = memory.availableAudioURL {
                 compactMemoryAudioRow(url: url)
             }
 
@@ -416,9 +434,9 @@ struct MemoryEnhancementGuidedSessionView: View {
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.vertical, 24)
                 } else if pendingTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("We didn’t catch speech. Try recording again in a quieter spot.")
+                    Text(pendingTranscriptionError ?? "We didn’t catch speech. Try recording again in a quieter spot.")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(pendingTranscriptionError == nil ? Color.secondary : Color.red)
                 } else {
                     ScrollView {
                         Text(pendingTranscript)
@@ -451,14 +469,18 @@ struct MemoryEnhancementGuidedSessionView: View {
                     .buttonStyle(.plain)
 
                     Button {
-                        Task {
-                            let text = pendingTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-                            showReviewSheet = false
-                            await vm.submitAnswer(text)
-                            discardPendingRecording()
+                        if pendingTranscriptionError != nil {
+                            transcribePendingRecording()
+                        } else {
+                            Task {
+                                let text = pendingTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+                                showReviewSheet = false
+                                await vm.submitAnswer(text)
+                                discardPendingRecording()
+                            }
                         }
                     } label: {
-                        Text("Submit")
+                        Text(pendingTranscriptionError == nil ? "Submit" : "Try Again")
                             .font(.system(size: 16, weight: .semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
@@ -473,7 +495,11 @@ struct MemoryEnhancementGuidedSessionView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .disabled(vm.isAnalyzing || isAwaitingFileTranscription || pendingTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        vm.isAnalyzing ||
+                        isAwaitingFileTranscription ||
+                        (pendingTranscriptionError == nil && pendingTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    )
                 }
             }
             .padding(24)
@@ -483,7 +509,11 @@ struct MemoryEnhancementGuidedSessionView: View {
     }
 
     private func discardPendingRecording() {
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+        transcriptionRequestID = UUID()
         pendingTranscript = ""
+        pendingTranscriptionError = nil
         isAwaitingFileTranscription = false
         if let url = audioURL {
             try? FileManager.default.removeItem(at: url)
@@ -498,38 +528,70 @@ struct MemoryEnhancementGuidedSessionView: View {
         isRecording = false
         audioMonitor.stopMonitoring()
         realTimeTranscription.stopTranscription()
-
-        let spoken = realTimeTranscription.getFinalTranscript().trimmingCharacters(in: .whitespacesAndNewlines)
-        if !spoken.isEmpty {
-            pendingTranscript = spoken
-            isAwaitingFileTranscription = false
-            showReviewSheet = true
-        } else if let url = audioURL {
-            isAwaitingFileTranscription = true
-            pendingTranscript = ""
-            showReviewSheet = true
-            SpeechTranscriber.shared.transcribe(url: url) { result in
-                DispatchQueue.main.async {
-                    isAwaitingFileTranscription = false
-                    switch result {
-                    case .success(let t):
-                        pendingTranscript = t.trimmingCharacters(in: .whitespacesAndNewlines)
-                    case .failure:
-                        pendingTranscript = ""
-                    }
-                }
-            }
-        } else {
-            pendingTranscript = ""
-            isAwaitingFileTranscription = false
-            showReviewSheet = true
-        }
+        _ = realTimeTranscription.getFinalTranscript()
+        pendingTranscript = ""
+        pendingTranscriptionError = nil
+        showReviewSheet = true
+        transcribePendingRecording()
         try? AVAudioSession.sharedInstance().setActive(false)
+    }
+
+    private func transcribePendingRecording() {
+        guard let url = audioURL else {
+            pendingTranscriptionError = EnhancementVoiceTranscriptionError.invalidRecording.localizedDescription
+            return
+        }
+        isAwaitingFileTranscription = true
+        pendingTranscriptionError = nil
+        transcriptionTask?.cancel()
+        let requestID = UUID()
+        transcriptionRequestID = requestID
+        transcriptionTask = Task {
+            do {
+                let text = try await EnhancementVoiceTranscriptionService.shared.transcribe(
+                    url: url,
+                    glossary: transcriptionGlossary
+                )
+                guard !Task.isCancelled,
+                      transcriptionRequestID == requestID,
+                      audioURL == url else { return }
+                pendingTranscript = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                guard !Task.isCancelled,
+                      transcriptionRequestID == requestID,
+                      audioURL == url else { return }
+                pendingTranscript = ""
+                pendingTranscriptionError = error.localizedDescription
+            }
+            guard transcriptionRequestID == requestID, audioURL == url else { return }
+            isAwaitingFileTranscription = false
+            transcriptionTask = nil
+        }
     }
 
     // MARK: - Memory playback
 
     private func toggleMemoryPlayback(url: URL) {
+        if !url.isFileURL {
+            if isMemoryAudioPlaying {
+                stopMemoryPlayback()
+                return
+            }
+            let player = AVPlayer(url: url)
+            remoteMemoryAudioPlayer = player
+            remoteMemoryPlaybackObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: player.currentItem,
+                queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    stopMemoryPlayback()
+                }
+            }
+            player.play()
+            isMemoryAudioPlaying = true
+            return
+        }
         if isMemoryAudioPlaying {
             memoryAudioPlayer?.pause()
             isMemoryAudioPlaying = false
@@ -556,6 +618,12 @@ struct MemoryEnhancementGuidedSessionView: View {
     private func stopMemoryPlayback() {
         memoryAudioPlayer?.stop()
         memoryAudioPlayer = nil
+        remoteMemoryAudioPlayer?.pause()
+        remoteMemoryAudioPlayer = nil
+        if let remoteMemoryPlaybackObserver {
+            NotificationCenter.default.removeObserver(remoteMemoryPlaybackObserver)
+            self.remoteMemoryPlaybackObserver = nil
+        }
         isMemoryAudioPlaying = false
     }
 
@@ -569,6 +637,9 @@ struct MemoryEnhancementGuidedSessionView: View {
     }
 
     private func cleanupRecording() {
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+        transcriptionRequestID = UUID()
         recordingTimer?.invalidate()
         recordingTimer = nil
         if isRecording {
@@ -587,8 +658,14 @@ struct MemoryEnhancementGuidedSessionView: View {
 
     private func startRecording() {
         stopMemoryPlayback()
+        guard CloudTranscriptionDisclosure.isAccepted() else {
+            showCloudTranscriptionDisclosure = true
+            return
+        }
         guard permissionManager.isMicrophoneAuthorized else {
-            permissionManager.requestMicrophonePermission()
+            permissionManager.requestMicrophonePermission {
+                startRecording()
+            }
             return
         }
         pendingTranscript = ""

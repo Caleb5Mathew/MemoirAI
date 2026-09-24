@@ -45,6 +45,23 @@ assert.throws(
 );
 
 const now = new Date("2026-08-27T12:00:00Z");
+for (const productIdentifier of ["com.Buildr.MemoirAI.ProMonthly", "com.Buildr.MemoirAI.ProYearly"]) {
+  const basicEntitlement = {
+    product_identifier: productIdentifier,
+    purchase_date: "2026-08-27T11:56:00Z",
+    expires_date: "2026-08-27T12:01:00Z"
+  };
+  const response = { subscriber: { entitlements: { Basic: basicEntitlement } } };
+  assert.strictEqual(activeRevenueCatEntitlement(response, now), basicEntitlement);
+  assert.strictEqual(activeRevenueCatEntitlement(response, new Date(basicEntitlement.expires_date)), null);
+  for (const expiresDate of [null, undefined, "invalid", "2026-08-27T11:59:59Z"]) {
+    basicEntitlement.expires_date = expiresDate;
+    assert.strictEqual(activeRevenueCatEntitlement(response, now), null);
+  }
+}
+assert.strictEqual(activeRevenueCatEntitlement({ subscriber: { entitlements: {
+  Basic: { product_identifier: "unrelated.product", expires_date: "2099-01-01T00:00:00Z" }
+} } }, now), null);
 assert.ok(activeRevenueCatEntitlement({ subscriber: { entitlements: {
   image_generation: { expires_date: "2026-09-27T12:00:00Z" }
 } } }, now));
@@ -54,6 +71,37 @@ assert.strictEqual(activeRevenueCatEntitlement({ subscriber: { entitlements: {
 assert.strictEqual(activeRevenueCatEntitlement({ subscriber: { entitlements: {
   unrelated: { expires_date: "2026-09-27T12:00:00Z" }
 } } }, now), null);
+for (const productIdentifier of ["com.Buildr.MemoirAI.ProMonthly", "com.Buildr.MemoirAI.ProYearly"]) {
+  for (const isSandbox of [true, false]) {
+    const subscription = {
+      expires_date: "2026-08-27T12:01:00Z",
+      purchase_date: "2026-08-27T11:56:00Z",
+      is_sandbox: isSandbox,
+      unsubscribe_detected_at: "2026-08-27T11:59:00Z"
+    };
+    const response = { subscriber: { subscriptions: { [productIdentifier]: subscription } } };
+    const verified = activeRevenueCatEntitlement(response, now);
+    assert.strictEqual(verified.product_identifier, productIdentifier);
+    assert.strictEqual(verified.expires_date, subscription.expires_date);
+    assert.strictEqual(activeRevenueCatEntitlement(response, new Date(subscription.expires_date)), null);
+    for (const expiresDate of [null, undefined, "invalid", "2026-08-27T11:59:59Z"]) {
+      subscription.expires_date = expiresDate;
+      assert.strictEqual(activeRevenueCatEntitlement(response, now), null);
+    }
+    subscription.grace_period_expires_date = "2026-08-27T12:02:00Z";
+    assert.strictEqual(activeRevenueCatEntitlement(response, now).expires_date,
+      subscription.grace_period_expires_date);
+    subscription.refunded_at = "2026-08-27T11:59:00Z";
+    assert.strictEqual(activeRevenueCatEntitlement(response, now), null);
+  }
+}
+assert.strictEqual(activeRevenueCatEntitlement({ subscriber: { subscriptions: {
+  "unrelated.product": { expires_date: "2099-01-01T00:00:00Z" }
+} } }, now), null);
+assert.ok(activeRevenueCatEntitlement({ subscriber: {
+  entitlements: { image_generation: { expires_date: "2026-08-27T11:59:00Z" } },
+  subscriptions: { "com.Buildr.MemoirAI.ProMonthly": { expires_date: "2026-08-27T12:01:00Z" } }
+} }, now));
 assert.strictEqual(FREE_PAGE_LIMIT, 4);
 assert.strictEqual(MAX_PAGES_PER_JOB, 9);
 assert.deepStrictEqual(
@@ -141,6 +189,41 @@ const serverTimestamp = () => "SERVER_TIMESTAMP";
 const timestampFromDate = (date) => ({ toDate: () => date });
 
 (async () => {
+  // Exhausting the free preview must not block a newly purchased subscription,
+  // including TestFlight receipts without an entitlement association.
+  for (const purchaseSource of ["Basic", "subscriptionFallback"]) {
+    for (const isSandbox of [true, false]) {
+      const purchaseDb = new FakeFirestore();
+      purchaseDb.rows.set("users/user-1/aiUsage/storybook_free_lifetime", { reservedPages: FREE_PAGE_LIMIT });
+      const purchaseHandler = createStorybookJobHandler({
+        db: purchaseDb,
+        serverTimestamp,
+        timestampFromDate,
+        HttpsError: FakeHttpsError,
+        nowDate: () => now,
+        fetchImpl: async () => ({ ok: true, json: async () => ({ subscriber: {
+          entitlements: purchaseSource === "Basic" ? { Basic: {
+            product_identifier: "com.Buildr.MemoirAI.ProMonthly",
+            purchase_date: "2026-08-27T11:56:00Z",
+            expires_date: "2026-08-27T12:01:00Z"
+          } } : {},
+          subscriptions: purchaseSource === "subscriptionFallback" ? {
+          "com.Buildr.MemoirAI.ProMonthly": {
+            expires_date: "2026-08-27T12:01:00Z",
+            is_sandbox: isSandbox
+          }
+        } : {} } }) })
+      });
+      const result = await purchaseHandler({
+        auth: { uid: "user-1" },
+        data: { jobId: "job_1", job: { ...base, pageCountTarget: 5, clientVersion: 2 } }
+      });
+      assert.strictEqual(result.allowanceRemaining, 95);
+      assert.strictEqual(purchaseDb.rows.get("users/user-1/storybookJobs/job_1").entitlementKind, "paid");
+      assert.strictEqual(purchaseDb.rows.get("users/user-1/aiUsage/storybook_free_lifetime").reservedPages,
+        FREE_PAGE_LIMIT);
+    }
+  }
   const db = new FakeFirestore();
   let revenueCatCalls = 0;
   const handler = createStorybookJobHandler({

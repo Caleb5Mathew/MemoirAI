@@ -9,6 +9,27 @@ import Testing
 @testable import MemoirAI
 
 struct StorybookActiveJobPickerTests {
+    @Test func staleRunningJobIsNotTreatedAsActive() {
+        let profileId = UUID()
+        let now = Date()
+        let rows: [(documentID: String, data: [String: Any])] = [
+            (
+                "stale-running",
+                [
+                    "profileId": profileId.uuidString,
+                    "status": "running",
+                    "createdAt": Timestamp(date: now.addingTimeInterval(-3_600)),
+                    "lastHeartbeatAt": Timestamp(date: now.addingTimeInterval(-3_600))
+                ]
+            )
+        ]
+
+        #expect(FirestoreSyncService.pickActiveStorybookCloudJob(
+            profileId: profileId,
+            rowsNewestFirst: rows,
+            referenceNow: now
+        ) == nil)
+    }
 
     @Test func pickActive_returnsNewestInFlight() {
         let profileId = UUID()
