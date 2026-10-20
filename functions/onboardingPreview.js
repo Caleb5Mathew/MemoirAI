@@ -1,8 +1,5 @@
 const admin = require("firebase-admin");
 const crypto = require("crypto");
-const fs = require("fs");
-const path = require("path");
-const { buildFastOnboardingIllustrationPrompt } = require("./onboardingIllustrationPolicy");
 const OpenAI = require("openai");
 const { refineTranscriptWithOpenAI, refineTranscriptForReading, TRANSCRIPTION_REFINEMENT_VERSION } = require("./transcriptReadingCopy");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
@@ -28,8 +25,6 @@ const MAX_STORY_CHARACTERS = 12_000;
 const MAX_PROFILE_NAME_CHARACTERS = 100;
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 const ONBOARDING_IMAGE_MODEL = GEMINI_IMAGE_MODEL;
-const FAST_ONBOARDING_IMAGE_MODEL = "gemini-3.1-flash-lite-image";
-const fastStyleReference = fs.readFileSync(path.join(__dirname, "assets/style/Refnormal-onboarding.jpg"));
 const ONBOARDING_PREVIEW_VERSION = 1;
 const STALE_GENERATION_MS = 2 * 60 * 1000;
 const MAX_GENERATION_ATTEMPTS = 3;
@@ -101,10 +96,10 @@ function buildOnboardingIllustrationPrompt({ profileName, storyText, hasHeadshot
     : `The book subject is ${profileName}. Render this person only when the memory places them visibly in the scene.`;
   const style = artStyleMemoryIllustrationStyleDescription("kidsBook");
   const references = [
-    hasStyleReference ? "REFERENCE IMAGE #1 is the children's-book STYLE ANCHOR. Match its watercolor medium, loose ink linework, visible paper texture, simplified expressive faces, and warm palette. Copy only the illustration style, not its people, objects, or composition." : "Enforce the watercolor children's-book style from the text even without a style image.",
+    hasStyleReference ? "REFERENCE IMAGE #1 is the children's-book STYLE ANCHOR. Match its watercolor medium, loose ink linework, visible paper texture, and warm palette. Simplify the people beyond the reference: broad rounded silhouettes, a few facial marks, and soft flat washes; do not copy detailed anatomy or rendered facial shading. Copy only the illustration style, not its people, objects, or composition." : "Enforce the watercolor children's-book style from the text even without a style image.",
     hasHeadshot ? `REFERENCE IMAGE #${hasStyleReference ? 2 : 1} is the book subject's IDENTITY ONLY. Do NOT copy photographic lighting, skin texture, exposure, lens look, or realistic rendering. Re-render the person completely in the children's-book STYLE LOCK.` : "No identity portrait is attached."
   ].join("\n");
-  return `STYLE LOCK (same as the normal printed book):\n${style}\n\n${references}\n\nROLE LOCK — READ BEFORE ANY REFERENCE IMAGE:\n${perspective}\n${identity}\n\n${onboardingAgeDirection()}\n\nMEMORY ABOUT ${profileName.toUpperCase()}:\n${storyText}\n\nCreate one wordless 4:3 landscape illustration for a premium printed memoir. Choose the single clearest visual moment. Render a soft watercolor children’s-book scene, with loose hand-drawn ink, visibly painted paper, simplified shapes, and stylized expressive faces. Keep the scene readable and the action physically coherent. Do not turn this into a realistic oil painting, cinematic render, or detailed digital portrait. Preserve the exact action, setting, people count, and relationships in the memory. The attached portrait is identity reference only and must never appear as a photo, frame, inset, thumbnail, prop, or second copy of the book subject. No words, letters, captions, speech bubbles, logos, signatures, watermarks, QR codes, borders, or page furniture.`;
+  return `STYLE LOCK (same as the normal printed book):\n${style}\n\n${references}\n\nROLE LOCK — READ BEFORE ANY REFERENCE IMAGE:\n${perspective}\n${identity}\n\n${onboardingAgeDirection()}\n\nMEMORY ABOUT ${profileName.toUpperCase()}:\n${storyText}\n\nCreate one wordless 4:3 landscape illustration for a premium printed memoir. Choose the single clearest visual moment. Render a soft watercolor children’s-book scene, with loose hand-drawn ink, visibly painted paper, broad simplified shapes, and minimal facial marks. Keep faces readable at printed page size using a few soft strokes. Leave breathing room between objects. Omit pores, individual hairs, eyelashes, fine hatching, sculpted cheeks, detailed muscles, and glossy three-dimensional shading. Convey emotion through posture and simple expressions rather than realistic facial anatomy. Keep the scene readable and the action physically coherent. Do not turn this into a realistic oil painting, cinematic render, or detailed digital portrait. Preserve the exact action, setting, people count, and relationships in the memory. The attached portrait is identity reference only and must never appear as a photo, frame, inset, thumbnail, prop, or second copy of the book subject. No words, letters, captions, speech bubbles, logos, signatures, watermarks, QR codes, borders, or page furniture.`;
 }
 
 function previewTitle(storyText, storytellerRole = "subject") {
@@ -220,8 +215,7 @@ function createOnboardingPreviewHandler({
     } catch (error) {
       throw new HttpsError("invalid-argument", String(error.message || error));
     }
-    const fastIllustration = request.auth?.token?.onboardingPreviewTester === true;
-    const imageModel = fastIllustration ? FAST_ONBOARDING_IMAGE_MODEL : ONBOARDING_IMAGE_MODEL;
+    const imageModel = ONBOARDING_IMAGE_MODEL;
     const requestHash = onboardingPreviewRequestHash(input);
     const previewLimit = onboardingPreviewLimit(request.auth);
     const userRef = db.collection("users").doc(userId);
@@ -324,9 +318,9 @@ function createOnboardingPreviewHandler({
         requestId: input.requestId,
         storagePath: input.subjectPhotoStoragePath
       }));
-      const styleReference = fastIllustration ? fastStyleReference : loadStyleReferencePng("normal");
+      const styleReference = loadStyleReferencePng("normal");
       if (!styleReference) throw new HttpsError("internal", "The book illustration style is unavailable.");
-      const prompt = (fastIllustration ? buildFastOnboardingIllustrationPrompt : buildOnboardingIllustrationPrompt)({
+      const prompt = buildOnboardingIllustrationPrompt({
         profileName: input.profileName,
         storyText: input.storyText,
         hasHeadshot: Boolean(photo),
@@ -346,7 +340,7 @@ function createOnboardingPreviewHandler({
           deadlineAtMs: Date.now() + 100_000,
           model: imageModel,
           textFirst: true,
-          responseModalities: fastIllustration ? ["TEXT", "IMAGE"] : ["IMAGE"]
+          responseModalities: ["IMAGE"]
         }
       ));
       await assertAccountNotDeleting(db, userId);

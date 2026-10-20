@@ -65,6 +65,10 @@ assert.throws(() => sanitizeOnboardingPreviewRequest({
   assert(prompt.includes("REFERENCE IMAGE #1 is the children's-book STYLE ANCHOR"));
   assert(prompt.includes("REFERENCE IMAGE #2 is the book subject's IDENTITY ONLY"));
   assert(prompt.includes("Do NOT copy photographic lighting"));
+  assert(prompt.includes("Simplify the people beyond the reference"));
+  assert(prompt.includes("minimal facial marks"));
+  assert(prompt.includes("Omit pores, individual hairs, eyelashes"));
+  assert(prompt.includes("rather than realistic facial anatomy"));
   assert(!prompt.includes("editorial storybook"));
   assert(!prompt.includes("undefined"));
 }
@@ -302,25 +306,24 @@ function fakeDatabase() {
   const concurrentResult = await concurrentHandler(request);
   assert.equal(concurrentResult.refinementModel, "deterministic-fallback");
   assert.equal(concurrentResult.readingText, input.storyText);
-  const fastHandler = createOnboardingPreviewHandler({
+  const testerHandler = createOnboardingPreviewHandler({
     db: fakeDatabase(),
     bucket: { file: () => ({ save: async () => {} }) },
     geminiApiKey: "test",
     generateTitle: async () => "A childhood memory",
     refineStory: async () => ({ text: input.storyText, model: "test" }),
     generateImage: async (key, prompt, size, references, options) => {
-      assert.equal(options.model, "gemini-3.1-flash-lite-image");
-      assert.deepEqual(options.responseModalities, ["TEXT", "IMAGE"]);
-      assert(references[0].length < 200000, "Fast style anchor must stay small");
-      assert.equal(references[0].readUInt16BE(0), 0xffd8);
-      assert.match(prompt, /warm watercolor palette/);
-      assert.match(prompt, /more cartoon-like/);
+      assert.equal(options.model, require("./storybookAI").GEMINI_IMAGE_MODEL, "Tester quota must not opt users into an experimental image model");
+      assert.deepEqual(options.responseModalities, ["IMAGE"]);
+      assert(references[0].equals(require("./storybookAI").loadStyleReferencePng("normal")));
+      assert.match(prompt, /same as the normal printed book/);
+      assert.match(prompt, /minimal facial marks/);
       assert(prompt.includes(input.storyText));
       return Buffer.from("89504e470d0a1a0a", "hex");
     }
   });
-  const fastResult = await fastHandler({ ...request, auth: { uid, token: { onboardingPreviewTester: true } } });
-  assert.equal(fastResult.status, "imageReady");
+  const testerResult = await testerHandler({ ...request, auth: { uid, token: { onboardingPreviewTester: true } } });
+  assert.equal(testerResult.status, "imageReady");
   console.log('onboarding handler integration tests passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
