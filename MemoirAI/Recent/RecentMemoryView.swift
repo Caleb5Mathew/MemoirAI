@@ -65,8 +65,11 @@ struct RecentMemoriesView: View {
                         .padding(.horizontal, 24)
                         .padding(.bottom, 12)
 
-                    memoirFilterBar
-                        .padding(.bottom, 10)
+                    if enhancementMode {
+                        memoirFilterBar
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 10)
+                    }
                     
                     if sortedEntries.isEmpty {
                         Spacer()
@@ -208,12 +211,13 @@ struct RecentMemoriesView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .analyticsScreen("memories")
         }
     }
 
     // MARK: - Custom Header
     private var customHeader: some View {
-        HStack(alignment: .center, spacing: 0) {
+        HStack(alignment: .center, spacing: 10) {
             // Back button - perfectly aligned
             Button(action: {
                 // If we're in a TabView context (selectedTab is provided), switch to Home tab
@@ -229,66 +233,44 @@ struct RecentMemoriesView: View {
                 Image(systemName: "chevron.left")
                     .font(LinenTheme.body(16, weight: .semibold))
                     .foregroundColor(textPrimary.opacity(0.7))
-                    .frame(width: 40, height: 40)
-                    .background(
-                        Circle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        LinenTheme.surface,
-                                        LinenTheme.surface
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .shadow(color: Color.black.opacity(0.06), radius: 2, x: 0, y: 1)
-                    )
+                    .frame(width: 44, height: 44)
+                    .background(LinenTheme.surface, in: Circle())
             }
+            .accessibilityLabel("Back")
             
-            Spacer()
-            
-            // Title - elegant, bold, serif
-            Text(enhancementMode ? "Enhance Memories" : "Memories")
-                .font(LinenTheme.heading(25))
-                .foregroundColor(textPrimary)
-                .tracking(-0.5) // Tighter letter spacing for elegance
-            
-            Spacer()
+            if enhancementMode {
+                Spacer(minLength: 0)
+                Text("Enhance Memories")
+                    .font(LinenTheme.heading(25))
+                    .foregroundColor(textPrimary)
+                    .tracking(-0.5)
+                Spacer(minLength: 0)
+            } else {
+                memoirFilterBar
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             
             // Sort button - perfectly aligned with back button
             Button(action: { showSortOptions.toggle() }) {
                 Image(systemName: "arrow.up.arrow.down")
                     .font(LinenTheme.body(14, weight: .semibold))
                     .foregroundColor(textPrimary.opacity(0.7))
-                    .frame(width: 40, height: 40)
-                    .background(
-                        Circle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        LinenTheme.surface,
-                                        LinenTheme.surface
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .shadow(color: Color.black.opacity(0.06), radius: 2, x: 0, y: 1)
-                    )
+                    .frame(width: 44, height: 44)
+                    .background(LinenTheme.surface, in: Circle())
             }
+            .accessibilityLabel("Sort memories")
             .confirmationDialog("Sort Memories", isPresented: $showSortOptions, titleVisibility: .visible) {
                 Button("Newest First") { sortAscending = false }
                 Button("Oldest First") { sortAscending = true }
                 Button("Cancel", role: .cancel) {}
             }
         }
-        .frame(height: 50)
+        .frame(minHeight: 50)
     }
 
     @ViewBuilder
     private var memoirFilterBar: some View {
-        if !availableMemoirModes.isEmpty {
+        if !enhancementMode || !availableMemoirModes.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     if !enhancementMode {
@@ -298,8 +280,8 @@ struct RecentMemoriesView: View {
                         memoirFilterButton(title: mode.libraryTitle, mode: mode)
                     }
                 }
-                .padding(.horizontal, 24)
             }
+            .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("memoirLibraryFilter")
         }
     }
@@ -319,6 +301,7 @@ struct RecentMemoriesView: View {
                 .overlay(Capsule().stroke(terracotta.opacity(isSelected ? 0 : 0.25), lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("memoirFilter_\(mode?.rawValue ?? "all")")
     }
 

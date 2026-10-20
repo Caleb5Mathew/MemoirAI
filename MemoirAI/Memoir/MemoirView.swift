@@ -64,6 +64,7 @@ struct MemoirView: View {
             .padding(.bottom, 100)
         }
         .background(colors.softCream.ignoresSafeArea())
+        .analyticsScreen("memoir_chapters")
         .onAppear {
             migrateLegacyMemoirModeIfNeeded()
             fetchEntries()

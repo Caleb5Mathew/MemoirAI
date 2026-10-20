@@ -267,6 +267,7 @@ struct OrderBookView: View {
 
     var body: some View {
         bodyWithAllHandlers
+            .analyticsScreen("book_order")
     }
 
     private var bodyContent: some View {

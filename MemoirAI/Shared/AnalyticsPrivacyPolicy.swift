@@ -13,8 +13,10 @@ enum AnalyticsPrivacyPolicy {
     ]
 
     private static let enumValues: [String: Set<String>] = [
-        "screen": ["audience", "name", "record", "photo", "meetAlex", "cover", "spread", "illustration", "voice", "story", "building", "reveal", "home", "memories", "paywall", "settings", "login"],
-        "action": ["continue", "back", "skip_tour", "sample_answer", "record_start", "record_stop", "photo_skip", "reveal", "photo_camera", "photo_library", "play_sample", "pause_sample"],
+        "screen": ["audience", "name", "record", "photo", "meetAlex", "cover", "spread", "illustration", "voice", "story", "building", "reveal", "home", "memories", "paywall", "settings", "login", "memory_detail", "memory_recording", "book", "profile", "chapter_journey", "profile_switcher", "book_editor", "book_library", "book_order", "profile_edit", "account_backup", "memory_rerecord", "memory_enhancement", "order_history", "order_detail", "memoir_chapters"],
+        "diagnostic_reason": ["auth_unavailable", "recorder_start_rejected", "recorder_creation_failed"],
+        "screen_exit_reason": ["navigation", "covered", "inactive", "identity_changed"],
+        "action": ["continue", "back", "skip_tour", "sample_answer", "record_start", "record_stop", "photo_skip", "reveal", "photo_camera", "photo_library", "play_sample", "pause_sample", "retry_generation", "retry_paywall", "retry_transcription"],
         "field": ["narrator_name", "story"],
         "onboarding_version": ["native_v5"],
         "audience": ["myself", "someoneElse", "myChildren", "parentOrGrandparent", "notSure"],
@@ -29,6 +31,10 @@ enum AnalyticsPrivacyPolicy {
         "auth_operation": ["sign_in", "create_account", "link_account"],
         "auth_outcome": ["success", "failure"]
     ]
+
+    static func isAllowedScreen(_ screen: String) -> Bool {
+        enumValues["screen"]?.contains(screen) == true
+    }
 
     static func sanitized(_ properties: Properties) -> Properties {
         properties.filter { key, value in

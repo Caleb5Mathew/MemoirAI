@@ -241,6 +241,7 @@ struct SettingsView: View {
         }
         .tint(LinenTheme.accent)
         .navigationBarBackButtonHidden(true)
+        .analyticsScreen("settings")
         .interactiveDismissDisabled(isDeletingAccount)
         .onAppear {
             sliderPageCount = Double(pageCountSetting)

@@ -86,6 +86,88 @@ struct ProductAnalyticsTests {
         #expect(AnalyticsEventCategory.categories.values.allSatisfy { !$0.isEmpty })
     }
 
+    @Test func screenDwellPausesWhileInactiveAndResumesWithoutAnotherView() throws {
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        var date = Date(timeIntervalSince1970: 0)
+        var events: [(String, Properties)] = []
+        let analytics = ProductAnalytics(send: { events.append(($0, $1)) }, identify: { _ in }, reset: {}, defaults: defaults, now: { date })
+        let screenID = UUID()
+        analytics.beginScreen("home", id: screenID)
+        date = date.addingTimeInterval(10)
+        analytics.setScreenTrackingActive(true)
+        date = date.addingTimeInterval(2)
+        analytics.setScreenTrackingActive(false)
+        analytics.setScreenTrackingActive(false)
+        date = date.addingTimeInterval(100)
+        analytics.setScreenTrackingActive(true)
+        date = date.addingTimeInterval(3)
+        analytics.endScreen(id: screenID)
+        analytics.endScreen(id: screenID)
+        let dwell = events.filter { $0.0 == "Screen Time Recorded" }
+        #expect(dwell.map { $0.1["duration_ms"] as? Int } == [2000, 3000])
+        #expect(dwell.map { $0.1["screen_exit_reason"] as? String } == ["inactive", "navigation"])
+        #expect(events.filter { $0.0 == "Screen Viewed" }.count == 1)
+    }
+
+    @Test func nestedScreenDwellRestoresUnderlyingScreenAndIgnoresStaleDisappear() throws {
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        var date = Date(timeIntervalSince1970: 0)
+        var events: [(String, Properties)] = []
+        let analytics = ProductAnalytics(send: { events.append(($0, $1)) }, identify: { _ in }, reset: {}, defaults: defaults, now: { date })
+        let home = UUID(), detail = UUID(), paywall = UUID()
+        analytics.setScreenTrackingActive(true)
+        analytics.beginScreen("home", id: home)
+        analytics.beginScreen("home", id: home)
+        date = date.addingTimeInterval(1)
+        analytics.beginScreen("memory_detail", id: detail)
+        date = date.addingTimeInterval(2)
+        analytics.beginScreen("paywall", id: paywall)
+        analytics.endScreen(id: detail)
+        date = date.addingTimeInterval(3)
+        analytics.endScreen(id: paywall)
+        date = date.addingTimeInterval(4)
+        analytics.endScreen(id: home)
+        let dwell = events.filter { $0.0 == "Screen Time Recorded" }
+        #expect(dwell.map { $0.1["screen"] as? String } == ["home", "memory_detail", "paywall", "home"])
+        #expect(dwell.map { $0.1["duration_ms"] as? Int } == [1000, 2000, 3000, 4000])
+        #expect(events.filter { $0.0 == "Screen Viewed" }.count == 3)
+    }
+
+    @Test func dynamicScreensRejectPrivateNamesAndSeparateIdentityDurations() throws {
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        var date = Date(timeIntervalSince1970: 0)
+        var events: [(String, Properties)] = []
+        let analytics = ProductAnalytics(send: { events.append(($0, $1)) }, identify: { _ in }, reset: {}, defaults: defaults, now: { date })
+        let screenID = UUID()
+        analytics.setScreenTrackingActive(true)
+        analytics.beginScreen("private memoir title", id: UUID())
+        #expect(events.isEmpty)
+        analytics.beginScreen("audience", id: screenID)
+        date = date.addingTimeInterval(1)
+        analytics.beginScreen("name", id: screenID)
+        date = date.addingTimeInterval(2)
+        analytics.updateIdentity(userID: "reader", isGuest: false)
+        date = date.addingTimeInterval(3)
+        analytics.endScreen(id: screenID)
+        let dwell = events.filter { $0.0 == "Screen Time Recorded" }
+        #expect(dwell.map { $0.1["duration_ms"] as? Int } == [1000, 2000, 3000])
+        #expect(dwell.map { $0.1["account_type"] as? String } == ["unidentified", "unidentified", "registered"])
+        #expect(dwell[1].1["screen_exit_reason"] as? String == "identity_changed")
+    }
+
+    @Test func backwardClockDoesNotProduceNegativeScreenTime() throws {
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        var date = Date(timeIntervalSince1970: 10)
+        var events: [String] = []
+        let analytics = ProductAnalytics(send: { name, _ in events.append(name) }, identify: { _ in }, reset: {}, defaults: defaults, now: { date })
+        analytics.setScreenTrackingActive(true)
+        let screenID = UUID()
+        analytics.beginScreen("home", id: screenID)
+        date = date.addingTimeInterval(-5)
+        analytics.endScreen(id: screenID)
+        #expect(events == ["Screen Viewed"])
+    }
+
     @Test func enhancementDraftSurvivesFailedSaveUntilSuccessfulRetry() throws {
         enum SaveError: Error { case storageUnavailable }
         let memoryID = UUID()

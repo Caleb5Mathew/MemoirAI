@@ -4,6 +4,20 @@
 import SwiftUI
 import CoreData
 
+enum HomeGreeting {
+    static func text(for profileName: String) -> String {
+        let name = profileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let placeholderNames: Set<String> = [
+            "grandparent", "parent", "grandma", "grandpa", "mom", "dad",
+            "mother", "father", "myself", "someone else", "memoir", "your name"
+        ]
+        guard !name.isEmpty, !placeholderNames.contains(name.lowercased()) else {
+            return "Welcome to Memoir"
+        }
+        return "Hello, \(name)."
+    }
+}
+
 struct HomepageView: View {
     // MARK: – Environment & Context
     @EnvironmentObject var profileVM: ProfileViewModel
@@ -52,7 +66,7 @@ struct HomepageView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(profileVM.selectedProfile.name.isEmpty ? "Welcome to Memoir" : "Hello, \(profileVM.selectedProfile.name).")
+                        Text(HomeGreeting.text(for: profileVM.selectedProfile.name))
                             .font(LinenTheme.heading(30))
                             .tracking(-0.9)
                             .fixedSize(horizontal: false, vertical: true)
@@ -169,6 +183,7 @@ struct HomepageView: View {
                 .adaptiveContentWidth(560)
             }
             .linenScreen()
+            .analyticsScreen("home")
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
             .onAppear {
                 tutorialCoordinator.setVisibleScreen(.home)

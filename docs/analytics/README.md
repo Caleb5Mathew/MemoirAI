@@ -1,6 +1,6 @@
 # Understanding Memoir events
 
-The catalog describes all **69 app events**, organized into **13 product areas**, using the current source callsites. Event names are unchanged so existing reports keep working.
+The catalog describes all **73 app events**, organized into **13 product areas**, using the current source callsites. Event names are unchanged so existing reports keep working.
 
 - `event-catalog.json` contains each event's category, plain-language description, interpretation limits, and source locations.
 - `event-catalog.csv` contains the same descriptions in a spreadsheet-friendly format. It is a handoff format, not a claim that Mixpanel supports a direct CSV import.
@@ -36,3 +36,13 @@ On October 20, 2026, the main implementation session verified the import of all 
 `Memory Enhancement Auto Saved` now requires successful local persistence. `Memory Enhancement Save Failed` keeps failed attempts separate, and the screen offers retry instead of claiming success. Historical builds before this fix could emit the success event after a caught save error; historical success counts therefore need that caveat.
 
 Use production + external + physical-device filters for customer reporting. Internal/simulator data remains useful for QA but is not a customer funnel. Descriptions and categories do not send names, memoir text, images, audio, or individual keystrokes.
+
+## Foreground dwell and bounded diagnostics
+
+The latest source adds four events beyond the 69 previously imported live: `Screen Time Recorded`, `Recording Start Failed`, `Memory Transcription Retry Queued`, and `Memory Transcription Retry Failed`. Their Lexicon import and updated-binary delivery are separate verification steps; do not assume they are already live.
+
+Screen timing covers the main navigation and onboarding steps, with 20 named native destinations. Instrumented sheets suspend the underlying screen and restore its timer on dismissal. Inactive/background time is excluded, repeated appearances are deduplicated per view instance, and identity changes split timing segments. Sum `duration_ms` by `screen` to measure dwell; segment count is not visits. Longer dwell can mean interest, difficulty, or distraction; it is not automatically positive engagement.
+
+Known limits: system camera/photo/share pickers and hosted checkout may remain attributed to their parent while the app stays active. Force quit/crash can lose the unfinished segment. Existing onboarding `step_duration_ms` is wall-clock step duration and must not be silently mixed with foreground dwell. Screen views and timing do not prove reading completion, payment, or crash detection.
+
+Existing `UI Action` now identifies `retry_generation`, `retry_paywall`, and `retry_transcription` using bounded screen labels. Recording diagnostics use only `auth_unavailable`, `recorder_start_rejected`, or `recorder_creation_failed`; no error messages, file paths, memoir text, names, photos, audio, or individual keystrokes are collected.

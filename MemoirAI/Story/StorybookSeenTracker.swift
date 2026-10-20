@@ -34,6 +34,9 @@ final class StorybookSeenTracker: ObservableObject {
     /// This closes the short window before `onAppear` where a second route could be pushed.
     private(set) var isStoryPageNavigationPending = false
 
+    /// Invalidates cloud lookups started before a newer navigation decision.
+    private(set) var navigationRevision: UInt = 0
+
     /// Set just before ContentView pushes the storybook route; consumed by `StoryPage.onAppear`
     /// so a job only counts as seen once the destination actually appeared.
     private var pendingRoute: (jobId: String, isComplete: Bool)?
@@ -83,11 +86,13 @@ final class StorybookSeenTracker: ObservableObject {
     // MARK: - Route handshake
 
     func notePendingRoute(jobId: String, isComplete: Bool) {
+        navigationRevision &+= 1
         isStoryPageNavigationPending = true
         pendingRoute = (jobId, isComplete)
     }
 
     func noteUserNavigationIntent() {
+        navigationRevision &+= 1
         isStoryPageNavigationPending = true
     }
 
@@ -105,6 +110,7 @@ final class StorybookSeenTracker: ObservableObject {
     // MARK: - Lifecycle
 
     func setStoryPageVisible(_ visible: Bool) {
+        if isStoryPageVisible && !visible { navigationRevision &+= 1 }
         isStoryPageVisible = visible
         if visible {
             isStoryPageNavigationPending = false
@@ -114,6 +120,7 @@ final class StorybookSeenTracker: ObservableObject {
     /// In-flight seen-state only lasts one foreground session: exiting the app means the
     /// next open should route back to a still-running generation.
     func resetForegroundSession() {
+        navigationRevision &+= 1
         seenThisForeground.removeAll()
         pendingRoute = nil
         isStoryPageNavigationPending = false

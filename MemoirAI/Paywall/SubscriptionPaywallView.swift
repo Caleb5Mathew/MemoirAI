@@ -91,7 +91,10 @@ struct SubscriptionPaywallView: View {
                     Text("Subscription unavailable").font(.title2.bold())
                     Text(preparationError ?? "Please try again.")
                         .multilineTextAlignment(.center)
-                    Button("Try Again") { Task { await prepare() } }
+                    Button("Try Again") {
+                        ProductAnalytics.shared.action("retry_paywall", screen: "paywall")
+                        Task { await prepare() }
+                    }
                     Button("Close") { dismiss() }
                 }
                 .padding(24)
@@ -99,6 +102,7 @@ struct SubscriptionPaywallView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
+        .analyticsScreen("paywall")
         .interactiveDismissDisabled(isActivating || isPurchasing)
         .task { await prepare() }
         .onDisappear {

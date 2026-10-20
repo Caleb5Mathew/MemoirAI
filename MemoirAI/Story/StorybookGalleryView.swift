@@ -177,6 +177,7 @@ struct StorybookGalleryView: View {
                     .transition(.opacity)
             }
         }
+        .analyticsScreen("book_library")
         .animation(.easeInOut(duration: 0.2), value: isOpeningSelection)
         .navigationBarHidden(true)
         .onAppear {

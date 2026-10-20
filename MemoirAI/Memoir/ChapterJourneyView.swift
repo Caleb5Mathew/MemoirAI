@@ -229,6 +229,7 @@ struct ChapterJourneyView: View {
                 }
             }
         }
+        .analyticsScreen("chapter_journey")
         .onAppear {
             tutorialCoordinator.setVisibleScreen(.chapterJourney)
             tutorialCoordinator.onChapterJourneyAppeared(profileID: profileVM.selectedProfile.id)

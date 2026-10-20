@@ -143,6 +143,7 @@ struct MemoryEnhancementCoordinatorView: View {
                 }
             }
         }
+        .analyticsScreen("memory_enhancement")
         .onAppear {
             ProductAnalytics.shared.track("Memory Enhancement Flow Opened", [
                     "voice_available": voiceAvailable

@@ -271,7 +271,11 @@ struct StoryPage: View {
     }
 
     private var isShowingOpeningBook: Bool {
-        isOpeningBook || StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
+        StorybookPagePresentationPolicy.shouldShowEntryLoading(
+            isOpeningBook: isOpeningBook,
+            resumesPendingGeneration: storybookScreenEntry.resumesPendingGeneration,
+            hasLoadedBook: vm.hasGeneratedStorybook && !vm.pageItems.isEmpty
+        ) || StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
             isLoadingProfileBook: vm.isLoadingProfileBook,
             hasLoadedBook: StorybookPagePresentationPolicy.shouldShowLoadedBook(
                 hasGeneratedStorybook: vm.hasGeneratedStorybook,
@@ -930,6 +934,7 @@ struct StoryPage: View {
         let mainContent = makeMainContent()
         
         return mainContent
+            .analyticsScreen("book")
             .navigationBarHidden(true)
             .onAppear {
                 tutorialCoordinator.setVisibleScreen(.storyPage)

@@ -203,6 +203,7 @@ struct FreeformBookPageEditor: View {
                 }
             }
         }
+        .analyticsScreen("book_editor")
         .onDisappear {
             photoImportTask?.cancel()
             photoImportTask = nil

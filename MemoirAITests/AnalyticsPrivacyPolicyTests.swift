@@ -38,6 +38,30 @@ struct AnalyticsPrivacyPolicyTests {
         #expect(AnalyticsPrivacyPolicy.sanitized(properties).count == properties.count)
     }
 
+    @Test func allowsBoundedScreenTimingWithoutAcceptingPrivateLabels() {
+        #expect(AnalyticsPrivacyPolicy.isAllowedScreen("memory_detail"))
+        #expect(!AnalyticsPrivacyPolicy.isAllowedScreen("My private memory"))
+        let safe = AnalyticsPrivacyPolicy.sanitized([
+            "screen": "book", "screen_exit_reason": "covered", "duration_ms": 1200
+        ])
+        #expect(safe.count == 3)
+        #expect(AnalyticsPrivacyPolicy.sanitized([
+            "screen_exit_reason": "private error or name"
+        ]).isEmpty)
+    }
+
+    @Test func retainsRetryDiagnosticsButRejectsRawErrorMessages() {
+        let safe = AnalyticsPrivacyPolicy.sanitized([
+            "screen": "memory_recording", "action": "retry_transcription",
+            "failure_stage": "recording", "diagnostic_reason": "recorder_start_rejected"
+        ])
+        #expect(safe.count == 4)
+        #expect(AnalyticsPrivacyPolicy.sanitized([
+            "diagnostic_reason": "Error at /private/user/memory.m4a",
+            "action": "Tapped on a private story title"
+        ]).isEmpty)
+    }
+
     @Test func rejectsNegativeMetrics() {
         #expect(AnalyticsPrivacyPolicy.sanitized([
             "duration_ms": -1, "characters_saved": -2, "recording_duration": -0.5

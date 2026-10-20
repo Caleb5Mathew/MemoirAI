@@ -36,6 +36,7 @@ struct OrderHistoryView: View {
             .scrollContentBackground(.hidden)
             .background(LinenTheme.paper)
             .tint(LinenTheme.accent)
+            .analyticsScreen("order_history")
             .navigationTitle("Print Orders")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -211,6 +212,7 @@ struct OrderDetailView: View {
             .scrollContentBackground(.hidden)
             .background(LinenTheme.paper)
             .tint(LinenTheme.accent)
+            .analyticsScreen("order_detail")
             .navigationTitle("Order Details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

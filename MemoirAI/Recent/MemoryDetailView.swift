@@ -754,16 +754,19 @@ struct MemoryDetailView: View {
     }
 
     private func retryCloudTranscription() {
+        ProductAnalytics.shared.action("retry_transcription", screen: "memory_detail")
         memory.transcriptionStatus = "queued"
         memory.transcriptionUpdatedAt = Date()
         do {
             try context.save()
+            ProductAnalytics.shared.track("Memory Transcription Retry Queued", ["save_scope": "local"])
             FirestoreSyncService.shared.queueMemorySyncWithProfile(
                 memory,
                 profile: profileVM.selectedProfile
             )
             NotificationCenter.default.post(name: .memorySaved, object: nil)
         } catch {
+            ProductAnalytics.shared.track("Memory Transcription Retry Failed", ["failure_stage": "local_save"])
             print("Failed to queue transcription retry: \(error.localizedDescription)")
         }
     }
@@ -1061,6 +1064,7 @@ struct MemoryDetailView: View {
             ReRecordAudioView(memoryObjectID: memory.objectID, promptText: memory.prompt)
                 .environmentObject(profileVM)
         }
+        .analyticsScreen("memory_detail")
         .onAppear {
             ProductAnalytics.shared.track("Viewed Memory", [
                     "has_audio": memory.hasAudio,

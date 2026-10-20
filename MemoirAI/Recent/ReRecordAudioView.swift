@@ -176,6 +176,7 @@ struct ReRecordAudioView: View {
                 }
             }
         }
+        .analyticsScreen("memory_rerecord")
         .onAppear {
             configureInterruptionObserver()
         }

@@ -50,6 +50,7 @@ struct LinenProfileHub: View {
                             .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
                         }
                         .linenScreen()
+                        .analyticsScreen("account_backup")
                         .navigationTitle("Account & backup")
                     } label: { LinenHubRow(title: "Account & backup", symbol: "icloud") }
                 }
@@ -57,6 +58,7 @@ struct LinenProfileHub: View {
                 .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
             }
             .linenScreen()
+            .analyticsScreen("profile")
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) {

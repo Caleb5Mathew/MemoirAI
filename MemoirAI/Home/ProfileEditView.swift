@@ -90,6 +90,7 @@ struct ProfileEditView: View {
             }
             .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
         }
+        .analyticsScreen("profile_edit")
         .onAppear {
             withAnimation(.easeOut(duration: 0.45)) { appeared = true }
         }

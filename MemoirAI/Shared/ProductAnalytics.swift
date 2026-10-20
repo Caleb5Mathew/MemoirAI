@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Mixpanel
 
 struct AnalyticsTrafficContext {
@@ -57,6 +58,9 @@ final class ProductAnalytics {
     private var sessionID = UUID().uuidString
     private var activeSince: Date?
     private var inputs: [String: Date] = [:]
+    private var visibleScreens: [(id: UUID, name: String)] = []
+    private var screenActiveSince: Date?
+    private var screenTrackingActive = false
     private static let identityKey = "memoirai.analytics.identity"
 
     init(
@@ -119,6 +123,7 @@ final class ProductAnalytics {
 
     func updateIdentity(userID nextID: String?, isGuest: Bool) {
         if userID != nextID {
+            recordScreenTime(reason: "identity_changed")
             if userID != nil {
                 reset()
                 sessionID = UUID().uuidString
@@ -131,6 +136,9 @@ final class ProductAnalytics {
         self.isGuest = isGuest
         if let nextID { identify(nextID) }
         registerContext(trustedContext)
+        if screenTrackingActive && !visibleScreens.isEmpty && screenActiveSince == nil {
+            screenActiveSince = now()
+        }
     }
 
     func setSessionActive(_ active: Bool) {
@@ -145,6 +153,55 @@ final class ProductAnalytics {
             activeSince = nil
             inputs.removeAll()
         }
+    }
+
+    func beginScreen(_ name: String, id: UUID) {
+        guard AnalyticsPrivacyPolicy.isAllowedScreen(name) else { return }
+        if let existing = visibleScreens.firstIndex(where: { $0.id == id }) {
+            guard visibleScreens[existing].name != name else { return }
+            if existing == visibleScreens.count - 1 {
+                recordScreenTime(reason: "navigation")
+            }
+            visibleScreens[existing].name = name
+            if existing == visibleScreens.count - 1 {
+                screenActiveSince = screenTrackingActive ? now() : nil
+                screen(name)
+            }
+            return
+        }
+        recordScreenTime(reason: "covered")
+        visibleScreens.append((id: id, name: name))
+        screenActiveSince = screenTrackingActive ? now() : nil
+        screen(name)
+    }
+
+    func endScreen(id: UUID) {
+        guard let index = visibleScreens.firstIndex(where: { $0.id == id }) else { return }
+        let wasVisible = index == visibleScreens.count - 1
+        if wasVisible { recordScreenTime(reason: "navigation") }
+        visibleScreens.remove(at: index)
+        if wasVisible {
+            screenActiveSince = screenTrackingActive && !visibleScreens.isEmpty ? now() : nil
+        }
+    }
+
+    func setScreenTrackingActive(_ active: Bool) {
+        guard screenTrackingActive != active else { return }
+        if !active { recordScreenTime(reason: "inactive") }
+        screenTrackingActive = active
+        screenActiveSince = active && !visibleScreens.isEmpty ? now() : nil
+    }
+
+    private func recordScreenTime(reason: String) {
+        guard let started = screenActiveSince, let screen = visibleScreens.last?.name else { return }
+        screenActiveSince = nil
+        let elapsed = max(0, now().timeIntervalSince(started))
+        guard elapsed > 0 else { return }
+        track("Screen Time Recorded", [
+            "screen": screen,
+            "duration_ms": Int(min(elapsed * 1000, Double(Int.max / 2))),
+            "screen_exit_reason": reason
+        ])
     }
 
     func screen(_ screen: String) {
@@ -189,6 +246,9 @@ enum AnalyticsEventCategory {
         "Book Generation Requested": "Book creation",
         "Book Illustrations Completed": "Book creation",
         "Memory Save Failed": "Memory creation",
+        "Recording Start Failed": "Memory creation",
+        "Memory Transcription Retry Failed": "Memory creation",
+        "Memory Transcription Retry Queued": "Memory creation",
         "Opened Prompt": "Memory creation",
         "Saved Memory": "Memory creation",
         "Started Recording": "Memory creation",
@@ -208,6 +268,7 @@ enum AnalyticsEventCategory {
         "Input Completed": "Navigation and input",
         "Input Started": "Navigation and input",
         "Screen Viewed": "Navigation and input",
+        "Screen Time Recorded": "Navigation and input",
         "Tab Viewed": "Navigation and input",
         "UI Action": "Navigation and input",
         "Onboarding Photo Added": "Onboarding capture",
@@ -248,5 +309,33 @@ enum AnalyticsEventCategory {
 
     static func category(for event: String) -> String {
         categories[event] ?? "Uncategorized"
+    }
+}
+
+
+private struct AnalyticsScreenModifier: ViewModifier {
+    let name: String
+    @State private var instanceID = UUID()
+    @State private var isVisible = false
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                isVisible = true
+                ProductAnalytics.shared.beginScreen(name, id: instanceID)
+            }
+            .onChange(of: name) { _, newName in
+                if isVisible { ProductAnalytics.shared.beginScreen(newName, id: instanceID) }
+            }
+            .onDisappear {
+                isVisible = false
+                ProductAnalytics.shared.endScreen(id: instanceID)
+            }
+    }
+}
+
+extension View {
+    func analyticsScreen(_ name: String) -> some View {
+        modifier(AnalyticsScreenModifier(name: name))
     }
 }

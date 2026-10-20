@@ -93,6 +93,7 @@ struct ProfileSwitcherView: View {
                 }
             }
         }
+        .analyticsScreen("profile_switcher")
         .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
         .background(LinenTheme.paper.ignoresSafeArea())
         .sheet(isPresented: $showAddProfile) {

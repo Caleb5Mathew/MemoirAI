@@ -540,6 +540,7 @@ struct RecordingView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.hidden)
             }
+            .analyticsScreen("memory_recording")
             .onAppear {
                 activePromptText = prompt.text
                 isUsingCustomQuestion = false
@@ -722,6 +723,7 @@ struct RecordingView: View {
             firebaseUserID: MemoryUserScope.currentFirebaseUserId
         ) {
             recordingStartErrorMessage = failureMessage
+            ProductAnalytics.shared.track("Recording Start Failed", ["failure_stage": "auth", "diagnostic_reason": "auth_unavailable"])
             return
         }
         guard CloudTranscriptionDisclosure.isAccepted() else {
@@ -759,6 +761,7 @@ struct RecordingView: View {
             recorder.prepareToRecord()
             guard recorder.record(forDuration: RecordingDurationPolicy.maximumRecordingDuration) else {
                 recordingStartErrorMessage = RecordingStartErrorPolicy.message()
+                ProductAnalytics.shared.track("Recording Start Failed", ["failure_stage": "recording", "diagnostic_reason": "recorder_start_rejected"])
                 try? FileManager.default.removeItem(at: fileURL)
                 return
             }
@@ -785,6 +788,7 @@ struct RecordingView: View {
             debugBanner = "Recording started with AAC format"
         } catch {
             try? FileManager.default.removeItem(at: fileURL)
+            ProductAnalytics.shared.track("Recording Start Failed", ["failure_stage": "recording", "diagnostic_reason": "recorder_creation_failed"])
             print("⚠️ Error starting recorder: \(error.localizedDescription)")
             recordingStartErrorMessage = RecordingStartErrorPolicy.message(
                 detail: "Check that another app is not using the microphone, then try again."

@@ -29,6 +29,13 @@ final class DesignWalkthroughUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(saved.frame.height, 44)
 
         saved.tap()
+        let allFilter = app.buttons["memoirFilter_all"]
+        XCTAssertTrue(allFilter.waitForExistence(timeout: 5))
+        XCTAssertTrue(allFilter.isHittable)
+        XCTAssertFalse(app.staticTexts["Memories"].exists)
+        let sort = app.buttons["Sort memories"]
+        XCTAssertTrue(sort.isHittable)
+        XCTAssertLessThan(abs(allFilter.frame.midY - sort.frame.midY), 3)
         let create = app.buttons["createNewMemoryButton"]
         XCTAssertTrue(create.waitForExistence(timeout: 5))
         XCTAssertTrue(create.isHittable)
@@ -48,11 +55,34 @@ final class DesignWalkthroughUITests: XCTestCase {
     }
 
     @MainActor
+    func testEmptyBookEntryAndRapidRepeatedNavigation() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITest", "-linen-preview"]
+        app.launch()
+        let home = app.buttons["linenHomeTab"]
+        XCTAssertTrue(home.waitForExistence(timeout: 10))
+        home.tap()
+        let book = app.buttons["tutorialYourBook"]
+        for _ in 0..<4 {
+            XCTAssertTrue(book.waitForExistence(timeout: 5))
+            if !book.isHittable { app.swipeUp() }
+            book.doubleTap()
+            let back = app.buttons["Back"]
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["createStorybookButton"].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.staticTexts["Opening your book…"].exists)
+            back.tap()
+            XCTAssertTrue(book.waitForExistence(timeout: 5), app.debugDescription)
+            XCTAssertTrue(book.isHittable)
+        }
+    }
+
+    @MainActor
     func testYourBookRepeatedNavigation() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-UITestSeedStorybook"]
+        app.launchArguments = ["-UITest", "-linen-preview", "-UITestSeedStorybook"]
         app.launch()
-        let home = app.buttons["Home"]
+        let home = app.buttons["linenHomeTab"]
         if home.waitForExistence(timeout: 5) { home.tap() }
         let yourBook = app.buttons["tutorialYourBook"]
         XCTAssertTrue(yourBook.waitForExistence(timeout: 10))
@@ -63,7 +93,7 @@ final class DesignWalkthroughUITests: XCTestCase {
             let edit = app.buttons["storybookEditCurrentPage"]
             XCTAssertTrue(edit.waitForExistence(timeout: 10))
             XCTAssertTrue(edit.isHittable)
-            XCTAssertFalse(app.buttons["Create My Storybook"].exists)
+            XCTAssertFalse(app.buttons["createStorybookButton"].exists)
 
             app.buttons["Back"].tap()
             XCTAssertTrue(yourBook.waitForExistence(timeout: 5), app.debugDescription)
@@ -345,7 +375,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testInteriorPageEditorScreenshot() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-UITestSeedStorybook"]
+        app.launchArguments = ["-UITest", "-linen-preview", "-UITestSeedStorybook"]
         app.launch()
 
         sleep(3)
@@ -449,7 +479,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testClosingPageReaderAndEditorStayInSync() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-UITestSeedStorybook"]
+        app.launchArguments = ["-UITest", "-linen-preview", "-UITestSeedStorybook"]
         app.launch()
 
         sleep(3)

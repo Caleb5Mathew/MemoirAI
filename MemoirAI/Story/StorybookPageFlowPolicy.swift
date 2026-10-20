@@ -1,6 +1,14 @@
 import Foundation
 
 enum StorybookPagePresentationPolicy {
+    static func shouldShowEntryLoading(
+        isOpeningBook: Bool,
+        resumesPendingGeneration: Bool,
+        hasLoadedBook: Bool
+    ) -> Bool {
+        isOpeningBook && (resumesPendingGeneration || hasLoadedBook)
+    }
+
     static func shouldShowLoadedBook(hasGeneratedStorybook: Bool, pageCount: Int) -> Bool {
         hasGeneratedStorybook && pageCount > 0
     }

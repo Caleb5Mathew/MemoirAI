@@ -58,6 +58,7 @@ struct MainTabView: View {
                 .overlay(alignment: .bottom) { Rectangle().fill(LinenTheme.line).frame(height: 1) }
                 TabView(selection: $selectedTab) {
                     HomepageView {
+                        guard path.isEmpty else { return }
                         StorybookSeenTracker.shared.noteUserNavigationIntent()
                         path.append(StorybookRootRoute.openBook)
                     }

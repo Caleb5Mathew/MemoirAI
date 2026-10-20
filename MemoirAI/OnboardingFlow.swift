@@ -121,6 +121,7 @@ struct OnboardingFlow: View {
         .onGeometryChange(for: CGSize.self) { $0.size } action: { availableSize = $0 }
         .foregroundStyle(colors.ink)
         .animation(reduceMotion ? nil : (step == .meetAlex ? .easeInOut(duration: 0.45) : .spring(response: 0.55, dampingFraction: 0.88)), value: step)
+        .analyticsScreen(String(describing: step))
         .task { await prepareSession() }
         .onDisappear { _ = recorder.stop(); sampleAudio.stop(); memoryPreflight.invalidate() }
         .onChange(of: scenePhase) { _, phase in
@@ -541,7 +542,10 @@ struct OnboardingFlow: View {
                     .font(.custom("IowanOldStyle-Roman", size: 20, relativeTo: .title3)).multilineTextAlignment(.center)
                 if let generationFailure {
                     Text(generationFailure).font(.custom("AvenirNext-Regular", size: 13, relativeTo: .footnote)).multilineTextAlignment(.center)
-                    primaryButton("Try again") { Task { await createPersonalizedPage() } }
+                    primaryButton("Try again") {
+                        ProductAnalytics.shared.action("retry_generation", screen: "building")
+                        Task { await createPersonalizedPage() }
+                    }
                 } else if !isGenerating && previewImage != nil && audioReady {
                     Button {
                         track("Onboarding Action", ["action": "reveal"])

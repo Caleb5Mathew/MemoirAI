@@ -167,6 +167,7 @@ struct ContentView: View {
         }
         .id(authService.user?.uid ?? "signed-out")
         .onChange(of: scenePhase, initial: true) { _, phase in
+            ProductAnalytics.shared.setScreenTrackingActive(phase == .active)
             if phase == .active {
                 ProductAnalytics.shared.setSessionActive(true)
             } else if phase == .background {
@@ -394,11 +395,18 @@ struct ContentView: View {
     /// bypasses the gating but still no-ops when `StoryPage` is already on screen.
     private func routeToActiveCloudStorybookIfNeeded(force: Bool = false) async {
         guard authService.isSignedIn else { return }
-        guard let job = await fetchRoutableStorybookJobWithRetry(profileId: profileVM.selectedProfile.id) else {
+        let requestedProfileID = profileVM.selectedProfile.id
+        let requestedUserID = Auth.auth().currentUser?.uid
+        let navigationRevision = StorybookSeenTracker.shared.navigationRevision
+        guard let job = await fetchRoutableStorybookJobWithRetry(profileId: requestedProfileID) else {
             return
         }
         await MainActor.run {
             let tracker = StorybookSeenTracker.shared
+            guard tracker.navigationRevision == navigationRevision,
+                  profileVM.selectedProfile.id == requestedProfileID,
+                  authService.isSignedIn,
+                  Auth.auth().currentUser?.uid == requestedUserID else { return }
             if tracker.isStoryPageVisible || tracker.isStoryPageNavigationPending { return }
             if !force {
                 if job.status == "complete" {

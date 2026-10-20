@@ -16,6 +16,35 @@ struct StorybookSeenTrackerTests {
         return (StorybookSeenTracker(defaults: defaults, observeLifecycle: false), defaults, suite)
     }
 
+    @Test func returningHomeInvalidatesLookupStartedBeforeManualBookVisit() {
+        let (tracker, defaults, suite) = makeTracker()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let requestedRevision = tracker.navigationRevision
+        tracker.noteUserNavigationIntent()
+        tracker.setStoryPageVisible(true)
+        tracker.setStoryPageVisible(false)
+        #expect(!tracker.isStoryPageVisible)
+        #expect(!tracker.isStoryPageNavigationPending)
+        #expect(tracker.navigationRevision != requestedRevision)
+    }
+
+    @Test func leavingBookInvalidatesLookupStartedWhileItWasVisible() {
+        let (tracker, defaults, suite) = makeTracker()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        tracker.setStoryPageVisible(true)
+        let requestedRevision = tracker.navigationRevision
+        tracker.setStoryPageVisible(false)
+        #expect(tracker.navigationRevision != requestedRevision)
+    }
+
+    @Test func backgroundInvalidatesOutstandingResumeLookup() {
+        let (tracker, defaults, suite) = makeTracker()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let requestedRevision = tracker.navigationRevision
+        tracker.resetForegroundSession()
+        #expect(tracker.navigationRevision != requestedRevision)
+    }
+
     @Test func completedSeenPersistsAcrossForegroundReset() {
         let (tracker, defaults, suite) = makeTracker()
         defer { defaults.removePersistentDomain(forName: suite) }

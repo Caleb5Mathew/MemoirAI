@@ -4,6 +4,13 @@ import Testing
 @testable import MemoirAI
 
 struct StorybookPageFlowPolicyTests {
+    @Test func emptyStandardEntryDoesNotPretendToOpenAnExistingBook() {
+        #expect(!StorybookPagePresentationPolicy.shouldShowEntryLoading(isOpeningBook: true, resumesPendingGeneration: false, hasLoadedBook: false))
+        #expect(StorybookPagePresentationPolicy.shouldShowEntryLoading(isOpeningBook: true, resumesPendingGeneration: true, hasLoadedBook: false))
+        #expect(StorybookPagePresentationPolicy.shouldShowEntryLoading(isOpeningBook: true, resumesPendingGeneration: false, hasLoadedBook: true))
+        #expect(!StorybookPagePresentationPolicy.shouldShowEntryLoading(isOpeningBook: false, resumesPendingGeneration: true, hasLoadedBook: true))
+    }
+
     @Test func maximumStandardBookPadsToPrintableHardcoverMinimum() {
         let unpaddedPageCount = 3 + (StorybookGenerationBatchPolicy.maximumPagesPerBook * 2)
         #expect(unpaddedPageCount == 21)
