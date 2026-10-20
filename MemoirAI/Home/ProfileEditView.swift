@@ -8,16 +8,16 @@ import UIKit
 
 // MARK: - Design System
 private enum DS {
-    static let accent = Color(red: 0.82, green: 0.45, blue: 0.32)
-    static let accentSoft = Color(red: 0.82, green: 0.45, blue: 0.32).opacity(0.14)
-    static let bg = Color(red: 0.98, green: 0.96, blue: 0.89)
-    static let card = Color.white.opacity(0.96)
-    static let textPrimary = Color(red: 0.12, green: 0.16, blue: 0.16)
-    static let textSecondary = Color(red: 0.30, green: 0.36, blue: 0.36)
-    static let textTertiary = Color(red: 0.50, green: 0.54, blue: 0.54)
-    static let fieldBg = Color(red: 0.97, green: 0.95, blue: 0.91)
-    static let divider = Color.black.opacity(0.08)
-    static let stroke = Color.black.opacity(0.06)
+    static let accent = LinenTheme.accent
+    static let accentSoft = LinenTheme.accent.opacity(0.14)
+    static let bg = LinenTheme.paper
+    static let card = LinenTheme.paper
+    static let textPrimary = LinenTheme.ink
+    static let textSecondary = LinenTheme.secondary
+    static let textTertiary = LinenTheme.secondary
+    static let fieldBg = LinenTheme.surface
+    static let divider = LinenTheme.line
+    static let stroke = LinenTheme.line
     static let cardRadius: CGFloat = 20
 }
 
@@ -114,9 +114,9 @@ struct ProfileEditView: View {
                 dismiss()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(LinenTheme.body(14, weight: .semibold))
                     .foregroundColor(DS.textSecondary)
-                    .frame(width: 38, height: 38)
+                    .frame(width: 44, height: 44)
                     .background(
                         Circle()
                             .fill(Color.white.opacity(0.92))
@@ -129,11 +129,11 @@ struct ProfileEditView: View {
             Spacer()
 
             Text("Edit Profile")
-                .font(.system(size: 32, weight: .bold, design: .serif))
+                .font(LinenTheme.heading(25))
                 .foregroundColor(DS.textPrimary)
                 .tracking(-0.5)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                 .fixedSize(horizontal: false, vertical: true)
+
 
             Spacer()
 
@@ -143,14 +143,14 @@ struct ProfileEditView: View {
                 dismiss()
             } label: {
                 Text("Save")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(.white)
+                    .font(LinenTheme.body(15, weight: .bold))
+                    .foregroundColor(LinenTheme.onAccent)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 10)
                     .background(
                         Capsule()
                             .fill(DS.accent)
-                            .shadow(color: DS.accent.opacity(0.35), radius: 6, y: 3)
+
                     )
             }
         }
@@ -194,16 +194,16 @@ struct ProfileEditView: View {
     private var transcriptionCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Names & Places")
-                .font(.system(size: 15, weight: .semibold))
+                .font(LinenTheme.body(15, weight: .semibold))
                 .foregroundColor(DS.textPrimary)
 
             Text("Add uncommon names or places, separated by commas, to improve voice transcripts.")
-                .font(.system(size: 13))
+                .font(LinenTheme.body(13))
                 .foregroundColor(DS.textSecondary)
 
             TextField("e.g. Rosalie, Chautauqua, St. Louis", text: $transcriptionTerms, axis: .vertical)
                 .lineLimit(2...4)
-                .font(.system(size: 16))
+                .font(LinenTheme.body(16))
                 .foregroundColor(DS.textPrimary)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
@@ -225,7 +225,7 @@ struct ProfileEditView: View {
                     RoundedRectangle(cornerRadius: DS.cardRadius, style: .continuous)
                         .stroke(DS.stroke, lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.06), radius: 12, y: 4)
+
         )
     }
 
@@ -240,14 +240,14 @@ struct ProfileEditView: View {
                     // Outer ring
                     Circle()
                         .stroke(DS.accent.opacity(0.15), lineWidth: 3)
-                        .frame(width: 118, height: 118)
+                        .frame(width: 96, height: 106)
 
                     if let photo = currentPhoto {
                         Image(uiImage: photo)
                             .resizable()
                             .scaledToFill()
-                            .frame(width: 110, height: 110)
-                            .clipShape(Circle())
+                            .frame(width: 88, height: 98)
+                            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 44, bottomLeadingRadius: 15, bottomTrailingRadius: 15, topTrailingRadius: 44))
                     } else {
                         Circle()
                             .fill(
@@ -257,7 +257,7 @@ struct ProfileEditView: View {
                                     endPoint: .bottomTrailing
                                 )
                             )
-                            .frame(width: 110, height: 110)
+                            .frame(width: 88, height: 98)
                             .overlay(
                                 Image(systemName: "person.fill")
                                     .font(.system(size: 42, weight: .thin))
@@ -271,17 +271,17 @@ struct ProfileEditView: View {
                         .frame(width: 34, height: 34)
                         .overlay(
                             Image(systemName: "camera.fill")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(.white)
+                                .font(LinenTheme.body(14, weight: .medium))
+                                .foregroundColor(LinenTheme.onAccent)
                         )
-                        .shadow(color: DS.accent.opacity(0.35), radius: 6, y: 3)
-                        .offset(x: 40, y: 40)
+
+                        .offset(x: 32, y: 38)
                 }
             }
             .buttonStyle(ProfileScaleButtonStyle())
 
             Text("Tap to change photo")
-                .font(.system(size: 13, weight: .medium))
+                .font(LinenTheme.body(13, weight: .medium))
                 .foregroundColor(DS.textTertiary)
         }
         .frame(maxWidth: .infinity)
@@ -295,13 +295,13 @@ struct ProfileEditView: View {
             // Name field
             VStack(alignment: .leading, spacing: 8) {
                 Text("Name")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(LinenTheme.body(13, weight: .semibold))
                     .foregroundColor(DS.textTertiary)
                     .textCase(.uppercase)
                     .kerning(0.4)
 
                 TextField("Enter name", text: $name)
-                    .font(.system(size: 17, weight: .regular))
+                    .font(LinenTheme.body(17, weight: .regular))
                     .foregroundColor(DS.textPrimary)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
@@ -320,7 +320,7 @@ struct ProfileEditView: View {
             // Birthday
             VStack(alignment: .leading, spacing: 8) {
                 Text("Birthday")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(LinenTheme.body(13, weight: .semibold))
                     .foregroundColor(DS.textTertiary)
                     .textCase(.uppercase)
                     .kerning(0.4)
@@ -333,13 +333,13 @@ struct ProfileEditView: View {
                         Text(selectedBirthdate != nil ?
                              DateFormatter.birthdayFormat.string(from: selectedBirthdate!) :
                              "Set birthday")
-                            .font(.system(size: 17))
+                            .font(LinenTheme.body(17))
                             .foregroundColor(selectedBirthdate != nil ? DS.textPrimary : DS.textTertiary)
 
                         Spacer()
 
                         Image(systemName: "calendar")
-                            .font(.system(size: 15, weight: .medium))
+                            .font(LinenTheme.body(15, weight: .medium))
                             .foregroundColor(DS.accent)
                     }
                     .padding(.horizontal, 16)
@@ -359,7 +359,7 @@ struct ProfileEditView: View {
                     RoundedRectangle(cornerRadius: DS.cardRadius, style: .continuous)
                         .stroke(DS.stroke, lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.06), radius: 12, y: 4)
+
         )
     }
 
@@ -368,11 +368,11 @@ struct ProfileEditView: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(spacing: 8) {
                 Text("Personal Details")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(LinenTheme.body(15, weight: .semibold))
                     .foregroundColor(DS.textPrimary)
 
                 Text("Optional")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(LinenTheme.body(12, weight: .medium))
                     .foregroundColor(DS.textTertiary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
@@ -384,13 +384,13 @@ struct ProfileEditView: View {
             // Ethnicity
             VStack(alignment: .leading, spacing: 8) {
                 Text("Ethnicity / Heritage")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(LinenTheme.body(13, weight: .semibold))
                     .foregroundColor(DS.textTertiary)
                     .textCase(.uppercase)
                     .kerning(0.4)
 
                 TextField("e.g. Italian-American", text: $ethnicity)
-                    .font(.system(size: 17, weight: .regular))
+                    .font(LinenTheme.body(17, weight: .regular))
                     .foregroundColor(DS.textPrimary)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
@@ -409,7 +409,7 @@ struct ProfileEditView: View {
             // Gender
             VStack(alignment: .leading, spacing: 10) {
                 Text("Gender")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(LinenTheme.body(13, weight: .semibold))
                     .foregroundColor(DS.textTertiary)
                     .textCase(.uppercase)
                     .kerning(0.4)
@@ -425,7 +425,7 @@ struct ProfileEditView: View {
                     RoundedRectangle(cornerRadius: DS.cardRadius, style: .continuous)
                         .stroke(DS.stroke, lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.06), radius: 12, y: 4)
+
         )
     }
 
@@ -441,7 +441,7 @@ struct ProfileEditView: View {
                     }
                 } label: {
                     Text(option.rawValue)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(LinenTheme.body(15, weight: .semibold))
                         .foregroundColor(selectedGenderOption == option ? .white : DS.textSecondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -449,7 +449,7 @@ struct ProfileEditView: View {
                             Group {
                                 if selectedGenderOption == option {
                                     Capsule().fill(DS.accent)
-                                        .shadow(color: DS.accent.opacity(0.25), radius: 4, y: 2)
+
                                 }
                             }
                         )
@@ -470,7 +470,7 @@ struct ProfileEditView: View {
             showDevModeSheet = true
         } label: {
             Text("Developer Options")
-                .font(.system(size: 11, weight: .medium))
+                .font(LinenTheme.body(11, weight: .medium))
                 .foregroundColor(DS.textTertiary.opacity(0.4))
         }
         .buttonStyle(.plain)
@@ -487,10 +487,10 @@ struct ProfileEditView: View {
                             .font(.system(size: 40))
                             .foregroundColor(.green)
                         Text("Developer Mode Active")
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(LinenTheme.body(17, weight: .semibold))
                             .foregroundColor(DS.textPrimary)
                         Text("Subscription bypass and elevated allowance persist across app launches until you disable.")
-                            .font(.system(size: 13))
+                            .font(LinenTheme.body(13))
                             .foregroundColor(DS.textSecondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 28)
@@ -499,8 +499,8 @@ struct ProfileEditView: View {
                             showDevModeSheet = false
                         } label: {
                             Text("Disable Developer Mode")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.white)
+                                .font(LinenTheme.body(15, weight: .semibold))
+                                .foregroundColor(LinenTheme.onAccent)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
                                 .background(Color.red.opacity(0.85))
@@ -516,10 +516,10 @@ struct ProfileEditView: View {
                             .font(.system(size: 32))
                             .foregroundColor(.gray.opacity(0.4))
                         Text("Developer Access")
-                            .font(.system(size: 16, weight: .medium))
+                            .font(LinenTheme.body(16, weight: .medium))
                             .foregroundColor(.gray)
                         SecureField("Enter key", text: $devPassword)
-                            .font(.system(size: 15))
+                            .font(LinenTheme.body(15))
                             .padding(12)
                             .background(Color.gray.opacity(0.1))
                             .cornerRadius(10)
@@ -529,7 +529,7 @@ struct ProfileEditView: View {
                                 Image(systemName: result == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
                                 Text(result == .success ? "Unlocked!" : (devUnlockErrorMessage ?? "Access denied"))
                             }
-                            .font(.system(size: 14, weight: .medium))
+                            .font(LinenTheme.body(14, weight: .medium))
                             .foregroundColor(result == .success ? .green : .red)
                         }
                         Button {
@@ -540,8 +540,8 @@ struct ProfileEditView: View {
                                     ProgressView().tint(.white)
                                 } else {
                                     Text("Unlock")
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundColor(.white)
+                                        .font(LinenTheme.body(15, weight: .semibold))
+                                        .foregroundColor(LinenTheme.onAccent)
                                 }
                             }
                             .frame(width: 120)
@@ -715,7 +715,7 @@ private struct BirthdayPickerSheet: View {
                                     .stroke(DS.stroke, lineWidth: 1)
                             )
                     )
-                    .shadow(color: Color.black.opacity(0.05), radius: 10, y: 4)
+
                 }
                 .padding(.horizontal, 20)
                 .transition(.opacity)
@@ -734,7 +734,7 @@ private struct BirthdayPickerSheet: View {
                         dismiss()
                     }
                     .foregroundColor(DS.textSecondary)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(LinenTheme.body(16, weight: .semibold))
                 }
 
                 ToolbarItem(placement: .navigationBarTrailing) {

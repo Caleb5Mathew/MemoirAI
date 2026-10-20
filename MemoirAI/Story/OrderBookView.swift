@@ -181,12 +181,12 @@ struct OrderBookView: View {
         ("EXPRESS", "Express")
     ]
     
-    private var pageBackground: Color { Color(red: 0.98, green: 0.94, blue: 0.86) }
-    private var cardBackground: Color { Color(red: 1.0, green: 0.985, blue: 0.95) }
-    private var cardStroke: Color { Color(red: 0.40, green: 0.29, blue: 0.20).opacity(0.14) }
-    private var fieldBackground: Color { Color(red: 0.96, green: 0.91, blue: 0.82) }
-    private var accentColor: Color { Color(red: 0.80, green: 0.32, blue: 0.20) }
-    private var mutedTextColor: Color { Color.secondary.opacity(0.9) }
+    private var pageBackground: Color { LinenTheme.paper }
+    private var cardBackground: Color { LinenTheme.paper }
+    private var cardStroke: Color { LinenTheme.line }
+    private var fieldBackground: Color { LinenTheme.surface }
+    private var accentColor: Color { LinenTheme.accent }
+    private var mutedTextColor: Color { LinenTheme.secondary }
     private var isLandscapeBook: Bool { book.pageWidth > book.pageHeight }
     private var coverAspectRatio: CGFloat {
         AdaptiveLayoutPolicy.validatedAspectRatio(
@@ -283,7 +283,7 @@ struct OrderBookView: View {
                             if let msg = errorMessage {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(msg)
-                                        .font(.footnote)
+                                        .font(LinenTheme.body(13))
                                         .foregroundColor(.red)
                                     #if DEBUG
                                     if let dbg = checkoutErrorDebugFootnote {
@@ -352,10 +352,10 @@ struct OrderBookView: View {
                     orderCoverThumbnail(urls: coverPreviewURLs, pdfURL: coverPDFURL)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(displayBookTitle)
-                            .font(.headline)
+                            .font(LinenTheme.body(16, weight: .semibold))
                             .lineLimit(2)
                         Text("\(book.pageCount) pages · \(isLandscapeBook ? "11 × 8.5\"" : "8.5 × 11\"")")
-                            .font(.subheadline)
+                            .font(LinenTheme.body(14))
                             .foregroundColor(mutedTextColor)
                     }
                     Spacer(minLength: 0)
@@ -370,10 +370,10 @@ struct OrderBookView: View {
                     case .needsPages(let current, let minimum, let remaining):
                         VStack(spacing: 8) {
                             Text("\(remaining) more pages needed to print")
-                                .font(.customSerifFallback(size: 25))
+                                .font(LinenTheme.heading())
                                 .multilineTextAlignment(.center)
                             Text("Hardcover printing starts at \(minimum) pages. Keep adding memories and your book will become available here automatically.")
-                                .font(.subheadline)
+                                .font(LinenTheme.body(14))
                                 .foregroundColor(mutedTextColor)
                                 .multilineTextAlignment(.center)
                         }
@@ -398,10 +398,10 @@ struct OrderBookView: View {
                     case .unavailable:
                         VStack(spacing: 8) {
                             Text("This book isn’t ready for print yet")
-                                .font(.customSerifFallback(size: 25))
+                                .font(LinenTheme.heading())
                                 .multilineTextAlignment(.center)
                             Text("Its page count doesn’t currently match an available print format.")
-                                .font(.subheadline)
+                                .font(LinenTheme.body(14))
                                 .foregroundColor(mutedTextColor)
                                 .multilineTextAlignment(.center)
                         }
@@ -533,13 +533,13 @@ struct OrderBookView: View {
                 orderCoverThumbnail(urls: coverPreviewURLs, pdfURL: coverPDFURL)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(displayBookTitle)
-                        .font(.headline)
+                        .font(LinenTheme.body(16, weight: .semibold))
                         .lineLimit(2)
                     Text("\(book.pageCount) pages · \(isLandscapeBook ? "11 × 8.5\"" : "8.5 × 11\"")")
-                        .font(.subheadline)
+                        .font(LinenTheme.body(14))
                         .foregroundColor(mutedTextColor)
                     Text(selectedProductOption?.title ?? "Choose a print format")
-                        .font(.caption)
+                        .font(LinenTheme.body(12))
                         .foregroundColor(mutedTextColor)
                     if orderCart.totalLineCount > 0, activeStep == .cart || activeStep == .review {
                         Text("\(orderCart.totalLineCount) in cart")
@@ -591,7 +591,7 @@ struct OrderBookView: View {
                     .foregroundColor(mutedTextColor)
             }
             Text(activeStep.detailSubtitle)
-                .font(.caption)
+                .font(LinenTheme.body(12))
                 .foregroundColor(.secondary)
         }
         .padding(14)
@@ -648,7 +648,7 @@ struct OrderBookView: View {
                     Text("Protect your purchase")
                         .font(.subheadline.weight(.semibold))
                     Text("Back up your account so your order history is never lost.")
-                        .font(.caption)
+                        .font(LinenTheme.body(12))
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -733,7 +733,7 @@ struct OrderBookView: View {
         VStack(alignment: .leading, spacing: 8) {
             if let hint = wizardPrimaryDisabledHint {
                 Text(hint)
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1015,11 +1015,11 @@ struct OrderBookView: View {
     private var productDetailsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Product")
-                .font(.subheadline)
+                .font(LinenTheme.body(14))
                 .fontWeight(.semibold)
                 .foregroundColor(.secondary)
             Text("\(isLandscapeBook ? "11 x 8.5\"" : "8.5 x 11\"") \(selectedProductOption?.title ?? "Hardcover (Casewrap)"), Full Color, Matte Finish")
-                .font(.subheadline)
+                .font(LinenTheme.body(14))
         }
     }
 
@@ -1071,13 +1071,13 @@ struct OrderBookView: View {
                     orderCoverThumbnail(urls: coverPreviewURLs, pdfURL: coverPDFURL)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(selectedProductOption.subtitle)
-                            .font(.subheadline)
+                            .font(LinenTheme.body(14))
                             .foregroundColor(.primary)
                         Text("\(isLandscapeBook ? "11 × 8.5\"" : "8.5 × 11\"") · Full color · Matte finish")
-                            .font(.caption)
+                            .font(LinenTheme.body(12))
                             .foregroundColor(.secondary)
                         Text(selectedProductOption.requirementsText)
-                            .font(.caption)
+                            .font(LinenTheme.body(12))
                             .foregroundColor(.secondary)
                         if let reason = availability.reason {
                             Label(reason, systemImage: "info.circle.fill")
@@ -1100,7 +1100,7 @@ struct OrderBookView: View {
                             if option.id != selectedProductOptionId,
                                let reason = optionAvailability(option).reason {
                                 Text("\(option.title): \(reason)")
-                                    .font(.caption)
+                                    .font(LinenTheme.body(12))
                                     .foregroundColor(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -1128,16 +1128,16 @@ struct OrderBookView: View {
                 .foregroundColor(mutedTextColor)
             if !hasAnyEligibleProductOption {
                 Text("No print formats match \(book.pageCount) pages yet.")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(.orange)
             } else if !selectedProductIsEligible {
                 Text("Choose an available print format, then set how many copies to add.")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(.secondary)
             } else {
                 Stepper(value: $lineQuantity, in: 1...99) {
                     Text("Copies to add: \(lineQuantity)")
-                        .font(.subheadline)
+                        .font(LinenTheme.body(14))
                 }
             }
         }
@@ -1154,7 +1154,7 @@ struct OrderBookView: View {
         VStack(alignment: .leading, spacing: 12) {
             if orderCart.items.isEmpty {
                 Text("Nothing in your cart yet. Tap Back, then on Format use Add to cart & continue.")
-                    .font(.subheadline)
+                    .font(LinenTheme.body(14))
                     .foregroundColor(.secondary)
             } else {
                 ForEach(orderCart.items) { item in
@@ -1187,7 +1187,7 @@ struct OrderBookView: View {
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(2)
                     Text("\(item.productTitle) • \(item.snapshotPageCount) p.")
-                        .font(.caption)
+                        .font(LinenTheme.body(12))
                         .foregroundColor(.secondary)
                     if !status.available, let reason = status.reason {
                         Text(reason)
@@ -1330,12 +1330,12 @@ struct OrderBookView: View {
     private var pricingEstimateSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Estimate (this book × quantity)")
-                .font(.subheadline)
+                .font(LinenTheme.body(14))
                 .fontWeight(.semibold)
                 .foregroundColor(mutedTextColor)
             if activeStep == .review {
                 Text("Total includes printing and shipping to your address.")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(.secondary)
             }
 
@@ -1343,7 +1343,7 @@ struct OrderBookView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                     Text("Getting price from Lulu…")
-                        .font(.subheadline)
+                        .font(LinenTheme.body(14))
                         .foregroundColor(.secondary)
                 }
             } else if orderCart.items.isEmpty {
@@ -1354,17 +1354,17 @@ struct OrderBookView: View {
             } else {
                 if cartHasInvalidLines {
                     Text("Shipping estimate is hidden until all cart lines pass format checks.")
-                        .font(.caption)
+                        .font(LinenTheme.body(12))
                         .foregroundColor(.orange)
                 } else if let ce = cartEstimate {
                     cartEstimateBreakdown(ce)
                 } else if isFormValid {
                     Text("Enter a complete address to refresh your cart estimate.")
-                        .font(.caption)
+                        .font(LinenTheme.body(12))
                         .foregroundColor(.secondary)
                 } else {
                     Text("Fill out shipping to see cart pricing.")
-                        .font(.caption)
+                        .font(LinenTheme.body(12))
                         .foregroundColor(.secondary)
                 }
             }
@@ -1386,20 +1386,20 @@ struct OrderBookView: View {
     private var emptyCartPricingCopy: some View {
         if !hasAnyEligibleProductOption {
             Text("This book has \(book.pageCount) pages. None of the listed print formats support that page count yet.")
-                .font(.caption)
+                .font(LinenTheme.body(12))
                 .foregroundColor(.orange)
         } else if !selectedProductIsEligible {
             Text("Pick one of the available print formats to view pricing.")
-                .font(.caption)
+                .font(LinenTheme.body(12))
                 .foregroundColor(.secondary)
         } else if cartEstimate == nil {
             if isFormValid {
                 Text("Enter a complete address to see your estimate.")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(.secondary)
             } else {
                 Text("Fill out shipping to see pricing.")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(.secondary)
             }
         }
@@ -1432,7 +1432,7 @@ struct OrderBookView: View {
             )
             if ce.fallback {
                 Text("Live Lulu estimate is temporarily unavailable for one or more lines. Total may adjust at checkout.")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(.orange)
             }
         }
@@ -1446,13 +1446,13 @@ struct OrderBookView: View {
         if !addressWarnings.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Address validation")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .fontWeight(.semibold)
                     .foregroundColor(.secondary)
                 ForEach(Array(addressWarnings.enumerated()), id: \.offset) { _, w in
                     if !w.message.isEmpty {
                         Text(w.message)
-                            .font(.caption)
+                            .font(LinenTheme.body(12))
                             .foregroundColor(.primary)
                     }
                 }
@@ -1569,7 +1569,7 @@ struct OrderBookView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(mutedTextColor)
                 Text("Used for delivery and live price estimate")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(mutedTextColor)
             }
 
@@ -1610,7 +1610,7 @@ struct OrderBookView: View {
                             } label: {
                                 HStack {
                                     Text(pred.description)
-                                        .font(.subheadline)
+                                        .font(LinenTheme.body(14))
                                         .foregroundColor(.primary)
                                         .multilineTextAlignment(.leading)
                                     Spacer()
@@ -1701,7 +1701,7 @@ struct OrderBookView: View {
                         .foregroundColor(.secondary)
                     ForEach(Array(shippingValidationIssues.enumerated()), id: \.offset) { _, issue in
                         Text("• \(issue)")
-                            .font(.caption)
+                            .font(LinenTheme.body(12))
                             .foregroundColor(.orange)
                     }
                 }
@@ -1724,7 +1724,7 @@ struct OrderBookView: View {
 
             if !isFormValid {
                 Text("Complete your address to see delivery estimates.")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(.secondary)
             } else if isEstimating && cartEstimate == nil {
                 shippingSpeedLoadingRow
@@ -1749,7 +1749,7 @@ struct OrderBookView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(mutedTextColor)
             Text("Choose after your address is complete. Options refresh with Lulu delivery windows and indicative rates.")
-                .font(.caption)
+                .font(LinenTheme.body(12))
                 .foregroundColor(mutedTextColor)
         }
     }
@@ -1758,7 +1758,7 @@ struct OrderBookView: View {
         HStack(spacing: 8) {
             ProgressView()
             Text("Fetching delivery windows from Lulu…")
-                .font(.caption)
+                .font(LinenTheme.body(12))
                 .foregroundColor(.secondary)
         }
     }
@@ -1768,11 +1768,11 @@ struct OrderBookView: View {
         if isFormValid {
             if hasLiveShippingMethodEstimates {
                 Text("Estimates and indicative prices come from Lulu for your full cart. The Review step shows the live total for your selection, including books and shipping. Each book ships in its own package.")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(.secondary)
             } else if !isEstimating {
                 Text("Shipping cost and delivery windows appear after Lulu returns data for this address.")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(.secondary)
             }
         }
@@ -1800,12 +1800,12 @@ struct OrderBookView: View {
                     .foregroundColor(shippingLevel == opt.id ? accentColor : .secondary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.subheadline)
+                        .font(LinenTheme.body(14))
                         .foregroundColor(.primary)
                         .multilineTextAlignment(.leading)
                     if let c = opt.shippingPriceCents {
                         Text(formatMoney(cents: c) + " (Lulu rate for this cart)")
-                            .font(.caption)
+                            .font(LinenTheme.body(12))
                             .foregroundColor(.secondary)
                     }
                 }

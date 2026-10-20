@@ -73,9 +73,9 @@ struct ChapterJourneyView: View {
     @State private var selectedEntryID: UUID?
     @State private var refreshID = UUID() // Forces full rerender
 
-    let highlightColor = Color(red: 254/255, green: 242/255, blue: 215/255)
-    let deepGreen = Color(red: 39/255, green: 60/255, blue: 34/255)
-    private let headerSurface = Color(red: 1.0, green: 0.97, blue: 0.90)
+    let highlightColor = LinenTheme.paper
+    let deepGreen = LinenTheme.ink
+    private let headerSurface = LinenTheme.paper
 
     private var childNames: [String] {
         profileVM.selectedProfile.childNames
@@ -225,7 +225,7 @@ struct ChapterJourneyView: View {
                         .environmentObject(profileVM)
                 } else {
                     Text("Memory not found")
-                        .font(.headline)
+                        .font(LinenTheme.body(16, weight: .semibold))
                 }
             }
         }
@@ -311,7 +311,7 @@ struct ChapterJourneyView: View {
         ZStack(alignment: .leading) {
             VStack(spacing: 6) {
                 Text("Chapter \(chapter.number): \(chapter.title)")
-                    .font(.customSerifFallback(size: 28))
+                    .font(LinenTheme.heading(25))
                     .foregroundColor(deepGreen)
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
@@ -321,8 +321,8 @@ struct ChapterJourneyView: View {
                     .accessibilityIdentifier("chapterJourneyTitle")
 
                 Text("\(completedPromptIDs.count) of \(chapter.prompts.count) memories recorded")
-                    .font(.subheadline)
-                    .foregroundColor(deepGreen)
+                    .font(LinenTheme.body(13))
+                    .foregroundColor(LinenTheme.secondary)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.85)
@@ -336,7 +336,7 @@ struct ChapterJourneyView: View {
                 dismiss()
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(LinenTheme.body(22, weight: .semibold))
                     .foregroundColor(deepGreen)
                     .frame(width: 44, height: 44)
                     .contentShape(Circle())
@@ -347,8 +347,8 @@ struct ChapterJourneyView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(headerSurface.opacity(0.96))
-                .shadow(color: .black.opacity(0.16), radius: 12, y: 5)
+                .fill(headerSurface)
+                .shadow(color: LinenTheme.ink.opacity(0.08), radius: 12, y: 5)
         )
         .padding(.horizontal, 16)
         .zIndex(100)
@@ -363,10 +363,10 @@ struct ChapterJourneyView: View {
             HStack {
                 Spacer(minLength: 24)
                 Text("\"\(prompt.text)\"")
-                    .font(.system(size: 17, weight: .medium))
+                    .font(LinenTheme.body(17, weight: .medium))
                     .multilineTextAlignment(.center)
                     .padding(.vertical, 12)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 24)
                     .background(highlightColor)
                     .cornerRadius(20)
                     .shadow(radius: 4)
@@ -405,14 +405,11 @@ struct ChapterJourneyView: View {
                 return
             }
 
-            Mixpanel.mainInstance().track(
-                event: "Opened Prompt",
-                properties: AnalyticsPrivacyPolicy.sanitized([
+            ProductAnalytics.shared.track("Opened Prompt", [
                     "chapter_number": chapter.number,
                     "is_completed": isCompleted,
                     "per_child_count": expanded.count
                 ])
-            )
 
             if expanded.count == 1 {
                 // Single child (or no kids): open a regular RecordingView with the substituted text.
@@ -451,13 +448,10 @@ struct ChapterJourneyView: View {
             }
         } else {
             // Track prompt opened
-            Mixpanel.mainInstance().track(
-                event: "Opened Prompt",
-                properties: AnalyticsPrivacyPolicy.sanitized([
+            ProductAnalytics.shared.track("Opened Prompt", [
                     "chapter_number": chapter.number,
                     "is_completed": isCompleted
                 ])
-            )
 
             // start a new recording (no animation to prevent visual flash)
             selectedPrompt = prompt

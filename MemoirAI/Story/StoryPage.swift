@@ -19,17 +19,17 @@ private enum StorybookHeadshotOverride {
 
 // Enhanced color definitions for book-like appearance
 struct StoryPageLocalColors {
-    let softCream = Color(red: 0.98, green: 0.96, blue: 0.89)
-    let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
-    let defaultBlack = Color.black
-    let defaultGray = Color.gray
+    let softCream = LinenTheme.paper
+    let terracotta = LinenTheme.accent
+    let defaultBlack = LinenTheme.ink
+    let defaultGray = LinenTheme.secondary
     let defaultRed = Color.red
     let defaultWhite = Color.white
     let arrowColor = Color.white.opacity(0.9)
-    let subtleControlBackground = Color.black.opacity(0.07)
+    let subtleControlBackground = LinenTheme.surface
     let shadowColor = Color.black.opacity(0.15)
-    let bookFrameFill = Color.white.opacity(0.95)
-    let bookFrameStroke = Color.gray.opacity(0.3)
+    let bookFrameFill = LinenTheme.card
+    let bookFrameStroke = LinenTheme.line
     let fullScreenOverlayBackground = Color.black.opacity(0.85)
     
     // Book-specific colors - elegant and clean
@@ -214,7 +214,6 @@ struct StoryPage: View {
     
     // Incomplete memories banner
     @State private var incompleteCount: Int = 0
-    @State private var animateIncompleteMemoriesGlow = false
     @State private var navigateToRecent: Bool = false
     @State private var showIncompleteMemoriesAlert: Bool = false
     
@@ -248,79 +247,29 @@ struct StoryPage: View {
     @ViewBuilder
     private func incompleteMemoriesBanner() -> some View {
         if incompleteCount > 0 {
-            HStack(spacing: 8) { // Reduced spacing
-                // Subtle icon badge
-                HStack(spacing: 4) { // Reduced spacing
+            Button(action: { navigateToRecent = true }) {
+                HStack(spacing: 12) {
                     Image(systemName: "sparkles")
+                        .foregroundColor(LinenTheme.accent)
+                    Text("\(incompleteCount) \(incompleteCount == 1 ? "memory" : "memories") can be enhanced")
+                        .font(LinenTheme.body(14))
+                        .foregroundColor(LinenTheme.ink)
+                        .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(localColors.terracotta)
-                    
-                    Text("\(incompleteCount)")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(localColors.terracotta)
+                        .foregroundColor(LinenTheme.secondary)
                 }
-                .padding(.horizontal, 8) // Reduced padding
-                .padding(.vertical, 6)
-                .background(localColors.terracotta.opacity(0.1))
-                .cornerRadius(8)
-                .fixedSize()
-                
-                // Clean text - Allow full flexibility
-                Text("\(incompleteCount == 1 ? "memory" : "memories") can be enhanced")
-                    .font(.system(size: 13))
-                    .foregroundColor(localColors.defaultGray)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7) // Allow more shrinking if needed
-                    .layoutPriority(1) // Prioritize text width
-                
-                Spacer(minLength: 0)
-                
-                // Subtle action button
-                Button(action: { navigateToRecent = true }) {
-                    Text("Enhance")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(localColors.terracotta)
-                        .padding(.horizontal, 10) // Reduced padding
-                        .padding(.vertical, 6)
-                        .background(
-                            Capsule()
-                                .stroke(localColors.terracotta.opacity(0.3), lineWidth: 1)
-                                .background(Capsule().fill(localColors.terracotta.opacity(0.05)))
-                        )
-                }
-                .fixedSize()
+                .frame(minHeight: 44)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 14))
             }
-            .padding(.horizontal, 12) // Reduced outer padding
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.white.opacity(0.5))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(
-                                AngularGradient(
-                                    gradient: Gradient(colors: [
-                                        Color.orange,
-                                        Color.yellow,
-                                        Color.red.opacity(0.8),
-                                        Color.orange
-                                    ]),
-                                    center: .center,
-                                    angle: .degrees(animateIncompleteMemoriesGlow ? 360 : 0)
-                                ),
-                                lineWidth: 3
-                            )
-                    )
-            )
-            .shadow(color: Color.orange.opacity(0.3), radius: 8, x: 0, y: 4)
-            .onAppear {
-                withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) {
-                    animateIncompleteMemoriesGlow = true
-                }
-            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens saved stories to add more detail")
         }
     }
-    
+
     private var isShowingOpeningBook: Bool {
         isOpeningBook || StorybookPagePresentationPolicy.shouldShowProfileLoadingOverlay(
             isLoadingProfileBook: vm.isLoadingProfileBook,
@@ -360,7 +309,13 @@ struct StoryPage: View {
     
     @ViewBuilder
     private func makeLoadingView() -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
+            Image(systemName: "book.closed")
+                .font(.system(size: 34, weight: .light))
+                .foregroundColor(LinenTheme.forest)
+            Text("Creating your book")
+                .font(LinenTheme.heading(22))
+                .foregroundColor(LinenTheme.ink)
             // One continuous bar for the whole pipeline — cloud illustration AND on-device
             // finalizing — so it never switches to an indeterminate spinner and appears stuck.
             ProgressView(value: vm.overallProgress)
@@ -390,8 +345,8 @@ struct StoryPage: View {
                     .foregroundColor(.gray)
             }
 
-            Text("Creating your storybook. Keep MemoirAI open to watch it come together.")
-                .font(.caption2)
+            Text("Your memories are becoming a book.")
+                .font(LinenTheme.body(13))
                 .foregroundColor(.gray.opacity(0.8))
         }
     }
@@ -703,55 +658,69 @@ struct StoryPage: View {
     
     @ViewBuilder
     private func makeEmptyStateView() -> some View {
-        VStack(spacing: 0) {
-            Spacer()
-
-            VStack(spacing: 16) {
-                if incompleteCount > 0 {
-                    incompleteMemoriesBanner()
-                        .padding(.bottom, 4)
+        VStack(spacing: 24) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(LinenTheme.surface)
+                VStack(spacing: 10) {
+                    Text("MEMOIR")
+                        .font(LinenTheme.body(10, weight: .semibold))
+                        .tracking(2)
+                    Image("LinenJourney")
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 156, height: 76)
+                        .clipped()
+                    Text("Your stories, together.")
+                        .font(LinenTheme.heading(16))
                 }
-
-                Text("Your storybook awaits!")
-                    .font(.storyPageSerifFont(size: 18))
-                    .foregroundColor(localColors.defaultBlack.opacity(0.9))
-
-                Text("Tap below to bring this profile's memories to life.")
-                    .font(.system(size: 14))
-                    .foregroundColor(localColors.defaultGray)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 30)
-
-                Button(action: {
-                    prepareStorybookSetup()
-                }) {
-                    Text("Create My Storybook")
-                        .font(.headline)
-                        .foregroundColor(localColors.defaultWhite)
-                        .padding(.horizontal, 30)
-                        .padding(.vertical, 15)
-                        .background(localColors.terracotta)
-                        .clipShape(Capsule())
-                        .shadow(
-                            color: localColors.terracotta.opacity(0.4),
-                            radius: 5, y: 3
-                        )
+                .foregroundColor(LinenTheme.ink)
+                .frame(width: 210, height: 210 * 8.5 / 11)
+                .background(LinenTheme.paper)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(LinenTheme.line).frame(width: 6)
                 }
-                .tutorialAnchor(.storybookCreate)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear
-                            .onAppear { tutorialCoordinator.reportAnchor(.storybookCreate, rect: geo.frame(in: .global)) }
-                            .onChange(of: geo.frame(in: .global)) { _, f in tutorialCoordinator.reportAnchor(.storybookCreate, rect: f) }
-                    }
-                )
-                .accessibilityIdentifier("createStorybookButton")
-                .disabled(vm.isLoading || vm.isUploadingToCloud)
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 2, bottomLeadingRadius: 2, bottomTrailingRadius: 6, topTrailingRadius: 6))
+                .shadow(color: LinenTheme.ink.opacity(0.14), radius: 5, x: 3, y: 5)
+                .rotationEffect(.degrees(-4))
             }
+            .frame(height: 180)
+            .accessibilityHidden(true)
 
-            Spacer()
+            VStack(spacing: 12) {
+                Text("A book of your memories")
+                    .font(LinenTheme.heading())
+                    .foregroundColor(LinenTheme.ink)
+                Text("Choose the stories you want to keep together, then make them into an illustrated book.")
+                    .font(LinenTheme.body(14))
+                    .foregroundColor(LinenTheme.secondary)
+            }
+            .multilineTextAlignment(.center)
+
+            Button(action: { prepareStorybookSetup() }) {
+                Text("Create a book")
+                    .font(LinenTheme.body(16, weight: .semibold))
+                    .foregroundColor(LinenTheme.onAccent)
+                    .frame(maxWidth: .infinity, minHeight: 55)
+                    .background(LinenTheme.accent, in: RoundedRectangle(cornerRadius: 14))
+            }
+            .tutorialAnchor(.storybookCreate)
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { tutorialCoordinator.reportAnchor(.storybookCreate, rect: geo.frame(in: .global)) }
+                        .onChange(of: geo.frame(in: .global)) { _, f in tutorialCoordinator.reportAnchor(.storybookCreate, rect: f) }
+                }
+            )
+            .accessibilityIdentifier("createStorybookButton")
+            .disabled(vm.isLoading || vm.isUploadingToCloud)
+
+            if incompleteCount > 0 {
+                incompleteMemoriesBanner()
+            }
         }
-        .padding()
+        .frame(maxWidth: .infinity, alignment: .top)
+        .padding(.top, 8)
     }
 
     private func prepareStorybookSetup() {
@@ -1140,71 +1109,50 @@ struct StoryPage: View {
     
     @ViewBuilder
     private func makeHeader(usesCompactChrome: Bool) -> some View {
-        if usesCompactChrome {
+        VStack(alignment: .leading, spacing: 16) {
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) {
-                    makeBackButton()
-
-                    Text("Your Storybook")
-                        .font(.system(size: 21, weight: .bold, design: .serif))
-                        .foregroundColor(localColors.defaultBlack.opacity(0.8))
-                        .lineLimit(1)
-
-                    Spacer(minLength: 4)
-                    makeHeaderButtons(horizontal: true)
-                }
-
                 HStack(spacing: 8) {
                     makeBackButton()
+                    Text(hasGeneratedStorybook ? "Read book" : "Your Book")
+                        .font(LinenTheme.heading())
+                        .foregroundColor(LinenTheme.ink)
+                        .fixedSize(horizontal: true, vertical: false)
                     Spacer(minLength: 0)
                     makeHeaderButtons(horizontal: true)
                 }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 6)
-        } else {
-            ZStack(alignment: .top) {
-                HStack(alignment: .top) {
-                    makeBackButton()
-                    Spacer()
-                    makeHeaderButtons(horizontal: false)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 8) {
+                        makeBackButton()
+                        Spacer(minLength: 0)
+                        makeHeaderButtons(horizontal: true)
+                    }
+                    Text(hasGeneratedStorybook ? "Read book" : "Your Book")
+                        .font(LinenTheme.heading())
+                        .foregroundColor(LinenTheme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-
-                makeTitleSection()
-                    .frame(maxWidth: 250, alignment: .top)
             }
-            .padding(.horizontal)
-            .padding(.top, 5)
-            .padding(.bottom, 10)
+            if !usesCompactChrome, subscriptionManager.hasActiveSubscription {
+                makeSubscriptionButton()
+                    .padding(.leading, 44)
+            }
         }
+        .padding(.horizontal, 24)
+        .padding(.top, usesCompactChrome ? 6 : 10)
+        .padding(.bottom, usesCompactChrome ? 6 : 16)
     }
-    
+
     @ViewBuilder
     private func makeBackButton() -> some View {
         Button(action: { dismiss() }) {
             Image(systemName: "chevron.left")
                 .font(.system(size: 18, weight: .medium))
                 .foregroundColor(localColors.defaultBlack.opacity(0.7))
-                .padding(10)
+                .frame(width: 44, height: 44)
                 .background(localColors.subtleControlBackground)
                 .clipShape(Circle())
         }
-    }
-    
-    @ViewBuilder
-    private func makeTitleSection() -> some View {
-        VStack(spacing: 2) {
-            Text("Your Storybook")
-                .font(.system(size: 30, weight: .bold, design: .serif))
-                .foregroundColor(localColors.defaultBlack.opacity(0.8))
-                .tracking(-0.6)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            
-            if subscriptionManager.hasActiveSubscription {
-                makeSubscriptionButton()
-            }
-        }
+        .accessibilityLabel("Back")
     }
     
     @ViewBuilder
@@ -1284,10 +1232,11 @@ struct StoryPage: View {
             Image(systemName: "books.vertical")
                 .font(.system(size: 18, weight: .medium))
                 .foregroundColor(localColors.defaultBlack.opacity(0.7))
-                .padding(10)
+                .frame(width: 44, height: 44)
                 .background(localColors.subtleControlBackground)
                 .clipShape(Circle())
         }
+        .accessibilityLabel("Book library")
     }
     
     @ViewBuilder
@@ -1304,10 +1253,11 @@ struct StoryPage: View {
                 }
             }
             .foregroundColor(showDownloadSuccess ? .green : localColors.defaultBlack.opacity(0.7))
-            .padding(10)
+            .frame(width: 44, height: 44)
             .background(localColors.subtleControlBackground)
             .clipShape(Circle())
         }
+        .accessibilityLabel("Export book")
         .accessibilityIdentifier("downloadStorybookButton")
         .disabled(isDownloading)
         .scaleEffect(showDownloadSuccess ? 1.1 : 1.0)
@@ -1320,17 +1270,33 @@ struct StoryPage: View {
             Image(systemName: "gearshape.fill")
                 .font(.system(size: 18, weight: .medium))
                 .foregroundColor(localColors.defaultBlack.opacity(0.7))
-                .padding(10)
+                .frame(width: 44, height: 44)
                 .background(localColors.subtleControlBackground)
                 .clipShape(Circle())
         }
+        .accessibilityLabel("Settings")
         .accessibilityIdentifier("storybookSettingsButton")
     }
     
     @ViewBuilder
     private func makeStorybookContentArea() -> some View {
         GeometryReader { geo in
-            makeBookFrame(geo: geo)
+            if vm.isLoading || isShowingOpeningBook || vm.isLoadingGalleryBook
+                || (hasGeneratedStorybook && vm.requiresVisualReadyGate && !vm.isVisualBookReady)
+                || vm.errorMessage != nil || !hasGeneratedStorybook {
+                ScrollView {
+                    storybookContentView(
+                        bookFrameWidth: max(0, geo.size.width - 48),
+                        bookContentHeightInsideFrame: max(0, geo.size.height - 32)
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: max(0, geo.size.height - 32), alignment: hasGeneratedStorybook || vm.isLoading ? .center : .top)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 16)
+                }
+            } else {
+                makeBookFrame(geo: geo)
+            }
         }
     }
     
@@ -1454,7 +1420,7 @@ struct StoryPage: View {
                         .disabled(isOrderPreparing || vm.isSavingBookRevision || vm.isUploadingToCloud)
                 }
             }
-            .padding(.horizontal, usesCompactChrome ? 12 : 20)
+            .padding(.horizontal, usesCompactChrome ? 12 : 24)
             .padding(.vertical, 10)
             .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth)
         }
@@ -1480,12 +1446,12 @@ struct StoryPage: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundColor(filled ? .white : localColors.terracotta)
+            .font(LinenTheme.body(15, weight: .semibold))
+            .foregroundColor(filled ? LinenTheme.onAccent : LinenTheme.ink)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
-            .background(filled ? localColors.terracotta : localColors.terracotta.opacity(0.14))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.vertical, 14)
+            .background(filled ? LinenTheme.accent : LinenTheme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
     }

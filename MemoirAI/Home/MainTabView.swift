@@ -11,6 +11,8 @@ struct MainTabView: View {
     @ObservedObject private var notificationManager = NotificationManager.shared
     @AppStorage(MemoirPersistenceUserDefaults.suggestAccountLinkAfterBook) private var suggestBookBackup = false
     @AppStorage("memoirai.notificationPromptDismissed") private var notificationPromptDismissed = false
+    @State private var showProfileHub = false
+    @State private var showProfileSwitcher = false
     @State private var bookBackupBannerDismissed = false
     @State private var showEmailBackupSheet = false
     @State private var pendingAccessRequestCount = 0
@@ -24,10 +26,36 @@ struct MainTabView: View {
     var body: some View {
         ZStack {
             // Soft background base
-            Color(red: 0.98, green: 0.94, blue: 0.86)
+            LinenTheme.paper
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image("MemoirBrandIcon")
+                        .resizable().scaledToFit().frame(width: 34, height: 34)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .accessibilityHidden(true)
+                    Text("memoir").font(LinenTheme.heading(27))
+                    Spacer(minLength: 8)
+                    Button { showProfileSwitcher = true } label: {
+                        Image(systemName: "arrow.left.arrow.right")
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Switch profiles")
+                    Button { showProfileHub = true } label: {
+                        Image(systemName: "person")
+                            .frame(width: 38, height: 38)
+                            .background(LinenTheme.surface, in: Circle())
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Your profile")
+                }
+                .foregroundStyle(LinenTheme.ink)
+                .padding(.horizontal, 24)
+                .frame(minHeight: 64)
+                .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
+                .background(LinenTheme.paper)
+                .overlay(alignment: .bottom) { Rectangle().fill(LinenTheme.line).frame(height: 1) }
                 TabView(selection: $selectedTab) {
                     HomepageView {
                         StorybookSeenTracker.shared.noteUserNavigationIntent()
@@ -46,7 +74,7 @@ struct MainTabView: View {
                     RecentMemoriesView(selectedTab: $selectedTab)
                         .environmentObject(profileVM)
                         .tabItem {
-                            Image(systemName: "clock.fill")
+                            Image(systemName: "bookmark")
                             Text("Saved Stories")
                         }
                         .tag(1)
@@ -55,10 +83,10 @@ struct MainTabView: View {
                         }
                 }
                 .ignoresSafeArea(edges: .bottom)
-                .accentColor(.black)
-                .background(.ultraThinMaterial)
+                .tint(LinenTheme.accent)
+                .background(LinenTheme.paper)
                 .onAppear {
-                    let cream = UIColor(red: 0.98, green: 0.94, blue: 0.86, alpha: 0.6)
+                    let cream = UIColor(LinenTheme.paper)
                     UITabBar.appearance().backgroundColor = cream
                     UITabBar.appearance().barTintColor = cream
                     tutorialCoordinator.runMigrationIfNeeded(profileID: profileVM.selectedProfile.id)
@@ -76,7 +104,7 @@ struct MainTabView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .tutorialSelectHomeTab)) { _ in
                     selectedTab = 0
                 }
-                .overlay(alignment: .top) {
+                .safeAreaInset(edge: .top, spacing: 0) {
                     VStack(spacing: 8) {
                         if !notificationPromptDismissed,
                            NotificationPermissionPolicy.action(for: notificationManager.authorizationStatus) != .none {
@@ -110,6 +138,8 @@ struct MainTabView: View {
                 }
             }
         }
+        .sheet(isPresented: $showProfileHub) { LinenProfileHub().environmentObject(profileVM) }
+        .sheet(isPresented: $showProfileSwitcher) { ProfileSwitcherView().environmentObject(profileVM) }
         .navigationBarHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .alert(

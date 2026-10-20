@@ -9,6 +9,7 @@ struct HomepageView: View {
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
     @Environment(\.managedObjectContext) private var context
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let openStorybook: () -> Void
 
     // MARK: – State
@@ -17,18 +18,12 @@ struct HomepageView: View {
     @State private var promptCompleted: Bool = false
 
     @State private var entries: [MemoryEntry] = []
-
-    @State private var showingAddProfile = false
-    @State private var showProfileEdit = false
-    @State private var showProfileSwitcher = false
+    @State private var availableWidth: CGFloat = 390
 
     @State private var showMemoirPicker = false
     @State private var pendingNavigateToMemoir = false
     @State private var navigateToMemoir = false
     @AppStorage("hasChosenMemoirMode") private var hasChosenMemoirMode = false
-
-    // Animation flag for glowing gradient around the Book Preview button
-    @State private var animatePreviewGlow = false
 
     // MARK: – Computed Properties
 
@@ -54,86 +49,50 @@ struct HomepageView: View {
 
     var body: some View {
         Group {
-            VStack(spacing: 0) {
-                // ─── TOP BAR ─────────────────────────────────────
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Memoir")
-                            .font(.customSerifFallback(size: 22))
-                            .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
-
-                        if !profileVM.profiles.isEmpty && !profileVM.selectedProfile.name.isEmpty {
-                            Text("Hello, \(profileVM.selectedProfile.name)")
-                                .font(.subheadline)
-                                .foregroundColor(.black.opacity(0.7))
-                        }
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(profileVM.selectedProfile.name.isEmpty ? "Welcome to Memoir" : "Hello, \(profileVM.selectedProfile.name).")
+                            .font(LinenTheme.heading(33))
+                        Text("Keep the stories that matter.")
+                            .font(LinenTheme.body(14))
+                            .foregroundStyle(LinenTheme.secondary)
                     }
-                    Spacer()
-                    
-                    // Profile Icon Button
+                    .padding(.vertical, 18)
+
                     Button {
-                        showProfileEdit = true
+                        if hasChosenMemoirMode { navigateToMemoir = true }
+                        else { showMemoirPicker = true }
                     } label: {
-                        ProfileIconView(profile: profileVM.selectedProfile)
+                        HStack(spacing: 12) {
+                            if !dynamicTypeSize.isAccessibilitySize && availableWidth >= 360 {
+                                Image("LinenJourney")
+                                    .resizable().scaledToFill()
+                                    .frame(width: 109, height: 164)
+                                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 55, bottomLeadingRadius: 12, bottomTrailingRadius: 12, topTrailingRadius: 55))
+                                    .accessibilityHidden(true)
+                            }
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Your\nMemoir").font(LinenTheme.heading(31))
+                                Text("Tell your story.").font(LinenTheme.body(13))
+                                ProgressView(value: Double(min(100, completionPercentage)), total: 100)
+                                    .tint(LinenTheme.accent)
+                                    .accessibilityLabel("Memoir completion")
+                                Text("\(completionPercentage)%")
+                                    .font(LinenTheme.body(12, weight: .semibold))
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "arrow.up.right").font(.system(size: 17))
+                                .frame(width: 37, height: 37)
+                                .overlay(Circle().strokeBorder(lineWidth: 1))
+                        }
+                        .foregroundStyle(LinenTheme.ink)
+                        .padding(21)
+                        .frame(maxWidth: .infinity, minHeight: 205, alignment: .leading)
+                        .background(LinenTheme.card, in: RoundedRectangle(cornerRadius: 25))
+                        .contentShape(RoundedRectangle(cornerRadius: 25))
                     }
-                    .buttonStyle(PlainButtonStyle())
-                }
-                .padding(.horizontal)
-                .padding(.top, 12)
-
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 24) {
-                        // Profile Photo + Title
-                        ProfilePhotoView(
-                            viewModel: profileVM
-                        ) {
-                            showProfileSwitcher = true
-                        }
-
-                        VStack(spacing: 10) {
-                            Text("Your voice.\nYour legacy.")
-                                .font(.customSerifFallback(size: 30))
-                                .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
-                                .multilineTextAlignment(.center)
-
-                            Text("Capture your stories for future generations. No typing, just talking.")
-                                .font(.subheadline)
-                                .foregroundColor(Color.black.opacity(0.7))
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal)
-                        }
-
-                        // CONTINUE YOUR MEMORIES
-                        Button {
-                            if hasChosenMemoirMode {
-                                navigateToMemoir = true
-                            } else {
-                                showMemoirPicker = true
-                            }
-                        } label: {
-                            HStack {
-                                Text("Continue Your Memories")
-                                    .font(.system(size: 18, weight: .semibold))
-                                Spacer()
-                                HStack(spacing: 8) {
-                                    Text("\(completionPercentage)%")
-                                        .font(.system(size: 16, weight: .bold))
-                                        .foregroundColor(.white)
-                                    Image(systemName: "chevron.right")
-                                        .foregroundColor(.white.opacity(0.85))
-                                }
-                            }
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 22)
-                            .padding(.vertical, 14)
-                            .background(
-                                RoundedRectangle(cornerRadius: 24)
-                                    .fill(Color(red: 0.83, green: 0.45, blue: 0.14))
-                            )
-                            .shadow(color: Color.orange.opacity(0.25), radius: 6, x: 0, y: 3)
-                            .padding(.horizontal)
-                        }
-                        .buttonStyle(.plain)
+                    .buttonStyle(.plain)
                         .tutorialAnchor(.homeContinueMemoir)
                         .background(
                             GeometryReader { geo in
@@ -144,52 +103,40 @@ struct HomepageView: View {
                         )
                         .accessibilityIdentifier("tutorialContinueYourMemoir")
                         
-                        // YOUR BOOK (Premium Gradient Outline)
-                        Button(action: openStorybook) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Your Book")
-                                        .font(.subheadline)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.black)
-                                    Text("Generate your life story here!")
-                                        .font(.footnote)
-                                        .foregroundColor(.black.opacity(0.7))
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.gray)
+                    Button(action: openStorybook) {
+                        HStack(spacing: 12) {
+                            if !dynamicTypeSize.isAccessibilitySize && availableWidth >= 360 {
+                            VStack(alignment: .center, spacing: 8) {
+                                Text("MEMOIR").font(LinenTheme.body(8, weight: .semibold)).tracking(1)
+                                Text("A\nlife\nto\nkeep.")
+                                    .font(LinenTheme.heading(17))
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Image("LinenJourney").resizable().scaledToFill().frame(width: 65, height: 28).clipped()
                             }
-                            .padding()
-                            .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color(red: 0.98, green: 0.93, blue: 0.80))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 16)
-                                            .stroke(
-                                                AngularGradient(
-                                                    gradient: Gradient(colors: [
-                                                        Color.orange,
-                                                        Color.yellow,
-                                                        Color.red.opacity(0.8),
-                                                        Color.orange
-                                                    ]),
-                                                    center: .center,
-                                                    angle: .degrees(animatePreviewGlow ? 360 : 0)
-                                                ),
-                                                lineWidth: 3
-                                            )
-                                    )
-                            )
-                            .shadow(color: Color.orange.opacity(0.3), radius: 8, x: 0, y: 4)
-                            .padding(.horizontal)
-                            .onAppear {
-                                withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) {
-                                    animatePreviewGlow = true
-                                }
+                            .foregroundStyle(LinenTheme.ink)
+                            .padding(12)
+                            .frame(width: 91, height: 158)
+                            .background(Color(red: 0.73, green: 0.63, blue: 0.45), in: UnevenRoundedRectangle(topLeadingRadius: 2, bottomLeadingRadius: 2, bottomTrailingRadius: 8, topTrailingRadius: 8))
+                            .rotationEffect(.degrees(8))
+                            .accessibilityHidden(true)
                             }
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Your\nBook").font(LinenTheme.heading(31))
+                                Text("Bring it to life in print.").font(LinenTheme.body(13))
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "arrow.up.right").font(.system(size: 17))
+                                .frame(width: 37, height: 37)
+                                .overlay(Circle().strokeBorder(lineWidth: 1))
                         }
-                        .buttonStyle(.plain)
+                        .foregroundStyle(LinenTheme.onAccent)
+                        .padding(21)
+                        .frame(maxWidth: .infinity, minHeight: 205, alignment: .leading)
+                        .background(LinenTheme.forest, in: RoundedRectangle(cornerRadius: 25))
+                        .contentShape(RoundedRectangle(cornerRadius: 25))
+                    }
+                    .buttonStyle(.plain)
                         .tutorialAnchor(.homeYourBook)
                         .background(
                             GeometryReader { geo in
@@ -200,15 +147,13 @@ struct HomepageView: View {
                         )
                         .accessibilityIdentifier("tutorialYourBook")
 
-                        // Clears the floating tab bar so the last card is fully visible
-                        // and tappable when scrolled to the bottom.
-                        Spacer(minLength: 110)
-                    }
-                    .padding(.top, 24)
                 }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 28)
+                .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
             }
-            .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
-            .background(Color(red: 0.98, green: 0.94, blue: 0.86).ignoresSafeArea(.all))
+            .linenScreen()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
             .onAppear {
                 tutorialCoordinator.setVisibleScreen(.home)
                 resetDailyPromptIfNeeded()
@@ -244,17 +189,6 @@ struct HomepageView: View {
                     hasChosenMemoirMode = true
                     pendingNavigateToMemoir = true
                 })
-            }
-            .sheet(isPresented: $showingAddProfile) {
-                AddProfileView()
-                    .environmentObject(profileVM)
-            }
-            .fullScreenCover(isPresented: $showProfileEdit) {
-                ProfileEditView(profileVM: profileVM)
-            }
-            .sheet(isPresented: $showProfileSwitcher) {
-                ProfileSwitcherView()
-                    .environmentObject(profileVM)
             }
             .toolbar(.hidden, for: .navigationBar)
         }

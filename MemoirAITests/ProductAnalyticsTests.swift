@@ -64,3 +64,41 @@ struct ProductAnalyticsTests {
         #expect(events.last?.1["character_count"] as? Int == 42)
     }
 }
+
+@MainActor
+struct AnalyticsTrafficContextTests {
+    @Test func separatesHardwareFromTrafficClassification() {
+        let physical = AnalyticsTrafficContext(isSimulator: false, explicitlyInternal: false, internalUserIDs: ["qa"])
+        #expect(physical.properties(environment: "production", userID: "reader")["traffic_type"] as? String == "external")
+        #expect(physical.properties(environment: "production", userID: "qa")["traffic_type"] as? String == "internal")
+        for environment in ["development", "test", "sandbox"] {
+            #expect(physical.properties(environment: environment, userID: "reader")["traffic_type"] as? String == "internal")
+        }
+        let simulator = AnalyticsTrafficContext(isSimulator: true, explicitlyInternal: false, internalUserIDs: [])
+        #expect(simulator.properties(environment: "production", userID: nil)["traffic_type"] as? String == "internal")
+        #expect(simulator.properties(environment: "production", userID: nil)["is_simulator"] as? Bool == true)
+        #expect(physical.properties(environment: "production", userID: nil)["device_type"] as? String == "physical")
+        let explicitQA = AnalyticsTrafficContext(isSimulator: false, explicitlyInternal: true, internalUserIDs: [])
+        #expect(explicitQA.properties(environment: "production", userID: "reader")["traffic_type"] as? String == "internal")
+    }
+
+    @Test func trustedTrafficCannotBeSpoofedAndResetsWithIdentity() throws {
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        var received: Properties = [:]
+        var registered: Properties = [:]
+        let analytics = ProductAnalytics(
+            send: { _, props in received = props }, identify: { _ in }, reset: {},
+            defaults: defaults, environment: "production",
+            trafficContext: .init(isSimulator: false, explicitlyInternal: false, internalUserIDs: ["qa"]),
+            registerContext: { registered = $0 }
+        )
+        analytics.updateIdentity(userID: "qa", isGuest: false)
+        analytics.track("Example", ["traffic_type": "external", "is_simulator": true])
+        #expect(received["traffic_type"] as? String == "internal")
+        #expect(received["is_simulator"] as? Bool == false)
+        #expect(registered["traffic_type"] as? String == "internal")
+        analytics.updateIdentity(userID: "reader", isGuest: false)
+        #expect(registered["traffic_type"] as? String == "external")
+        #expect(registered["environment"] as? String == "production")
+    }
+}

@@ -21,11 +21,11 @@ struct RecentMemoriesView: View {
     @State private var selectedMemoirMode: MemoirMode? = nil
 
     // Design tokens - consistent with app theme
-    private let backgroundColor = Color(red: 0.98, green: 0.96, blue: 0.89) // softCream
-    private let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
-    private let cardBackground = Color.white
-    private let textPrimary = Color(red: 0.2, green: 0.2, blue: 0.2)
-    private let textSecondary = Color(red: 0.5, green: 0.5, blue: 0.5)
+    private let backgroundColor = LinenTheme.paper
+    private let terracotta = LinenTheme.accent
+    private let cardBackground = LinenTheme.card
+    private let textPrimary = LinenTheme.ink
+    private let textSecondary = LinenTheme.secondary
 
     private var candidateEntries: [MemoryEntry] {
         enhancementMode ? entries.filter(isEnhanceCandidate(_:)) : entries
@@ -62,7 +62,7 @@ struct RecentMemoriesView: View {
                     // Custom header - aligned and polished
                     customHeader
                         .padding(.top, 8)
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, 24)
                         .padding(.bottom, 12)
 
                     memoirFilterBar
@@ -88,7 +88,7 @@ struct RecentMemoriesView: View {
                                     .frame(width: 120, height: 120)
 
                                 Image(systemName: "book.closed.fill")
-                                    .font(.system(size: 56, weight: .light))
+                                    .font(LinenTheme.body(56, weight: .light))
                                     .foregroundColor(terracotta.opacity(0.6))
                             }
 
@@ -96,13 +96,13 @@ struct RecentMemoriesView: View {
                                 Text(enhancementMode
                                      ? "No \(selectedMemoirMode?.libraryTitle ?? "scoped") memories to enhance"
                                      : "No memories yet")
-                                    .font(.system(size: 28, weight: .bold, design: .serif))
+                                    .font(LinenTheme.heading(25))
                                     .foregroundColor(textPrimary)
 
                                 Text(enhancementMode
                                      ? "Choose another memoir above, or add more detail from a saved memory."
                                      : "Start recording or writing your stories.\nThey'll appear here.")
-                                    .font(.system(size: 17, weight: .regular))
+                                    .font(LinenTheme.body(17, weight: .regular))
                                     .foregroundColor(textSecondary)
                                     .multilineTextAlignment(.center)
                                     .lineSpacing(6)
@@ -114,7 +114,7 @@ struct RecentMemoriesView: View {
                     } else {
                         // Enhanced list of memories
                         ScrollView {
-                            LazyVStack(spacing: 20) {
+                            LazyVStack(spacing: 16) {
                                 ForEach(sortedEntries) { entry in
                                     MemoryCard(
                                         entry: entry,
@@ -135,7 +135,7 @@ struct RecentMemoriesView: View {
                                     }
                                 }
                             }
-                            .padding(.horizontal, 20)
+                            .padding(.horizontal, 24)
                             .padding(.top, 8)
                             .padding(.bottom, 8)
                         }
@@ -159,9 +159,9 @@ struct RecentMemoriesView: View {
                         } else {
                             VStack {
                                 Text("Memory not found")
-                                    .font(.headline)
+                                    .font(LinenTheme.body(16, weight: .semibold))
                                 Text("ID: \(memoryID.uuidString)")
-                                    .font(.caption)
+                                    .font(LinenTheme.body(12))
                                     .foregroundColor(.gray)
                             }
                             .onAppear {
@@ -227,7 +227,7 @@ struct RecentMemoriesView: View {
                 }
             }) {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(LinenTheme.body(16, weight: .semibold))
                     .foregroundColor(textPrimary.opacity(0.7))
                     .frame(width: 40, height: 40)
                     .background(
@@ -235,8 +235,8 @@ struct RecentMemoriesView: View {
                             .fill(
                                 LinearGradient(
                                     colors: [
-                                        Color.white.opacity(0.8),
-                                        Color.white.opacity(0.6)
+                                        LinenTheme.surface,
+                                        LinenTheme.surface
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
@@ -250,7 +250,7 @@ struct RecentMemoriesView: View {
             
             // Title - elegant, bold, serif
             Text(enhancementMode ? "Enhance Memories" : "Memories")
-                .font(.system(size: 30, weight: .bold, design: .serif))
+                .font(LinenTheme.heading(25))
                 .foregroundColor(textPrimary)
                 .tracking(-0.5) // Tighter letter spacing for elegance
             
@@ -259,7 +259,7 @@ struct RecentMemoriesView: View {
             // Sort button - perfectly aligned with back button
             Button(action: { showSortOptions.toggle() }) {
                 Image(systemName: "arrow.up.arrow.down")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(LinenTheme.body(14, weight: .semibold))
                     .foregroundColor(textPrimary.opacity(0.7))
                     .frame(width: 40, height: 40)
                     .background(
@@ -267,8 +267,8 @@ struct RecentMemoriesView: View {
                             .fill(
                                 LinearGradient(
                                     colors: [
-                                        Color.white.opacity(0.8),
-                                        Color.white.opacity(0.6)
+                                        LinenTheme.surface,
+                                        LinenTheme.surface
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
@@ -298,7 +298,7 @@ struct RecentMemoriesView: View {
                         memoirFilterButton(title: mode.libraryTitle, mode: mode)
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
             }
             .accessibilityIdentifier("memoirLibraryFilter")
         }
@@ -310,11 +310,11 @@ struct RecentMemoriesView: View {
             selectedMemoirMode = mode
         } label: {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(LinenTheme.body(14, weight: .semibold))
                 .foregroundColor(isSelected ? .white : textPrimary.opacity(0.78))
                 .padding(.horizontal, 16)
-                .frame(minHeight: 40)
-                .background(isSelected ? terracotta : Color.white.opacity(0.72))
+                .frame(minHeight: 44)
+                .background(isSelected ? terracotta : LinenTheme.surface)
                 .clipShape(Capsule())
                 .overlay(Capsule().stroke(terracotta.opacity(isSelected ? 0 : 0.25), lineWidth: 1))
         }
@@ -328,12 +328,15 @@ struct RecentMemoriesView: View {
         }) {
             HStack(alignment: .center, spacing: 8) {
                 Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .bold))
+                    .font(LinenTheme.body(18, weight: .bold))
                 Text("Create new memory")
-                    .font(.system(size: 18, weight: .bold, design: .serif))
+                    .font(LinenTheme.heading(18))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 56, alignment: .center)
+            .padding(.vertical, 12)
+            .frame(minHeight: 56, alignment: .center)
             .foregroundColor(terracotta)
             .background(
                 Color(red: 1.0, green: 0.95, blue: 0.88)
@@ -555,28 +558,6 @@ struct MemoryCard: View {
         return relative
     }
     
-    // Subtle gradient based on memory type
-    private var cardGradient: LinearGradient {
-        if entry.hasAudio {
-            return LinearGradient(
-                colors: [
-                    Color(red: 0.99, green: 0.98, blue: 0.95),
-                    Color(red: 0.98, green: 0.97, blue: 0.94)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
-        return LinearGradient(
-            colors: [
-                Color.white,
-                Color(red: 0.99, green: 0.98, blue: 0.95)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-    
     // Check if memory has text content
     private var hasText: Bool {
         entry.text != nil && !(entry.text?.isEmpty ?? true)
@@ -629,7 +610,7 @@ struct MemoryCard: View {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(displayTitle)
-                            .font(.system(size: 20, weight: .bold, design: .serif))
+                            .font(LinenTheme.heading(20))
                             .foregroundColor(colors.textPrimary)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
@@ -642,9 +623,9 @@ struct MemoryCard: View {
                                 if entry.hasAudio {
                                     HStack(spacing: 4) {
                                         Image(systemName: "waveform")
-                                            .font(.system(size: 11, weight: .semibold))
+                                            .font(LinenTheme.body(11, weight: .semibold))
                                         Text("Audio")
-                                            .font(.system(size: 11, weight: .medium))
+                                            .font(LinenTheme.body(11, weight: .medium))
                                     }
                                     .foregroundColor(colors.terracotta)
                                     .padding(.horizontal, 8)
@@ -656,9 +637,9 @@ struct MemoryCard: View {
                                 } else if let text = entry.text, !text.isEmpty {
                                     HStack(spacing: 4) {
                                         Image(systemName: "text.alignleft")
-                                            .font(.system(size: 11, weight: .semibold))
+                                            .font(LinenTheme.body(11, weight: .semibold))
                                         Text("Text")
-                                            .font(.system(size: 11, weight: .medium))
+                                            .font(LinenTheme.body(11, weight: .medium))
                                     }
                                     .foregroundColor(Color(red: 0.3, green: 0.5, blue: 0.7))
                                     .padding(.horizontal, 8)
@@ -672,7 +653,7 @@ struct MemoryCard: View {
                             
                             // Date with subtle styling
                             Text(formattedDate)
-                                .font(.system(size: 12, weight: .regular))
+                                .font(LinenTheme.body(12, weight: .regular))
                                 .foregroundColor(colors.textSecondary)
                         }
                     }
@@ -692,9 +673,9 @@ struct MemoryCard: View {
                             }) {
                                 HStack(spacing: 5) {
                                     Image(systemName: "sparkles")
-                                        .font(.system(size: 11, weight: .semibold))
+                                        .font(LinenTheme.body(11, weight: .semibold))
                                     Text("Enhance")
-                                        .font(.system(size: 12, weight: .semibold))
+                                        .font(LinenTheme.body(12, weight: .semibold))
                                 }
                                 .foregroundColor(colors.terracotta)
                                 .padding(.horizontal, 12)
@@ -724,9 +705,9 @@ struct MemoryCard: View {
                             }) {
                                 HStack(spacing: 5) {
                                     Image(systemName: "checkmark.circle.fill")
-                                        .font(.system(size: 11, weight: .semibold))
+                                        .font(LinenTheme.body(11, weight: .semibold))
                                     Text("Enhanced")
-                                        .font(.system(size: 12, weight: .semibold))
+                                        .font(LinenTheme.body(12, weight: .semibold))
                                 }
                                 .foregroundColor(Color(red: 0.15, green: 0.55, blue: 0.25))
                                 .padding(.horizontal, 12)
@@ -773,7 +754,7 @@ struct MemoryCard: View {
                 // Content preview
                 if let text = entry.text, !text.isEmpty {
                     Text(text)
-                        .font(.system(size: 15, weight: .regular))
+                        .font(LinenTheme.body(15, weight: .regular))
                         .foregroundColor(colors.textPrimary.opacity(0.75))
                         .lineLimit(3)
                         .lineSpacing(5)
@@ -789,38 +770,38 @@ struct MemoryCard: View {
                             ProgressView()
                                 .scaleEffect(0.75)
                             Text("Transcribing…")
-                                .font(.system(size: 15, weight: .medium))
+                                .font(LinenTheme.body(15, weight: .medium))
                                 .foregroundColor(colors.textSecondary)
                         } else if entry.transcriptionStatus == "failed" || entry.transcriptionStatus == "needsRerecording" {
                             Image(systemName: "exclamationmark.circle.fill")
-                                .font(.system(size: 18))
+                                .font(LinenTheme.body(18))
                                 .foregroundColor(colors.terracotta.opacity(0.8))
                             Text(entry.transcriptionStatus == "needsRerecording" ?
                                  "This audio needs to be recorded again." :
                                  "Transcript failed. Open this memory to retry.")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(LinenTheme.body(14, weight: .medium))
                                 .foregroundColor(colors.textSecondary)
                         } else if entry.transcriptionStatus == nil,
                                   URL(string: entry.audioFileURL ?? "")?.pathExtension.lowercased() != "m4a" {
                             Image(systemName: "mic.badge.plus")
-                                .font(.system(size: 18))
+                                .font(LinenTheme.body(18))
                                 .foregroundColor(colors.terracotta.opacity(0.7))
                             Text("Re-record this older audio to create a transcript.")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(LinenTheme.body(14, weight: .medium))
                                 .foregroundColor(colors.textSecondary)
                         } else if entry.hasAudio {
                             Image(systemName: "waveform.circle.fill")
-                                .font(.system(size: 18))
+                                .font(LinenTheme.body(18))
                                 .foregroundColor(colors.terracotta.opacity(0.7))
                             Text("Audio saved. Transcript coming soon, we'll retry automatically.")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(LinenTheme.body(14, weight: .medium))
                                 .foregroundColor(colors.textSecondary)
                         } else {
                             Image(systemName: "waveform.circle.fill")
-                                .font(.system(size: 18))
+                                .font(LinenTheme.body(18))
                                 .foregroundColor(colors.terracotta.opacity(0.7))
                             Text("Audio recording")
-                                .font(.system(size: 15, weight: .medium))
+                                .font(LinenTheme.body(15, weight: .medium))
                                 .foregroundColor(colors.textSecondary)
                         }
                     }
@@ -829,46 +810,12 @@ struct MemoryCard: View {
                     .padding(.bottom, 20)
                 }
             }
-            .background(
-                ZStack {
-                    // Main gradient background
-                    cardGradient
-                    
-                    // Subtle overlay for depth
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.3),
-                            Color.clear
-                        ],
-                        startPoint: .top,
-                        endPoint: .center
-                    )
-                }
-            )
-            .cornerRadius(20)
+            .background(LinenTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
-                AnimatedMemoryBorder(
-                    colors: shouldShowEnhancedState ? [
-                        Color(red: 0.1, green: 0.4, blue: 0.2),   // Dark green
-                        Color(red: 0.15, green: 0.55, blue: 0.25), // Medium green (matching Enhanced badge)
-                        Color(red: 0.2, green: 0.65, blue: 0.35),  // Lighter green
-                        Color(red: 0.15, green: 0.55, blue: 0.25), // Medium green
-                        Color(red: 0.1, green: 0.45, blue: 0.2),   // Dark green
-                        Color(red: 0.15, green: 0.55, blue: 0.25), // Medium green
-                        Color(red: 0.1, green: 0.4, blue: 0.2)     // Dark green (complete loop)
-                    ] : [
-                        colors.terracotta,
-                        colors.terracotta,
-                        Color(red: 1.0, green: 0.8, blue: 0.4), // Yellow-orange
-                        colors.terracotta,
-                        Color(red: 0.9, green: 0.3, blue: 0.2), // Red-ish
-                        colors.terracotta,
-                        colors.terracotta
-                    ]
-                )
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(shouldShowEnhancedState ? LinenTheme.forest.opacity(0.3) : LinenTheme.line, lineWidth: 1)
             )
-            .shadow(color: Color.black.opacity(0.08), radius: 12, x: 0, y: 4)
-            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
             .scaleEffect(isPressed ? 0.98 : 1.0)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isPressed)
         }

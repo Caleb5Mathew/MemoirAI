@@ -1,18 +1,47 @@
 import Foundation
 import Mixpanel
 
+struct AnalyticsTrafficContext {
+    let isSimulator: Bool
+    let explicitlyInternal: Bool
+    let internalUserIDs: Set<String>
+
+    static var runtime: Self {
+        #if targetEnvironment(simulator)
+        let simulator = true
+        #else
+        let simulator = false
+        #endif
+        // An explicit QA launch persists across app updates on this installation.
+        if ProcessInfo.processInfo.arguments.contains("-analytics-internal") {
+            UserDefaults.standard.set(true, forKey: "memoirai.analytics.internalInstallation")
+        }
+        return Self(
+            isSimulator: simulator,
+            explicitlyInternal: UserDefaults.standard.bool(forKey: "memoirai.analytics.internalInstallation"),
+            internalUserIDs: Set(Bundle.main.object(forInfoDictionaryKey: "AnalyticsInternalUserIDs") as? [String] ?? [])
+        )
+    }
+
+    func properties(environment: String, userID: String?) -> Properties {
+        let internalTraffic = isSimulator || environment != "production" || explicitlyInternal
+            || userID.map(internalUserIDs.contains) == true
+        return [
+            "device_type": isSimulator ? "simulator" : "physical",
+            "is_simulator": isSimulator,
+            "traffic_type": internalTraffic ? "internal" : "external"
+        ]
+    }
+}
+
 /// Product telemetry contains audited interaction metadata only, never memoir content.
 @MainActor
 final class ProductAnalytics {
     static let shared = ProductAnalytics(
         send: { Mixpanel.mainInstance().track(event: $0, properties: $1) },
         identify: { Mixpanel.mainInstance().identify(distinctId: $0) },
-        reset: {
-            Mixpanel.mainInstance().reset()
-            Mixpanel.mainInstance().registerSuperProperties([
-                "environment": ProductAnalytics.buildEnvironment, "schema_version": 1
-            ])
-        }
+        reset: { Mixpanel.mainInstance().reset() },
+        registerContext: { Mixpanel.mainInstance().registerSuperProperties($0) }
     )
 
     private let send: (String, Properties) -> Void
@@ -21,6 +50,8 @@ final class ProductAnalytics {
     private let now: () -> Date
     private let defaults: UserDefaults
     private let environment: String
+    private let trafficContext: AnalyticsTrafficContext
+    private let registerContext: (Properties) -> Void
     private var userID: String?
     private var isGuest = true
     private var sessionID = UUID().uuidString
@@ -34,6 +65,8 @@ final class ProductAnalytics {
         reset: @escaping () -> Void,
         defaults: UserDefaults = .standard,
         environment: String? = nil,
+        trafficContext: AnalyticsTrafficContext = .runtime,
+        registerContext: @escaping (Properties) -> Void = { _ in },
         now: @escaping () -> Date = Date.init
     ) {
         self.send = send
@@ -41,6 +74,8 @@ final class ProductAnalytics {
         self.reset = reset
         self.defaults = defaults
         self.environment = environment ?? Self.buildEnvironment
+        self.trafficContext = trafficContext
+        self.registerContext = registerContext
         self.now = now
         userID = defaults.string(forKey: Self.identityKey)
     }
@@ -63,15 +98,19 @@ final class ProductAnalytics {
             ?? "ca3f4918c79c2dee9957d0b18a1e0027"
         Mixpanel.initialize(token: token, trackAutomaticEvents: false)
         Mixpanel.mainInstance().useIPAddressForGeoLocation = false
-        Mixpanel.mainInstance().registerSuperProperties([
-            "environment": buildEnvironment, "schema_version": 1
-        ])
+        Mixpanel.mainInstance().registerSuperProperties(shared.trustedContext)
+    }
+
+    private var trustedContext: Properties {
+        var properties = trafficContext.properties(environment: environment, userID: userID)
+        properties["environment"] = environment
+        properties["schema_version"] = 1
+        return properties
     }
 
     func track(_ event: String, _ properties: Properties = [:]) {
         var safe = AnalyticsPrivacyPolicy.sanitized(properties)
-        safe["environment"] = environment
-        safe["schema_version"] = 1
+        safe.merge(trustedContext) { _, trusted in trusted }
         safe["session_id"] = sessionID
         safe["account_type"] = userID == nil ? "unidentified" : (isGuest ? "guest" : "registered")
         send(event, safe)
@@ -90,6 +129,7 @@ final class ProductAnalytics {
         }
         self.isGuest = isGuest
         if let nextID { identify(nextID) }
+        registerContext(trustedContext)
     }
 
     func setSessionActive(_ active: Bool) {

@@ -20,17 +20,17 @@ struct MemoirModePickerView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 ScrollView {
-                    VStack(spacing: 24) {
-                        VStack(spacing: 8) {
+                    VStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 8) {
                             Text("Choose Your Memoir")
-                                .font(.customSerifFallback(size: 28))
+                                .font(LinenTheme.heading(25))
                                 .foregroundColor(colors.deepGreen)
 
                             Text("Which story would you like to tell?")
-                                .font(.subheadline)
+                                .font(LinenTheme.body(14))
                                 .foregroundColor(colors.deepGreen.opacity(0.75))
                         }
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 12)
 
                         VStack(spacing: 14) {
@@ -54,12 +54,12 @@ struct MemoirModePickerView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 24)
                     .padding(.bottom, 28)
                 }
 
                 Text("You can always change this later.")
-                    .font(.footnote)
+                    .font(LinenTheme.body(13))
                     .foregroundColor(colors.deepGreen.opacity(0.5))
                     .padding(.bottom, 16)
             }
@@ -85,17 +85,17 @@ struct MemoirModePickerView: View {
         } label: {
             HStack(alignment: .center, spacing: 14) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 24))
+                    .font(LinenTheme.body(24))
                     .foregroundColor(colors.terracotta)
                     .frame(width: 32, alignment: .center)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
-                        .font(.headline)
+                        .font(LinenTheme.body(16, weight: .semibold))
                         .foregroundColor(colors.deepGreen)
 
                     Text(description)
-                        .font(.subheadline)
+                        .font(LinenTheme.body(14))
                         .foregroundColor(colors.deepGreen.opacity(0.65))
                         .lineLimit(2)
                 }
@@ -104,8 +104,8 @@ struct MemoirModePickerView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(colors.tileBackground)
-            .cornerRadius(20)
-            .shadow(color: .black.opacity(0.06), radius: 6, x: 0, y: 3)
+            .cornerRadius(16)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(LinenTheme.line, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }

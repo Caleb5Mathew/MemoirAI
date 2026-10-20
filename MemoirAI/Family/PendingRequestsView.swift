@@ -2,15 +2,16 @@ import SwiftUI
 
 /// Owner-side list of pending family and friends access requests, with approve/deny.
 struct PendingRequestsView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var requests: [SharedAccessService.MemoryAccessRequest] = []
     @State private var grants: [SharedAccessService.MemoryAccessGrant] = []
     @State private var isLoading = true
     @State private var actingOn: Set<String> = []
     @State private var errorMessage: String? = nil
 
-    private let cream = Color(red: 0.98, green: 0.94, blue: 0.86)
-    private let darkText = Color(red: 0.25, green: 0.2, blue: 0.15)
-    private let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
+    private let cream = LinenTheme.paper
+    private let darkText = LinenTheme.ink
+    private let terracotta = LinenTheme.accent
 
     var body: some View {
         ZStack {
@@ -18,25 +19,28 @@ struct PendingRequestsView: View {
             if isLoading {
                 ProgressView("Loading requests…")
             } else if requests.isEmpty && grants.isEmpty {
+                ScrollView {
                 VStack(spacing: 12) {
                     Image(systemName: "person.2")
                         .font(.system(size: 40))
                         .foregroundColor(terracotta)
                     Text("No pending requests")
-                        .font(.system(size: 18, weight: .semibold, design: .serif))
+                        .font(LinenTheme.heading(25))
                         .foregroundColor(darkText)
                     Text("When someone scans a page of your book and asks to hear your memories, their request shows up here.")
-                        .font(.system(size: 14))
+                        .font(LinenTheme.body(14))
                         .foregroundColor(darkText.opacity(0.6))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 40)
+                }
+                .padding(.vertical, 40)
                 }
             } else {
                 ScrollView {
                     VStack(spacing: 12) {
                         if let errorMessage {
                             Text(errorMessage)
-                                .font(.system(size: 13))
+                                .font(LinenTheme.body(13))
                                 .foregroundColor(.red)
                         }
                         ForEach(requests) { request in
@@ -44,7 +48,7 @@ struct PendingRequestsView: View {
                         }
                         if !grants.isEmpty {
                             Text("Currently shared")
-                                .font(.system(size: 16, weight: .semibold, design: .serif))
+                                .font(LinenTheme.body(16, weight: .semibold))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.top, 8)
                             ForEach(grants) { grant in
@@ -52,11 +56,13 @@ struct PendingRequestsView: View {
                             }
                         }
                     }
-                    .padding(16)
+                    .padding(24)
+                    .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
                 }
             }
         }
-        .navigationTitle("Access Requests")
+        .linenScreen()
+        .navigationTitle("Family access")
         .navigationBarTitleDisplayMode(.inline)
         .task { await refresh() }
         .refreshable { await refresh() }
@@ -65,51 +71,55 @@ struct PendingRequestsView: View {
     private func grantRow(_ grant: SharedAccessService.MemoryAccessGrant) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Shared memory")
-                .font(.system(size: 16, weight: .semibold, design: .serif))
+                .font(LinenTheme.body(16, weight: .semibold))
                 .foregroundColor(darkText)
             Text("Recipient \(grant.requesterId.prefix(8))… · Memory \(grant.memoryId.prefix(8))…")
-                .font(.system(size: 12))
+                .font(LinenTheme.body(12))
                 .foregroundColor(darkText.opacity(0.6))
             Button(role: .destructive) {
                 revoke(grant)
             } label: {
                 Text("Revoke access")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(LinenTheme.body(14, weight: .semibold))
             }
             .disabled(actingOn.contains(grant.id))
         }
         .padding(16)
-        .background(Color.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 16))
+        .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 16))
     }
 
     private func requestRow(_ request: SharedAccessService.MemoryAccessRequest) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(request.requesterDisplayName)
-                    .font(.system(size: 17, weight: .semibold, design: .serif))
+                    .font(LinenTheme.body(16, weight: .semibold))
                     .foregroundColor(darkText)
                 Text("wants to hear your shared memories")
-                    .font(.system(size: 13))
+                    .font(LinenTheme.body(13))
                     .foregroundColor(darkText.opacity(0.6))
             }
-            HStack(spacing: 12) {
+            let actionLayout = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))
+            actionLayout {
                 Button {
                     respond(to: request, approve: true)
                 } label: {
                     Text("Approve")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(LinenTheme.body(15, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
+                        .frame(minHeight: 48)
                         .background(darkText, in: Capsule())
-                        .foregroundColor(.white)
+                        .foregroundColor(LinenTheme.onAccent)
                 }
                 Button {
                     respond(to: request, approve: false)
                 } label: {
                     Text("Decline")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(LinenTheme.body(15, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
+                        .frame(minHeight: 48)
                         .background(Color.clear, in: Capsule())
                         .overlay(Capsule().stroke(darkText.opacity(0.35), lineWidth: 1))
                         .foregroundColor(darkText)
@@ -119,7 +129,7 @@ struct PendingRequestsView: View {
             .opacity(actingOn.contains(request.id) ? 0.5 : 1)
         }
         .padding(16)
-        .background(Color.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 16))
+        .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 16))
     }
 
     private func refresh() async {

@@ -131,7 +131,7 @@ struct MemoryPromptNodeView: View {
         if isCompleted {
             return brownBorder
         } else if isSelected {
-            return Color.orange
+            return LinenTheme.accent
         } else {
             return Color.clear
         }

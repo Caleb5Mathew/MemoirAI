@@ -14,9 +14,9 @@ struct LinkedAccountsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Linked Accounts")
-                .font(.system(size: 16, weight: .semibold))
+                .font(LinenTheme.body(16, weight: .semibold))
             Text("Use Apple or Google to access all your profiles and memories on another device.")
-                .font(.system(size: 13))
+                .font(LinenTheme.body(13))
                 .foregroundStyle(.secondary)
 
             ForEach(["apple.com", "google.com"], id: \.self) { providerID in
@@ -27,7 +27,7 @@ struct LinkedAccountsView: View {
                         Group {
                             if providerID == "apple.com" {
                                 Image(systemName: "apple.logo")
-                                    .font(.system(size: 24))
+                                    .font(LinenTheme.body(24))
                             } else {
                                 Image("GoogleLogo")
                                     .resizable()
@@ -37,11 +37,10 @@ struct LinkedAccountsView: View {
                         .frame(width: 26, height: 26)
                         .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(name).font(.system(size: 15, weight: .medium))
+                            Text(name).font(LinenTheme.body(15, weight: .medium))
                             Text(provider?.email ?? (provider == nil ? "Not linked" : "Linked"))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .font(.system(size: 12))
+                                .fixedSize(horizontal: false, vertical: true)
+                                .font(LinenTheme.body(12))
                                 .foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 8)
@@ -50,7 +49,7 @@ struct LinkedAccountsView: View {
                                 .foregroundStyle(.green)
                                 .accessibilityLabel("Linked")
                             Button("Manage") { selectedProvider = providerID }
-                                .font(.system(size: 13, weight: .medium))
+                                .font(LinenTheme.body(13, weight: .medium))
                                 .frame(minHeight: 44)
                         }
                     }
@@ -96,7 +95,7 @@ struct LinkedAccountsView: View {
                                 }
                             } label: {
                                 Text("Sign in with Google")
-                                    .font(.system(size: 15, weight: .semibold))
+                                    .font(LinenTheme.body(15, weight: .semibold))
                                     .frame(maxWidth: .infinity, minHeight: 44)
                                     .background(.white, in: RoundedRectangle(cornerRadius: 8))
                                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(.gray.opacity(0.3)))
@@ -109,7 +108,7 @@ struct LinkedAccountsView: View {
             }
             if isBusy { ProgressView("Updating account…").font(.footnote) }
         }
-        .foregroundStyle(Color(red: 0.12, green: 0.16, blue: 0.16))
+        .foregroundStyle(LinenTheme.ink)
         .disabled(isBusy || auth.user == nil)
         .confirmationDialog(
             "Manage \(selectedProvider == "apple.com" ? "Apple" : "Google")",

@@ -15,14 +15,9 @@ struct OrderConfirmationView: View {
 
     @State private var showOrderHistory = false
 
-    private let softCream = Color(red: 0.98, green: 0.96, blue: 0.89)
-    private let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
-    private let darkText = Color.black.opacity(0.85)
-
-    private func serifFont(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        let name = weight == .bold || weight == .semibold ? "Georgia-Bold" : "Georgia"
-        return .custom(name, size: size)
-    }
+    private let softCream = LinenTheme.paper
+    private let terracotta = LinenTheme.accent
+    private let darkText = LinenTheme.ink
 
     var body: some View {
         ZStack {
@@ -38,12 +33,12 @@ struct OrderConfirmationView: View {
 
                 VStack(spacing: 10) {
                     Text("Your payment is confirmed")
-                        .font(serifFont(size: 24, weight: .bold))
+                        .font(LinenTheme.heading())
                         .foregroundColor(darkText)
                         .multilineTextAlignment(.center)
 
                     Text("We're preparing your order for printing. You'll get a receipt by email from Stripe.")
-                        .font(serifFont(size: 15))
+                        .font(LinenTheme.body(14))
                         .foregroundColor(darkText.opacity(0.7))
                         .multilineTextAlignment(.center)
                 }
@@ -56,22 +51,22 @@ struct OrderConfirmationView: View {
                         showOrderHistory = true
                     } label: {
                         Text("View My Orders")
-                            .font(serifFont(size: 16, weight: .semibold))
+                            .font(LinenTheme.body(16, weight: .semibold))
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
                             .background(terracotta)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                     }
 
                     Button(action: onDone) {
                         Text("Done")
-                            .font(serifFont(size: 16, weight: .semibold))
+                            .font(LinenTheme.body(16, weight: .semibold))
                             .foregroundColor(terracotta)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
                             .background(Color.white.opacity(0.6))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                     }
                 }
                 .padding(.horizontal, 32)

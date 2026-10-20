@@ -21,13 +21,11 @@ struct WelcomeAuthView: View {
     /// caller can flip the "seen welcome" gate and continue into onboarding/main flow.
     let onFinished: () -> Void
 
-    private let colors = OnboardingColorTheme()
-    @ScaledMetric(relativeTo: .largeTitle) private var titleFontSize: CGFloat = 30
     @ScaledMetric(relativeTo: .body) private var authButtonHeight: CGFloat = 50
 
     var body: some View {
         ZStack {
-            colors.beige.ignoresSafeArea()
+            LinenTheme.paper.ignoresSafeArea()
 
             GeometryReader { geometry in
                 ScrollView {
@@ -37,17 +35,17 @@ struct WelcomeAuthView: View {
                 VStack(spacing: 14) {
                     Image(systemName: "book.closed.fill")
                         .font(.system(size: 44))
-                        .foregroundColor(colors.orange)
+                        .foregroundColor(LinenTheme.accent)
 
                     Text("Welcome to Memoir")
-                        .font(.customSerifFallback(size: titleFontSize))
+                        .font(LinenTheme.heading(25))
                         .fontWeight(.bold)
-                        .foregroundColor(colors.deepGreen)
+                        .foregroundColor(LinenTheme.ink)
                         .multilineTextAlignment(.center)
 
                     Text("Save your family's stories to an account so they're never lost.")
-                        .font(.body)
-                        .foregroundColor(colors.deepGreen.opacity(0.75))
+                        .font(LinenTheme.body(16))
+                        .foregroundColor(LinenTheme.ink.opacity(0.75))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 36)
                 }
@@ -93,7 +91,7 @@ struct WelcomeAuthView: View {
                                     .foregroundColor(.blue)
                             }
                             Text("Continue with Google")
-                                .font(.system(size: 16, weight: .semibold))
+                                .font(LinenTheme.body(16, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: authButtonHeight)
@@ -114,12 +112,12 @@ struct WelcomeAuthView: View {
                         HStack(spacing: 10) {
                             Image(systemName: "envelope.fill")
                             Text("Continue with Email")
-                                .font(.system(size: 16, weight: .semibold))
+                                .font(LinenTheme.body(16, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: authButtonHeight)
-                        .background(colors.orange)
-                        .foregroundColor(.white)
+                        .background(LinenTheme.accent)
+                        .foregroundColor(LinenTheme.onAccent)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .buttonStyle(.plain)
@@ -136,8 +134,9 @@ struct WelcomeAuthView: View {
                     Button("Skip for now") {
                         onFinished()
                     }
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(colors.deepGreen.opacity(0.6))
+                    .font(LinenTheme.body(15, weight: .medium))
+                    .foregroundColor(LinenTheme.ink.opacity(0.6))
+                    .frame(minHeight: 44)
                     .padding(.bottom, 28)
                     }
                     .frame(minHeight: geometry.size.height)
@@ -146,6 +145,7 @@ struct WelcomeAuthView: View {
                 .scrollBounceBehavior(.basedOnSize)
             }
         }
+        .linenScreen()
         .sheet(isPresented: $showEmailSheet) {
             EmailAuthSheet { outcome in
                 complete(outcome: outcome)

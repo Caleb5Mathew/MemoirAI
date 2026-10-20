@@ -17,8 +17,8 @@ struct SharedMemoryView: View {
     @State private var isVisible = false
     @State private var playbackError: String? = nil
 
-    private let darkText = Color(red: 0.25, green: 0.2, blue: 0.15)
-    private let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
+    private let darkText = LinenTheme.ink
+    private let terracotta = LinenTheme.accent
 
     var body: some View {
         Group {
@@ -27,13 +27,13 @@ struct SharedMemoryView: View {
                     VStack(alignment: .leading, spacing: 20) {
                         if let name = memory.profileName, !name.isEmpty {
                             Text("From \(name)'s memoir")
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(LinenTheme.body(14, weight: .semibold))
                                 .foregroundColor(darkText.opacity(0.6))
                         }
 
                         if let prompt = memory.prompt, !prompt.isEmpty {
                             Text(prompt)
-                                .font(.system(size: 26, weight: .bold, design: .serif))
+                                .font(LinenTheme.heading(25))
                                 .foregroundColor(darkText)
                         }
 
@@ -46,12 +46,12 @@ struct SharedMemoryView: View {
                                         .font(.system(size: 44))
                                         .foregroundColor(terracotta)
                                     Text(isLoadingAudio ? "Loading audio…" : (isPlaying ? "Pause" : "Hear this memory"))
-                                        .font(.system(size: 17, weight: .semibold, design: .serif))
+                                        .font(LinenTheme.body(16, weight: .semibold))
                                         .foregroundColor(darkText)
                                     Spacer()
                                 }
                                 .padding(16)
-                                .background(Color.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 16))
+                                .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 16))
                             }
                             .buttonStyle(.plain)
                             .disabled(isLoadingAudio)
@@ -59,18 +59,19 @@ struct SharedMemoryView: View {
 
                         if let playbackError {
                             Text(playbackError)
-                                .font(.system(size: 13))
+                                .font(LinenTheme.body(13))
                                 .foregroundColor(.red)
                         }
 
                         if let transcription = memory.transcription, !transcription.isEmpty {
                             Text(transcription)
-                                .font(.system(size: 17, design: .serif))
+                                .font(LinenTheme.body(16))
                                 .foregroundColor(darkText.opacity(0.85))
                                 .lineSpacing(6)
                         }
                     }
                     .padding(24)
+                    .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
                 }
             } else if loadFailed {
                 VStack(spacing: 12) {
@@ -78,16 +79,17 @@ struct SharedMemoryView: View {
                         .font(.system(size: 40))
                         .foregroundColor(terracotta)
                     Text("Could not load this memory")
-                        .font(.system(size: 18, weight: .semibold, design: .serif))
+                        .font(LinenTheme.heading(25))
                         .foregroundColor(darkText)
                     Text("Check your connection and try again.")
-                        .font(.system(size: 14))
+                        .font(LinenTheme.body(14))
                         .foregroundColor(darkText.opacity(0.6))
                 }
             } else {
                 ProgressView("Loading memory…")
             }
         }
+        .linenScreen()
         .task { await load() }
         .onAppear { isVisible = true }
         .onDisappear {

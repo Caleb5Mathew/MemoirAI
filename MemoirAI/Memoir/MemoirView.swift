@@ -20,16 +20,15 @@ extension Font {
 
 // MARK: - App Color Theme
 struct ColorTheme {
-    let softCream      = Color(red: 253/255, green: 234/255, blue: 198/255)
-    let terracotta     = Color(red: 210/255, green: 112/255, blue:  45/255)
-    let warmGreen      = Color(red: 169/255, green: 175/255, blue: 133/255)
-    let deepGreen      = Color(red:  39/255, green:  60/255, blue:  34/255)
-    let tileBackground = Color(red: 255/255, green: 241/255, blue: 213/255)
+    let softCream      = LinenTheme.paper
+    let terracotta     = LinenTheme.accent
+    let warmGreen      = LinenTheme.forest
+    let deepGreen      = LinenTheme.ink
+    let tileBackground = LinenTheme.surface
 }
 
 struct MemoirView: View {
     let colors = ColorTheme()
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
     @StateObject private var subscriptionManager = RCSubscriptionManager.shared
@@ -54,7 +53,7 @@ struct MemoirView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 24) {
+            VStack(spacing: 16) {
                 header
                 modeToggle
                 if let ch = firstIncompleteChapter { currentChapterCard(for: ch) }
@@ -117,7 +116,7 @@ struct MemoirView: View {
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Text(memoirPageTitle)
-                    .font(.customSerifFallback(size: 22))
+                    .font(LinenTheme.heading(22))
                     .foregroundColor(colors.deepGreen)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
@@ -131,7 +130,7 @@ struct MemoirView: View {
                     }
                 } label: {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(LinenTheme.body(14, weight: .semibold))
                         .foregroundColor(colors.deepGreen)
                         .frame(width: 36, height: 36)
                         .background(colors.tileBackground)
@@ -149,24 +148,26 @@ struct MemoirView: View {
 
     // MARK: — UI sections
     private var header: some View {
-        VStack(spacing: 12) {
-            Image("Flower")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 120, height: 120)
-                .padding(.bottom, 4)
-
-            Text("Hold on to your story")
-                .font(.customSerifFallback(size: 30))
-                .foregroundColor(colors.deepGreen)
-                .multilineTextAlignment(.center)
-
-            Text("\(completedChaptersCount()) of \(totalChapters) chapters completed")
-                .font(.subheadline)
-                .foregroundColor(colors.deepGreen)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("YOUR CHAPTERS")
+                .font(LinenTheme.body(11, weight: .semibold))
+                .tracking(1.6)
+                .foregroundStyle(LinenTheme.accent)
+            Text("A life, one story at a time.")
+                .font(LinenTheme.heading(25))
+                .foregroundStyle(LinenTheme.ink)
+            HStack {
+                Text("\(completedChaptersCount()) of \(totalChapters) chapters completed")
+                    .font(LinenTheme.body(13))
+                    .foregroundStyle(LinenTheme.secondary)
+                Spacer()
+            }
+            ProgressView(value: Double(completedChaptersCount()), total: Double(max(1, totalChapters)))
+                .tint(LinenTheme.forest)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 24)
+        .padding(.top, 16)
     }
 
     private func currentChapterCard(for chapter: Chapter) -> some View {
@@ -180,14 +181,14 @@ struct MemoirView: View {
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Chapter \(chapter.number): \(chapter.title)")
-                            .font(.headline)
+                            .font(LinenTheme.body(16, weight: .semibold))
                             .foregroundColor(colors.deepGreen)
                             .lineLimit(3)
                             .minimumScaleFactor(0.75)
                             .fixedSize(horizontal: false, vertical: true)
 
                         Text("\(filledPromptSlotsForChapter(entries: entries, chapter: chapter)) of \(chapter.prompts.count) memories recorded")
-                            .font(.subheadline)
+                            .font(LinenTheme.body(14))
                             .foregroundColor(colors.deepGreen)
                             .lineLimit(2)
                             .minimumScaleFactor(0.85)
@@ -196,23 +197,23 @@ struct MemoirView: View {
 
                 Text("Continue Chapter")
                     .foregroundColor(.white)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(LinenTheme.body(16, weight: .semibold))
                     .padding(.vertical, 12)
                     .frame(maxWidth: .infinity)
                     .background(colors.terracotta)
-                    .clipShape(Capsule())
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(colors.tileBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 6)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("currentChapterCard")
         .accessibilityHint("Opens this chapter")
-        .padding(.horizontal)
+        .padding(.horizontal, 24)
     }
 
     @ViewBuilder
@@ -230,7 +231,7 @@ struct MemoirView: View {
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: memoirModeIcon(mode))
-                                .font(.system(size: 16, weight: .medium))
+                                .font(LinenTheme.body(16, weight: .medium))
                                 .foregroundColor(isSelected ? .white : colors.terracotta)
                                 .frame(width: 32, height: 32)
                                 .background(isSelected ? colors.terracotta : colors.terracotta.opacity(0.12))
@@ -270,7 +271,7 @@ struct MemoirView: View {
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "person.2.fill")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(LinenTheme.body(14, weight: .medium))
                                 .foregroundColor(colors.terracotta)
                                 .frame(width: 32, height: 32)
                                 .background(colors.terracotta.opacity(0.12))
@@ -278,10 +279,10 @@ struct MemoirView: View {
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(editChildrenLabelTitle)
-                                    .font(.system(size: 15, weight: .semibold))
+                                    .font(LinenTheme.body(15, weight: .semibold))
                                     .foregroundColor(colors.deepGreen)
                                 Text(editChildrenLabelDetail)
-                                    .font(.system(size: 12))
+                                    .font(LinenTheme.body(12))
                                     .foregroundColor(colors.deepGreen.opacity(0.65))
                                     .lineLimit(1)
                             }
@@ -289,7 +290,7 @@ struct MemoirView: View {
                             Spacer()
 
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(LinenTheme.body(12, weight: .semibold))
                                 .foregroundColor(colors.deepGreen.opacity(0.5))
                         }
                         .padding(.horizontal, 16)
@@ -341,9 +342,9 @@ struct MemoirView: View {
 
     private var allChaptersTitle: some View {
         Text("All Chapters")
-            .font(.headline)
+            .font(LinenTheme.body(16, weight: .semibold))
             .foregroundColor(colors.deepGreen)
-            .padding(.horizontal)
+            .padding(.horizontal, 24)
             .padding(.top, 12)
     }
 
@@ -352,19 +353,31 @@ struct MemoirView: View {
             ForEach(1...chapters.count, id: \.self) { chapterNumber in
                 if let chapter = chapters.first(where: { $0.number == chapterNumber }) {
                     let isDone = filledPromptSlotsForChapter(entries: entries, chapter: chapter) >= chapter.prompts.count
-                    let isLocked = false
 
                     Button(action: {
                         navigateToChapter = chapterNumber
                     }) {
-                        ChapterTileView(
-                            chapterNumber: chapterNumber,
-                            title: chapter.title,
-                            isLocked: isLocked,
-                            isCurrent: false,
-                            isCompleted: isDone,
-                            colors: colors
-                        )
+                        HStack(spacing: 16) {
+                            Text(String(format: "%02d", chapterNumber))
+                                .font(LinenTheme.heading(24))
+                                .foregroundStyle(LinenTheme.accent)
+                                .frame(width: 36, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(chapter.title)
+                                    .font(LinenTheme.body(16, weight: .medium))
+                                    .foregroundStyle(LinenTheme.ink)
+                                    .multilineTextAlignment(.leading)
+                                Text("\(filledPromptSlotsForChapter(entries: entries, chapter: chapter)) of \(chapter.prompts.count) memories")
+                                    .font(LinenTheme.body(12))
+                                    .foregroundStyle(LinenTheme.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: isDone ? "checkmark.circle.fill" : "chevron.right")
+                                .foregroundStyle(isDone ? LinenTheme.forest : LinenTheme.secondary)
+                        }
+                        .padding(.vertical, 16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(alignment: .bottom) { LinenTheme.line.frame(height: 1) }
                     }
                     .buttonStyle(PlainButtonStyle())
                     .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -389,11 +402,11 @@ struct MemoirView: View {
                 }
             }
         }
-        .padding(.horizontal)
+        .padding(.horizontal, 24)
     }
 
     private var chapterGridColumns: [GridItem] {
-        let columnCount = dynamicTypeSize.isAccessibilitySize ? 1 : 2
+        let columnCount = 1
         return Array(
             repeating: GridItem(.flexible(), spacing: 16, alignment: .top),
             count: columnCount
@@ -454,10 +467,10 @@ struct ChapterTileView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Chapter \(chapterNumber)")
-                    .font(.subheadline).fontWeight(.semibold)
+                    .font(LinenTheme.body(14)).fontWeight(.semibold)
                     .foregroundColor(colors.deepGreen)
                 Text(title)
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(colors.deepGreen)
                     .lineLimit(2)
                     .minimumScaleFactor(0.72)

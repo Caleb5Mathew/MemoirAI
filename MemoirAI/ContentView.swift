@@ -41,10 +41,10 @@ struct ContentView: View {
     @State private var programmaticNavigationReset = false
     
     var body: some View {
-        let done = OnboardingDebugConfiguration.replayOnLaunch
+        let done = OnboardingDebugConfiguration.previewApp || (OnboardingDebugConfiguration.replayOnLaunch
             ? finishedDebugOnboarding
-            : (localCompleted || iCloudManager.hasCompletedOnboarding)
-        let seenWelcomeAuth = OnboardingDebugConfiguration.replayOnLaunch || hasSeenWelcomeAuth
+            : (localCompleted || iCloudManager.hasCompletedOnboarding))
+        let seenWelcomeAuth = OnboardingDebugConfiguration.previewApp || OnboardingDebugConfiguration.replayOnLaunch || hasSeenWelcomeAuth
 
         return Group {
             if !seenWelcomeAuth {

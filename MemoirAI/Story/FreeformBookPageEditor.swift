@@ -84,7 +84,7 @@ struct FreeformBookPageEditor: View {
                 )
 
                 ZStack {
-                    Tokens.bgPrimary
+                    LinenTheme.paper
                         .contentShape(Rectangle())
                         .onTapGesture {
                             guard cropElementID == nil else { return }
@@ -121,14 +121,14 @@ struct FreeformBookPageEditor: View {
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .clipShape(Rectangle())
-                    .overlay(Rectangle().stroke(Tokens.ink.opacity(0.34), lineWidth: 1.5))
-                    .shadow(color: Tokens.ink.opacity(0.15), radius: 10, y: 4)
+                    .overlay(Rectangle().stroke(LinenTheme.ink.opacity(0.34), lineWidth: 1.5))
+                    .shadow(color: LinenTheme.ink.opacity(0.15), radius: 10, y: 4)
                     .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                     .accessibilityLabel("Book page canvas")
                 }
             }
         }
-        .background(Tokens.bgPrimary.ignoresSafeArea())
+        .background(LinenTheme.paper.ignoresSafeArea())
         .accessibilityIdentifier("freeformPageEditor")
         .safeAreaInset(edge: .bottom, spacing: 0) {
             editorControlDock
@@ -229,79 +229,81 @@ struct FreeformBookPageEditor: View {
         .padding(.top, 10)
         .padding(.bottom, 8)
         .frame(height: 158)
-        .background(Tokens.bgPrimary)
+        .background(LinenTheme.surface)
         .overlay(alignment: .top) {
-            Divider().overlay(Tokens.ink.opacity(0.16))
+            LinenTheme.line.frame(height: 1)
         }
     }
 
     private var editorHeader: some View {
-        HStack(spacing: 7) {
-            Button(action: {
-                if cropElementID != nil {
-                    cancelCropping()
-                } else {
-                    onCancel()
-                }
-            }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 15, weight: .bold))
-                    .frame(width: 36, height: 36)
-                    .background(Tokens.ink.opacity(0.08), in: Circle())
-            }
-            .accessibilityLabel("Close page editor")
-            .disabled(isSaving)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(cropElementID == nil ? "Edit Page" : "Crop Photo")
-                    .font(.system(size: 18, weight: .semibold, design: .serif))
-                    .lineLimit(1)
-                Text(editorInstruction)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            Button {
-                history.undo(current: &document)
-                clearSelectionIfNeeded()
-            } label: {
-                Image(systemName: "arrow.uturn.backward")
-                    .frame(width: 32, height: 36)
-            }
-            .disabled(!history.canUndo || isSaving || cropElementID != nil)
-            .accessibilityLabel("Undo")
-
-            Button {
-                history.redo(current: &document)
-                clearSelectionIfNeeded()
-            } label: {
-                Image(systemName: "arrow.uturn.forward")
-                    .frame(width: 32, height: 36)
-            }
-            .disabled(!history.canRedo || isSaving || cropElementID != nil)
-            .accessibilityLabel("Redo")
-
-            Button(action: onSave) {
-                Group {
-                    if isSaving {
-                        ProgressView().tint(Tokens.ink)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Button(action: {
+                    if cropElementID != nil {
+                        cancelCropping()
                     } else {
-                        Text("Save").fontWeight(.semibold)
+                        onCancel()
                     }
+                }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .medium))
+                        .frame(width: 44, height: 44)
                 }
-                .frame(minWidth: 48, minHeight: 38)
-                .padding(.horizontal, 5)
-                .foregroundStyle(Tokens.ink)
-                .background(Tokens.accentSoft, in: Capsule())
+                .accessibilityLabel("Close page editor")
+                .disabled(isSaving)
+
+                Text(cropElementID == nil ? "Edit page" : "Crop photo")
+                    .font(LinenTheme.heading())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Spacer(minLength: 0)
+                Button(action: onSave) {
+                    Group {
+                        if isSaving {
+                            ProgressView().tint(LinenTheme.onAccent)
+                        } else {
+                            Text("Save").font(LinenTheme.body(15, weight: .semibold))
+                        }
+                    }
+                    .frame(minWidth: 56, minHeight: 44)
+                    .padding(.horizontal, 8)
+                    .foregroundStyle(LinenTheme.onAccent)
+                    .background(LinenTheme.accent, in: RoundedRectangle(cornerRadius: 14))
+                }
+                .disabled(isSaving || isImportingPhotos || cropElementID != nil)
             }
-            .disabled(isSaving || isImportingPhotos || cropElementID != nil)
+            HStack(spacing: 8) {
+                Text(editorInstruction)
+                    .font(LinenTheme.body(12))
+                    .foregroundStyle(LinenTheme.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+                Button {
+                    history.undo(current: &document)
+                    clearSelectionIfNeeded()
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                        .frame(width: 44, height: 44)
+                }
+                .disabled(!history.canUndo || isSaving || cropElementID != nil)
+                .accessibilityLabel("Undo")
+
+                Button {
+                    history.redo(current: &document)
+                    clearSelectionIfNeeded()
+                } label: {
+                    Image(systemName: "arrow.uturn.forward")
+                        .frame(width: 44, height: 44)
+                }
+                .disabled(!history.canRedo || isSaving || cropElementID != nil)
+                .accessibilityLabel("Redo")
+            }
         }
         .buttonStyle(.plain)
-        .foregroundStyle(Tokens.ink)
-        .padding(.horizontal, 16)
+        .foregroundStyle(LinenTheme.ink)
+        .padding(.horizontal, 24)
+        .padding(.top, 8)
+        .overlay(alignment: .bottom) { LinenTheme.line.frame(height: 1) }
     }
 
     private var editorInstruction: String {
@@ -328,10 +330,10 @@ struct FreeformBookPageEditor: View {
                     importErrorMessage = error.localizedDescription
                 }
             } label: {
-                Label("Add Text", systemImage: "text.badge.plus")
+                Label("Text", systemImage: "text.badge.plus")
                     .frame(maxWidth: .infinity)
-                    .frame(height: 42)
-                    .background(Tokens.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .frame(height: 44)
+                    .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
 
@@ -349,10 +351,10 @@ struct FreeformBookPageEditor: View {
                 ),
                 matching: .images
             ) {
-                Label(isImportingPhotos ? "Adding" : "Add Photos", systemImage: "photo.badge.plus")
+                Label(isImportingPhotos ? "Adding" : "Photo", systemImage: "photo.badge.plus")
                     .frame(maxWidth: .infinity)
-                    .frame(height: 42)
-                    .background(Tokens.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .frame(height: 44)
+                    .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 12))
             }
             .disabled(
                 isImportingPhotos
@@ -379,8 +381,8 @@ struct FreeformBookPageEditor: View {
                     }
                 } label: {
                     Image(systemName: "square.3.layers.3d")
-                        .frame(width: 42, height: 42)
-                        .background(Tokens.ink.opacity(0.08), in: Circle())
+                        .frame(width: 44, height: 44)
+                        .background(LinenTheme.ink.opacity(0.08), in: Circle())
                 }
                 .accessibilityLabel("Arrange selected item")
 
@@ -388,7 +390,7 @@ struct FreeformBookPageEditor: View {
                     deleteElement(selectedElementID)
                 } label: {
                     Image(systemName: "trash")
-                        .frame(width: 42, height: 42)
+                        .frame(width: 44, height: 44)
                         .background(Color.red.opacity(0.10), in: Circle())
                 }
                 .accessibilityLabel("Delete selected item")
@@ -397,7 +399,7 @@ struct FreeformBookPageEditor: View {
             if let onReset {
                 Button(role: .destructive, action: onReset) {
                     Image(systemName: "arrow.counterclockwise")
-                        .frame(width: 42, height: 42)
+                        .frame(width: 44, height: 44)
                         .background(Color.red.opacity(0.10), in: Circle())
                 }
                 .accessibilityLabel("Reset to original page")
@@ -405,8 +407,9 @@ struct FreeformBookPageEditor: View {
             }
         }
         .buttonStyle(.plain)
-        .tint(Tokens.accent)
-        .padding(.horizontal)
+        .tint(LinenTheme.accent)
+        .font(LinenTheme.body(14, weight: .medium))
+        .padding(.horizontal, 24)
     }
 
     @ViewBuilder
@@ -434,8 +437,8 @@ struct FreeformBookPageEditor: View {
                 .focused($focusedInspectorField, equals: .text)
                 .padding(.horizontal, 10)
                 .frame(minHeight: 38)
-                .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Tokens.ink.opacity(0.12)))
+                .background(LinenTheme.paper, in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(LinenTheme.ink.opacity(0.12)))
                 .accessibilityLabel("Selected text")
 
                 HStack(spacing: 10) {
@@ -479,7 +482,7 @@ struct FreeformBookPageEditor: View {
                         }
                     } label: {
                         Label("Align", systemImage: "text.alignleft")
-                            .font(.caption.weight(.semibold))
+                            .font(LinenTheme.body(12, weight: .semibold))
                             .frame(minWidth: 62, minHeight: 36)
                     }
                 }
@@ -507,8 +510,8 @@ struct FreeformBookPageEditor: View {
                 .focused($focusedInspectorField, equals: .caption)
                 .padding(.horizontal, 10)
                 .frame(height: 38)
-                .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Tokens.ink.opacity(0.12)))
+                .background(LinenTheme.paper, in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(LinenTheme.ink.opacity(0.12)))
                 .accessibilityLabel("Photo caption")
 
                 HStack(spacing: 8) {
@@ -525,9 +528,9 @@ struct FreeformBookPageEditor: View {
                             Button("Fill frame") { updateImageFit(.fill, id: selectedElementID) }
                         } label: {
                             Label("Frame", systemImage: "rectangle.inset.filled")
-                                .font(.caption.weight(.semibold))
+                                .font(LinenTheme.body(12, weight: .semibold))
                                 .frame(maxWidth: .infinity, minHeight: 38)
-                                .background(Tokens.ink.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+                                .background(LinenTheme.ink.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
                         }
                         .accessibilityLabel("Photo frame style")
 
@@ -552,11 +555,11 @@ struct FreeformBookPageEditor: View {
     ) -> some View {
         Button(role: role, action: action) {
             Label(title, systemImage: systemImage)
-                .font(.caption.weight(.semibold))
+                .font(LinenTheme.body(12, weight: .semibold))
                 .frame(maxWidth: .infinity, minHeight: 38)
-                .foregroundStyle(Tokens.ink)
+                .foregroundStyle(prominent ? LinenTheme.onAccent : LinenTheme.ink)
                 .background(
-                    prominent ? Tokens.accentSoft : Tokens.bgWash,
+                    prominent ? LinenTheme.accent : LinenTheme.paper,
                     in: RoundedRectangle(cornerRadius: 9)
                 )
         }

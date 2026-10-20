@@ -34,9 +34,9 @@ struct RecordingExitConfirmationOverlay: View {
     let discard: () -> Void
     let keepEditing: () -> Void
 
-    private let cream = Color(red: 1.0, green: 0.97, blue: 0.90)
-    private let deepGreen = Color(red: 0.10, green: 0.22, blue: 0.14)
-    private let terracotta = Color(red: 210/255, green: 112/255, blue: 45/255)
+    private let cream = LinenTheme.paper
+    private let deepGreen = LinenTheme.ink
+    private let terracotta = LinenTheme.accent
 
     var body: some View {
         ZStack {
@@ -46,7 +46,7 @@ struct RecordingExitConfirmationOverlay: View {
 
             VStack(spacing: 18) {
                 Text("Exit without saving?")
-                    .font(.customSerifFallback(size: 24))
+                    .font(LinenTheme.heading(24))
                     .foregroundColor(deepGreen)
                     .multilineTextAlignment(.center)
 
@@ -59,7 +59,7 @@ struct RecordingExitConfirmationOverlay: View {
                 VStack(spacing: 12) {
                     Button(action: discard) {
                         Text("Discard and Exit")
-                            .font(.system(size: 17, weight: .semibold, design: .serif))
+                            .font(LinenTheme.heading(17))
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
@@ -70,7 +70,7 @@ struct RecordingExitConfirmationOverlay: View {
 
                     Button(action: keepEditing) {
                         Text("Keep Editing")
-                            .font(.system(size: 17, weight: .semibold, design: .serif))
+                            .font(LinenTheme.heading(17))
                             .foregroundColor(deepGreen)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
@@ -153,10 +153,10 @@ struct RecordingView: View {
     @State private var photoItems: [PhotosPickerItem] = []
 
     // Colors
-    let terracotta = Color(red: 210/255, green: 112/255, blue: 45/255)
-    let softCream = Color(red: 253/255, green: 234/255, blue: 198/255)
-    let overlayBlack = Color.black.opacity(0.4)
-    let accent = Color(red: 0.10, green: 0.22, blue: 0.14)
+    let terracotta = LinenTheme.accent
+    let softCream = LinenTheme.paper
+    let overlayBlack = LinenTheme.paper.opacity(0.92)
+    let accent = LinenTheme.forest
 
     // Grid layout for up to 8 images (4 columns)
     private var columns: [GridItem] {
@@ -197,7 +197,7 @@ struct RecordingView: View {
                 overlayBlack.ignoresSafeArea()
 
                 ScrollView {
-                    VStack(spacing: 24) {
+                    VStack(spacing: 16) {
                         Spacer(minLength: RecordingLayoutPolicy.minimumTopSpacing(
                             safeAreaTop: geo.safeAreaInsets.top
                         ))
@@ -210,13 +210,13 @@ struct RecordingView: View {
                         if let message = interruptionBannerMessage {
                             HStack(spacing: 10) {
                                 Image(systemName: "pause.circle.fill")
-                                    .font(.system(size: 15, weight: .semibold))
+                                    .font(LinenTheme.body(15, weight: .semibold))
                                 Text(message)
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(LinenTheme.body(13, weight: .semibold))
                                     .multilineTextAlignment(.leading)
                                 Spacer(minLength: 0)
                             }
-                            .foregroundColor(.white)
+                            .foregroundColor(LinenTheme.onAccent)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
                             .background(terracotta)
@@ -229,28 +229,33 @@ struct RecordingView: View {
                             if let progressLabel = progressLabel {
                                 Text(progressLabel)
                                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                    .foregroundColor(.white.opacity(0.9))
+                                    .foregroundColor(LinenTheme.secondary)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 4)
-                                    .background(Color.black.opacity(0.35))
+                                    .background(LinenTheme.surface)
                                     .clipShape(Capsule())
                             }
+                            Text("YOUR MEMORY")
+                                .font(LinenTheme.body(11, weight: .semibold))
+                                .tracking(1.6)
+                                .foregroundStyle(LinenTheme.accent)
                             Text(activePromptText.isEmpty ? prompt.text : activePromptText)
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.white)
+                                .font(LinenTheme.heading(25))
+                                .foregroundColor(LinenTheme.ink)
                                 .multilineTextAlignment(.center)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .lineLimit(nil)
                                 .padding(.horizontal, 24)
-                                .padding(.vertical, 12)
-                                .background(terracotta)
-                                .cornerRadius(16)
+                                .padding(.vertical, 18)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(LinenTheme.paper)
+                                .cornerRadius(20)
 
                             if isUsingCustomQuestion {
                                 Text("You're answering your own question")
-                                    .font(.caption2)
+                                    .font(LinenTheme.body(11))
                                     .fontWeight(.medium)
-                                    .foregroundColor(.white.opacity(0.9))
+                                    .foregroundColor(LinenTheme.secondary)
                             }
                         }
 
@@ -261,14 +266,14 @@ struct RecordingView: View {
                             } label: {
                                 HStack(spacing: 6) {
                                     Image(systemName: "arrow.triangle.2.circlepath")
-                                        .font(.system(size: 12, weight: .medium))
+                                        .font(LinenTheme.body(12, weight: .medium))
                                     Text("Try a different question")
-                                        .font(.system(size: 13, weight: .medium))
+                                        .font(LinenTheme.body(13, weight: .medium))
                                 }
-                                .foregroundColor(.white.opacity(0.85))
+                                .foregroundColor(LinenTheme.secondary)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 7)
-                                .background(Color.white.opacity(0.15))
+                                .background(LinenTheme.surface)
                                 .cornerRadius(20)
                             }
                         }
@@ -280,17 +285,17 @@ struct RecordingView: View {
                                     ZStack {
                                         Circle()
                                             .fill(terracotta)
-                                            .frame(width: 80, height: 80)
-                                            .shadow(color: .orange.opacity(0.3), radius: 8, x: 0, y: 4)
+                                            .frame(width: 72, height: 72)
+                                            .shadow(color: LinenTheme.accent.opacity(0.16), radius: 8, x: 0, y: 4)
                                         
                                         Image(systemName: "mic.fill")
-                                            .font(.system(size: 32))
-                                            .foregroundColor(.white)
+                                            .font(LinenTheme.body(28))
+                                            .foregroundColor(LinenTheme.onAccent)
                                     }
                                     
                                     Text("Tap to Record")
-                                        .font(.caption)
-                                        .foregroundColor(.white)
+                                        .font(LinenTheme.body(12))
+                                        .foregroundColor(LinenTheme.ink)
                                 }
                             }
                         }
@@ -310,21 +315,21 @@ struct RecordingView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
                                     Image(systemName: "text.bubble.fill")
-                                        .foregroundColor(.white)
+                                        .foregroundColor(LinenTheme.ink)
                                     Text("Live Transcription:")
-                                        .font(.caption)
-                                        .foregroundColor(.white.opacity(0.8))
+                                        .font(LinenTheme.body(12))
+                                        .foregroundColor(LinenTheme.secondary)
                                     Spacer()
                                 }
                                 Text(realTimeTranscription.currentTranscript)
-                                    .font(.body)
-                                    .foregroundColor(.white)
+                                    .font(LinenTheme.body(16))
+                                    .foregroundColor(LinenTheme.ink)
                                     .padding(12)
-                                    .background(Color.black.opacity(0.3))
+                                    .background(LinenTheme.card)
                                     .cornerRadius(8)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 8)
-                                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                                            .stroke(LinenTheme.line, lineWidth: 1)
                                     )
                             }
                             .frame(maxWidth: geo.size.width * 0.8)
@@ -334,12 +339,12 @@ struct RecordingView: View {
                         if isRecording || isPaused {
                             VStack(spacing: 4) {
                                 Text(formatTime(recordingTime))
-                                    .font(.system(size: 20, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.white)
+                                    .font(LinenTheme.heading(44)).monospacedDigit()
+                                    .foregroundColor(LinenTheme.ink)
                                 
                                 Text(isPaused ? "Recording paused" : "Recording in progress")
-                                    .font(.caption)
-                                    .foregroundColor(isPaused ? .white.opacity(0.7) : terracotta)
+                                    .font(LinenTheme.body(12))
+                                    .foregroundColor(isPaused ? LinenTheme.secondary : terracotta)
                             }
                         }
 
@@ -358,14 +363,14 @@ struct RecordingView: View {
                     ZStack(alignment: .topLeading) {
                         if typedText.isEmpty {
                             Text("Type your answer...")
-                                .foregroundColor(.gray)
+                                .foregroundColor(LinenTheme.secondary)
                                 .padding(.top, 12)
                                 .padding(.leading, 36)
                         }
                         TextEditor(text: $typedText)
-                            .font(.system(size: 14))
-                            .foregroundColor(.black)
-                            .frame(minHeight: 60, maxHeight: 120)
+                            .font(LinenTheme.body(16))
+                            .foregroundColor(LinenTheme.ink)
+                            .frame(minHeight: 180, maxHeight: 260)
                             .padding(.top, 8)
                             .padding(.leading, 32)
                             .scrollContentBackground(.hidden)
@@ -376,34 +381,32 @@ struct RecordingView: View {
                                 triggerHaptic(.selection)
                             }
                         Image(systemName: "pencil")
-                            .foregroundColor(.gray)
+                            .foregroundColor(LinenTheme.secondary)
                             .padding(.top, 14)
                             .padding(.leading, 10)
                     }
                     .background(softCream)
                     .clipShape(RoundedRectangle(cornerRadius: 16))
                     .shadow(color: .black.opacity(0.03), radius: 2, x: 0, y: 1)
-                    .padding(.horizontal, geo.size.width * 0.05)
+                    .padding(.horizontal, 24)
                     
-                    // Save Memory button - right-aligned, only shows when recording controls are NOT visible
+                    // Typed memories use the same full-width save action as recorded memories.
                     if !isRecording && !isPaused && audioURL == nil {
                         HStack {
-                            Spacer()
                             Button(action: {
                                 triggerHaptic(.impact(.heavy))
                                 saveMemory()
                             }) {
                                 Text("Save Memory")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(.white)
-                                    .padding(.vertical, 10)
-                                    .padding(.horizontal, 20)
+                                    .font(LinenTheme.body(14, weight: .semibold))
+                                    .foregroundColor(LinenTheme.onAccent)
+                                    .padding(.vertical, 14)
+                                    .frame(maxWidth: .infinity, minHeight: 52)
                                     .background(terracotta)
-                                    .cornerRadius(12)
-                                    .shadow(color: terracotta.opacity(0.3), radius: 4, x: 0, y: 2)
+                                    .clipShape(RoundedRectangle(cornerRadius: 22))
                             }
                         }
-                        .padding(.horizontal, geo.size.width * 0.05)
+                        .padding(.horizontal, 24)
                         .padding(.top, 8)
                         .transition(.opacity)
                     }
@@ -438,10 +441,10 @@ struct RecordingView: View {
                             }
                         }) {
                             Image(systemName: "chevron.left")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundColor(.white)
+                                .font(LinenTheme.body(18, weight: .medium))
+                                .foregroundColor(LinenTheme.ink)
                                 .padding(12)
-                                .background(Color.black.opacity(0.25))
+                                .background(LinenTheme.surface)
                                 .clipShape(Circle())
                         }
                         .accessibilityIdentifier("recordingBackButton")
@@ -461,12 +464,12 @@ struct RecordingView: View {
                         HStack {
                             Spacer(minLength: 0)
                             Text("Memory Saved!")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(LinenTheme.body(15, weight: .semibold))
                                 .multilineTextAlignment(.center)
-                                .padding(.horizontal, 20)
+                                .padding(.horizontal, 24)
                                 .padding(.vertical, 12)
-                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                                .foregroundColor(.white)
+                                .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+                                .foregroundColor(LinenTheme.ink)
                             Spacer(minLength: 0)
                         }
                         .padding(.horizontal, 24)
@@ -599,8 +602,8 @@ struct RecordingView: View {
         VStack(spacing: 6) {
             Button(action: action) {
                 Image(systemName: icon)
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundColor(.white)
+                    .font(LinenTheme.body(20, weight: .bold))
+                    .foregroundColor(LinenTheme.onAccent)
                     .padding(20)
                     .background(terracotta)
                     .clipShape(Circle())
@@ -608,8 +611,8 @@ struct RecordingView: View {
                     .animation(.easeInOut(duration: 0.1), value: isRecording)
             }
             Text(label)
-                .foregroundColor(.white)
-                .font(.caption)
+                .foregroundColor(LinenTheme.ink)
+                .font(LinenTheme.body(12))
         }
     }
 

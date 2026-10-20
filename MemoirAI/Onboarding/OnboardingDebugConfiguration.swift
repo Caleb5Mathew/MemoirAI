@@ -3,6 +3,14 @@ import AVFoundation
 
 /// Temporary testing switches are compiled out of distribution builds.
 enum OnboardingDebugConfiguration {
+    static var previewApp: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("-linen-preview")
+        #else
+        return false
+        #endif
+    }
+
     static var replayOnLaunch: Bool {
         #if DEBUG
         return true

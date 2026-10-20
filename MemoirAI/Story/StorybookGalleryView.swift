@@ -71,16 +71,16 @@ struct StorybookGalleryView: View {
     var onBookSelected: ((BookVersionRecord, PersistableStorybook?) -> Void)?
     
     private enum Palette {
-        static let background = Color(red: 0.975, green: 0.948, blue: 0.892)
-        static let surface = Color.white.opacity(0.94)
-        static let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
-        static let primaryText = Color(red: 0.2, green: 0.2, blue: 0.2)
-        static let secondaryText = Color(red: 0.46, green: 0.46, blue: 0.46)
-        static let mutedStroke = Color.black.opacity(0.06)
+        static let background = LinenTheme.paper
+        static let surface = LinenTheme.surface
+        static let terracotta = LinenTheme.accent
+        static let primaryText = LinenTheme.ink
+        static let secondaryText = LinenTheme.secondary
+        static let mutedStroke = LinenTheme.line
     }
 
     private enum Metrics {
-        static let screenPadding: CGFloat = 18
+        static let screenPadding: CGFloat = 24
         static let gridSpacing: CGFloat = 16
         static let cardCorner: CGFloat = 20
         static let coverCorner: CGFloat = 14
@@ -101,8 +101,11 @@ struct StorybookGalleryView: View {
     }
 
     private var gridColumns: [GridItem] {
-        let minimum = horizontalSizeClass == .compact ? 150.0 : 190.0
-        return [GridItem(.adaptive(minimum: minimum, maximum: 260), spacing: Metrics.gridSpacing, alignment: .top)]
+        if horizontalSizeClass == .compact {
+            return [GridItem(.flexible(), spacing: Metrics.gridSpacing, alignment: .top),
+                    GridItem(.flexible(), spacing: Metrics.gridSpacing, alignment: .top)]
+        }
+        return [GridItem(.adaptive(minimum: 190, maximum: 260), spacing: Metrics.gridSpacing, alignment: .top)]
     }
 
     var body: some View {
@@ -255,16 +258,14 @@ struct StorybookGalleryView: View {
     // MARK: - Custom Header
     private var customHeader: some View {
         VStack(spacing: 6) {
-            HStack(alignment: .center, spacing: 0) {
+            HStack(alignment: .center, spacing: 8) {
                 circleIconButton(systemName: "chevron.left", action: {
                     print("🧭 Gallery[\(debugSessionID)] back button tapped")
                     dismiss()
                 })
-                Spacer()
-
-                VStack(spacing: 2) {
-                    Text("My Library")
-                        .font(.system(size: 34, weight: .bold, design: .serif))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Book library")
+                        .font(LinenTheme.heading())
                         .foregroundColor(Palette.primaryText)
                         .tracking(-0.7)
 
@@ -372,7 +373,7 @@ struct StorybookGalleryView: View {
 
             VStack(spacing: 12) {
                 Text(styleFilter == .all ? "No storybooks yet" : "No \(styleFilter.rawValue.lowercased()) books")
-                    .font(.system(size: 30, weight: .bold, design: .serif))
+                    .font(LinenTheme.heading())
                     .foregroundColor(Palette.primaryText)
 
                 Text(styleFilter == .all 
@@ -665,6 +666,8 @@ private struct BookCardItem: View {
         }) {
             VStack(alignment: .leading, spacing: 10) {
                 coverView
+                    .padding(12)
+                    .background(cardColor, in: RoundedRectangle(cornerRadius: 15))
                     .overlay(
                         Group {
                             if isCoverPending {
@@ -684,15 +687,15 @@ private struct BookCardItem: View {
                     )
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(formattedDate)
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(textPrimary)
-                        .lineLimit(1)
-
                     Text(book.bookCatalogDisplayTitle)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(textSecondary)
+                        .font(LinenTheme.body(15, weight: .semibold))
+                        .foregroundColor(textPrimary)
                         .lineLimit(2)
+
+                    Text(formattedDate)
+                        .font(LinenTheme.body(12))
+                        .foregroundColor(textSecondary)
+                        .lineLimit(1)
 
                     HStack(spacing: 6) {
                         Label("\(book.pageCount)", systemImage: "doc.text")
@@ -722,16 +725,8 @@ private struct BookCardItem: View {
                 .padding(.horizontal, 2)
                 .padding(.bottom, 2)
             }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                    .fill(cardColor)
-                    .shadow(color: Color.black.opacity(0.07), radius: 11, x: 0, y: 6)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                    .stroke(Color.black.opacity(0.05), lineWidth: 1)
-            )
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
         .scaleEffect(isPressed ? 0.985 : 1.0)

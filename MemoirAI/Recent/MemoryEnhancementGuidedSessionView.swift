@@ -39,12 +39,12 @@ struct MemoryEnhancementGuidedSessionView: View {
 
     @Environment(\.scenePhase) private var scenePhase
 
-    private var terracotta: Color { Color(red: 0.82, green: 0.45, blue: 0.32) }
-    private var header: Color { Color(red: 0.07, green: 0.21, blue: 0.13) }
-    private var cream: Color { Color(red: 0.98, green: 0.96, blue: 0.90) }
-    private var surfaceStroke: Color { Color.black.opacity(0.08) }
-    private var textSecondary: Color { Color(red: 0.5, green: 0.5, blue: 0.5) }
-    private var softCream: Color { Color(red: 253 / 255, green: 234 / 255, blue: 198 / 255) }
+    private var terracotta: Color { LinenTheme.accent }
+    private var header: Color { LinenTheme.ink }
+    private var cream: Color { LinenTheme.paper }
+    private var surfaceStroke: Color { LinenTheme.line }
+    private var textSecondary: Color { LinenTheme.secondary }
+    private var softCream: Color { LinenTheme.surface }
 
     init(
         memory: MemoryEntry,
@@ -88,10 +88,10 @@ struct MemoryEnhancementGuidedSessionView: View {
                 ZStack {
                     VStack(spacing: 0) {
                         ScrollView {
-                            VStack(alignment: .leading, spacing: 24) {
+                            VStack(alignment: .leading, spacing: 16) {
                                 Text("Answer by voice. Tap Record, then Stop to review and send.")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(.secondary)
+                                    .font(LinenTheme.body(14, weight: .medium))
+                                    .foregroundStyle(LinenTheme.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
 
                                 memoryPreviewCard
@@ -104,7 +104,7 @@ struct MemoryEnhancementGuidedSessionView: View {
 
                                 if let err = vm.errorMessage {
                                     Text(err)
-                                        .font(.footnote)
+                                        .font(LinenTheme.body(13))
                                         .foregroundStyle(.red)
                                 }
 
@@ -117,17 +117,17 @@ struct MemoryEnhancementGuidedSessionView: View {
 
                                 if realTimeTranscription.isTranscribing && !realTimeTranscription.currentTranscript.isEmpty {
                                     Text(realTimeTranscription.currentTranscript)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
+                                        .font(LinenTheme.body(14))
+                                        .foregroundStyle(LinenTheme.secondary)
                                         .padding(14)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .background(
                                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                .fill(Color.black.opacity(0.05))
+                                                .fill(LinenTheme.surface)
                                         )
                                 }
                             }
-                            .padding(.horizontal, 20)
+                            .padding(.horizontal, 24)
                             .padding(.top, 12)
                             .padding(.bottom, 16)
                         }
@@ -136,7 +136,7 @@ struct MemoryEnhancementGuidedSessionView: View {
                             Divider()
                                 .opacity(0.12)
                             recordPrimaryButton
-                                .padding(.horizontal, 20)
+                                .padding(.horizontal, 24)
                                 .padding(.top, 12)
                                 .padding(.bottom, 8)
                         }
@@ -149,11 +149,11 @@ struct MemoryEnhancementGuidedSessionView: View {
                                 .scaleEffect(1.1)
                                 .tint(terracotta)
                             Text(vm.isBootstrapping ? "Preparing your question…" : "Thinking…")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(LinenTheme.body(15, weight: .semibold))
                                 .foregroundStyle(header)
                         }
                         .padding(28)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
                     }
                 }
@@ -202,15 +202,15 @@ struct MemoryEnhancementGuidedSessionView: View {
         let current = min(answered + 1, MemoryEnhancementSessionRules.maxSessionTurns)
         return VStack(alignment: .leading, spacing: 4) {
             Text("Question \(current)")
-                .font(.system(size: 13, weight: .semibold))
+                .font(LinenTheme.body(13, weight: .semibold))
                 .foregroundStyle(textSecondary)
             if !vm.rubricTierCaption.isEmpty {
                 Text(vm.rubricTierCaption)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(LinenTheme.body(11, weight: .medium))
                     .foregroundStyle(textSecondary.opacity(0.75))
             }
             Text("Usually 2 to 3 short answers · up to \(MemoryEnhancementSessionRules.maxSessionTurns)")
-                .font(.system(size: 12, weight: .medium))
+                .font(LinenTheme.body(12, weight: .medium))
                 .foregroundStyle(textSecondary.opacity(0.85))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -219,7 +219,7 @@ struct MemoryEnhancementGuidedSessionView: View {
     private var memoryPreviewCard: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(memory.prompt ?? "Memory")
-                .font(.system(size: 20, weight: .semibold, design: .serif))
+                .font(LinenTheme.heading(20))
                 .foregroundStyle(header)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -229,7 +229,7 @@ struct MemoryEnhancementGuidedSessionView: View {
 
             if let saved = memory.text, !saved.isEmpty {
                 Text(saved)
-                    .font(.custom("Georgia", size: 17))
+                    .font(LinenTheme.body(16))
                     .multilineTextAlignment(.leading)
                     .foregroundColor(Color(red: 0.15, green: 0.14, blue: 0.13))
                     .lineSpacing(5)
@@ -243,23 +243,22 @@ struct MemoryEnhancementGuidedSessionView: View {
                         }
                     } label: {
                         Text(isMemoryTextExpanded ? "Show less" : "Read more")
-                            .font(.system(size: 15, weight: .semibold, design: .serif))
+                            .font(LinenTheme.body(15, weight: .semibold))
                             .foregroundStyle(terracotta)
                     }
                     .buttonStyle(.plain)
                 }
             } else if !memory.hasAudio {
                 Text("No transcription yet. Use the recording below to add details.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(LinenTheme.body(14))
+                    .foregroundStyle(LinenTheme.secondary)
             }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.white)
-                .shadow(color: .black.opacity(0.06), radius: 10, x: 0, y: 4)
+                .fill(LinenTheme.card)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -278,15 +277,15 @@ struct MemoryEnhancementGuidedSessionView: View {
                         .fill(terracotta.opacity(0.12))
                         .frame(width: 44, height: 44)
                     Image(systemName: isMemoryAudioPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(LinenTheme.body(16, weight: .semibold))
                         .foregroundStyle(terracotta)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Original recording")
-                        .font(.caption.weight(.semibold))
+                        .font(LinenTheme.body(12, weight: .semibold))
                         .foregroundStyle(textSecondary)
                     Text(isMemoryAudioPlaying ? "Playing…" : "Listen to this memory")
-                        .font(.system(size: 14, weight: .medium, design: .serif))
+                        .font(LinenTheme.body(14, weight: .medium))
                         .foregroundStyle(header)
                 }
                 Spacer(minLength: 0)
@@ -294,7 +293,7 @@ struct MemoryEnhancementGuidedSessionView: View {
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(softCream.opacity(0.5))
+                    .fill(LinenTheme.surface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -320,13 +319,12 @@ struct MemoryEnhancementGuidedSessionView: View {
                 }
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(LinenTheme.body(16, weight: .semibold))
                     .foregroundStyle(header)
                     .frame(width: 44, height: 44)
                     .background(
                         Circle()
-                            .fill(Color.white.opacity(0.85))
-                            .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
+                            .fill(LinenTheme.surface)
                     )
             }
             .buttonStyle(.plain)
@@ -334,7 +332,7 @@ struct MemoryEnhancementGuidedSessionView: View {
             Spacer(minLength: 8)
 
             Text("Enhance this memory")
-                .font(.system(size: 22, weight: .bold, design: .serif))
+                .font(LinenTheme.heading(22))
                 .foregroundStyle(header)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
@@ -352,11 +350,11 @@ struct MemoryEnhancementGuidedSessionView: View {
         Group {
             if vm.currentQuestion.isEmpty {
                 Text("Loading your first question…")
-                    .font(.system(size: 18, weight: .semibold, design: .serif))
+                    .font(LinenTheme.heading(18))
                     .foregroundStyle(header.opacity(0.55))
             } else {
                 Text(vm.currentQuestion)
-                    .font(.system(size: 20, weight: .semibold, design: .serif))
+                    .font(LinenTheme.heading(20))
                     .foregroundStyle(header)
             }
         }
@@ -365,8 +363,7 @@ struct MemoryEnhancementGuidedSessionView: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.white)
-                .shadow(color: .black.opacity(0.07), radius: 12, x: 0, y: 6)
+                .fill(LinenTheme.card)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -382,22 +379,22 @@ struct MemoryEnhancementGuidedSessionView: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "mic.fill")
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(LinenTheme.body(16, weight: .semibold))
                         Text("Record")
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(LinenTheme.body(16, weight: .semibold))
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                    .foregroundStyle(.white)
+                    .padding(.vertical, 16)
+                    .foregroundStyle(LinenTheme.onAccent)
                     .background(
                         LinearGradient(
-                            colors: [terracotta, terracotta.opacity(0.92)],
+                            colors: [terracotta, terracotta],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .shadow(color: terracotta.opacity(0.35), radius: 12, y: 6)
+
                 }
                 .buttonStyle(.plain)
                 .disabled(vm.isAnalyzing || vm.isBootstrapping || vm.currentQuestion.isEmpty)
@@ -407,13 +404,13 @@ struct MemoryEnhancementGuidedSessionView: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "stop.fill")
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(LinenTheme.body(16, weight: .semibold))
                         Text("Stop")
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(LinenTheme.body(16, weight: .semibold))
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                    .foregroundStyle(.white)
+                    .padding(.vertical, 16)
+                    .foregroundStyle(LinenTheme.onAccent)
                     .background(Color.red.opacity(0.88))
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
@@ -424,9 +421,9 @@ struct MemoryEnhancementGuidedSessionView: View {
 
     private var reviewTranscriptSheet: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 16) {
                 Text("Review what we heard")
-                    .font(.system(size: 20, weight: .bold, design: .serif))
+                    .font(LinenTheme.heading(20))
                     .foregroundStyle(header)
 
                 if isAwaitingFileTranscription {
@@ -435,7 +432,7 @@ struct MemoryEnhancementGuidedSessionView: View {
                         .padding(.vertical, 24)
                 } else if pendingTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(pendingTranscriptionError ?? "We didn’t catch speech. Try recording again in a quieter spot.")
-                        .font(.subheadline)
+                        .font(LinenTheme.body(14))
                         .foregroundStyle(pendingTranscriptionError == nil ? Color.secondary : Color.red)
                 } else {
                     ScrollView {
@@ -453,13 +450,13 @@ struct MemoryEnhancementGuidedSessionView: View {
                         discardPendingRecording()
                     } label: {
                         Text("Record Again")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(LinenTheme.body(16, weight: .semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
                             .foregroundStyle(header)
                             .background(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(Color.white)
+                                    .fill(LinenTheme.card)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -481,13 +478,13 @@ struct MemoryEnhancementGuidedSessionView: View {
                         }
                     } label: {
                         Text(pendingTranscriptionError == nil ? "Submit" : "Try Again")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(LinenTheme.body(16, weight: .semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(LinenTheme.onAccent)
                             .background(
                                 LinearGradient(
-                                    colors: [terracotta, terracotta.opacity(0.9)],
+                                    colors: [terracotta, terracotta],
                                     startPoint: .leading,
                                     endPoint: .trailing
                                 )

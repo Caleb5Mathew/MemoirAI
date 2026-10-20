@@ -7,12 +7,12 @@ struct MemoryEnhancementIntroView: View {
     /// Guided enhancement requires its cloud service; both buttons disable when false.
     let voiceGuideAvailable: Bool
 
-    private var accent: Color { Color(red: 0.88, green: 0.52, blue: 0.28) }
-    private var header: Color { Color(red: 0.07, green: 0.21, blue: 0.13) }
+    private var accent: Color { LinenTheme.accent }
+    private var header: Color { LinenTheme.ink }
 
     var body: some View {
         ZStack {
-            Color(red: 0.98, green: 0.96, blue: 0.90).ignoresSafeArea()
+            LinenTheme.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 HStack {
@@ -20,29 +20,30 @@ struct MemoryEnhancementIntroView: View {
                         onClose()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 28))
+                            .font(LinenTheme.body(28))
                             .symbolRenderingMode(.hierarchical)
                             .foregroundStyle(header.opacity(0.55))
+                            .frame(width: 44, height: 44)
                     }
                     Spacer()
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
                 .padding(.top, 12)
 
                 Spacer(minLength: 8)
 
-                VStack(spacing: 20) {
+                VStack(spacing: 16) {
                     ZStack {
                         Circle()
                             .fill(accent.opacity(0.12))
-                            .frame(width: 100, height: 100)
+                            .frame(width: 72, height: 72)
                         Image(systemName: "sparkles")
-                            .font(.system(size: 44, weight: .medium))
+                            .font(LinenTheme.body(30, weight: .medium))
                             .foregroundStyle(accent)
                     }
 
                     Text("Enhance for better images")
-                        .font(.system(size: 26, weight: .bold, design: .serif))
+                        .font(LinenTheme.heading(25))
                         .multilineTextAlignment(.center)
                         .foregroundStyle(header)
 
@@ -50,14 +51,14 @@ struct MemoryEnhancementIntroView: View {
                         "Answer a few short questions, by voice or typing, so we can fill in who was there and what they looked like. " +
                         "That helps illustrated pages match your story without typing every field."
                     )
-                    .font(.system(size: 16))
-                    .foregroundStyle(.secondary)
+                    .font(LinenTheme.body(16))
+                    .foregroundStyle(LinenTheme.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 8)
 
                     if !voiceGuideAvailable {
                         Text("Guided enhancement is temporarily unavailable. Try again later.")
-                            .font(.footnote)
+                            .font(LinenTheme.body(13))
                             .foregroundStyle(.orange)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 4)
@@ -73,12 +74,12 @@ struct MemoryEnhancementIntroView: View {
                     } label: {
                         HStack {
                             Image(systemName: "mic.fill")
-                            Text("Enhance with Voice (Recommended)")
+                            Text("Answer by voice")
                                 .fontWeight(.semibold)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(LinenTheme.onAccent)
                         .background(voiceGuideAvailable ? accent : Color.gray)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
@@ -90,7 +91,7 @@ struct MemoryEnhancementIntroView: View {
                     } label: {
                         HStack {
                             Image(systemName: "keyboard")
-                            Text("Enhance by Typing")
+                            Text("Answer by typing")
                                 .fontWeight(.semibold)
                         }
                         .frame(maxWidth: .infinity)
@@ -107,9 +108,10 @@ struct MemoryEnhancementIntroView: View {
                     .disabled(!voiceGuideAvailable)
                     .accessibilityIdentifier("enhancementIntroTypingButton")
                 }
-                .padding(.horizontal, 22)
+                .padding(.horizontal, 24)
                 .padding(.bottom, 36)
             }
         }
+        .font(LinenTheme.body(16))
     }
 }

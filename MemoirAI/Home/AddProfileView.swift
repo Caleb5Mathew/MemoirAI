@@ -9,11 +9,11 @@ struct AddProfileView: View {
     @StateObject private var subscriptionManager = RCSubscriptionManager.shared
 
     // Style constants
-    private let headerFontSize: CGFloat = 28
+    private let headerFontSize: CGFloat = 25
     private let subHeaderFontSize: CGFloat = 21  // 3/4 of header
-    private let bodyFontSize: CGFloat = 18
-    private let baseBackground = Color(red: 0.98, green: 0.94, blue: 0.86)
-    private var inputBackground: Color { baseBackground.opacity(0.7) }
+    private let bodyFontSize: CGFloat = 16
+    private let baseBackground = LinenTheme.paper
+    private var inputBackground: Color { LinenTheme.surface }
 
     @State private var name: String = ""
     @FocusState private var isNameFieldFocused: Bool
@@ -68,19 +68,19 @@ struct AddProfileView: View {
             // Icon
             Image(systemName: "person.2.badge.plus")
                 .font(.system(size: 80))
-                .foregroundColor(.orange.opacity(0.7))
+                .foregroundColor(LinenTheme.accent)
             
             // Title
             VStack(spacing: 12) {
                 Text("Multiple Profiles")
-                    .font(.customSerifFallback(size: headerFontSize))
-                    .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
+                    .font(LinenTheme.heading(25))
+                    .foregroundColor(LinenTheme.ink)
                     .fontWeight(.light)
                 
                 Text("Create profiles for multiple family members and keep their stories separate")
-                    .font(.system(size: bodyFontSize))
+                    .font(LinenTheme.body(16))
                     .fontWeight(.light)
-                    .foregroundColor(.black.opacity(0.6))
+                    .foregroundColor(LinenTheme.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
             }
@@ -88,11 +88,11 @@ struct AddProfileView: View {
             // Current status
             VStack(spacing: 8) {
                 Text("Current: \(profileVM.profiles.count)/1 profile")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(LinenTheme.body(16, weight: .medium))
                     .foregroundColor(.gray)
                 
                 Text("Subscribe to create unlimited profiles")
-                    .font(.system(size: 14))
+                    .font(LinenTheme.body(14))
                     .foregroundColor(.gray)
             }
             .padding()
@@ -106,11 +106,11 @@ struct AddProfileView: View {
             VStack(spacing: 16) {
                 Button(action: { showPaywall = true }) {
                     Text("Subscribe Now")
-                        .font(.system(size: bodyFontSize, weight: .semibold))
-                        .foregroundColor(.white)
+                        .font(LinenTheme.body(16, weight: .semibold))
+                        .foregroundColor(LinenTheme.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(Color(red: 0.83, green: 0.45, blue: 0.14))
+                        .background(LinenTheme.accent)
                         .cornerRadius(24)
                 }
                 .padding(.horizontal)
@@ -118,7 +118,7 @@ struct AddProfileView: View {
                 Button("Maybe Later") {
                     dismiss()
                 }
-                .font(.system(size: bodyFontSize))
+                .font(LinenTheme.body(16))
                 .fontWeight(.light)
                 .foregroundColor(.gray)
             }
@@ -136,9 +136,9 @@ struct AddProfileView: View {
             VStack(spacing: 24) {
             // Title
             VStack(spacing: 6) {
-                Text("Add a New Profile")
-                    .font(.customSerifFallback(size: headerFontSize))
-                    .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
+                Text("Add profile")
+                    .font(LinenTheme.heading(25))
+                    .foregroundColor(LinenTheme.ink)
                     .fontWeight(.light)
                     .onTapGesture {
                         guard DeveloperAccessDistributionPolicy.permitsCurrentBuild else { return }
@@ -153,22 +153,22 @@ struct AddProfileView: View {
                         }
                     }
                 Text("Who is this memory profile for?")
-                    .font(.system(size: bodyFontSize))
+                    .font(LinenTheme.body(16))
                     .fontWeight(.light)
-                    .foregroundColor(.black.opacity(0.6))
+                    .foregroundColor(LinenTheme.secondary)
             }
             .padding(.top, 40)
 
             // Name Input with pencil icon
             HStack {
                 TextField("Enter their name...", text: $name)
-                    .font(.system(size: bodyFontSize))
+                    .font(LinenTheme.body(16))
                     .fontWeight(.light)
-                    .foregroundColor(.black.opacity(0.6))
+                    .foregroundColor(LinenTheme.secondary)
                     .padding()
                     .background(inputBackground)
                     .cornerRadius(16)
-                    .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
+
                     .focused($isNameFieldFocused)
 
                 if !isNameFieldFocused {
@@ -187,7 +187,7 @@ struct AddProfileView: View {
                 Text("Add a Profile Picture")
                     .font(.customSerifFallback(size: subHeaderFontSize))
                     .fontWeight(.light)
-                    .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.14))
+                    .foregroundColor(LinenTheme.ink)
 
                 ZStack(alignment: .bottomTrailing) {
                     Group {
@@ -217,14 +217,14 @@ struct AddProfileView: View {
                     }
                     .frame(width: 200, height: 200)
                     .clipShape(RoundedRectangle(cornerRadius: 20))
-                    .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
+
 
                     PhotosPicker(
                         selection: $photoSelection,
                         matching: .images
                     ) {
                         Image(systemName: "camera.fill")
-                            .font(.system(size: 16))
+                            .font(LinenTheme.body(16))
                             .padding(10)
                             .background(Color.white)
                             .clipShape(Circle())
@@ -246,11 +246,11 @@ struct AddProfileView: View {
             // Save Button (always enabled)
             Button(action: saveProfile) {
                 Text("Save Profile")
-                    .font(.system(size: bodyFontSize, weight: .semibold))
-                    .foregroundColor(.white)
+                    .font(LinenTheme.body(16, weight: .semibold))
+                    .foregroundColor(LinenTheme.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(Color(red: 0.83, green: 0.45, blue: 0.14))
+                    .background(LinenTheme.accent)
                     .cornerRadius(24)
                     .padding(.horizontal)
             }
@@ -259,7 +259,7 @@ struct AddProfileView: View {
             Button("Cancel") {
                 dismiss()
             }
-            .font(.system(size: bodyFontSize))
+            .font(LinenTheme.body(16))
             .fontWeight(.light)
             .foregroundColor(.gray)
             .padding(.bottom, 20)
@@ -304,11 +304,11 @@ struct AddProfileView: View {
                 .foregroundColor(.gray.opacity(0.4))
             
             Text("Developer Access")
-                .font(.system(size: 16, weight: .medium))
+                .font(LinenTheme.body(16, weight: .medium))
                 .foregroundColor(.gray)
             
             SecureField("Enter key", text: $devKey)
-                .font(.system(size: 15))
+                .font(LinenTheme.body(15))
                 .padding(12)
                 .background(Color.gray.opacity(0.1))
                 .cornerRadius(10)
@@ -320,7 +320,7 @@ struct AddProfileView: View {
                     Image(systemName: result == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
                     Text(result == .success ? "Unlocked!" : (devErrorMessage ?? "Access denied"))
                 }
-                .font(.system(size: 14, weight: .medium))
+                .font(LinenTheme.body(14, weight: .medium))
                 .foregroundColor(result == .success ? .green : .red)
                 .transition(.opacity.combined(with: .scale))
             }
@@ -333,13 +333,13 @@ struct AddProfileView: View {
                         ProgressView().tint(.white)
                     } else {
                         Text("Unlock")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.white)
+                            .font(LinenTheme.body(15, weight: .semibold))
+                            .foregroundColor(LinenTheme.onAccent)
                     }
                 }
                 .frame(width: 120)
                 .padding(.vertical, 12)
-                .background(devKey.isEmpty ? Color.gray.opacity(0.3) : Color(red: 0.83, green: 0.45, blue: 0.14))
+                .background(devKey.isEmpty ? Color.gray.opacity(0.3) : LinenTheme.accent)
                 .cornerRadius(10)
             }
             .disabled(devKey.isEmpty || isVerifyingDevAccess)

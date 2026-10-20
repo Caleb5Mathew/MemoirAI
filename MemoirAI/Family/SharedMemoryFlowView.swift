@@ -10,7 +10,7 @@ struct SharedMemoryFlowView: View {
     @State private var status: SharedAccessService.GrantStatus? = nil
     @State private var requestListener: ListenerRegistration? = nil
 
-    private let cream = Color(red: 0.98, green: 0.94, blue: 0.86)
+    private let cream = LinenTheme.paper
 
     var body: some View {
         ZStack {
@@ -24,7 +24,8 @@ struct SharedMemoryFlowView: View {
                 RequestAccessView(route: route, initialStatus: status ?? .none)
             }
         }
-        .navigationTitle("Shared Memory")
+        .linenScreen()
+        .navigationTitle("Shared memory")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             status = await SharedAccessService.shared.grantStatus(
@@ -61,14 +62,15 @@ struct RequestAccessView: View {
     @State private var didSubmit = false
     @State private var errorMessage: String? = nil
 
-    private let darkText = Color(red: 0.25, green: 0.2, blue: 0.15)
-    private let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
+    private let darkText = LinenTheme.ink
+    private let terracotta = LinenTheme.accent
 
     private var isPending: Bool { didSubmit || initialStatus == .pending }
 
     var body: some View {
+        ScrollView {
         VStack(spacing: 24) {
-            Spacer()
+            Spacer(minLength: 24)
 
             Image(systemName: isPending ? "hourglass" : "person.2.fill")
                 .font(.system(size: 52))
@@ -77,38 +79,39 @@ struct RequestAccessView: View {
             if isPending {
                 VStack(spacing: 10) {
                     Text("Request sent")
-                        .font(.system(size: 24, weight: .bold, design: .serif))
+                        .font(LinenTheme.heading(25))
                         .foregroundColor(darkText)
                     Text("The owner of this memoir will see your request in their app. This screen updates the moment they approve.")
-                        .font(.system(size: 15, design: .serif))
+                        .font(LinenTheme.body(15))
                         .foregroundColor(darkText.opacity(0.7))
                         .multilineTextAlignment(.center)
                 }
-                .padding(.horizontal, 36)
+                .padding(.horizontal, 24)
             } else {
                 VStack(spacing: 10) {
                     Text("This memory belongs to someone else")
-                        .font(.system(size: 24, weight: .bold, design: .serif))
+                        .font(LinenTheme.heading(25))
                         .foregroundColor(darkText)
                         .multilineTextAlignment(.center)
                     Text("Ask for access to hear their recorded memories. Tell them who you are so they recognize you.")
-                        .font(.system(size: 15, design: .serif))
+                        .font(LinenTheme.body(15))
                         .foregroundColor(darkText.opacity(0.7))
                         .multilineTextAlignment(.center)
                 }
-                .padding(.horizontal, 36)
+                .padding(.horizontal, 24)
 
                 TextField("Your name", text: $displayName)
                     .textFieldStyle(.plain)
+                    .font(LinenTheme.body(16))
                     .padding(14)
-                    .background(Color.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 12))
-                    .padding(.horizontal, 36)
+                    .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 24)
 
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.system(size: 13))
+                        .font(LinenTheme.body(13))
                         .foregroundColor(.red)
-                        .padding(.horizontal, 36)
+                        .padding(.horizontal, 24)
                 }
 
                 Button {
@@ -118,19 +121,23 @@ struct RequestAccessView: View {
                         ProgressView().tint(.white)
                     } else {
                         Text("Request access")
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(LinenTheme.body(16, weight: .semibold))
                     }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
                 .background(canSubmit ? darkText : darkText.opacity(0.4), in: Capsule())
-                .foregroundColor(.white)
+                .foregroundColor(LinenTheme.onAccent)
                 .disabled(!canSubmit || isSubmitting)
-                .padding(.horizontal, 36)
+                .padding(.horizontal, 24)
             }
 
-            Spacer()
+            Spacer(minLength: 24)
         }
+        .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .linenScreen()
     }
 
     private var canSubmit: Bool {

@@ -422,14 +422,14 @@ struct MemoryDetailView: View {
     }
 
     /// Aligned with `RecentMemoriesView` warm parchment base.
-    private let backgroundColor = Color(red: 0.98, green: 0.96, blue: 0.89)
-    private let cardSurface = Color.white
+    private let backgroundColor = LinenTheme.paper
+    private let cardSurface = LinenTheme.card
     /// Subtle hairline; keeps cards calm vs heavy shadows.
-    private let cardStroke = Color.black.opacity(0.06)
-    private let headerColor = Color(red: 0.12, green: 0.22, blue: 0.18)
-    private let textSecondary = Color(red: 0.5, green: 0.5, blue: 0.5)
-    private let softCream = Color(red: 253/255, green: 234/255, blue: 198/255)
-    private let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
+    private let cardStroke = LinenTheme.line
+    private let headerColor = LinenTheme.ink
+    private let textSecondary = LinenTheme.secondary
+    private let softCream = LinenTheme.paper
+    private let terracotta = LinenTheme.accent
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
     
@@ -444,16 +444,17 @@ struct MemoryDetailView: View {
 
     private var memoryDetailTitle: some View {
         Text(memory.prompt ?? "Memory")
-            .font(.system(size: 28, weight: .semibold, design: .serif))
+            .font(LinenTheme.heading(25))
             .foregroundColor(headerColor)
-            .multilineTextAlignment(.center)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 24)
             .padding(.top, 4)
     }
 
     private var memoryPrimaryCard: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 16) {
             if let date = memory.createdAt {
                 memoryDateRow(date: date)
             }
@@ -484,18 +485,18 @@ struct MemoryDetailView: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(cardStroke, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.05), radius: 16, x: 0, y: 6)
-        .padding(.horizontal, 20)
+
+        .padding(.horizontal, 24)
     }
 
     @ViewBuilder
     private func memoryDateRow(date: Date) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "calendar")
-                .font(.system(size: 15, weight: .medium))
+                .font(LinenTheme.body(15, weight: .medium))
                 .foregroundColor(terracotta)
             Text(dateFormatted(date))
-                .font(.system(size: 16, weight: .regular, design: .serif))
+                .font(LinenTheme.heading(16))
                 .foregroundColor(headerColor.opacity(0.88))
             Spacer()
         }
@@ -522,7 +523,7 @@ struct MemoryDetailView: View {
                     Circle()
                         .fill(terracotta.opacity(0.12))
                     Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 19, weight: .semibold))
+                        .font(LinenTheme.body(19, weight: .semibold))
                         .foregroundColor(terracotta)
                 }
                 .frame(width: 52, height: 52)
@@ -535,9 +536,9 @@ struct MemoryDetailView: View {
             Button(action: { showReRecordConfirm = true }) {
                 VStack(spacing: 4) {
                     Image(systemName: "mic.badge.plus")
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(LinenTheme.body(22, weight: .semibold))
                     Text("Record Again")
-                        .font(.system(size: 11, weight: .semibold, design: .serif))
+                        .font(LinenTheme.heading(11))
                         .multilineTextAlignment(.center)
                 }
                 .foregroundColor(terracotta)
@@ -557,12 +558,12 @@ struct MemoryDetailView: View {
 
             VStack(spacing: 18) {
                 Text("Replace this recording?")
-                    .font(.system(size: 22, weight: .semibold, design: .serif))
+                    .font(LinenTheme.heading(22))
                     .foregroundColor(headerColor)
                     .multilineTextAlignment(.center)
 
                 Text("This will permanently clear the current voice recording. You can then record a new one.")
-                    .font(.system(size: 16, weight: .regular, design: .serif))
+                    .font(LinenTheme.heading(16))
                     .foregroundColor(textSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -570,7 +571,7 @@ struct MemoryDetailView: View {
                 VStack(spacing: 12) {
                     Button(action: confirmClearAudioAndOpenRecorder) {
                         Text("Clear and Record Again")
-                            .font(.system(size: 17, weight: .semibold, design: .serif))
+                            .font(LinenTheme.heading(17))
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
@@ -581,7 +582,7 @@ struct MemoryDetailView: View {
 
                     Button(action: { showReRecordConfirm = false }) {
                         Text("Keep Recording")
-                            .font(.system(size: 17, weight: .semibold, design: .serif))
+                            .font(LinenTheme.heading(17))
                             .foregroundColor(headerColor.opacity(0.88))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
@@ -623,12 +624,12 @@ struct MemoryDetailView: View {
                                 ? "Lightly refined for reading"
                                 : "Edited by you"))
                     }
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(LinenTheme.body(13, weight: .semibold))
                     .foregroundColor(terracotta)
 
                     if !isShowingRawTranscript {
                         Text("Obvious filler and formatting noise are removed. Your words, details, and voice stay intact.")
-                            .font(.system(size: 13, design: .serif))
+                            .font(LinenTheme.body(13))
                             .foregroundColor(textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -636,10 +637,10 @@ struct MemoryDetailView: View {
             }
 
             Text(visibleText)
-                .font(.custom("Georgia", size: 18))
+                .font(LinenTheme.body(16))
                 .multilineTextAlignment(.leading)
                 .foregroundColor(Color(red: 0.15, green: 0.14, blue: 0.13))
-                .lineSpacing(6)
+                .lineSpacing(8)
                 .lineLimit(isTextExpanded ? nil : 10)
                 .padding(.vertical, 2)
 
@@ -650,7 +651,7 @@ struct MemoryDetailView: View {
                     }
                 }) {
                     Text(isTextExpanded ? "Read less" : "Read more")
-                        .font(.system(size: 15, weight: .semibold, design: .serif))
+                        .font(LinenTheme.heading(15))
                         .foregroundColor(terracotta)
                 }
                 .buttonStyle(.plain)
@@ -664,7 +665,7 @@ struct MemoryDetailView: View {
                     }
                 }) {
                     Text(isShowingRawTranscript ? "View reading copy" : "View raw transcript")
-                        .font(.system(size: 14, weight: .semibold, design: .serif))
+                        .font(LinenTheme.heading(14))
                         .foregroundColor(terracotta)
                 }
                 .buttonStyle(.plain)
@@ -678,12 +679,12 @@ struct MemoryDetailView: View {
                     Text(memory.transcriptionStatus == "needsRerecording" ?
                          "This audio can't be transcribed. Record it again." :
                          "Audio transcript failed.")
-                        .font(.system(size: 14, weight: .medium, design: .serif))
+                        .font(LinenTheme.heading(14))
                         .foregroundColor(textSecondary)
                     Spacer(minLength: 0)
                     if memory.transcriptionStatus == "failed" {
                         Button("Retry", action: retryCloudTranscription)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(LinenTheme.body(14, weight: .semibold))
                             .foregroundColor(terracotta)
                     }
                 }
@@ -699,38 +700,38 @@ struct MemoryDetailView: View {
         HStack(spacing: 10) {
             if memory.transcriptionStatus == "failed" || memory.transcriptionStatus == "needsRerecording" {
                 Image(systemName: "exclamationmark.circle.fill")
-                    .font(.system(size: 18))
+                    .font(LinenTheme.body(18))
                     .foregroundColor(terracotta)
                 Text(memory.transcriptionStatus == "needsRerecording" ?
                      "This recording needs to be recorded again." :
                      "We couldn't create the transcript.")
-                    .font(.system(size: 15, weight: .medium, design: .serif))
+                    .font(LinenTheme.heading(15))
                     .foregroundColor(textSecondary)
                 Spacer(minLength: 0)
                 if memory.transcriptionStatus == "failed" {
                     Button("Retry", action: retryCloudTranscription)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(LinenTheme.body(15, weight: .semibold))
                         .foregroundColor(terracotta)
                 }
             } else if isTranscribingNow {
                 ProgressView()
                     .tint(terracotta)
                 Text("Transcribing…")
-                    .font(.system(size: 15, weight: .medium, design: .serif))
+                    .font(LinenTheme.heading(15))
                     .foregroundColor(textSecondary)
             } else if isLegacyRecording {
                 Image(systemName: "mic.badge.plus")
-                    .font(.system(size: 18))
+                    .font(LinenTheme.body(18))
                     .foregroundColor(terracotta.opacity(0.7))
                 Text("Re-record this older audio to create a new transcript.")
-                    .font(.system(size: 15, weight: .medium, design: .serif))
+                    .font(LinenTheme.heading(15))
                     .foregroundColor(textSecondary)
             } else {
                 Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 18))
+                    .font(LinenTheme.body(18))
                     .foregroundColor(terracotta.opacity(0.7))
                 Text("Audio saved. Transcript coming soon, we'll retry automatically.")
-                    .font(.system(size: 15, weight: .medium, design: .serif))
+                    .font(LinenTheme.heading(15))
                     .foregroundColor(textSecondary)
             }
             Spacer(minLength: 0)
@@ -771,9 +772,9 @@ struct MemoryDetailView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 Image(systemName: "pencil.line")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(LinenTheme.body(13, weight: .semibold))
                 Text("Editing")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(LinenTheme.body(13, weight: .semibold))
             }
             .foregroundColor(terracotta)
             .padding(.horizontal, 12)
@@ -784,7 +785,7 @@ struct MemoryDetailView: View {
             )
 
             TextEditor(text: $draftText)
-                .font(.custom("Georgia", size: 18))
+                .font(LinenTheme.body(16))
                 .lineSpacing(5)
                 .frame(minHeight: 220)
                 .padding(12)
@@ -818,7 +819,7 @@ struct MemoryDetailView: View {
                 /*
                 VStack(spacing: 20) {
                     Text("Photos")
-                        .font(.subheadline)
+                        .font(LinenTheme.body(14))
                         .textCase(.uppercase)
                         .foregroundColor(.gray)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -872,8 +873,8 @@ struct MemoryDetailView: View {
                     RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .stroke(cardStroke, lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.05), radius: 16, x: 0, y: 6)
-                .padding(.horizontal, 20)
+
+                .padding(.horizontal, 24)
                 */
 
                 Spacer(minLength: 40)
@@ -896,7 +897,7 @@ struct MemoryDetailView: View {
                     ProgressView()
                         .tint(terracotta)
                     Text("Preparing your memory to share…")
-                        .font(.system(size: 15, weight: .semibold, design: .serif))
+                        .font(LinenTheme.heading(15))
                         .foregroundColor(headerColor)
                 }
                 .padding(.horizontal, 24)
@@ -919,7 +920,7 @@ struct MemoryDetailView: View {
                     dismiss()
                 }) {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(LinenTheme.body(16, weight: .semibold))
                         .foregroundColor(headerColor.opacity(0.75))
                         .frame(width: 40, height: 40)
                         .background(
@@ -927,8 +928,8 @@ struct MemoryDetailView: View {
                                 .fill(
                                     LinearGradient(
                                         colors: [
-                                            Color.white.opacity(0.85),
-                                            Color.white.opacity(0.65)
+                                            LinenTheme.surface,
+                                            LinenTheme.surface
                                         ],
                                         startPoint: .topLeading,
                                         endPoint: .bottomTrailing
@@ -1089,12 +1090,12 @@ struct MemoryDetailView: View {
         .sheet(isPresented: $showTranscriptionProgress) {
             VStack(spacing: 20) {
                 Text("Transcribing Memories…")
-                    .font(.headline)
+                    .font(LinenTheme.body(16, weight: .semibold))
                 ProgressView(value: Double(transcriptionManager.processed), total: Double(max(transcriptionManager.total, 1)))
                     .progressViewStyle(CircularProgressViewStyle(tint: .orange))
                     .frame(width: 80, height: 80)
                 Text("\(transcriptionManager.processed) / \(transcriptionManager.total)")
-                    .font(.subheadline)
+                    .font(LinenTheme.body(14))
                     .padding(.bottom, 20)
             }
             .padding()
@@ -1495,7 +1496,7 @@ struct MemoryDetailView: View {
         }) {
             HStack(alignment: .center, spacing: 14) {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(LinenTheme.body(18, weight: .semibold))
                     .foregroundColor(terracotta)
                     .frame(width: 44, height: 44)
                     .background(
@@ -1509,11 +1510,11 @@ struct MemoryDetailView: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Enhance for better images")
-                        .font(.system(size: 16, weight: .semibold, design: .serif))
+                        .font(LinenTheme.heading(16))
                         .foregroundColor(headerColor)
 
                     Text("Add character details so story art matches your memory.")
-                        .font(.system(size: 13))
+                        .font(LinenTheme.body(13))
                         .foregroundColor(textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1521,7 +1522,7 @@ struct MemoryDetailView: View {
                 Spacer(minLength: 8)
 
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(LinenTheme.body(13, weight: .semibold))
                     .foregroundColor(terracotta.opacity(0.5))
             }
             .padding(14)
@@ -1561,23 +1562,23 @@ struct MemoryDetailView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 12) {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(LinenTheme.body(22, weight: .semibold))
                         .foregroundColor(Color(red: 0.35, green: 0.62, blue: 0.42))
                         .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Character details")
-                            .font(.system(size: 16, weight: .semibold, design: .serif))
+                            .font(LinenTheme.heading(16))
                             .foregroundColor(headerColor)
                         Text("\(details.characters.count) character\(details.characters.count == 1 ? "" : "s") saved")
-                            .font(.system(size: 13))
+                            .font(LinenTheme.body(13))
                             .foregroundColor(textSecondary)
                     }
 
                     Spacer(minLength: 8)
 
                     Text("Edit")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(LinenTheme.body(13, weight: .semibold))
                         .foregroundColor(terracotta)
                 }
 
@@ -1590,12 +1591,12 @@ struct MemoryDetailView: View {
                                     .frame(width: 26, height: 26)
                                     .overlay(
                                         Text(character.name.isEmpty ? "?" : String(character.name.prefix(1).uppercased()))
-                                            .font(.system(size: 11, weight: .bold))
+                                            .font(LinenTheme.body(11, weight: .bold))
                                             .foregroundColor(headerColor)
                                     )
 
                                 Text(character.name.isEmpty ? "Unnamed" : character.name)
-                                    .font(.system(size: 13, weight: .medium))
+                                    .font(LinenTheme.body(13, weight: .medium))
                                     .foregroundColor(headerColor)
                             }
                             .padding(.horizontal, 12)
@@ -1612,7 +1613,7 @@ struct MemoryDetailView: View {
 
                         if details.characters.count > 4 {
                             Text("+\(details.characters.count - 4)")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(LinenTheme.body(12, weight: .semibold))
                                 .foregroundColor(textSecondary)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
@@ -1772,7 +1773,7 @@ struct CharacterDetailsQuestionView: View {
                                 
                                 Spacer(minLength: 140)
                             }
-                            .padding(.horizontal, 20)
+                            .padding(.horizontal, 24)
                             .padding(.top, 12)
                         }
                         .scrollDismissesKeyboard(.interactively)
@@ -1823,7 +1824,7 @@ struct CharacterDetailsQuestionView: View {
                 }
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(LinenTheme.body(18, weight: .semibold))
                     .foregroundColor(Tokens.ink)
                     .frame(width: 36, height: 36)
             }
@@ -1831,7 +1832,7 @@ struct CharacterDetailsQuestionView: View {
             Spacer()
             
             Text("Characters")
-                .font(.system(size: 17, weight: .semibold))
+                .font(LinenTheme.body(17, weight: .semibold))
                 .foregroundColor(Tokens.ink)
             
             Spacer()
@@ -1868,7 +1869,7 @@ struct CharacterDetailsQuestionView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Quick Add")
-                        .font(.system(size: 18, weight: .semibold, design: .serif))
+                        .font(LinenTheme.heading(18))
                         .foregroundColor(Tokens.ink)
                     Text("People from your other memories")
                         .font(Tokens.Typography.caption)
@@ -1879,7 +1880,7 @@ struct CharacterDetailsQuestionView: View {
                 if existingCharacters.count > 3 {
                     Button(action: { showExistingCharactersPicker = true }) {
                         Text("See All")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(LinenTheme.body(13, weight: .medium))
                             .foregroundColor(accentColor)
                     }
                 }
@@ -1943,20 +1944,20 @@ struct CharacterDetailsQuestionView: View {
                     .frame(width: 90, height: 90)
                 
                 Image(systemName: "person.2.fill")
-                    .font(.system(size: 36, weight: .medium))
+                    .font(LinenTheme.body(36, weight: .medium))
                     .foregroundColor(accentColor)
             }
             
             VStack(spacing: 8) {
                 Text("Add people from this memory")
-                    .font(.system(size: 20, weight: .semibold, design: .serif))
+                    .font(LinenTheme.heading(20))
                     .foregroundColor(Tokens.ink)
                 
                 Text("Help us create better images by describing who was there")
                     .font(Tokens.Typography.subtitle)
                     .foregroundColor(Tokens.ink.opacity(0.6))
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 24)
             }
         }
         .frame(maxWidth: .infinity)
@@ -1972,7 +1973,7 @@ struct CharacterDetailsQuestionView: View {
         }) {
             HStack(spacing: 8) {
                 Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(LinenTheme.body(18, weight: .semibold))
                 Text("Add Character")
                     .font(Tokens.Typography.button)
             }
@@ -2013,7 +2014,7 @@ struct CharacterDetailsQuestionView: View {
         HStack(spacing: 8) {
             if saveSuccess {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(LinenTheme.body(18, weight: .semibold))
             }
             Text(saveSuccess ? "Saved!" : "Save")
                 .font(Tokens.Typography.button)
@@ -2055,7 +2056,7 @@ struct CharacterDetailsQuestionView: View {
                 
                 saveButton
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 24)
             .padding(.vertical, 16)
         }
         .background(backgroundColor)
@@ -2225,7 +2226,7 @@ struct QuickAddCharacterButton: View {
     let onTap: () -> Void
     
     private let accentColor = Color(red: 0.88, green: 0.52, blue: 0.28)
-    private let headerColor = Color(red: 0.07, green: 0.21, blue: 0.13)
+    private let headerColor = LinenTheme.ink
     private let softGreen = Color(red: 0.15, green: 0.35, blue: 0.25)
     
     private var quickInfo: String {
@@ -2243,21 +2244,21 @@ struct QuickAddCharacterButton: View {
                     
                     if !character.name.isEmpty {
                         Text(String(character.name.prefix(1).uppercased()))
-                            .font(.system(size: 22, weight: .bold, design: .serif))
+                            .font(LinenTheme.heading(22))
                             .foregroundColor(isAdded ? softGreen : headerColor)
                     } else {
                         Image(systemName: "person.fill")
-                            .font(.system(size: 22))
+                            .font(LinenTheme.body(22))
                             .foregroundColor(accentColor.opacity(0.7))
                     }
                     
                     if isAdded {
                         Circle()
-                            .fill(Color.white)
+                            .fill(LinenTheme.card)
                             .frame(width: 22, height: 22)
                             .overlay(
                                 Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 22, weight: .bold))
+                                    .font(LinenTheme.body(22, weight: .bold))
                                     .foregroundColor(softGreen)
                             )
                             .offset(x: 20, y: -20)
@@ -2266,7 +2267,7 @@ struct QuickAddCharacterButton: View {
                 
                 // Name
                 Text(character.name.isEmpty ? "Unknown" : character.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(LinenTheme.body(13, weight: .medium))
                     .foregroundColor(isAdded ? softGreen : headerColor)
                     .lineLimit(1)
                     .frame(width: 80)
@@ -2274,11 +2275,11 @@ struct QuickAddCharacterButton: View {
                 // Quick info or "Added" label
                 if isAdded {
                     Text("Added")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(LinenTheme.body(11, weight: .medium))
                         .foregroundColor(softGreen)
                 } else if !quickInfo.isEmpty {
                     Text(quickInfo)
-                        .font(.system(size: 11))
+                        .font(LinenTheme.body(11))
                         .foregroundColor(.gray)
                         .lineLimit(1)
                 }
@@ -2309,10 +2310,10 @@ struct ExistingCharactersPickerView: View {
     
     @State private var searchText = ""
     
-    private let backgroundColor = Color(red: 0.98, green: 0.94, blue: 0.86)
+    private let backgroundColor = LinenTheme.paper
     private let cardColor = Color(red: 1.0, green: 0.97, blue: 0.92)
     private let accentColor = Color(red: 0.88, green: 0.52, blue: 0.28)
-    private let headerColor = Color(red: 0.07, green: 0.21, blue: 0.13)
+    private let headerColor = LinenTheme.ink
     
     private func isAdded(_ character: CharacterDetails.Character) -> Bool {
         let normalizedName = character.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2345,12 +2346,12 @@ struct ExistingCharactersPickerView: View {
                         Image(systemName: "magnifyingglass")
                             .foregroundColor(.gray)
                         TextField("Search characters...", text: $searchText)
-                            .font(.system(size: 16))
+                            .font(LinenTheme.body(16))
                     }
                     .padding(12)
                     .background(Color.white.opacity(0.8))
                     .cornerRadius(12)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 24)
                     .padding(.vertical, 12)
                     
                     ScrollView {
@@ -2370,7 +2371,7 @@ struct ExistingCharactersPickerView: View {
                                 )
                             }
                         }
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, 24)
                         .padding(.vertical, 8)
                     }
                 }
@@ -2397,7 +2398,7 @@ struct ExistingCharacterRow: View {
     
     private let cardColor = Color(red: 1.0, green: 0.97, blue: 0.92)
     private let accentColor = Color(red: 0.88, green: 0.52, blue: 0.28)
-    private let headerColor = Color(red: 0.07, green: 0.21, blue: 0.13)
+    private let headerColor = LinenTheme.ink
     
     private var detailsText: String {
         var details: [String] = []
@@ -2428,15 +2429,15 @@ struct ExistingCharacterRow: View {
                     
                     if isAdded {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 20, weight: .bold))
+                            .font(LinenTheme.body(20, weight: .bold))
                             .foregroundColor(.white)
                     } else if !character.name.isEmpty {
                         Text(String(character.name.prefix(1).uppercased()))
-                            .font(.system(size: 20, weight: .bold, design: .serif))
+                            .font(LinenTheme.heading(20))
                             .foregroundColor(headerColor)
                     } else {
                         Image(systemName: "person.fill")
-                            .font(.system(size: 20))
+                            .font(LinenTheme.body(20))
                             .foregroundColor(accentColor.opacity(0.7))
                     }
                 }
@@ -2444,12 +2445,12 @@ struct ExistingCharacterRow: View {
                 // Info
                 VStack(alignment: .leading, spacing: 4) {
                     Text(character.name.isEmpty ? "Unknown" : character.name)
-                        .font(.system(size: 16, weight: .semibold, design: .serif))
+                        .font(LinenTheme.heading(16))
                         .foregroundColor(isAdded ? .gray : headerColor)
                     
                     if !detailsText.isEmpty {
                         Text(detailsText)
-                            .font(.system(size: 13))
+                            .font(LinenTheme.body(13))
                             .foregroundColor(.gray)
                             .lineLimit(2)
                     }
@@ -2459,11 +2460,11 @@ struct ExistingCharacterRow: View {
                 
                 if isAdded {
                     Text("Added")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(LinenTheme.body(13, weight: .medium))
                         .foregroundColor(.gray)
                 } else {
                     Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 24))
+                        .font(LinenTheme.body(24))
                         .foregroundColor(accentColor)
                 }
             }
@@ -2490,7 +2491,7 @@ struct AgeSlider: View {
     
     @State private var ageValue: Double = 25
     
-    private let terracotta = Color(red: 0.88, green: 0.52, blue: 0.28)
+    private let terracotta = LinenTheme.accent
     private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
     
     var body: some View {
@@ -2509,7 +2510,7 @@ struct AgeSlider: View {
                 }
             
             Text("100")
-                .font(.system(size: 13))
+                .font(LinenTheme.body(13))
                 .foregroundColor(.gray)
         }
         .onAppear {
@@ -2541,7 +2542,7 @@ struct GenderSegmentedPicker: View {
     @Binding var selectedGender: String
     
     private let genderOptions = ["Male", "Female", "Other"]
-    private let terracotta = Color(red: 0.88, green: 0.52, blue: 0.28)
+    private let terracotta = LinenTheme.accent
     private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
     
     var body: some View {
@@ -2584,24 +2585,24 @@ struct AppearanceTextArea: View {
     @Binding var text: String
     @FocusState private var isFocused: Bool
     
-    private let terracotta = Color(red: 0.88, green: 0.52, blue: 0.28)
+    private let terracotta = LinenTheme.accent
     private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Appearance")
-                .font(.system(size: 14, weight: .semibold, design: .serif))
+                .font(LinenTheme.heading(14))
                 .foregroundColor(ink)
             
             TextField("Describe their look: skin tone, hair, build, what they're wearing...", text: $text, axis: .vertical)
                 .lineLimit(2...5)
-                .font(.system(size: 15))
+                .font(LinenTheme.body(15))
                 .foregroundColor(ink)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white)
+                        .fill(LinenTheme.card)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(isFocused ? terracotta.opacity(0.6) : Color.gray.opacity(0.2), lineWidth: isFocused ? 2 : 1)
@@ -2623,29 +2624,29 @@ struct CharacterTextField: View {
     
     @FocusState private var isFocused: Bool
     
-    private let terracotta = Color(red: 0.88, green: 0.52, blue: 0.28)
+    private let terracotta = LinenTheme.accent
     private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(LinenTheme.body(12, weight: .medium))
                     .foregroundColor(terracotta)
                 Text(label)
-                    .font(.system(size: 14, weight: .semibold, design: .serif))
+                    .font(LinenTheme.heading(14))
                     .foregroundColor(ink)
             }
             
             TextField(placeholder, text: $text, axis: .vertical)
                 .lineLimit(1...5)
-                .font(.system(size: 15))
+                .font(LinenTheme.body(15))
                 .foregroundColor(ink)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white)
+                        .fill(LinenTheme.card)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(isFocused ? terracotta.opacity(0.6) : Color.gray.opacity(0.2), lineWidth: isFocused ? 2 : 1)
@@ -2667,29 +2668,29 @@ struct CharacterTextArea: View {
     
     @FocusState private var isFocused: Bool
     
-    private let terracotta = Color(red: 0.88, green: 0.52, blue: 0.28)
+    private let terracotta = LinenTheme.accent
     private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(LinenTheme.body(12, weight: .medium))
                     .foregroundColor(terracotta)
                 Text(label)
-                    .font(.system(size: 14, weight: .semibold, design: .serif))
+                    .font(LinenTheme.heading(14))
                     .foregroundColor(ink)
             }
             
             TextField(placeholder, text: $text, axis: .vertical)
                 .lineLimit(2...5)
-                .font(.system(size: 15))
+                .font(LinenTheme.body(15))
                 .foregroundColor(ink)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white)
+                        .fill(LinenTheme.card)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(isFocused ? terracotta.opacity(0.6) : Color.gray.opacity(0.2), lineWidth: isFocused ? 2 : 1)
@@ -2711,9 +2712,9 @@ struct StreamlinedCharacterCard: View {
     @FocusState private var isNameFocused: Bool
     @State private var nameText: String = ""
     
-    private let terracotta = Color(red: 0.88, green: 0.52, blue: 0.28)
+    private let terracotta = LinenTheme.accent
     private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
-    private let deepGreen = Color(red: 0.07, green: 0.21, blue: 0.13)
+    private let deepGreen = LinenTheme.ink
     
     // Name text field broken into separate computed property
     private var nameTextField: some View {
@@ -2724,7 +2725,7 @@ struct StreamlinedCharacterCard: View {
         let shadowY: CGFloat = isNameFocused ? 4 : 2
         
         return TextField("Name", text: $character.name, prompt: Text("Character \(index + 1)").foregroundColor(ink.opacity(0.4)))
-            .font(.system(size: 18, weight: .semibold, design: .serif))
+            .font(LinenTheme.heading(18))
             .foregroundColor(deepGreen)
             .focused($isNameFocused)
             .padding(.horizontal, 16)
@@ -2735,7 +2736,7 @@ struct StreamlinedCharacterCard: View {
     
     private func nameFieldBackground(borderColor: Color, borderWidth: CGFloat, shadowColor: Color, shadowRadius: CGFloat, shadowY: CGFloat) -> some View {
         RoundedRectangle(cornerRadius: 12)
-            .fill(Color.white)
+            .fill(LinenTheme.card)
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(borderColor, lineWidth: borderWidth)
@@ -2761,11 +2762,11 @@ struct StreamlinedCharacterCard: View {
                     
                     if !character.name.isEmpty {
                         Text(String(character.name.prefix(1).uppercased()))
-                            .font(.system(size: 22, weight: .bold, design: .serif))
+                            .font(LinenTheme.heading(22))
                             .foregroundColor(deepGreen)
                     } else {
                         Image(systemName: "person.fill")
-                            .font(.system(size: 20))
+                            .font(LinenTheme.body(20))
                             .foregroundColor(terracotta.opacity(0.7))
                     }
                 }
@@ -2782,7 +2783,7 @@ struct StreamlinedCharacterCard: View {
                     }
                 }) {
                     Image(systemName: "trash")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(LinenTheme.body(15, weight: .medium))
                         .foregroundColor(.red.opacity(0.8))
                         .frame(width: 36, height: 36)
                         .background(
@@ -2796,7 +2797,7 @@ struct StreamlinedCharacterCard: View {
             // Age slider
             VStack(alignment: .leading, spacing: 8) {
                 Text("Age")
-                    .font(.system(size: 14, weight: .semibold, design: .serif))
+                    .font(LinenTheme.heading(14))
                     .foregroundColor(ink)
                 
                 AgeSlider(selectedAge: $character.age)
@@ -2805,7 +2806,7 @@ struct StreamlinedCharacterCard: View {
             // Gender picker
             VStack(alignment: .leading, spacing: 8) {
                 Text("Gender")
-                    .font(.system(size: 14, weight: .semibold, design: .serif))
+                    .font(LinenTheme.heading(14))
                     .foregroundColor(ink)
                 
                 GenderSegmentedPicker(selectedGender: $character.gender)
@@ -2838,7 +2839,7 @@ struct StreamlinedCharacterCard: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color.white)
+                .fill(LinenTheme.card)
                 .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
         )
         .onAppear {
@@ -2901,12 +2902,12 @@ struct SimpleTextField: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 14))
+                .font(LinenTheme.body(14))
                 .foregroundColor(accentColor)
                 .frame(width: 20)
             
             TextField(placeholder, text: $text, prompt: Text(placeholder).foregroundColor(softGreen.opacity(0.5)))
-                .font(.system(size: 15, weight: .medium))
+                .font(LinenTheme.body(15, weight: .medium))
                 .foregroundColor(Color(red: 0, green: 0, blue: 0))
         }
         .padding(12)
@@ -2931,28 +2932,28 @@ struct DetailedTextField: View {
     @FocusState private var isFocused: Bool
     
     private let accentColor = Color(red: 0.88, green: 0.52, blue: 0.28)
-    private let headerColor = Color(red: 0.07, green: 0.21, blue: 0.13)
+    private let headerColor = LinenTheme.ink
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(LinenTheme.body(13, weight: .medium))
                     .foregroundColor(accentColor)
                     .frame(width: 20)
                 
                 Text(label)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(LinenTheme.body(14, weight: .semibold))
                     .foregroundColor(headerColor)
             }
             
             TextField(placeholder, text: $text)
-                .font(.system(size: 15, weight: .regular))
+                .font(LinenTheme.body(15, weight: .regular))
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .background(
                     RoundedRectangle(cornerRadius: 11)
-                        .fill(Color.white)
+                        .fill(LinenTheme.card)
                         .overlay(
                             RoundedRectangle(cornerRadius: 11)
                                 .stroke(
@@ -2989,23 +2990,23 @@ struct EnhancedTextField: View {
     @FocusState private var isFocused: Bool
     
     private let accentColor = Color(red: 0.88, green: 0.52, blue: 0.28)
-    private let headerColor = Color(red: 0.07, green: 0.21, blue: 0.13)
+    private let headerColor = LinenTheme.ink
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(LinenTheme.body(14, weight: .medium))
                     .foregroundColor(accentColor)
                 
                 Text(title)
-                    .font(.custom("Georgia", size: 13))
+                    .font(LinenTheme.body(13))
                     .foregroundColor(headerColor)
                     .fontWeight(.medium)
             }
             
             TextField(placeholder, text: $text)
-                .font(.custom("Georgia", size: 15))
+                .font(LinenTheme.body(15))
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .background(

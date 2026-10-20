@@ -34,7 +34,6 @@ struct EmailAuthSheet: View {
     /// before the sheet dismisses itself.
     private let onSuccess: (AuthenticationService.AccountLinkOutcome) -> Void
 
-    private let colors = OnboardingColorTheme()
 
     init(
         initialMode: Mode = .createAccount,
@@ -51,7 +50,7 @@ struct EmailAuthSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                colors.beige.ignoresSafeArea()
+                LinenTheme.paper.ignoresSafeArea()
 
                 GeometryReader { geometry in
                     ScrollView {
@@ -67,7 +66,7 @@ struct EmailAuthSheet: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Email")
                             .font(.caption)
-                            .foregroundColor(colors.deepGreen.opacity(0.7))
+                            .foregroundColor(LinenTheme.ink.opacity(0.7))
                         TextField("you@example.com", text: $email)
                             .textContentType(.emailAddress)
                             .keyboardType(.emailAddress)
@@ -81,7 +80,7 @@ struct EmailAuthSheet: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Password")
                             .font(.caption)
-                            .foregroundColor(colors.deepGreen.opacity(0.7))
+                            .foregroundColor(LinenTheme.ink.opacity(0.7))
                         SecureField(mode == .createAccount ? "At least 8 characters" : "Password", text: $password)
                             .textContentType(mode == .createAccount ? .newPassword : .password)
                             .padding(12)
@@ -95,7 +94,7 @@ struct EmailAuthSheet: View {
                         } label: {
                             Text("Forgot password?")
                                 .font(.footnote.weight(.semibold))
-                                .foregroundColor(colors.orange)
+                                .foregroundColor(LinenTheme.accent)
                         }
                         .frame(maxWidth: .infinity, alignment: .trailing)
                     }
@@ -103,7 +102,7 @@ struct EmailAuthSheet: View {
                     if let resetConfirmation {
                         Text(resetConfirmation)
                             .font(.footnote)
-                            .foregroundColor(colors.deepGreen)
+                            .foregroundColor(LinenTheme.ink)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
@@ -121,11 +120,11 @@ struct EmailAuthSheet: View {
                                     .tint(.white)
                             }
                             Text(mode == .createAccount ? "Create Account" : "Sign In")
-                                .font(.system(size: 16, weight: .semibold))
+                                .font(LinenTheme.body(16, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: submitButtonHeight)
-                        .background(canSubmit ? colors.orange : colors.fadedGray)
+                        .background(canSubmit ? LinenTheme.accent : LinenTheme.surface)
                         .foregroundColor(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }

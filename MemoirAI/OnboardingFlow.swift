@@ -710,10 +710,6 @@ struct OnboardingFlow: View {
 
     private func prepareSession() async {
         isPreparingAccount = true
-        if !didTrackStart {
-            didTrackStart = true
-            track("Onboarding Started")
-        }
         guard await AuthenticationService.shared.prepareAuthenticatedSessionForLaunch(),
               let uid = Auth.auth().currentUser?.uid else {
             isPreparingAccount = false
@@ -721,7 +717,9 @@ struct OnboardingFlow: View {
             track("Onboarding Preparation Failed", ["failure_stage": "auth"])
             return
         }
+        guard !Task.isCancelled else { return }
         await profileVM.activateUser(uid)
+        guard !Task.isCancelled else { return }
         #if DEBUG
         do {
             _ = try await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
@@ -731,6 +729,11 @@ struct OnboardingFlow: View {
             return
         }
         #endif
+        guard !Task.isCancelled else { return }
+        if !didTrackStart {
+            didTrackStart = true
+            track("Onboarding Started")
+        }
         if !didWarmPreviewService {
             didWarmPreviewService = true
             Task {

@@ -33,7 +33,9 @@ struct OrderHistoryView: View {
                     }
                 }
             }
-            .background(Color(UIColor.systemGroupedBackground))
+            .scrollContentBackground(.hidden)
+            .background(LinenTheme.paper)
+            .tint(LinenTheme.accent)
             .navigationTitle("Print Orders")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -58,10 +60,10 @@ struct OrderHistoryView: View {
                 .font(.system(size: 56))
                 .foregroundColor(.gray.opacity(0.5))
             Text("No orders yet")
-                .font(.title2)
+                .font(LinenTheme.heading())
                 .fontWeight(.medium)
             Text("Order a printed copy of your book from the library reader.")
-                .font(.subheadline)
+                .font(LinenTheme.body(14))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
@@ -87,7 +89,7 @@ struct OrderRowView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Order \(order.orderId.suffix(8))")
-                    .font(.subheadline)
+                    .font(LinenTheme.body(14))
                     .fontWeight(.medium)
                 Spacer()
                 if let pill = order.specialStatusPill {
@@ -97,12 +99,12 @@ struct OrderRowView: View {
             }
             if let addr = order.shippingAddress {
                 Text("\(addr.city), \(addr.stateCode) \(addr.postcode)")
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .foregroundColor(.secondary)
             }
             if let (cents, currency) = order.pricing {
                 Text(formatPrice(cents: cents, currency: currency))
-                    .font(.caption)
+                    .font(LinenTheme.body(12))
                     .fontWeight(.medium)
             }
         }
@@ -111,7 +113,7 @@ struct OrderRowView: View {
 
     var statusBadge: some View {
         Text(order.statusDisplay)
-            .font(.caption2)
+            .font(LinenTheme.body(11))
             .fontWeight(.semibold)
             .foregroundColor(statusColor)
             .padding(.horizontal, 8)
@@ -134,7 +136,7 @@ struct OrderRowView: View {
     /// Renders a refund/dispute/hold pill using the same capsule styling as `statusBadge`.
     func specialPill(_ pill: (text: String, color: Color)) -> some View {
         Text(pill.text)
-            .font(.caption2)
+            .font(LinenTheme.body(11))
             .fontWeight(.semibold)
             .foregroundColor(pill.color)
             .padding(.horizontal, 8)
@@ -206,7 +208,9 @@ struct OrderDetailView: View {
                     print("⚠️ syncOrderFromLulu failed for \(order.orderId): \(error.localizedDescription)")
                 }
             }
-            .background(Color(UIColor.systemGroupedBackground))
+            .scrollContentBackground(.hidden)
+            .background(LinenTheme.paper)
+            .tint(LinenTheme.accent)
             .navigationTitle("Order Details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -240,7 +244,7 @@ struct OrderDetailView: View {
             }
         }
         .padding()
-        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .background(LinenTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
@@ -256,11 +260,11 @@ struct OrderDetailView: View {
                 Spacer()
                 Image(systemName: "arrow.up.right")
             }
-            .font(.subheadline)
+            .font(LinenTheme.body(14))
             .foregroundColor(.blue)
         }
         .padding()
-        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .background(LinenTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
@@ -282,13 +286,13 @@ struct OrderDetailView: View {
                     }
                 } label: {
                     Label(copiedOrderId ? "Copied!" : "Copy", systemImage: copiedOrderId ? "checkmark" : "doc.on.doc")
-                        .font(.caption)
+                        .font(LinenTheme.body(12))
                         .foregroundColor(copiedOrderId ? .green : .accentColor)
                 }
             }
         }
         .padding()
-        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .background(LinenTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
@@ -302,12 +306,12 @@ struct OrderDetailView: View {
                     Spacer()
                     Image(systemName: "arrow.up.right")
                 }
-                .font(.subheadline)
+                .font(LinenTheme.body(14))
                 .foregroundColor(.blue)
             }
         }
         .padding()
-        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .background(LinenTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
@@ -315,17 +319,17 @@ struct OrderDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader("Ships To")
             VStack(alignment: .leading, spacing: 3) {
-                Text(addr.name).font(.subheadline).fontWeight(.medium)
-                Text(addr.street1).font(.subheadline).foregroundColor(.secondary)
-                Text("\(addr.city), \(addr.stateCode) \(addr.postcode)").font(.subheadline).foregroundColor(.secondary)
-                Text(addr.countryCode).font(.subheadline).foregroundColor(.secondary)
+                Text(addr.name).font(LinenTheme.body(14)).fontWeight(.medium)
+                Text(addr.street1).font(LinenTheme.body(14)).foregroundColor(.secondary)
+                Text("\(addr.city), \(addr.stateCode) \(addr.postcode)").font(LinenTheme.body(14)).foregroundColor(.secondary)
+                Text(addr.countryCode).font(LinenTheme.body(14)).foregroundColor(.secondary)
                 if !addr.phone.isEmpty {
-                    Text(addr.phone).font(.caption).foregroundColor(.secondary)
+                    Text(addr.phone).font(LinenTheme.body(12)).foregroundColor(.secondary)
                 }
             }
         }
         .padding()
-        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .background(LinenTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
@@ -334,15 +338,15 @@ struct OrderDetailView: View {
             sectionHeader("Payment")
             HStack {
                 Text("Total paid")
-                    .font(.subheadline)
+                    .font(LinenTheme.body(14))
                 Spacer()
                 Text(OrderRowView(order: order).formatPrice(cents: cents, currency: currency))
-                    .font(.subheadline)
+                    .font(LinenTheme.body(14))
                     .fontWeight(.semibold)
             }
         }
         .padding()
-        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .background(LinenTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
@@ -358,11 +362,11 @@ struct OrderDetailView: View {
                             .padding(.top, 5)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(entry["status"] as? String ?? "Unknown")
-                                .font(.subheadline)
+                                .font(LinenTheme.body(14))
                                 .fontWeight(.medium)
                             if let ts = entry["timestamp"] as? String {
                                 Text(ts)
-                                    .font(.caption)
+                                    .font(LinenTheme.body(12))
                                     .foregroundColor(.secondary)
                             }
                         }
@@ -372,27 +376,27 @@ struct OrderDetailView: View {
             }
         }
         .padding()
-        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .background(LinenTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private func detailRow(label: String, value: String) -> some View {
         HStack {
             Text(label)
-                .font(.subheadline)
+                .font(LinenTheme.body(14))
                 .foregroundColor(.secondary)
             Spacer()
             Text(value)
-                .font(.subheadline)
+                .font(LinenTheme.body(14))
         }
         .padding()
-        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .background(LinenTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.caption)
+            .font(LinenTheme.body(12))
             .fontWeight(.semibold)
             .foregroundColor(.secondary)
             .textCase(.uppercase)

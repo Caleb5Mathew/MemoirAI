@@ -72,12 +72,12 @@ struct MemoryEnhancementCoordinatorView: View {
                         }
                     )
                 } else {
-                    Color(red: 0.98, green: 0.96, blue: 0.90)
+                    LinenTheme.paper
                         .ignoresSafeArea()
                         .overlay {
                             VStack(spacing: 16) {
                                 Text("Guided enhancement isn’t available.")
-                                    .font(.headline)
+                                    .font(LinenTheme.body(16, weight: .semibold))
                                 Button("Back") { route = .intro }
                             }
                         }
@@ -107,12 +107,12 @@ struct MemoryEnhancementCoordinatorView: View {
                         }
                     )
                 } else {
-                    Color(red: 0.98, green: 0.96, blue: 0.90)
+                    LinenTheme.paper
                         .ignoresSafeArea()
                         .overlay {
                             VStack(spacing: 16) {
                                 Text("Guided enhancement isn’t available.")
-                                    .font(.headline)
+                                    .font(LinenTheme.body(16, weight: .semibold))
                                 Button("Back") { route = .intro }
                             }
                         }
@@ -127,19 +127,16 @@ struct MemoryEnhancementCoordinatorView: View {
                     .environmentObject(profileVM)
                     .environment(\.managedObjectContext, context)
                 } else {
-                    Color(red: 0.98, green: 0.96, blue: 0.90)
+                    LinenTheme.paper
                         .ignoresSafeArea()
                         .onAppear { dismiss() }
                 }
             }
         }
         .onAppear {
-            Mixpanel.mainInstance().track(
-                event: "Memory Enhancement Flow Opened",
-                properties: AnalyticsPrivacyPolicy.sanitized([
+            ProductAnalytics.shared.track("Memory Enhancement Flow Opened", [
                     "voice_available": voiceAvailable
                 ])
-            )
         }
     }
 }
@@ -156,9 +153,9 @@ private struct MemoryEnhancementAutoSaveSuccessView: View {
 
     @State private var didRunSave = false
 
-    private var header: Color { Color(red: 0.07, green: 0.21, blue: 0.13) }
-    private var terracotta: Color { Color(red: 0.82, green: 0.45, blue: 0.32) }
-    private var cream: Color { Color(red: 0.98, green: 0.96, blue: 0.90) }
+    private var header: Color { LinenTheme.ink }
+    private var terracotta: Color { LinenTheme.accent }
+    private var cream: Color { LinenTheme.paper }
 
     private var characterCount: Int {
         characterDetails.characters.count
@@ -168,7 +165,7 @@ private struct MemoryEnhancementAutoSaveSuccessView: View {
         ZStack {
             cream.ignoresSafeArea()
 
-            VStack(spacing: 20) {
+            VStack(spacing: 16) {
                 Spacer()
 
                 ZStack {
@@ -176,18 +173,18 @@ private struct MemoryEnhancementAutoSaveSuccessView: View {
                         .fill(terracotta.opacity(0.15))
                         .frame(width: 96, height: 96)
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 56))
+                        .font(LinenTheme.body(56))
                         .foregroundStyle(terracotta)
                 }
 
                 Text("Enhanced")
-                    .font(.system(size: 28, weight: .bold, design: .serif))
+                    .font(LinenTheme.heading(25))
                     .foregroundStyle(header)
 
                 if characterCount == 0 {
                     Text("We saved your answers. You can add people to this memory anytime from the memory screen.")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .font(LinenTheme.body(16, weight: .medium))
+                        .foregroundStyle(LinenTheme.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
                 } else {
@@ -196,8 +193,8 @@ private struct MemoryEnhancementAutoSaveSuccessView: View {
                             ? "1 character was added from your answers. Tap Characters on the memory to edit anytime."
                             : "\(characterCount) characters were added from your answers. Tap Characters on the memory to edit anytime."
                     )
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(LinenTheme.body(16, weight: .medium))
+                    .foregroundStyle(LinenTheme.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
                 }
@@ -215,12 +212,9 @@ private struct MemoryEnhancementAutoSaveSuccessView: View {
                 profile: profileVM.selectedProfile,
                 mergeWithExisting: false
             )
-            Mixpanel.mainInstance().track(
-                event: "Memory Enhancement Auto Saved",
-                properties: AnalyticsPrivacyPolicy.sanitized([
+            ProductAnalytics.shared.track("Memory Enhancement Auto Saved", [
                     "characters_saved": characterCount
                 ])
-            )
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 onFinished()
             }

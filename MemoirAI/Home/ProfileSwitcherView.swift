@@ -6,9 +6,9 @@ struct ProfileSwitcherView: View {
     @State private var showAddProfile = false
     @State private var editingProfile: Profile?
     
-    private let baseBackground = Color(red: 0.98, green: 0.96, blue: 0.89)
-    private let darkText = Color(red: 0.10, green: 0.22, blue: 0.14)
-    private let terracotta = Color(red: 0.83, green: 0.45, blue: 0.14)
+    private let baseBackground = LinenTheme.paper
+    private let darkText = LinenTheme.ink
+    private let terracotta = LinenTheme.accent
     
     var body: some View {
         ZStack {
@@ -20,20 +20,20 @@ struct ProfileSwitcherView: View {
                 HStack {
                     Button(action: { dismiss() }) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(LinenTheme.body(16, weight: .semibold))
                             .foregroundColor(darkText.opacity(0.8))
-                            .frame(width: 36, height: 36)
+                            .frame(width: 44, height: 44)
                             .background(
                                 RoundedRectangle(cornerRadius: 8)
                                     .fill(Color.white.opacity(0.9))
-                                    .shadow(color: Color.black.opacity(0.08), radius: 3, x: 0, y: 1)
+
                             )
                     }
                     
                     Spacer()
                     
                     Text("Switch Profile")
-                        .font(.system(size: 20, weight: .semibold, design: .serif))
+                        .font(LinenTheme.heading(25))
                         .foregroundColor(darkText)
                     
                     Spacer()
@@ -41,7 +41,7 @@ struct ProfileSwitcherView: View {
                     // Invisible spacer to center the title
                     Circle()
                         .fill(Color.clear)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                 }
                 .padding(.horizontal)
                 .padding(.top, 12)
@@ -77,11 +77,11 @@ struct ProfileSwitcherView: View {
                     }) {
                         HStack {
                             Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 20))
-                            Text("Create New Profile")
-                                .font(.system(size: 18, weight: .semibold))
+                                .font(LinenTheme.body(20))
+                            Text("Add profile")
+                                .font(LinenTheme.body(18, weight: .semibold))
                         }
-                        .foregroundColor(.white)
+                        .foregroundColor(LinenTheme.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                         .background(terracotta)
@@ -93,6 +93,8 @@ struct ProfileSwitcherView: View {
                 }
             }
         }
+        .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
+        .background(LinenTheme.paper.ignoresSafeArea())
         .sheet(isPresented: $showAddProfile) {
             AddProfileView()
                 .environmentObject(profileVM)
@@ -109,8 +111,8 @@ struct ProfileRowView: View {
     let onTap: () -> Void
     let onEdit: () -> Void
     
-    private let darkText = Color(red: 0.10, green: 0.22, blue: 0.14)
-    private let terracotta = Color(red: 0.83, green: 0.45, blue: 0.14)
+    private let darkText = LinenTheme.ink
+    private let terracotta = LinenTheme.accent
     
     var body: some View {
         HStack(spacing: 16) {
@@ -122,7 +124,7 @@ struct ProfileRowView: View {
                         .scaledToFill()
                 } else {
                     Image(systemName: "person.fill")
-                        .font(.system(size: 24))
+                        .font(LinenTheme.body(24))
                         .foregroundColor(darkText.opacity(0.6))
                 }
             }
@@ -134,15 +136,15 @@ struct ProfileRowView: View {
             )
             .background(
                 Circle()
-                    .fill(Color.white)
-                    .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+                    .fill(LinenTheme.surface)
+
             )
 
             // Profile Name
             Text(profile.name)
-                .font(.system(size: 18, weight: .medium))
+                .font(LinenTheme.body(18, weight: .medium))
                 .foregroundColor(darkText)
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
 
             Spacer()
 
@@ -150,16 +152,16 @@ struct ProfileRowView: View {
                 // Checkmark if selected
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 24))
+                        .font(LinenTheme.body(24))
                         .foregroundColor(terracotta)
                 }
 
                 Button(action: onEdit) {
                     HStack(spacing: 4) {
                         Image(systemName: "pencil")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(LinenTheme.body(12, weight: .semibold))
                         Text("Edit")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(LinenTheme.body(13, weight: .semibold))
                     }
                     .foregroundColor(terracotta)
                     .padding(.horizontal, 10)
@@ -175,8 +177,8 @@ struct ProfileRowView: View {
         .padding()
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color.white)
-                .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
+                .fill(LinenTheme.surface)
+
         )
         .contentShape(RoundedRectangle(cornerRadius: 16))
         .onTapGesture(perform: onTap)

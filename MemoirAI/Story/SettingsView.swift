@@ -59,50 +59,6 @@ enum StyleReferencePreset: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Circular Progress Ring
-struct CircularProgressRing: View {
-    let progress: Double // 0.0 to 1.0 (1.0 = full allowance remaining)
-    let lineWidth: CGFloat
-    let size: CGFloat
-    
-    // Orange/Yellow gradient colors
-    private let gradientColors = [
-        Color(red: 1.0, green: 0.6, blue: 0.2),  // Orange
-        Color(red: 1.0, green: 0.8, blue: 0.3),  // Yellow-orange
-        Color(red: 1.0, green: 0.55, blue: 0.1)  // Deep orange
-    ]
-    
-    var body: some View {
-        ZStack {
-            // Background ring
-            Circle()
-                .stroke(
-                    Color.gray.opacity(0.15),
-                    lineWidth: lineWidth
-                )
-            
-            // Progress ring with gradient
-            Circle()
-                .trim(from: 0, to: CGFloat(progress))
-                .stroke(
-                    AngularGradient(
-                        gradient: Gradient(colors: gradientColors),
-                        center: .center,
-                        startAngle: .degrees(-90),
-                        endAngle: .degrees(270)
-                    ),
-                    style: StrokeStyle(
-                        lineWidth: lineWidth,
-                        lineCap: .round
-                    )
-                )
-                .rotationEffect(.degrees(-90))
-                .animation(.easeInOut(duration: 0.5), value: progress)
-        }
-        .frame(width: size, height: size)
-    }
-}
-
 struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
@@ -112,9 +68,9 @@ struct SettingsView: View {
     @ObservedObject private var notificationManager = NotificationManager.shared
     
     // Colors
-    let softCream = Color(red: 0.98, green: 0.96, blue: 0.89)
-    let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
-    let darkText = Color.black.opacity(0.85)
+    let softCream = LinenTheme.paper
+    let terracotta = LinenTheme.accent
+    let darkText = LinenTheme.ink
     
     // Settings States
     @AppStorage("memoirPageCount") var pageCountSetting: Int = 2
@@ -219,7 +175,7 @@ struct SettingsView: View {
                 headerView
                 
                 ScrollView(showsIndicators: false) {
-                    VStack(spacing: 28) {
+                    VStack(spacing: 16) {
                         // Usage Ring Card
                         usageCard
 
@@ -255,7 +211,7 @@ struct SettingsView: View {
                             printOpsDashboardSection
                         }
                     }
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 24)
                     .padding(.top, 8)
                     .padding(.bottom, 100)
                     .adaptiveContentWidth(AdaptiveLayoutPolicy.workflowMaxWidth)
@@ -270,7 +226,7 @@ struct SettingsView: View {
                     ProgressView()
                         .controlSize(.large)
                     Text("Deleting your account…")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(LinenTheme.body(16, weight: .semibold))
                     Text("Keep MemoirAI open while we remove account data and clear this device.")
                         .font(.system(size: 13))
                         .foregroundColor(.secondary)
@@ -283,6 +239,7 @@ struct SettingsView: View {
             }
             
         }
+        .tint(LinenTheme.accent)
         .navigationBarBackButtonHidden(true)
         .interactiveDismissDisabled(isDeletingAccount)
         .onAppear {
@@ -468,10 +425,8 @@ struct SettingsView: View {
             }
             .accessibilityIdentifier("settingsBack")
             
-            Spacer()
-            
             Text("Settings")
-                .font(.system(size: 20, weight: .semibold, design: .serif))
+                .font(LinenTheme.heading())
                 .foregroundColor(darkText)
                 .accessibilityIdentifier("settingsHeaderTitle")
             
@@ -492,92 +447,53 @@ struct SettingsView: View {
                     }
                 }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 24)
         .padding(.top, 12)
         .padding(.bottom, 8)
     }
     
     // MARK: - Usage Card with Ring
     private var usageCard: some View {
-        VStack(spacing: 16) {
-            HStack(alignment: .center, spacing: 20) {
-                // Circular Progress Ring
-                ZStack {
-                    CircularProgressRing(
-                        progress: allowanceProgress,
-                        lineWidth: 10,
-                        size: 90
-                    )
-                    
-                    VStack(spacing: 2) {
-                        if isSubscribed {
-                            Text(subscriptionManager.isDeveloperUnlockedSession ? "∞" : "\(subscriptionManager.remainingAllowance)")
-                                .font(.system(size: 24, weight: .bold, design: .rounded))
-                                .foregroundColor(darkText)
-                            Text(subscriptionManager.isDeveloperUnlockedSession ? "Unlimited" : "left")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.gray)
-                        } else {
-                            // Show ACTUAL remaining free preview images
-                            Text("\(FreePreviewConfig.freeImagesRemaining)")
-                                .font(.system(size: 24, weight: .bold, design: .rounded))
-                                .foregroundColor(FreePreviewConfig.freeImagesRemaining > 0 ? darkText : .red)
-                            Text(FreePreviewConfig.freeImagesRemaining > 0 ? "left" : "images")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.gray)
-                        }
-                    }
-                }
-                
-                // Usage Info
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(isSubscribed ? "Image Allowance" : "Free Preview")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(darkText)
-                    
-                    if isSubscribed {
-                        Text(subscriptionManager.isDeveloperUnlockedSession ? "Unlimited images" : "\(subscriptionManager.remainingAllowance) of 100 images")
-                            .font(.system(size: 14))
-                            .foregroundColor(.gray)
-                        
-                        Text(subscriptionManager.isDeveloperUnlockedSession ? "Developer access" : "Resets \(subscriptionManager.getRenewalDateString())")
-                            .font(.system(size: 12))
-                            .foregroundColor(.gray.opacity(0.8))
-                    } else {
-                        // Show actual remaining for free users
-                        let remaining = FreePreviewConfig.freeImagesRemaining
-                        let total = FreePreviewConfig.maxPagesWithoutSubscription
-                        
-                        if remaining > 0 {
-                            Text("\(remaining) of \(total) free images left")
-                                .font(.system(size: 14))
-                                .foregroundColor(.gray)
-                        } else {
-                            Text("Free preview used")
-                                .font(.system(size: 14))
-                                .foregroundColor(.red.opacity(0.8))
-                        }
-                        
-                        Text("Subscribe for 100 images / month")
-                            .font(.system(size: 12))
-                            .foregroundColor(terracotta)
-                    }
-                }
-                
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(isSubscribed ? "Your subscription" : "Free preview")
+                    .font(LinenTheme.body(16, weight: .semibold))
                 Spacer()
+                Text(subscriptionManager.isDeveloperUnlockedSession ? "Unlimited" : "\(actualRemainingImages) left")
+                    .font(LinenTheme.heading(22))
+                    .foregroundColor(canGenerate ? LinenTheme.forest : LinenTheme.secondary)
+            }
+            ProgressView(value: min(1, max(0, allowanceProgress)))
+                .tint(LinenTheme.forest)
+                .accessibilityLabel("Available illustration allowance")
+            if isSubscribed {
+                Text(subscriptionManager.isDeveloperUnlockedSession
+                     ? "Developer access"
+                     : "Illustrations reset \(subscriptionManager.getRenewalDateString())")
+                    .font(LinenTheme.body(14))
+                    .foregroundColor(LinenTheme.secondary)
+            } else {
+                HStack {
+                    Text("\(FreePreviewConfig.freeImagesRemaining) of \(FreePreviewConfig.maxPagesWithoutSubscription) free illustrations")
+                        .font(LinenTheme.body(14))
+                        .foregroundColor(LinenTheme.secondary)
+                    Spacer()
+                    Button("View plans") { showPaywall = true }
+                        .font(LinenTheme.body(14, weight: .semibold))
+                        .foregroundColor(LinenTheme.accent)
+                }
             }
         }
+        .foregroundColor(LinenTheme.ink)
         .padding(20)
-        .background(Color.white.opacity(0.6))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 16))
     }
-    
+
     // MARK: - Page Count Section
     private var pageCountSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Memories to Generate")
-                .font(.system(size: 16, weight: .semibold))
+            Text("Book length")
+                .font(LinenTheme.body(16, weight: .semibold))
                 .foregroundColor(darkText)
             
             HStack(spacing: 10) {
@@ -641,16 +557,16 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .background(Color.white.opacity(0.6))
+        .background(LinenTheme.card)
         .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(LinenTheme.line, lineWidth: 1))
     }
     
     // MARK: - Developer Model Section
     private var geminiModelSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Developer: Gemini Model")
-                .font(.system(size: 16, weight: .semibold))
+                .font(LinenTheme.body(16, weight: .semibold))
                 .foregroundColor(darkText)
 
             Picker("Gemini model", selection: $geminiModelOverrideRawValue) {
@@ -665,9 +581,9 @@ struct SettingsView: View {
                 .foregroundColor(.gray)
         }
         .padding(20)
-        .background(Color.white.opacity(0.6))
+        .background(LinenTheme.card)
         .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(LinenTheme.line, lineWidth: 1))
     }
 
     // MARK: - Memory Enhancement Section
@@ -703,9 +619,9 @@ struct SettingsView: View {
                     .foregroundColor(.gray.opacity(0.5))
             }
             .padding(16)
-            .background(Color.white.opacity(0.6))
+            .background(LinenTheme.card)
             .cornerRadius(16)
-            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(LinenTheme.line, lineWidth: 1))
         }
         .buttonStyle(PlainButtonStyle())
     }
@@ -793,7 +709,7 @@ struct SettingsView: View {
     private var accountSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Account")
-                .font(.system(size: 16, weight: .semibold))
+                .font(LinenTheme.body(16, weight: .semibold))
                 .foregroundColor(darkText)
             
             if let user = authService.user {
@@ -920,9 +836,9 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .background(Color.white.opacity(0.6))
+        .background(LinenTheme.card)
         .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(LinenTheme.line, lineWidth: 1))
     }
 
     private var developerModeRow: some View {
@@ -971,9 +887,9 @@ struct SettingsView: View {
                     .foregroundColor(.gray.opacity(0.5))
             }
             .padding(16)
-            .background(Color.white.opacity(0.6))
+            .background(LinenTheme.card)
             .cornerRadius(16)
-            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(LinenTheme.line, lineWidth: 1))
         }
         .buttonStyle(PlainButtonStyle())
     }
@@ -1011,9 +927,9 @@ struct SettingsView: View {
                     .foregroundColor(.gray.opacity(0.5))
             }
             .padding(16)
-            .background(Color.white.opacity(0.6))
+            .background(LinenTheme.card)
             .cornerRadius(16)
-            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(LinenTheme.line, lineWidth: 1))
         }
         .buttonStyle(PlainButtonStyle())
     }
@@ -1169,7 +1085,7 @@ struct SettingsViewWithGenerate: View {
                 
                 Button(action: onGenerate) {
                     Text("Save & Generate")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(LinenTheme.body(16, weight: .semibold))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
