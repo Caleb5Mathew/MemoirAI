@@ -107,6 +107,10 @@ enum StorybookBookendRecoveryPolicy {
         let normalizedBody = textContent?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
+        if normalizedBody == "a collection of life stories",
+           normalizedTitle == "memoir" || normalizedTitle.hasSuffix(" memoir") {
+            return BookInteriorAnchor.titlePageMemoryId
+        }
         if normalizedBody.contains("personal memoir and life story")
             && normalizedBody.contains("recorded and written") {
             return BookInteriorAnchor.titlePageMemoryId
@@ -217,6 +221,19 @@ enum StorybookGenerationBatchPolicy {
     }
 }
 
+enum BookPrintPaddingPolicy {
+    static let hardcoverMinimumPageCount = 24
+    static let minimumContentPageCountForPadding = 21
+
+    static func paddingCount(for currentPageCount: Int) -> Int {
+        guard currentPageCount >= minimumContentPageCountForPadding else { return 0 }
+        if currentPageCount < hardcoverMinimumPageCount {
+            return hardcoverMinimumPageCount - currentPageCount
+        }
+        return currentPageCount.isMultiple(of: 2) ? 0 : 1
+    }
+}
+
 enum StorybookGenerationStylePolicy {
     static func supportedArtStyle(legacyStoredValue: String?) -> ArtStyle {
         .kidsBook
@@ -306,6 +323,7 @@ enum StorybookIllustrationHydrationPolicy {
 enum BookRevisionSavePolicy {
     static func reusesExistingCover(for reason: String) -> Bool {
         [
+            "interiorDesignUpdate",
             "freeformPageEdit",
             "freeformPageReset",
             "imageEdit",
@@ -364,5 +382,17 @@ enum StorybookUbiquitousPayloadPolicy {
 
     static func storesCurrentBook(encodedByteCount: Int) -> Bool {
         encodedByteCount > 0 && encodedByteCount <= maximumCurrentBookByteCount
+    }
+}
+
+/// Cloud question-driven results can keep the interview prompt in displayTitle.
+enum StorybookGeneratedMemoryTitlePolicy {
+    static func title(illustrationTitle: String?, extractedTitle: String?, displayTitle: String?, prompt: String?) -> String {
+        for candidate in [illustrationTitle, extractedTitle, displayTitle, prompt] {
+            if let title = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+                return title
+            }
+        }
+        return "Memory"
     }
 }

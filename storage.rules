@@ -132,6 +132,22 @@ service firebase.storage {
         && !hasBlockingAccountOperation(userId);
     }
 
+    // Private one-page onboarding artwork written by the Admin SDK.
+    match /users/{userId}/onboardingPreviews/{previewId}/subjectPhoto.jpg {
+      allow read: if isActiveOwner(userId);
+      allow create, update: if isActiveOwner(userId)
+        && previewId.matches('[A-Za-z0-9_-]{1,128}')
+        && request.resource.contentType == 'image/jpeg'
+        && request.resource.size > 0
+        && request.resource.size <= 5 * 1024 * 1024;
+      allow delete: if isActiveOwner(userId);
+    }
+
+    match /users/{userId}/onboardingPreviews/{previewId}/illustration.png {
+      allow get: if isActiveOwner(userId);
+      allow list, create, update, delete: if false;
+    }
+
     // Family and friends: an unrevoked grant unlocks streaming the owner's memory audio.
     // Must precede the catch-all so this read rule wins for audio files.
     match /users/{userId}/audio/{audioFile} {

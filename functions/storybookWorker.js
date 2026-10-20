@@ -23,7 +23,7 @@ const {
   validateSubjectPhotoForWorker
 } = require("./storybookAdmission");
 const { assertAccountNotDeleting } = require("./accountStateGuards");
-const { chapterMemories } = require("./storybookMemorySelection");
+const { chapterMemories, preferredMemoryTranscript } = require("./storybookMemorySelection");
 const {
   privacySafeLogDetails,
   safeErrorMetadata,
@@ -379,7 +379,7 @@ exports.processStorybookJob = onDocumentCreated(
           return {
             id: d.id,
             profileID: String(x.profileID || ""),
-            transcription: String(x.transcription || "").slice(0, 50_000),
+            transcription: preferredMemoryTranscript(x).slice(0, 50_000),
             prompt: String(x.prompt || "").slice(0, 2_000),
             characterDetails: x.characterDetails != null ? String(x.characterDetails).slice(0, 20_000) : "",
             chapter: x.chapter != null ? String(x.chapter).slice(0, 500) : "",

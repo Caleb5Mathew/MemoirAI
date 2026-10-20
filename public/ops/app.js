@@ -15,6 +15,8 @@
   const listOrdersFn = functions.httpsCallable("adminListPrintOrders");
   const fulfillFn = functions.httpsCallable("fulfillOrder");
   const syncLuluFn = functions.httpsCallable("adminSyncOrderFromLulu");
+  const listUsersFn = functions.httpsCallable("adminListUsers");
+  const listMemoriesFn = functions.httpsCallable("adminListUserMemories");
   const listBooksFn = functions.httpsCallable("adminListUserBooks");
   const verifyPdfsFn = functions.httpsCallable("adminVerifyOrderPdfs");
 
@@ -103,7 +105,8 @@
   function formatDate(iso) {
     if (!iso) return "—";
     try {
-      return new Date(iso).toLocaleString();
+      const date = new Date(iso);
+      return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
     } catch (_) {
       return iso;
     }
@@ -211,7 +214,12 @@
   }
 
   function linkIf(href, label) {
-    return href ? '<a href="' + esc(href) + '" target="_blank" rel="noopener">' + label + "</a>" : "";
+    if (!href) return "";
+    try {
+      const url = new URL(href);
+      if (!["https:", "http:"].includes(url.protocol)) return "";
+      return '<a href="' + esc(url.href) + '" target="_blank" rel="noopener">' + esc(label) + "</a>";
+    } catch (_) { return ""; }
   }
 
   function renderPendingLists() {
@@ -325,12 +333,7 @@
       p.textContent = "Lulu job: " + o.luluPrintJobId;
       actions.appendChild(p);
       if (o.luluTrackingUrl) {
-        const t = document.createElement("a");
-        t.href = o.luluTrackingUrl;
-        t.target = "_blank";
-        t.rel = "noopener";
-        t.textContent = "Tracking link";
-        actions.appendChild(t);
+        actions.insertAdjacentHTML("beforeend", linkIf(o.luluTrackingUrl, "Tracking link"));
       }
     }
     $("user-id-input").value = o.userId || "";
@@ -656,38 +659,166 @@
     }
   }
 
-  async function loadUserBooks() {
-    const uid = ($("user-id-input").value || "").trim();
-    if (!uid) {
-      toast("Enter a user ID", "err");
-      return;
-    }
-    const list = $("books-list");
-    list.innerHTML = '<div class="empty-state">Loading…</div>';
+  let browserEpoch = 0;
+  let usersRequest = 0;
+  let contentRequest = 0;
+  let usersLoaded = false;
+  let users = [];
+  let usersCursor = null;
+  let usersLoading = false;
+  let usersRetryAppend = false;
+  let selectedUser = null;
+  const content = {
+    books: { items: [], cursor: null, loading: false, retryAppend: false, request: 0 },
+    memories: { items: [], cursor: null, loading: false, retryAppend: false, request: 0 }
+  };
+
+  function mergeItems(previous, incoming, key) {
+    const byId = new Map(previous.map((item) => [item[key], item]));
+    incoming.forEach((item) => byId.set(item[key], item));
+    return [...byId.values()];
+  }
+
+  function newestFirst(items, key) {
+    return [...items].sort((a, b) => {
+      const aDate = Date.parse(a.createdAt) || 0;
+      const bDate = Date.parse(b.createdAt) || 0;
+      return bDate - aDate || String(a[key]).localeCompare(String(b[key]));
+    });
+  }
+
+  function renderUsers() {
+    $("users-tbody").innerHTML = users.map((user) => '<tr' + (selectedUser?.userId === user.userId ? ' class="selected"' : '') + '><td>' +
+      '<button type="button" class="user-open" data-uid="' + esc(user.userId) + '">' + esc(user.displayName || user.email || (user.isAnonymous ? "Guest account" : user.userId)) + '</button>' +
+      '<div class="meta-line">' + esc(user.email || user.userId) + '</div></td><td>' + esc(formatDate(user.createdAt)) + '</td><td>' + esc(formatDate(user.lastActiveAt)) + '</td></tr>').join("");
+    $("users-tbody").querySelectorAll(".user-open").forEach((button) => {
+      button.onclick = () => openUser(users.find((user) => user.userId === button.dataset.uid));
+    });
+  }
+
+  async function loadUsers(append = false) {
+    if (append && usersLoading) return;
+    const request = ++usersRequest;
+    const epoch = browserEpoch;
+    const sort = $("user-sort").value;
+    usersLoading = true;
+    usersRetryAppend = append;
+    $("more-users").hidden = true;
+    $("retry-users").hidden = true;
+    $("users-status").textContent = "Loading users…";
+    if (!append) { users = []; usersCursor = null; renderUsers(); }
     try {
-      const res = await listBooksFn({ userId: uid, limit: 50 });
-      const books = (res.data && res.data.books) || [];
-      if (!books.length) {
-        list.innerHTML = '<div class="empty-state">No book versions for this user.</div>';
-        return;
-      }
-      list.innerHTML = books.map((b) =>
-        '<div class="book-row">' +
-          "<div><strong>" + esc(b.printTitle || b.bookDisplayName || b.bookVersionId) + "</strong>" +
-          '<br><span style="color:var(--muted);font-size:0.8rem">' + esc(b.bookVersionId) +
-          " · " + esc(b.renderStatus || "?") + (b.hasPaidOrder ? " · paid" : "") + "</span></div>" +
-          '<div class="link-row">' +
-            linkIf(b.pdfURL, "PDF") +
-            linkIf(b.coverURL, "Cover") +
-          "</div>" +
-        "</div>"
-      ).join("");
-    } catch (e) {
-      list.innerHTML = '<div class="alert">' + esc(e.message || e) + "</div>";
+      const result = await listUsersFn({ sort, limit: 25, ...(append && usersCursor ? { cursor: usersCursor } : {}) });
+      if (epoch !== browserEpoch || request !== usersRequest) return;
+      users = mergeItems(append ? users : [], result.data?.users || [], "userId");
+      usersCursor = result.data?.nextCursor || null;
+      usersLoaded = true;
+      renderUsers();
+      $("users-status").textContent = users.length ? "" : "No accounts found.";
+      $("more-users").hidden = !usersCursor;
+    } catch (error) {
+      if (epoch !== browserEpoch || request !== usersRequest) return;
+      $("users-status").textContent = "Could not load users: " + (error.message || String(error));
+      $("retry-users").hidden = false;
+    } finally {
+      if (epoch === browserEpoch && request === usersRequest) usersLoading = false;
+    }
+  }
+
+  function renderUserContent(kind) {
+    const items = newestFirst(content[kind].items, kind === "books" ? "bookVersionId" : "memoryId");
+    if (kind === "books") {
+      $("books-list").innerHTML = items.map((book) => '<div class="book-row"><div><strong>' + esc(book.printTitle || book.bookDisplayName || book.bookVersionId) + '</strong>' +
+        '<p class="meta-line">' + esc(formatDate(book.createdAt)) + '</p><p class="meta-line">' + esc(book.renderStatus || "Unknown status") + (book.hasPaidOrder ? " · paid" : "") + '</p>' +
+        '<p class="meta-line">' + esc(book.bookVersionId) + '</p></div><div class="link-row">' + linkIf(book.pdfURL, "PDF") + linkIf(book.coverURL, "Cover") + '</div></div>').join("");
+    } else {
+      $("memories-list").innerHTML = items.map((memory) => '<details class="memory-row"><summary>' + esc(memory.prompt || "Saved memory") + '<span class="meta-line memory-date">' + esc(formatDate(memory.createdAt)) + (memory.profileName ? ' · ' + esc(memory.profileName) : '') + (memory.chapter ? ' · ' + esc(memory.chapter) : '') + '</span></summary>' +
+        '<div class="memory-text">' + esc(memory.text || "No transcript saved.") + '</div>' + (memory.textTruncated ? '<p class="meta-line">This preview is shortened. ' + linkIf('https://console.firebase.google.com/project/memoirai-7db06/firestore/databases/-default-/data/~2Fusers~2F' + encodeURIComponent(selectedUser.userId) + '~2Fmemories~2F' + encodeURIComponent(memory.memoryId), 'View full memory in Firebase') + '</p>' : '') + '</details>').join("");
+    }
+  }
+
+  async function loadUserContent(kind, append = false) {
+    if (!selectedUser || (append && content[kind].loading)) return;
+    const page = content[kind];
+    const request = ++page.request;
+    const selection = contentRequest;
+    const epoch = browserEpoch;
+    const uid = selectedUser.userId;
+    page.loading = true;
+    page.retryAppend = append;
+    $("more-" + kind).hidden = true;
+    $("retry-" + kind).hidden = true;
+    $(kind + "-status").textContent = "Loading " + kind + "…";
+    if (!append) { page.items = []; page.cursor = null; renderUserContent(kind); }
+    try {
+      const callable = kind === "books" ? listBooksFn : listMemoriesFn;
+      const result = await callable({ userId: uid, limit: 25, ...(append && page.cursor ? { cursor: page.cursor } : {}) });
+      if (epoch !== browserEpoch || selection !== contentRequest || request !== page.request) return;
+      page.items = mergeItems(append ? page.items : [], result.data?.[kind] || [], kind === "books" ? "bookVersionId" : "memoryId");
+      page.cursor = result.data?.nextCursor || null;
+      renderUserContent(kind);
+      $(kind + "-status").textContent = page.items.length ? "" : "No " + kind + " saved for this account.";
+      $("more-" + kind).hidden = !page.cursor;
+    } catch (error) {
+      if (epoch !== browserEpoch || selection !== contentRequest || request !== page.request) return;
+      $(kind + "-status").textContent = "Could not load " + kind + ": " + (error.message || String(error));
+      $("retry-" + kind).hidden = false;
+    } finally {
+      if (epoch === browserEpoch && selection === contentRequest && request === page.request) page.loading = false;
+    }
+  }
+
+  function openUser(user) {
+    if (!user?.userId) return;
+    selectedUser = user;
+    contentRequest++;
+    $("user-id-input").value = user.userId;
+    $("selected-user-name").textContent = user.displayName || user.email || (user.isAnonymous ? "Guest account" : "User details");
+    $("selected-user-id").textContent = user.userId;
+    $("user-detail").hidden = false;
+    $("user-selection-hint").hidden = true;
+    $("user-detail").scrollIntoView({ behavior: "smooth", block: "start" });
+    renderUsers();
+    loadUserContent("books");
+    loadUserContent("memories");
+  }
+
+  function loadUserBooks() {
+    const uid = $("user-id-input").value.trim();
+    if (!uid) { toast("Enter a user ID", "err"); return; }
+    openUser(users.find((user) => user.userId === uid) || { userId: uid });
+  }
+
+  function resetUserBrowser() {
+    browserEpoch++;
+    usersRequest++;
+    contentRequest++;
+    users = [];
+    usersCursor = null;
+    usersLoaded = false;
+    usersLoading = false;
+    selectedUser = null;
+    $("user-sort").value = "newest";
+    $("user-id-input").value = "";
+    $("user-detail").hidden = true;
+    $("user-selection-hint").hidden = false;
+    $("selected-user-name").textContent = "";
+    $("selected-user-id").textContent = "";
+    $("users-status").textContent = "";
+    $("more-users").hidden = true;
+    $("retry-users").hidden = true;
+    renderUsers();
+    for (const kind of ["books", "memories"]) {
+      content[kind] = { items: [], cursor: null, loading: false, retryAppend: false, request: 0 };
+      $(kind + "-list").innerHTML = "";
+      $(kind + "-status").textContent = "";
+      $("more-" + kind).hidden = true;
+      $("retry-" + kind).hidden = true;
     }
   }
 
   function showView(name) {
+    if (name === "users" && !usersLoaded && !usersLoading && auth.currentUser) loadUsers();
     document.querySelectorAll(".nav-btn").forEach((b) => {
       b.classList.toggle("active", b.getAttribute("data-view") === name);
     });
@@ -747,6 +878,16 @@
   $("order-search").oninput = renderOrdersTable;
   $("order-filter").onchange = renderOrdersTable;
   $("load-books-btn").onclick = loadUserBooks;
+  $("user-id-input").onkeydown = (event) => { if (event.key === "Enter") loadUserBooks(); };
+  $("user-sort").onchange = () => loadUsers();
+  $("refresh-users").onclick = () => loadUsers();
+  $("more-users").onclick = () => loadUsers(true);
+  $("retry-users").onclick = () => loadUsers(usersRetryAppend);
+  $("refresh-user-content").onclick = () => { if (selectedUser) openUser(selectedUser); };
+  for (const kind of ["books", "memories"]) {
+    $("more-" + kind).onclick = () => loadUserContent(kind, true);
+    $("retry-" + kind).onclick = () => loadUserContent(kind, content[kind].retryAppend);
+  }
   $("drawer-close").onclick = closeDrawer;
   $("drawer-backdrop").onclick = (e) => {
     if (e.target === $("drawer-backdrop")) closeDrawer();
@@ -760,7 +901,11 @@
   });
 
   auth.onAuthStateChanged((user) => {
-    if (user) showApp(user);
+    resetUserBrowser();
+    if (user) {
+      showApp(user);
+      if ($("view-users").classList.contains("active")) loadUsers();
+    }
     else {
       $("login-page").style.display = "";
       $("app").classList.remove("active");

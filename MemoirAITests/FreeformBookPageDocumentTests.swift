@@ -95,7 +95,7 @@ struct FreeformBookPageDocumentTests {
             isLandscape: true,
             isPrecomposed: false
         )
-        #expect(landscapeIllustration.imageFrame == NormalizedPageRect(x: 0, y: 0.065, width: 1, height: 0.935))
+        #expect(landscapeIllustration.imageFrame == NormalizedPageRect(x: 0, y: 0.10, width: 1, height: 0.90))
         #expect(landscapeIllustration.imageFit == .fill)
 
         let landscapeText = BookPageCanonicalLayout.text(
@@ -103,18 +103,60 @@ struct FreeformBookPageDocumentTests {
             hasTitle: true,
             hasSubtitle: false
         )
-        #expect(landscapeText.titleFrame?.y == 0.085)
-        #expect(landscapeText.bodyFrame.y == 0.18)
+        #expect(landscapeText.titleFrame?.y == Double(BookInteriorStyle.memoryTitleY))
+        #expect(landscapeText.bodyFrame.y == Double(BookInteriorStyle.memoryBodyY))
+        #expect(landscapeText.bodyFrame.height == Double(BookInteriorStyle.memoryBodyHeight))
 
         let portraitText = BookPageCanonicalLayout.text(
             isLandscape: false,
             hasTitle: true,
             hasSubtitle: true
         )
-        #expect(portraitText.titleFrame?.x == 0.06)
-        #expect(portraitText.subtitleFrame?.y == 0.125)
-        #expect(portraitText.bodyFrame.y == 0.18)
-        #expect(portraitText.bodyFrame.height == 0.74)
+        #expect(portraitText.titleFrame?.x == Double(BookInteriorStyle.memoryHorizontalInset))
+        #expect(portraitText.subtitleFrame == nil)
+        #expect(portraitText.bodyFrame.y == Double(BookInteriorStyle.memoryBodyY))
+        #expect(portraitText.bodyFrame.height == Double(BookInteriorStyle.memoryBodyHeight))
+        #expect(
+            landscapeText.bodyFrame.y + landscapeText.bodyFrame.height
+                < Double(BookInteriorStyle.memoryPageNumberY)
+        )
+    }
+
+    @Test func canonicalTextDocumentDetectionProtectsUserEdits() throws {
+        let title = "Sandfall at Silvestrom"
+        let body = "The sand fell slowly while we listened to the ocean."
+        var document = BookPageDocument(pageAspectRatio: 11.0 / 8.5)
+        let titleID = try document.addText(
+            title,
+            frame: NormalizedPageRect(x: 0.10, y: 0.15, width: 0.80, height: 0.08),
+            role: .title,
+            typographyPreset: .kidsBook
+        )
+        document.updateFontSize(id: titleID, fontSize: 0.054)
+        let bodyID = try document.addText(
+            body,
+            frame: NormalizedPageRect(x: 0.10, y: 0.31, width: 0.80, height: 0.57),
+            role: .body,
+            typographyPreset: .kidsBook
+        )
+        document.updateFontSize(id: bodyID, fontSize: 0.0265)
+
+        #expect(BookPageCanonicalLayout.isUntouchedGeneratedTextDocument(
+            document,
+            body: body,
+            title: title,
+            typographyPreset: .kidsBook,
+            isLandscape: true
+        ))
+
+        document.updateText(id: bodyID, text: body + " I added this myself.")
+        #expect(!BookPageCanonicalLayout.isUntouchedGeneratedTextDocument(
+            document,
+            body: body,
+            title: title,
+            typographyPreset: .kidsBook,
+            isLandscape: true
+        ))
     }
 
     @Test func decodedTextClampsAnOutOfRangeFontSize() throws {
@@ -824,18 +866,16 @@ struct FreeformBookPageDocumentTests {
             isKidsBook: true
         )
 
-        #expect(landscape.titleFontSize == 0.085)
-        #expect(kidsLandscape.titleFontSize == 0.09)
-        #expect(portrait.titleFontSize == 0.074)
-        #expect(landscape.titleFrame == NormalizedPageRect(x: 0.11, y: 0.29, width: 0.78, height: 0.17))
+        #expect(landscape.titleFontSize == 0.099)
+        #expect(kidsLandscape.titleFontSize == 0.099)
+        #expect(portrait.titleFontSize == 0.070)
+        #expect(landscape.titleFrame == NormalizedPageRect(x: 0.11, y: 0.24, width: 0.78, height: 0.27))
         #expect(landscape.closingIconFrame.y + landscape.closingIconFrame.height < landscape.closingHeadingFrame.y)
-        #expect(landscape.closingHeadingFrame.y + landscape.closingHeadingFrame.height < landscape.closingBadgeFrame.y)
+        #expect(landscape.closingHeadingFrame.y + landscape.closingHeadingFrame.height < landscape.closingStoreTextFrame.y)
         #expect(portrait.closingIconFrame.y + portrait.closingIconFrame.height < portrait.closingHeadingFrame.y)
-        #expect(portrait.closingHeadingFrame.y + portrait.closingHeadingFrame.height < portrait.closingBadgeFrame.y)
-        #expect(abs((landscape.closingHeadingFrame.y - (landscape.closingIconFrame.y + landscape.closingIconFrame.height)) - 0.035) < 0.0001)
-        #expect(abs((landscape.closingBadgeFrame.y - (landscape.closingHeadingFrame.y + landscape.closingHeadingFrame.height)) - 0.035) < 0.0001)
-        #expect(abs((portrait.closingHeadingFrame.y - (portrait.closingIconFrame.y + portrait.closingIconFrame.height)) - 0.035) < 0.0001)
-        #expect(abs((portrait.closingBadgeFrame.y - (portrait.closingHeadingFrame.y + portrait.closingHeadingFrame.height)) - 0.035) < 0.0001)
+        #expect(portrait.closingHeadingFrame.y + portrait.closingHeadingFrame.height < portrait.closingStoreTextFrame.y)
+        #expect(landscape.closingBadgeFrame.width == 0)
+        #expect(portrait.closingBadgeFrame.width == 0)
     }
 
     @Test func semanticTitleTypographyMatchesTheBookStyle() {
@@ -941,7 +981,7 @@ struct FreeformBookPageDocumentTests {
         #expect(migratedTitle.frame == layout.titleFrame)
         #expect(resolvedTitleText.text == "Caleb's Edited Story")
         #expect(resolvedTitleText.fontSize == layout.titleFontSize)
-        #expect(resolvedTitleText.alignment == .center)
+        #expect(resolvedTitleText.alignment == .leading)
         #expect(migrated.semanticTemplateVersion == BookInteriorPageDocumentFactory.semanticTemplateVersion)
     }
 
@@ -1031,7 +1071,9 @@ struct FreeformBookPageDocumentTests {
         }
 
         #expect(text.contains { $0.text == "Made with Memoir" })
-        #expect(text.contains { $0.text == "Download on the App Store" && $0.color == .white })
+        #expect(text.contains {
+            $0.text == "Download on the App Store" && $0.color == .ink && $0.alignment == .leading
+        })
         #expect(!text.contains { $0.text == "Grandparent" })
         #expect(document.semanticTemplate == .interiorClosing)
         #expect(document.semanticTemplateVersion == BookInteriorPageDocumentFactory.semanticTemplateVersion)
@@ -1050,6 +1092,303 @@ struct FreeformBookPageDocumentTests {
         })
         #expect(heading.frame == layout.closingHeadingFrame)
         #expect(store.frame == layout.closingStoreTextFrame)
+    }
+
+    @Test func fieldnotesOpeningBreaksOnlyTheMemoirSuffix() {
+        #expect(BookInteriorStyle.openingTitle("María’s Memoir") == "María’s\nMemoir")
+        #expect(BookInteriorStyle.openingTitle("A Memoir About Home") == "A Memoir About Home")
+        #expect(BookInteriorStyle.openingTitle("Memoir") == "Memoir")
+    }
+
+    @Test func fieldnotesBodyMeasurementDetectsOverflowAtTheCanonicalTypeSize() {
+        let fontSize: CGFloat = 612 * BookInteriorStyle.bodySize
+        let layout = BookPageCanonicalLayout.text(isLandscape: true, hasTitle: true, hasSubtitle: false)
+        let width: CGFloat = 792 * layout.bodyFrame.width
+        let height: CGFloat = 612 * layout.bodyFrame.height - 1
+        #expect(BookInteriorTextLayout.height(of: "The first star.", width: width, fontSize: fontSize) < height)
+        let text = Array(repeating: "I remember the orchard and every afternoon we spent there.", count: 65).joined(separator: " ")
+        #expect(BookInteriorTextLayout.height(of: text, width: width, fontSize: fontSize) > height)
+    }
+
+    @Test func openingMigrationReplacesOnlyTheLegacyDefaultSubtitle() throws {
+        for copy in ["A collection of memories from Alice’s life.", "My hand-written dedication"] {
+            var legacy = BookPageDocument(pageAspectRatio: 11.0 / 8.5, semanticTemplate: .interiorTitle, semanticTemplateVersion: 3)
+            let bodyID = try legacy.addText(copy, role: .body, typographyPreset: .kidsBook)
+            let originalFrame = legacy.elements.first { $0.id == bodyID }?.frame
+            let migrated = try BookInteriorPageDocumentFactory.make(
+                memoryID: BookInteriorAnchor.titlePageMemoryId, title: "Alice’s Memoir", body: copy, subtitle: nil,
+                pageAspectRatio: 11.0 / 8.5, typographyPreset: .kidsBook, isKidsBook: true,
+                background: nil, preservingEditableElementsFrom: legacy
+            )
+            let element = try #require(migrated.elements.first { $0.id == bodyID })
+            #expect(element.frame == originalFrame)
+            guard case .text(let text) = element.content else { Issue.record("Missing opening text"); return }
+            #expect(text.text == (copy.hasPrefix("A collection of memories from ") ? "A collection of life stories" : copy))
+
+            let withoutDocument = try BookInteriorPageDocumentFactory.make(
+                memoryID: BookInteriorAnchor.titlePageMemoryId, title: "Alice’s Memoir", body: copy, subtitle: nil,
+                pageAspectRatio: 11.0 / 8.5, typographyPreset: .kidsBook, isKidsBook: true, background: nil
+            )
+            let bodyTexts = withoutDocument.elements.compactMap { element -> String? in
+                guard case .text(let text) = element.content, text.role == .body else { return nil }
+                return text.text
+            }
+            #expect(bodyTexts == [text.text])
+        }
+    }
+
+    @Test func versionThreeOpeningMigrationPreservesCustomEditsAndUpdatesDefaults() throws {
+        var old = BookPageDocument(pageAspectRatio: 11.0 / 8.5, semanticTemplate: .interiorTitle, semanticTemplateVersion: 3)
+        let titleID = try old.addText("Alice’s Memoir", frame: NormalizedPageRect(x: 0.11, y: 0.29, width: 0.78, height: 0.17), role: .title, typographyPreset: .kidsBook)
+        old.updateFontSize(id: titleID, fontSize: 0.09)
+        old.updateTextAlignment(id: titleID, alignment: .center)
+        let bodyID = try old.addText("My hand-written dedication", frame: NormalizedPageRect(x: 0.2, y: 0.65, width: 0.6, height: 0.12), role: .body, typographyPreset: .kidsBook)
+        old.updateFontSize(id: bodyID, fontSize: 0.025)
+        let savedBody = old.elements.first { $0.id == bodyID }
+        let migrated = try BookInteriorPageDocumentFactory.make(
+            memoryID: BookInteriorAnchor.titlePageMemoryId, title: "Alice’s Memoir", body: "A collection of life stories", subtitle: nil,
+            pageAspectRatio: 11.0 / 8.5, typographyPreset: .kidsBook, isKidsBook: true,
+            background: nil, preservingEditableElementsFrom: old
+        )
+        #expect(migrated.elements.first { $0.id == bodyID } == savedBody)
+        let title = try #require(migrated.elements.first { if case .text(let text) = $0.content { return text.role == .title }; return false })
+        #expect(title.frame == BookInteriorPageDocumentFactory.layout(pageAspectRatio: 11.0 / 8.5, isKidsBook: true).titleFrame)
+        if case .text(let text) = title.content {
+            #expect(text.text == "Alice’s Memoir")
+            #expect(text.alignment == .leading)
+        }
+    }
+
+    @Test func versionFourClosingMigrationRestylesDefaultsAndPreservesCustomCopy() throws {
+        let aspectRatio = 11.0 / 8.5
+        let oldHeadingFrame = NormalizedPageRect(x: 0.20, y: 0.39, width: 0.60, height: 0.09)
+        let oldStoreFrame = NormalizedPageRect(x: 0.39, y: 0.535, width: 0.25, height: 0.065)
+        var old = BookPageDocument(
+            pageAspectRatio: aspectRatio,
+            semanticTemplate: .interiorClosing,
+            semanticTemplateVersion: 4
+        )
+        let headingID = try old.addText(
+            "Made with Memoir",
+            frame: oldHeadingFrame,
+            role: .title,
+            typographyPreset: .kidsBook
+        )
+        old.updateFontSize(id: headingID, fontSize: 0.052)
+        old.updateTextAlignment(id: headingID, alignment: .center)
+        let storeID = try old.addText(
+            "Download on the App Store",
+            frame: oldStoreFrame,
+            role: .body,
+            typographyPreset: .kidsBook,
+            color: .white
+        )
+        old.updateFontSize(id: storeID, fontSize: 0.024)
+        old.updateTextAlignment(id: storeID, alignment: .center)
+
+        let migrated = try BookInteriorPageDocumentFactory.make(
+            memoryID: BookInteriorAnchor.closingPageMemoryId,
+            title: "Made with Memoir",
+            body: "",
+            subtitle: nil,
+            pageAspectRatio: aspectRatio,
+            typographyPreset: .kidsBook,
+            isKidsBook: true,
+            background: nil,
+            preservingEditableElementsFrom: old
+        )
+        let layout = BookInteriorPageDocumentFactory.layout(
+            pageAspectRatio: aspectRatio,
+            isKidsBook: true
+        )
+        let text = migrated.elements.compactMap { element -> BookPageTextContent? in
+            guard case .text(let content) = element.content else { return nil }
+            return content
+        }
+        #expect(text.contains {
+            $0.role == .title && $0.alignment == .leading && $0.fontSize == layout.closingHeadingFontSize
+        })
+        #expect(text.contains {
+            $0.role == .body && $0.alignment == .leading && $0.color == .ink
+                && $0.fontSize == layout.closingStoreFontSize
+        })
+
+        var custom = old
+        custom.updateText(id: headingID, text: "A hand-edited farewell")
+        let customMigrated = try BookInteriorPageDocumentFactory.make(
+            memoryID: BookInteriorAnchor.closingPageMemoryId,
+            title: "Made with Memoir",
+            body: "",
+            subtitle: nil,
+            pageAspectRatio: aspectRatio,
+            typographyPreset: .kidsBook,
+            isKidsBook: true,
+            background: nil,
+            preservingEditableElementsFrom: custom
+        )
+        #expect(customMigrated.elements.contains { element in
+            guard case .text(let content) = element.content else { return false }
+            return content.role == .title && content.text == "A hand-edited farewell"
+        })
+    }
+
+    @MainActor @Test(arguments: [2, 5, 12])
+    func longMemoriesAddPagesWithoutShrinkingOrLosingText(expectedPages: Int) {
+        let model = StoryPageViewModel()
+        let memoryID = UUID()
+        for size in [CGSize(width: 792, height: 612), CGSize(width: 612, height: 792)] {
+            let fontSize = size.height * BookInteriorStyle.bodySize
+            let layout = BookPageCanonicalLayout.text(
+                isLandscape: size.width > size.height,
+                hasTitle: true,
+                hasSubtitle: false
+            )
+            let bodyWidth = size.width * layout.bodyFrame.width
+            let bodyHeight = size.height * layout.bodyFrame.height - 1
+            let sentence = "On summer evenings we gathered beside the porch and watched the garden grow. "
+            var paragraph = sentence
+            while BookInteriorTextLayout.height(of: paragraph, width: bodyWidth, fontSize: fontSize) < bodyHeight * 0.65 {
+                paragraph += sentence
+            }
+            let original = (1...expectedPages).map { "Memory detail \($0). " + paragraph }.joined(separator: "\n\n")
+            let pages = model.paginateText(original, title: "The summer garden", subtitle: nil,
+                pageHeight: size.height, pageWidth: size.width, memoryID: memoryID)
+            #expect(pages.count == expectedPages)
+            var bodies: [String] = []
+            for (offset, page) in pages.enumerated() {
+                guard case .textPage(let index, let total, let body, let title, _, let id) = page else {
+                    Issue.record("Expected text page"); continue
+                }
+                #expect(index == offset + 1)
+                #expect(total == expectedPages)
+                #expect(id == memoryID)
+                #expect(title == "The summer garden")
+                #expect(BookInteriorTextLayout.height(of: body, width: bodyWidth, fontSize: fontSize) <= bodyHeight)
+                bodies.append(body)
+            }
+            #expect(bodies.joined(separator: "\n\n") == original)
+        }
+    }
+
+    @MainActor @Test func fieldnotesPaginationPreservesEveryWordAndFitsAllPages() {
+        let model = StoryPageViewModel()
+        let original = (0..<300).map { "Memory number \($0) holds a different detail about our childhood." }.joined(separator: " ")
+        let pages = model.paginateText(original, title: "The first star", subtitle: nil, pageHeight: 612, pageWidth: 792, memoryID: UUID())
+        let bodies = pages.compactMap { page -> String? in
+            if case .textPage(_, _, let body, _, _, _) = page { return body }
+            return nil
+        }
+        #expect(bodies.count > 1)
+        #expect(bodies.joined(separator: " ").split(whereSeparator: { $0.isWhitespace }) == original.split(whereSeparator: { $0.isWhitespace }))
+        for body in bodies {
+            let layout = BookPageCanonicalLayout.text(isLandscape: true, hasTitle: true, hasSubtitle: false)
+            #expect(BookInteriorTextLayout.height(
+                of: body,
+                width: 792 * layout.bodyFrame.width,
+                fontSize: 612 * BookInteriorStyle.bodySize
+            ) <= 612 * layout.bodyFrame.height - 1)
+        }
+    }
+
+    @MainActor @Test func productionLengthMemoryUsesOnePageWhenItFits() {
+        let original = """
+        Chapter One. My earliest memory: the fall in sand. The world is very small when you are three years old, bounded by the edges of a mattress and the warm, heavy presence of your parents. It was 1972, and we were camping on the west coast of Cape Town at a place called Silvestrom. Home for those few days wasn't a tent, but a rondavel, a sturdy round house with thick walls and a high conical roof made of thatch grass. Inside, the night carried the trapped heat of the coastal summer day. It was thick, heavy, and restless. I lay trapped in that heat, sandwiched tightly between my mother and my father, while their breathing was slow and rhythmic, matching the distant dull roar of the Atlantic surf outside. Sleep wouldn't come to me. I tossed and turned, my small body sticky against the sheets, shifting in the narrow space between them. Looking up into the dark cone of the ceiling, I noticed something moving. From the gaps in the dried thatch overhead, fine grains of sand began to fall. They didn't drop all at once. They trickled down in quiet, delicate streams, like time slipping through an hourglass. And then the strange part happened. Even though the rondavel was dark, shrouded in the shadows of the night, the falling sand seemed to catch a light that shouldn't have been there. Each tiny grain shimmered as it cascaded towards us. Surrounded by a faint coastal glow, I watched it, mesmerized by the beautiful silent shower. But the wonder didn't last. As the glowing sand drifted down, a weight settled onto my ribs. The hot air in the room suddenly felt too thick to swallow. I tried to take a deep breath, but my chest locked up, tightening until it felt as though an invisible band was being cinched around my lungs. The comforting warmth of my parents' bodies suddenly felt suffocating. I couldn't draw enough air to call out. There, under the shimmering sand of the Silvestrom ceiling, my three-year-old self was experiencing the world narrowing down to a single, terrifying struggle to breathe. It was my first asthma attack.
+        """
+        let model = StoryPageViewModel()
+        let pages = model.paginateText(
+            original,
+            title: "Sandfall at Silvestrom",
+            subtitle: nil,
+            pageHeight: 612,
+            pageWidth: 792,
+            memoryID: UUID()
+        )
+
+        #expect(pages.count == 1)
+        guard case .textPage(_, _, let body, _, _, _) = pages[0] else {
+            Issue.record("Expected a text page")
+            return
+        }
+        #expect(body == original)
+        #expect(BookInteriorTextLayout.height(
+            of: body,
+            width: 792 * BookInteriorStyle.memoryContentWidth,
+            fontSize: 612 * BookInteriorStyle.bodySize
+        ) <= 612 * BookInteriorStyle.memoryBodyHeight - 1)
+    }
+
+    @MainActor @Test func legacyOverflowingTextPagesRepaginateWithoutLosingWords() {
+        let model = StoryPageViewModel()
+        let memoryID = UUID()
+        let first = Array(repeating: "The sand fell slowly while we listened to the ocean.", count: 10).joined(separator: " ")
+        let second = Array(repeating: "Then the room grew quiet and the story continued.", count: 10).joined(separator: " ")
+        model.pageItems = [
+            .textPage(index: 1, total: 2, body: first, title: "The fall in sand", subtitle: nil, memoryID: memoryID),
+            .textPage(index: 2, total: 2, body: second, title: "The fall in sand", subtitle: nil, memoryID: memoryID)
+        ]
+
+        #expect(model.repaginateTextPagesForCurrentLayout())
+        let pages = model.pageItems.compactMap { item -> String? in
+            guard case .textPage(_, _, let body, _, _, _) = item else { return nil }
+            return body
+        }
+        #expect(pages.count == 1)
+        #expect(
+            pages.joined(separator: " ").split(whereSeparator: { $0.isWhitespace })
+                == [first, second].joined(separator: " ").split(whereSeparator: { $0.isWhitespace })
+        )
+        for body in pages {
+            #expect(BookInteriorTextLayout.height(
+                of: body,
+                width: 792 * BookInteriorStyle.memoryContentWidth,
+                fontSize: 612 * BookInteriorStyle.bodySize
+            ) <= 612 * BookInteriorStyle.memoryBodyHeight - 1)
+        }
+    }
+
+    @MainActor @Test func recoveredBookendsNeverGainMemoryChrome() throws {
+        for anchor in [BookInteriorAnchor.titlePageMemoryId, BookInteriorAnchor.closingPageMemoryId] {
+            let document = try BookInteriorPageDocumentFactory.make(
+                memoryID: anchor, title: "Alice’s Memoir", body: "A collection of life stories", subtitle: nil,
+                pageAspectRatio: 11.0 / 8.5, typographyPreset: .kidsBook, isKidsBook: true, background: nil
+            )
+            let baseline = try #require(BookPagePrintRenderer.render(document: document, pixelSize: CGSize(width: 792, height: 612)))
+            let recovered = try #require(BookPagePrintRenderer.render(
+                document: document, pixelSize: CGSize(width: 792, height: 612),
+                memoryID: anchor, pageNumber: 2, isLandscape: true
+            ))
+            #expect(baseline.pngData() == recovered.pngData())
+            #expect(!BookPageChromePolicy.showsChrome(document: document, memoryID: nil, isPrecomposed: false))
+        }
+        #expect(!BookPageChromePolicy.showsChrome(document: BookPageDocument(), memoryID: BookInteriorAnchor.blankPageMemoryId, isPrecomposed: false))
+    }
+
+    @MainActor @Test func recoveredIllustrationsUseHeaderInsteadOfStoryFooter() throws {
+        let document = BookPageDocument(pageAspectRatio: 11.0 / 8.5)
+        let size = CGSize(width: 792, height: 612)
+        let baseline = try #require(BookPagePrintRenderer.render(document: document, pixelSize: size))
+        let illustration = try #require(BookPagePrintRenderer.render(
+            document: document, pixelSize: size, pageNumber: 4, isLandscape: true, isIllustration: true
+        ))
+        let story = try #require(BookPagePrintRenderer.render(document: document, pixelSize: size, pageNumber: 4, isLandscape: true))
+        let bottom = CGRect(x: 0, y: 480, width: 792, height: 132)
+        let baselineBottom = try #require(baseline.cgImage?.cropping(to: bottom))
+        let illustrationBottom = try #require(illustration.cgImage?.cropping(to: bottom))
+        let storyBottom = try #require(story.cgImage?.cropping(to: bottom))
+        #expect(UIImage(cgImage: baselineBottom).pngData() == UIImage(cgImage: illustrationBottom).pngData())
+        #expect(UIImage(cgImage: baselineBottom).pngData() != UIImage(cgImage: storyBottom).pngData())
+        #expect(baseline.pngData() != illustration.pngData())
+    }
+
+    @Test func fullPageIllustrationDocumentsPreservePrecomposedArtwork() throws {
+        let image = try BookPageImagePreparation.prepareForStorage(makeTestImageData())
+        var document = BookPageDocument(pageAspectRatio: 11.0 / 8.5)
+        _ = try document.addImage(image, frame: NormalizedPageRect(x: 0, y: 0, width: 1, height: 1))
+        #expect(BookPageChromePolicy.isPrecomposedIllustration(document: document, isIllustration: true))
+        #expect(!BookPageChromePolicy.isPrecomposedIllustration(document: document, isIllustration: false))
+        #expect(!BookPageChromePolicy.showsChrome(document: document, memoryID: UUID(), isPrecomposed: true))
+        _ = try document.addText("My title", role: .title)
+        #expect(!BookPageChromePolicy.isPrecomposedIllustration(document: document, isIllustration: true))
     }
 
     private func makeTestImageData(width: Int = 64, height: Int = 48) -> Data {

@@ -80,6 +80,28 @@ enum TranscriptionRetryPolicy {
     }
 }
 
+enum BookTranscriptionPreflightPolicy {
+    static func hasUsableText(_ text: String?) -> Bool {
+        !(text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    static func shouldRequestTranscription(
+        text: String?,
+        audioFileURL: String?,
+        status: String?,
+        updatedAt: Date?,
+        now: Date = Date()
+    ) -> Bool {
+        guard !hasUsableText(text) else { return false }
+        return TranscriptionRetryPolicy.shouldRequest(
+            status: status,
+            audioFileExtension: URL(string: audioFileURL ?? "")?.pathExtension,
+            updatedAt: updatedAt,
+            now: now
+        )
+    }
+}
+
 enum TranscriptionFailurePolicy {
     static func status(for errorDescription: String) -> String {
         let message = errorDescription.lowercased()
@@ -108,6 +130,16 @@ enum RecordingDurationPolicy {
 
     static func shouldStop(elapsed: TimeInterval) -> Bool {
         elapsed >= maximumRecordingDuration
+    }
+}
+
+enum RecordingStartErrorPolicy {
+    static func message(detail: String? = nil) -> String {
+        let trimmed = detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            return "Memoir could not start recording. Check your microphone and try again."
+        }
+        return "Memoir could not start recording. \(trimmed)"
     }
 }
 
@@ -171,8 +203,12 @@ actor CloudTranscriptionService {
                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw CloudTranscriptionError.invalidResponse
             }
+            let rawText = (payload["rawText"] as? String).flatMap {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+            } ?? text
             try await saveCompletedTranscription(
                 text,
+                rawText: rawText,
                 memoryID: memoryID,
                 language: language,
                 expectedAudioFileURL: expectedAudioFileURL
@@ -207,6 +243,7 @@ actor CloudTranscriptionService {
 
     private func saveCompletedTranscription(
         _ text: String,
+        rawText: String,
         memoryID: UUID,
         language: String,
         expectedAudioFileURL: String?
@@ -214,7 +251,7 @@ actor CloudTranscriptionService {
         try await MainActor.run {
             guard let entry = PersistenceController.shared.entry(id: memoryID) else { return }
             guard entry.audioFileURL == expectedAudioFileURL else { return }
-            entry.transcriptionRawText = text
+            entry.transcriptionRawText = rawText
             entry.transcriptionStatus = "completed"
             entry.transcriptionLanguage = language
             entry.transcriptionModel = "gpt-transcribe"

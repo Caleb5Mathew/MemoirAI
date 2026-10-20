@@ -6,7 +6,7 @@
   },
   "main": "index.js",
   "scripts": {
-    "test": "npm run test:merchant-pricing && npm run test:transcription && npm run test:memory-deletion && npm run test:memory-index-ownership && npm run test:account-deletion && npm run test:guest-recovery && npm run test:account-state-guards && npm run test:account-operation-lock && npm run test:admin-authorization && npm run test:book-pdf && npm run test:privacy-logging && npm run test:storybook-logging && npm run test:storybook-failure-privacy && npm run test:storybook-admission && npm run test:storybook-memory-selection && npm run test:storybook-age-prompt && npm run test:back-cover-pitch && npm run test:storybook-provider-deadline && npm run test:retry-deadline && npm run test:lulu-webhook-auth && npm run test:checkout-return && npm run test:order-flow && npm run test:storage-artifact-urls && npm run test:storage-rules-budget && npm run test:paid-checkout-artifacts && npm run test:fulfillment-incident && npm run test:shared-access-revocation && npm run test:shared-memory-projection",
+    "test": "npm run test:merchant-pricing && npm run test:transcription && npm run test:memory-deletion && npm run test:memory-index-ownership && npm run test:account-deletion && npm run test:guest-recovery && npm run test:account-state-guards && npm run test:account-operation-lock && npm run test:admin-authorization && npm run test:book-pdf && npm run test:privacy-logging && npm run test:storybook-logging && npm run test:storybook-failure-privacy && npm run test:storybook-admission && npm run test:storybook-memory-selection && npm run test:storybook-age-prompt && npm run test:back-cover-pitch && npm run test:storybook-provider-deadline && npm run test:retry-deadline && npm run test:lulu-webhook-auth && npm run test:checkout-return && npm run test:order-flow && npm run test:storage-artifact-urls && npm run test:storage-rules-budget && npm run test:paid-checkout-artifacts && npm run test:fulfillment-incident && npm run test:shared-access-revocation && npm run test:shared-memory-projection && npm run test:admin-browser && npm run test:book-order-emails && npm run test:onboarding-preview",
     "test:privacy-logging": "node privacyLogging.test.js",
     "test:merchant-pricing": "node merchantPricingMath.test.js",
     "test:transcription": "node transcriptionValidation.test.js",
@@ -35,7 +35,10 @@
     "test:fulfillment-incident": "node fulfillmentIncident.test.js",
     "test:shared-access-revocation": "node sharedAccessRevocation.test.js",
     "test:shared-memory-projection": "node sharedMemoryProjection.test.js",
-    "check-style-sync": "node scripts/check-style-sync.js"
+    "check-style-sync": "node scripts/check-style-sync.js",
+    "test:admin-browser": "node --test adminUserBrowser.test.js",
+    "test:book-order-emails": "node --test bookOrderEmails.test.js",
+    "test:onboarding-preview": "node onboardingPreview.test.js"
   },
   "dependencies": {
     "@ffprobe-installer/ffprobe": "^2.1.2",

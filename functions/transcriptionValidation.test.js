@@ -31,7 +31,59 @@ function assertInvalid(body) {
   assert.throws(() => _test.validateTranscriptionRequest(body), (error) => error.code === "invalid-argument");
 }
 
-assert.match(_test.transcriptionPrompt(), /personal memoir recording/);
+assert.match(_test.transcriptionPrompt(), /personal oral-history recording/);
+assert.match(_test.transcriptionPrompt(), /including hesitations, repetitions, and self-corrections/);
+
+const refinementCases = [
+  ["Um, I met her in, uh, 1972.", "I met her in 1972."],
+  ["I—I walked home after school.", "I walked home after school."],
+  ["I was really, really scared.", "I was really, really scared."],
+  ["It was Tuesday—no, Wednesday.", "It was Tuesday—no, Wednesday."],
+  ["There were like fifty people.", "There were like fifty people."],
+  ["We was always together, and I ain't never forgotten that.", "We was always together, and I ain't never forgotten that."],
+  ["I think it was around 1972, maybe 1973.", "I think it was around 1972, maybe 1973."],
+  ["hello hello we want to keep the story", "hello hello we want to keep the story"],
+  ["I went to the ER.", "I went to the ER."],
+  ["I studied at UM.", "I studied at UM."],
+  ["I went to the er after dinner.", "I went to the er after dinner."],
+  ["She graduated from um in 1982.", "She graduated from um in 1982."],
+  ["I said uh-huh and went along.", "I said uh-huh and went along."],
+  ["He said, “Um, I do not know.”", "He said, “I do not know.”"],
+  ["I, I love you.", "I, I love you."]
+];
+for (const [raw, expected] of refinementCases) {
+  assert.strictEqual(_test.refineTranscriptForReading(raw), expected);
+  assert.strictEqual(_test.validateTranscriptRefinement(raw, expected), true);
+}
+assert.strictEqual(
+  _test.validateTranscriptRefinement("I did not leave in 1972.", "I did leave in 1973."),
+  false
+);
+assert.strictEqual(
+  _test.validateTranscriptRefinement("I was really, really scared.", "I was really scared."),
+  false
+);
+assert.strictEqual(
+  _test.validateSemanticTranscriptRefinement(
+    "Um, it was, like, the happiest day, you know.",
+    "It was the happiest day."
+  ),
+  true
+);
+assert.strictEqual(
+  _test.validateSemanticTranscriptRefinement("I did not leave in 1972.", "I did leave in 1972."),
+  false
+);
+assert.strictEqual(
+  _test.validateSemanticTranscriptRefinement("I met Rosalie in 1972.", "I met in 1972.", ["Rosalie"]),
+  false
+);
+assert.deepStrictEqual(_test.splitTranscriptForRefinement("One sentence. Two sentence.", 15), [
+  "One sentence.",
+  "Two sentence."
+]);
+assert.strictEqual(_test.refineTranscriptForReading("Umbria was beautiful."), "Umbria was beautiful.");
+assert.strictEqual(_test.refineTranscriptForReading("Han er hjemme.", "da"), "Han er hjemme.");
 assert.deepStrictEqual(
   _test.validateTranscriptionRequest({
     memoryId: "00000000-0000-0000-0000-000000000000",
@@ -123,28 +175,38 @@ assert.deepStrictEqual(apiRequest.keywords, ["Rosalie"]);
 assert.strictEqual(apiRequest.language, undefined);
 assert.strictEqual(_test.buildTranscriptionAPIRequest("file", "en", []).keywords, undefined);
 
-const uneditedUpdate = _test.buildTranscriptionUpdate({ transcriptionVersion: 2 }, "New transcript", "en");
+const uneditedUpdate = _test.buildTranscriptionUpdate(
+  { transcriptionVersion: 2 },
+  "Um, new transcript",
+  "New transcript",
+  "en"
+);
+assert.strictEqual(uneditedUpdate.transcriptionRaw, "Um, new transcript");
 assert.strictEqual(uneditedUpdate.transcription, "New transcript");
+assert.strictEqual(uneditedUpdate.transcriptionRefinementVersion, 2);
 assert.strictEqual(uneditedUpdate.transcriptionVersion, 3);
 
 const editedUpdate = _test.buildTranscriptionUpdate(
   { transcriptionVersion: 4, transcriptionEdited: "My corrected transcript" },
   "Retried raw transcript",
+  "Retried clean transcript",
   "en"
 );
-assert.strictEqual(editedUpdate.transcription, undefined);
+assert.strictEqual(editedUpdate.transcription, "Retried clean transcript");
 assert.strictEqual(editedUpdate.transcriptionRaw, "Retried raw transcript");
 assert.strictEqual(editedUpdate.transcriptionVersion, 5);
 
 const clearedUpdate = _test.buildTranscriptionUpdate(
   { transcriptionEdited: "" },
   "Retried raw transcript",
+  "Retried clean transcript",
   "en"
 );
-assert.strictEqual(clearedUpdate.transcription, undefined);
+assert.strictEqual(clearedUpdate.transcription, "Retried clean transcript");
 
 const whitespacePlaceholderUpdate = _test.buildTranscriptionUpdate(
   { transcriptionEdited: "\n" },
+  "Recovered transcript",
   "Recovered transcript",
   "en"
 );
@@ -162,8 +224,74 @@ assert.deepStrictEqual(
     audioHash,
     1000
   ),
-  { action: "cached", text: "Saved" }
+  { action: "cached", rawText: "Saved", text: "Saved", needsRefinement: true }
 );
+assert.deepStrictEqual(
+  _test.transcriptionLeaseDecision(
+    {
+      transcriptionStatus: "completed",
+      transcriptionAudioSHA256: audioHash,
+      transcriptionRaw: "Um, saved",
+      transcription: "Saved"
+    },
+    audioHash,
+    1000
+  ),
+  { action: "cached", rawText: "Um, saved", text: "Saved", needsRefinement: true }
+);
+assert.deepStrictEqual(
+  _test.transcriptionLeaseDecision(
+    {
+      transcriptionStatus: "completed",
+      transcriptionAudioSHA256: audioHash,
+      transcriptionRaw: "Um, saved",
+      transcription: "Saved",
+      transcriptionRefinementVersion: 2
+    },
+    audioHash,
+    1000
+  ),
+  { action: "cached", rawText: "Um, saved", text: "Saved", needsRefinement: false }
+);
+
+async function assertSemanticRefinement() {
+  const calls = [];
+  const refined = await _test.refineTranscriptWithOpenAI({
+    apiKey: "test-key",
+    rawText: "Um, it was, like, the happiest day, you know.",
+    glossary: ["Rosalie"],
+    callChat: async (request) => {
+      calls.push(request);
+      return { text: JSON.stringify({ text: "It was the happiest day." }) };
+    }
+  });
+  assert.deepStrictEqual(refined, { text: "It was the happiest day.", model: "gpt-5-mini" });
+  assert.strictEqual(calls.length, 1);
+  assert.match(calls[0].messages[0].content, /Make spoken recollections clear/);
+  assert.match(calls[0].messages[0].content, /Never add, substitute, summarize, reorder, or rewrite words/);
+
+  const legitimateLike = await _test.refineTranscriptWithOpenAI({
+    apiKey: "test-key",
+    rawText: "There were like fifty people.",
+    callChat: async () => ({ text: JSON.stringify({ text: "There were like fifty people." }) })
+  });
+  assert.strictEqual(legitimateLike.text, "There were like fifty people.");
+
+  const invalidRewrite = await _test.refineTranscriptWithOpenAI({
+    apiKey: "test-key",
+    rawText: "I did not leave in 1972.",
+    callChat: async () => ({ text: JSON.stringify({ text: "I left in 1973." }) })
+  });
+  assert.deepStrictEqual(invalidRewrite, {
+    text: "I did not leave in 1972.",
+    model: "deterministic-fallback"
+  });
+}
+
+assertSemanticRefinement().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 assert.deepStrictEqual(
   _test.transcriptionLeaseDecision(
     {

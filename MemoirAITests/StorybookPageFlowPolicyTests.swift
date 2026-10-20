@@ -1,8 +1,38 @@
 import Foundation
+import CoreData
 import Testing
 @testable import MemoirAI
 
 struct StorybookPageFlowPolicyTests {
+    @Test func maximumStandardBookPadsToPrintableHardcoverMinimum() {
+        let unpaddedPageCount = 3 + (StorybookGenerationBatchPolicy.maximumPagesPerBook * 2)
+        #expect(unpaddedPageCount == 21)
+        #expect(BookPrintPaddingPolicy.paddingCount(for: unpaddedPageCount) == 3)
+        #expect(unpaddedPageCount + BookPrintPaddingPolicy.paddingCount(for: unpaddedPageCount) == 24)
+        #expect(BookPrintPaddingPolicy.paddingCount(for: 20) == 0)
+        #expect(BookPrintPaddingPolicy.paddingCount(for: 24) == 0)
+        #expect(BookPrintPaddingPolicy.paddingCount(for: 25) == 1)
+    }
+
+    @Test func generatedMemoryPagesPreferTheAIStoryTitleOverTheInterviewPrompt() {
+        #expect(StorybookGeneratedMemoryTitlePolicy.title(
+            illustrationTitle: " Sunflowers Beside the Porch ", extractedTitle: "Sunflowers Beside the Porch",
+            displayTitle: "What type of kid were you?", prompt: "What type of kid were you?"
+        ) == "Sunflowers Beside the Porch")
+        #expect(StorybookGeneratedMemoryTitlePolicy.title(
+            illustrationTitle: " ", extractedTitle: "A summer afternoon", displayTitle: "Old prompt", prompt: "Prompt"
+        ) == "A summer afternoon")
+        #expect(StorybookGeneratedMemoryTitlePolicy.title(
+            illustrationTitle: nil, extractedTitle: nil, displayTitle: "Older generated title", prompt: "Prompt"
+        ) == "Older generated title")
+        #expect(StorybookGeneratedMemoryTitlePolicy.title(
+            illustrationTitle: nil, extractedTitle: nil, displayTitle: " ", prompt: "Saved prompt"
+        ) == "Saved prompt")
+        #expect(StorybookGeneratedMemoryTitlePolicy.title(
+            illustrationTitle: nil, extractedTitle: nil, displayTitle: nil, prompt: " "
+        ) == "Memory")
+    }
+
     @Test func generatedBookWaitsForCoverPreparationButDoesNotStrandOnFailure() {
         #expect(!StorybookCoverRevealPolicy.shouldReveal(
             canonicalArtifactsReady: false,
@@ -102,9 +132,102 @@ struct StorybookPageFlowPolicyTests {
         #expect(initial.subtitle.isEmpty)
     }
 
-    @Test func interiorMemoirSubtitleUsesTheStorytellersName() {
+    @Test func interiorMemoirSubtitleUsesCollectionCopy() {
         let policy = CoverCopyPolicy(artStyle: .kidsBook, profileDisplayName: "Caleb")
-        #expect(policy.interiorTitlePageBlurb() == "A collection of memories from Caleb’s life.")
+        #expect(policy.interiorTitlePageBlurb() == "A collection of life stories")
+        #expect(StorybookBookendRecoveryPolicy.recoveredMemoryID(
+            storedMemoryID: nil, pageType: "textPage", title: "Alice’s Memoir",
+            textContent: "A collection of memories from Alice’s life."
+        ) == BookInteriorAnchor.titlePageMemoryId)
+        #expect(StorybookBookendRecoveryPolicy.recoveredMemoryID(
+            storedMemoryID: nil, pageType: "textPage", title: "An afternoon",
+            textContent: "A collection of life stories"
+        ) == nil)
+    }
+
+    @Test func memoirNameRejectsPlaceholdersAndNormalizesWhitespace() {
+        for name in ["", " ", "Grandparent", "NARRATOR", "MemoirAI Reader", "Unknown"] {
+            #expect(StorybookMemoirNamePolicy.usableName(name) == nil)
+        }
+        #expect(StorybookMemoirNamePolicy.usableName("  María\n  O’Neill ") == "María O’Neill")
+        #expect(StorybookMemoirNamePolicy.usableName(String(repeating: "a", count: 101)) == nil)
+        #expect(StorybookMemoirNamePolicy.usableName("Grandma Rose") == "Grandma Rose")
+    }
+
+    @Test func memoirNameUsesProfileBeforeUnambiguousNarrator() {
+        #expect(StorybookMemoirNamePolicy.resolvedName(profileName: "Alice", narratorNames: ["Bob"]) == "Alice")
+        #expect(StorybookMemoirNamePolicy.resolvedName(profileName: "Grandparent", narratorNames: ["Alice", "alice"]) == "Alice")
+        #expect(StorybookMemoirNamePolicy.resolvedName(profileName: "Grandparent", narratorNames: ["Alice", "Bob"]) == nil)
+        #expect(StorybookMemoirNamePolicy.resolvedName(profileName: nil, narratorNames: ["Narrator"]) == nil)
+    }
+
+    @Test func memoirTitleUsesUnicodePossessiveAndSafeFallback() {
+        #expect(StorybookMemoirNamePolicy.bookTitle(for: "James") == "James’s Memoir")
+        #expect(StorybookMemoirNamePolicy.bookTitle(for: "María O’Neill") == "María O’Neill’s Memoir")
+        #expect(StorybookMemoirNamePolicy.bookTitle(for: "Grandparent") == "Memoir")
+        #expect(CoverCopyPolicy(artStyle: .kidsBook, profileDisplayName: "Alice").defaultBookTitle() == "Alice’s Memoir")
+    }
+
+    @MainActor @Test func memoirNameReadsOnlyExplicitNarratorCharacters() {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        let narrator = MemoryEntry(context: context)
+        narrator.setValue(#"{"characters":[{"name":"Alice (me)","relationshipToNarrator":"self"},{"name":"Bob","relationshipToNarrator":"son"}]}"#, forKey: "characterDetails")
+        let other = MemoryEntry(context: context)
+        other.setValue(#"{"characters":[{"name":"Robert","relationshipToNarrator":"someone I met"},{"name":"Mary","relationshipToNarrator":"mother"}]}"#, forKey: "characterDetails")
+        let conflict = MemoryEntry(context: context)
+        conflict.setValue(#"{"characters":[{"name":"Evelyn","relationshipToNarrator":"narrator"}]}"#, forKey: "characterDetails")
+        let invalid = MemoryEntry(context: context)
+        invalid.setValue("invalid JSON", forKey: "characterDetails")
+        let viewModel = StoryPageViewModel()
+        #expect(viewModel.memoirName(profileName: "Grandparent", memories: [narrator, other]) == "Alice")
+        #expect(viewModel.memoirName(profileName: "Grandparent", memories: [other, invalid]) == nil)
+        #expect(viewModel.memoirName(profileName: "Grandparent", memories: [narrator, conflict]) == nil)
+        #expect(viewModel.memoirName(profileName: "María", memories: [narrator, conflict]) == "María")
+    }
+
+    @MainActor @Test func profileRenameMatchesStableIDInsteadOfStaleFields() {
+        let viewModel = ProfileViewModel()
+        let original = viewModel.selectedProfile
+        var changed = original
+        changed.gender = "Female"
+        viewModel.updateProfile(changed)
+        viewModel.updateName(for: original, to: "Evelyn")
+        #expect(viewModel.selectedProfile.name == "Evelyn")
+        #expect(viewModel.selectedProfile.gender == "Female")
+        #expect(viewModel.selectedProfile.id == original.id)
+        viewModel.updateName(for: Profile(name: "Unrelated"), to: "Wrong person")
+        #expect(viewModel.selectedProfile.name == "Evelyn")
+    }
+
+    @MainActor @Test func failedInteriorUpgradeDoesNotInventUnpublishedEdits() async {
+        let model = StoryPageViewModel()
+        #expect(!(await model.saveCurrentBookInPlace(reason: "interiorDesignUpdate")))
+        #expect(!model.hasUnpublishedBookChanges)
+        #expect(!(await model.saveCurrentBookInPlace(reason: "textPageEdit")))
+        #expect(!(await model.saveCurrentBookInPlace(reason: "interiorDesignUpdate")))
+        #expect(model.hasUnpublishedBookChanges)
+    }
+
+    @Test func interiorLayoutUpgradeRequiresANewPublishedVersion() throws {
+        var data: [String: Any] = [
+            "bookVersionId": "original", "profileId": "profile", "pageCount": 4,
+            "artStyle": "kidsBook", "orientation": "landscape", "pageWidth": 792.0,
+            "pageHeight": 612.0, "source": "story_generation"
+        ]
+        let legacy = try #require(BookVersionRecord.fromFirestoreData(data))
+        #expect(legacy.layoutVersion == 1)
+        #expect(BookInteriorUpgradePolicy.needsUpdate(layoutVersion: legacy.layoutVersion))
+        #expect(!BookInteriorUpgradePolicy.needsUpdate(layoutVersion: BookPrintSpec.layoutVersion))
+        #expect(!BookInteriorUpgradePolicy.needsUpdate(layoutVersion: BookPrintSpec.layoutVersion + 1))
+        #expect(!BookInteriorUpgradePolicy.canOrderPublishedUpdate(previousBookID: "original", record: legacy, hasUnpublishedChanges: false))
+        data["bookVersionId"] = "updated"
+        data["layoutVersion"] = BookPrintSpec.layoutVersion
+        let updated = try #require(BookVersionRecord.fromFirestoreData(data))
+        #expect(BookInteriorUpgradePolicy.canOrderPublishedUpdate(previousBookID: "original", record: updated, hasUnpublishedChanges: false))
+        #expect(!BookInteriorUpgradePolicy.canOrderPublishedUpdate(previousBookID: "original", record: updated, hasUnpublishedChanges: true))
+        #expect(!BookInteriorUpgradePolicy.canOrderPublishedUpdate(previousBookID: "original", record: nil, hasUnpublishedChanges: false))
+        #expect(BookRevisionSavePolicy.reusesExistingCover(for: "interiorDesignUpdate"))
     }
 
     @Test func catalogUsesTheHumanPrintTitleBeforeTheInternalBookKey() {
@@ -203,7 +326,7 @@ struct StorybookPageFlowPolicyTests {
             storedMemoryID: nil,
             pageType: "textPage",
             title: "Caleb’s Memoir",
-            textContent: "A collection of memories from Caleb’s life."
+            textContent: "A collection of life stories"
         ) == BookInteriorAnchor.titlePageMemoryId)
         #expect(StorybookBookendRecoveryPolicy.shouldInclude(
             memoryID: BookInteriorAnchor.titlePageMemoryId,

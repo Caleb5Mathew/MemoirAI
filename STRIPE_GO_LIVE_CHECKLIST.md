@@ -39,6 +39,8 @@ Use this before App Store submission when **real book orders** must work. Hosted
 
 `functions/opsAlerts.js` emails **memoirstorybook@gmail.com** when: a cart checkout is paid, an order fails to submit to Lulu (`lulu_failed`), or a refund/dispute webhook fires. Env-gated via the `OPS_ALERT_SMTP_URL` secret — while unset, `sendOpsAlert` just logs `ops alert skipped (OPS_ALERT_SMTP_URL not configured)` and every function behaves exactly as before (same pattern as `ENFORCE_APP_CHECK`).
 
+New live paid checkouts also notify **caleb5mathew@gmail.com** and **calebmathew2121@gmail.com** through `onPaidBookCheckoutEmail`. This covers single-book and cart purchases, sends one notification per checkout, and excludes Stripe test orders. Delivery is awaited and retried with a saved delivery marker; no past orders are emailed when the trigger is deployed. SMTP delivery is at-least-once: a crash after SMTP acceptance but before saving the marker can produce a duplicate. The original ops inbox and fulfillment alerts are unchanged.
+
 **One-time setup (Gmail app password):**
 
 1. The sending Gmail account needs 2-Step Verification on: [myaccount.google.com/security](https://myaccount.google.com/security) → **2-Step Verification** → enable.

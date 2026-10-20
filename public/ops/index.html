@@ -631,6 +631,20 @@
       gap: 1rem;
       flex-wrap: wrap;
     }
+    .browser-status { padding: 0.75rem 1.25rem; color: var(--muted); }
+    .browser-status:empty, .browser-footer:has(> [hidden]):not(:has(> :not([hidden]))) { display: none; }
+    .browser-footer { padding: 0 1.25rem 1rem; display: flex; gap: 0.5rem; }
+    [hidden] { display: none !important; }
+    .user-open { background: none; border: 0; color: var(--primary); font: inherit; text-align: left; cursor: pointer; padding: 0.35rem 0; overflow-wrap: anywhere; }
+    .user-open:hover { text-decoration: underline; }
+    tr.selected td { background: var(--info-bg); }
+    .memory-row { padding: 1rem; border: 1px solid var(--border); border-radius: 10px; overflow-wrap: anywhere; }
+    .memory-row summary { cursor: pointer; font-weight: 600; }
+    .memory-date { display: block; font-weight: 400; padding-top: 0.3rem; }
+    .memory-text { white-space: pre-wrap; font-size: 0.9rem; line-height: 1.65; }
+    .book-row > div { min-width: 0; overflow-wrap: anywhere; }
+    #selected-user-id { overflow-wrap: anywhere; }
+    @media (max-width: 600px) { #user-id-input { min-width: 0; width: 100%; } }
     #auth-error { color: var(--danger); font-size: 0.88rem; margin-top: 0.75rem; }
     .quick-links {
       display: grid;
@@ -713,7 +727,7 @@
         <button type="button" class="nav-btn active" data-view="dashboard">📊 Overview</button>
         <button type="button" class="nav-btn" data-view="queue">🖨 Print queue <span id="nav-queue-badge" class="nav-badge" hidden>0</span></button>
         <button type="button" class="nav-btn" data-view="orders">📦 All orders</button>
-        <button type="button" class="nav-btn" data-view="users">📚 User books</button>
+        <button type="button" class="nav-btn" data-view="users">📚 Users</button>
         <button type="button" class="nav-btn" data-view="links">🔗 Quick links</button>
       </nav>
       <div class="sidebar-foot">
@@ -798,19 +812,33 @@
 
       <div id="view-users" class="view">
         <div class="page-head">
-          <div>
-            <h2>User books</h2>
-            <p>Look up book versions by Firebase user ID</p>
-          </div>
+          <div><h2>Users</h2><p>Browse accounts, books, and saved memories.</p></div>
+          <button type="button" class="btn btn-ghost" id="refresh-users">Refresh users</button>
         </div>
         <div class="panel">
           <div class="panel-head">
-            <div class="toolbar">
-              <input type="text" id="user-id-input" placeholder="Firebase userId (from any order)" style="min-width:280px" />
-              <button type="button" class="btn btn-primary" id="load-books-btn">Load books</button>
-            </div>
+            <h3>Accounts</h3>
+            <div class="toolbar"><label for="user-sort">Sort</label><select id="user-sort"><option value="newest">Newest users</option><option value="oldest">Oldest users</option></select></div>
           </div>
-          <div id="books-list" class="books-grid"></div>
+          <div id="users-status" role="status" class="browser-status"></div>
+          <div class="table-wrap"><table><thead><tr><th>User</th><th>Joined</th><th>Last active</th></tr></thead><tbody id="users-tbody"></tbody></table></div>
+          <div class="browser-footer"><button type="button" class="btn btn-ghost" id="more-users" hidden>Load more users</button><button type="button" class="btn btn-ghost" id="retry-users" hidden>Retry users</button></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="toolbar">
+            <label for="user-id-input">User ID</label><input type="text" id="user-id-input" placeholder="Firebase user ID" />
+            <button type="button" class="btn btn-primary" id="load-books-btn">Open user</button>
+          </div></div>
+          <div id="user-detail" hidden>
+            <div class="panel-head"><div><h3 id="selected-user-name"></h3><p class="meta-line" id="selected-user-id"></p></div><button type="button" class="btn btn-ghost btn-sm" id="refresh-user-content">Refresh content</button></div>
+            <div class="panel-head"><h3>Books</h3><span class="meta-line">Newest first</span></div>
+            <div id="books-status" role="status" class="browser-status"></div><div id="books-list" class="books-grid"></div>
+            <div class="browser-footer"><button type="button" class="btn btn-ghost" id="more-books" hidden>Load more books</button><button type="button" class="btn btn-ghost" id="retry-books" hidden>Retry books</button></div>
+            <div class="panel-head"><h3>Memories</h3><span class="meta-line">Newest first</span></div>
+            <div id="memories-status" role="status" class="browser-status"></div><div id="memories-list" class="books-grid"></div>
+            <div class="browser-footer"><button type="button" class="btn btn-ghost" id="more-memories" hidden>Load more memories</button><button type="button" class="btn btn-ghost" id="retry-memories" hidden>Retry memories</button></div>
+          </div>
+          <div id="user-selection-hint" class="empty-state">Select an account above or enter a user ID.</div>
         </div>
       </div>
 
@@ -873,6 +901,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
-  <script src="app.js?v=20260525-13"></script>
+  <script src="app.js?v=20260924-users"></script>
 </body>
 </html>

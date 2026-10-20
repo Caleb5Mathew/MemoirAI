@@ -1007,6 +1007,7 @@ final class OrderService {
 
 enum CheckoutReturnPolicy {
     static let pendingSessionDefaultsKey = "pendingStripeReturnSessionId"
+    static let confirmedSessionDefaultsKey = "confirmedStripeReturnSessionId"
 
     static func normalizeSessionID(_ raw: String?) -> String? {
         guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines),

@@ -3,7 +3,6 @@ import UIKit
 import AVFoundation
 import PhotosUI
 import CoreData
-import Mixpanel
 import Speech
 
 // MARK: - Character Details Structure
@@ -410,6 +409,7 @@ struct MemoryDetailView: View {
     @State private var transcriptionAlertMessage = ""
     @State private var showTranscriptionAlert = false
     @State private var isTextExpanded = false
+    @State private var isShowingRawTranscript = false
     @State private var showReRecordConfirm = false
     @State private var showReRecordSheet = false
 
@@ -464,6 +464,8 @@ struct MemoryDetailView: View {
                 memoryEditBlock
             } else if let saved = memory.text, !saved.isEmpty {
                 memoryReadTextBlock(saved)
+            } else if memory.transcriptionStatus == "completed", memory.transcriptionEditedText == "" {
+                memoryReadTextBlock("")
             } else if memory.hasAudio {
                 memoryTranscriptionStatusBlock
             }
@@ -607,8 +609,33 @@ struct MemoryDetailView: View {
 
     @ViewBuilder
     private func memoryReadTextBlock(_ saved: String) -> some View {
+        let rawTranscript = memory.transcriptionRawText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasDistinctRawTranscript = rawTranscript?.isEmpty == false && rawTranscript != saved.trimmingCharacters(in: .whitespacesAndNewlines)
+        let visibleText = isShowingRawTranscript ? (rawTranscript ?? saved) : saved
+
         VStack(alignment: .leading, spacing: 14) {
-            Text(saved)
+            if hasDistinctRawTranscript {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 7) {
+                        Image(systemName: isShowingRawTranscript ? "waveform" : "text.alignleft")
+                        Text(isShowingRawTranscript ? "Raw machine transcript" :
+                            (MemoryTranscriptionTextPolicy.validUserEdit(memory.transcriptionEditedText) == nil
+                                ? "Lightly refined for reading"
+                                : "Edited by you"))
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(terracotta)
+
+                    if !isShowingRawTranscript {
+                        Text("Obvious filler and formatting noise are removed. Your words, details, and voice stay intact.")
+                            .font(.system(size: 13, design: .serif))
+                            .foregroundColor(textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            Text(visibleText)
                 .font(.custom("Georgia", size: 18))
                 .multilineTextAlignment(.leading)
                 .foregroundColor(Color(red: 0.15, green: 0.14, blue: 0.13))
@@ -616,7 +643,7 @@ struct MemoryDetailView: View {
                 .lineLimit(isTextExpanded ? nil : 10)
                 .padding(.vertical, 2)
 
-            if saved.count > 300 || saved.filter({ $0 == "\n" }).count > 8 {
+            if visibleText.count > 300 || visibleText.filter({ $0 == "\n" }).count > 8 {
                 Button(action: {
                     withAnimation(.easeInOut(duration: 0.25)) {
                         isTextExpanded.toggle()
@@ -627,6 +654,21 @@ struct MemoryDetailView: View {
                         .foregroundColor(terracotta)
                 }
                 .buttonStyle(.plain)
+            }
+
+            if hasDistinctRawTranscript {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isShowingRawTranscript.toggle()
+                        isTextExpanded = true
+                    }
+                }) {
+                    Text(isShowingRawTranscript ? "View reading copy" : "View raw transcript")
+                        .font(.system(size: 14, weight: .semibold, design: .serif))
+                        .foregroundColor(terracotta)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("The saved recording remains the original source")
             }
 
             if memory.transcriptionStatus == "failed" || memory.transcriptionStatus == "needsRerecording" {
@@ -1019,14 +1061,11 @@ struct MemoryDetailView: View {
                 .environmentObject(profileVM)
         }
         .onAppear {
-            Mixpanel.mainInstance().track(
-                event: "Viewed Memory",
-                properties: AnalyticsPrivacyPolicy.sanitized([
+            ProductAnalytics.shared.track("Viewed Memory", [
                     "has_audio": memory.hasAudio,
                     "has_text": !(memory.text?.isEmpty ?? true),
                     "has_photos": !(memory.photos?.allObjects.isEmpty ?? true)
                 ])
-            )
         }
         .onDisappear {
             stopPlaybackIfNeeded()
@@ -1186,9 +1225,11 @@ struct MemoryDetailView: View {
                     }
                     audioEngine.stop()
                     isPlaying = false
+                    ProductAnalytics.shared.track("Memory Playback Completed", ["playback_source": "local"])
                 }
             }
             playerNode.play()
+            ProductAnalytics.shared.track("Memory Playback Started", ["playback_source": "local"])
         } catch {
             playbackGeneration = UUID()
             playerNode.stop()
@@ -1211,7 +1252,10 @@ struct MemoryDetailView: View {
             object: item,
             queue: .main
         ) { _ in
-            Task { @MainActor in stopPlaybackIfNeeded() }
+            Task { @MainActor in
+                ProductAnalytics.shared.track("Memory Playback Completed", ["playback_source": "remote"])
+                stopPlaybackIfNeeded()
+            }
         }
         remotePlaybackFailureObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemFailedToPlayToEndTime,
@@ -1226,6 +1270,7 @@ struct MemoryDetailView: View {
             Task { @MainActor in failPlayback(.remoteMedia, error: item.error) }
         }
         player.play()
+        ProductAnalytics.shared.track("Memory Playback Requested", ["playback_source": "remote"])
         isPlaying = true
     }
 
@@ -1254,6 +1299,7 @@ struct MemoryDetailView: View {
     private func failPlayback(_ kind: AudioPlaybackFailureKind, error: Error? = nil) {
         stopPlaybackIfNeeded()
         audioPlaybackError = AudioPlaybackErrorPolicy.message(for: kind)
+        ProductAnalytics.shared.track("Memory Playback Failed", ["failure_stage": "playback"])
         if let error {
             print("Audio playback error (\(kind)): \(error.localizedDescription)")
         }
@@ -1377,8 +1423,9 @@ struct MemoryDetailView: View {
                     activityItems: items,
                     applicationActivities: nil
                 )
-                activityViewController.completionWithItemsHandler = { _, _, _, _ in
+                activityViewController.completionWithItemsHandler = { _, completed, _, error in
                     Task { @MainActor in
+                        ProductAnalytics.shared.track(error != nil ? "Memory Share Failed" : (completed ? "Memory Shared" : "Memory Share Cancelled"))
                         if let downloadedAudioURL {
                             try? FileManager.default.removeItem(at: downloadedAudioURL)
                         }
@@ -1404,6 +1451,7 @@ struct MemoryDetailView: View {
                 isPreparingShare = false
                 sharePreparationTask = nil
                 root.present(activityViewController, animated: true)
+                ProductAnalytics.shared.track("Memory Share Sheet Presented")
             } catch is CancellationError {
                 if let transientDownloadURL {
                     try? FileManager.default.removeItem(at: transientDownloadURL)
@@ -1422,6 +1470,7 @@ struct MemoryDetailView: View {
                 }
                 isPreparingShare = false
                 sharePreparationTask = nil
+                ProductAnalytics.shared.track("Memory Share Failed", ["failure_stage": "share"])
                 shareErrorMessage = "The recording couldn’t be downloaded. Check your connection and try again."
                 print("Failed to prepare memory share: \(error.localizedDescription)")
             }

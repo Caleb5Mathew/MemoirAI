@@ -8,8 +8,10 @@ const {
   chooseMonotonicOrderStatus,
   claimOrderForFulfillment,
   commitSingleBookOrderOnce,
+  expectedInteriorDimensionsInches,
   stripeSessionOrderId,
-  missingCartSessionDisposition
+  missingCartSessionDisposition,
+  stripeAmountMatches
 } = require("./orderFlowIdempotency");
 
 function createMemoryTransactions(initial = {}) {
@@ -142,6 +144,18 @@ async function run() {
     attemptStripeSessionId: null,
     existingOrderCount: 0
   }), { action: "mark_abandoned" });
+  assert.strictEqual(stripeAmountMatches(4299, 4299), true);
+  assert.strictEqual(stripeAmountMatches(4199, 4299), false);
+  assert.strictEqual(stripeAmountMatches(null, 4299), false);
+  assert.deepStrictEqual(expectedInteriorDimensionsInches("1100X0850FCSTDCW080CW444MXX"), {
+    width: 11.25,
+    height: 8.75
+  });
+  assert.deepStrictEqual(expectedInteriorDimensionsInches("0850X1100FCSTDCW080CW444MXX"), {
+    width: 8.75,
+    height: 11.25
+  });
+  assert.throws(() => expectedInteriorDimensionsInches("unknown"), /Unsupported POD package/);
 
   const fulfillmentStore = createMemoryTransactions({ order: { status: "paid" } });
   const claim = (token) => claimOrderForFulfillment({

@@ -12,4 +12,14 @@ function chapterMemories(memories, pinnedMemoryIds = []) {
   });
 }
 
-module.exports = { chapterMemories };
+function preferredMemoryTranscript(memory) {
+  const edited = memory?.transcriptionEdited;
+  if (edited === "") return "";
+  if (typeof edited === "string" && edited.trim()) return edited.trim();
+  for (const value of [memory?.transcription, memory?.transcriptionRaw]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+module.exports = { chapterMemories, preferredMemoryTranscript };

@@ -31,9 +31,10 @@ function extractSmtpUser(smtpUrl) {
  * (Stripe webhook, Lulu fulfillment, refund handling). Returns whether the email was sent.
  * @param {string} subject
  * @param {string} textBody
+ * @param {string|string[]} recipients
  * @returns {Promise<boolean>}
  */
-async function sendOpsAlert(subject, textBody) {
+async function sendOpsAlert(subject, textBody, recipients = OPS_ALERT_TO) {
   try {
     const smtpUrl = String(opsAlertSmtpUrl.value() || "").trim();
     if (!smtpUrl) {
@@ -42,12 +43,16 @@ async function sendOpsAlert(subject, textBody) {
     }
 
     const transporter = nodemailer.createTransport(smtpUrl);
-    await transporter.sendMail({
+    const result = await transporter.sendMail({
       from: extractSmtpUser(smtpUrl),
-      to: OPS_ALERT_TO,
+      to: recipients,
       subject,
       text: textBody
     });
+    if (result.rejected?.length) {
+      console.error("ops alert rejected by one or more recipients");
+      return false;
+    }
     console.log(`ops alert sent: ${subject}`);
     return true;
   } catch (err) {

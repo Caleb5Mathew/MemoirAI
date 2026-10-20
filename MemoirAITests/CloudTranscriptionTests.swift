@@ -80,6 +80,26 @@ struct CloudTranscriptionTests {
         ))
     }
 
+    @Test func bookPreflightRequestsFreshAudioOnlyMemory() {
+        #expect(BookTranscriptionPreflightPolicy.shouldRequestTranscription(
+            text: nil,
+            audioFileURL: "file:///tmp/memory.m4a",
+            status: "queued",
+            updatedAt: nil
+        ))
+        #expect(!BookTranscriptionPreflightPolicy.shouldRequestTranscription(
+            text: "A finished story",
+            audioFileURL: "file:///tmp/memory.m4a",
+            status: "queued",
+            updatedAt: nil
+        ))
+    }
+
+    @Test func bookPreflightRejectsWhitespaceAsUsableStory() {
+        #expect(!BookTranscriptionPreflightPolicy.hasUsableText("  \n"))
+        #expect(BookTranscriptionPreflightPolicy.hasUsableText("A story"))
+    }
+
     @Test func syncPolicy_resetsOnlyWhenM4AAudioChanges() {
         #expect(MemoryTranscriptionSyncPolicy.mode(
             audioChanged: true,
@@ -147,6 +167,11 @@ struct CloudTranscriptionTests {
         #expect(RecordingDurationPolicy.remainingDuration(after: 3_600) == 0)
         #expect(!RecordingDurationPolicy.shouldStop(elapsed: 3_594.99))
         #expect(RecordingDurationPolicy.shouldStop(elapsed: 3_595))
+    }
+
+    @Test func recordingStartErrorsAlwaysHaveVisibleUserCopy() {
+        #expect(RecordingStartErrorPolicy.message().contains("could not start recording"))
+        #expect(RecordingStartErrorPolicy.message(detail: "Try another microphone.").contains("Try another microphone."))
     }
 
     @Test func cloudDisclosure_acceptanceIsVersionedAndPersistent() throws {

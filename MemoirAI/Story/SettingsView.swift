@@ -222,6 +222,16 @@ struct SettingsView: View {
                     VStack(spacing: 28) {
                         // Usage Ring Card
                         usageCard
+
+                        if subscriptionManager.hasBillingIssue {
+                            SubscriptionBillingNotice(hasActiveSubscription: subscriptionManager.hasActiveSubscription)
+                        }
+                        if !subscriptionManager.hasBillingIssue || subscriptionManager.hasActiveSubscription,
+                           let subscriptionsURL = URL(string: "https://apps.apple.com/account/subscriptions") {
+                            Link("Manage App Store subscription", destination: subscriptionsURL)
+                                .font(.subheadline.weight(.medium))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                         
                         // Page Count Section
                         pageCountSection

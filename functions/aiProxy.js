@@ -78,7 +78,23 @@ const TRANSCRIPTION_GLOBAL_ATTEMPTS_PER_MINUTE = 30;
 const execFileAsync = promisify(execFile);
 
 function transcriptionPrompt() {
-  return "This is a personal memoir recording. Preserve names and wording exactly as spoken.";
+  return "A personal oral-history recording intended for verbatim archival review, including hesitations, repetitions, and self-corrections. Names and exact wording matter.";
+}
+
+const {
+  TRANSCRIPTION_REFINEMENT_VERSION,
+  transcriptWords,
+  orderedTranscriptWordIndexes,
+  validateTranscriptRefinement,
+  validateSemanticTranscriptRefinement,
+  splitTranscriptForRefinement,
+  transcriptionRefinementMessages,
+  refineTranscriptForReading,
+  refineTranscriptWithOpenAI: refineReadingCopy
+} = require("./transcriptReadingCopy");
+
+function refineTranscriptWithOpenAI(options) {
+  return refineReadingCopy({ ...options, callChat: options.callChat || callOpenAiChat });
 }
 
 function validateTranscriptionRequest(body) {
@@ -276,7 +292,13 @@ function transcriptionLeaseDecision(existing, audioSHA256, nowMillis) {
     existing.transcriptionAudioSHA256 === audioSHA256 &&
     raw
   ) {
-    return { action: "cached", text: raw };
+    const storedCanonical = typeof existing.transcription === "string" ? existing.transcription.trim() : "";
+    return {
+      action: "cached",
+      rawText: raw,
+      text: storedCanonical || raw,
+      needsRefinement: existing.transcriptionRefinementVersion !== TRANSCRIPTION_REFINEMENT_VERSION || !storedCanonical
+    };
   }
 
   const leaseMillis = existing.transcriptionLeaseExpiresAt?.toMillis?.() ?? 0;
@@ -843,7 +865,40 @@ exports.transcribeMemoryAudio = onCall(
     });
 
     if (leaseResult.action === "cached") {
-      return { status: "completed", text: leaseResult.text, model: "gpt-transcribe", language, cached: true };
+      let text = leaseResult.text;
+      let refinementModel = "cached";
+      if (leaseResult.needsRefinement) {
+        const refinement = await refineTranscriptWithOpenAI({
+          apiKey,
+          rawText: leaseResult.rawText,
+          language,
+          glossary
+        });
+        text = refinement.text;
+        refinementModel = refinement.model;
+        await firestore().runTransaction(async (transaction) => {
+          const latest = await transaction.get(memoryRef);
+          if (!latest.exists) throw new HttpsError("not-found", "Memory not found.");
+          const existing = latest.data();
+          if (existing.transcriptionAudioSHA256 !== audioSHA256 || existing.audioStoragePath !== storagePath) {
+            throw new HttpsError("aborted", "The recording changed while its transcript was being refined.");
+          }
+          transaction.set(
+            memoryRef,
+            buildTranscriptionUpdate(existing, leaseResult.rawText, text, language, refinementModel),
+            { merge: true }
+          );
+        });
+      }
+      return {
+        status: "completed",
+        rawText: leaseResult.rawText,
+        text,
+        model: "gpt-transcribe",
+        refinementModel,
+        language,
+        cached: true
+      };
     }
     if (leaseResult.action === "processing") {
       return { status: "processing" };
@@ -851,13 +906,15 @@ exports.transcribeMemoryAudio = onCall(
 
     try {
       await checkAndIncrementTranscriptionBudget(uid, audioInfo.size, audioDurationSeconds);
-      const text = await transcribeAudioWithOpenAI({
+      const rawText = await transcribeAudioWithOpenAI({
         apiKey,
         audio,
         fileName: `${memoryId}.m4a`,
         language,
         glossary
       });
+      const refinement = await refineTranscriptWithOpenAI({ apiKey, rawText, language, glossary });
+      const text = refinement.text;
 
       let currentMetadata;
       try {
@@ -881,10 +938,17 @@ exports.transcribeMemoryAudio = onCall(
         ) {
           throw new HttpsError("aborted", "A newer recording or transcription replaced this request.");
         }
-        const update = buildTranscriptionUpdate(existing, text, language);
+        const update = buildTranscriptionUpdate(existing, rawText, text, language, refinement.model);
         transaction.set(memoryRef, update, { merge: true });
       });
-      return { status: "completed", text, model: "gpt-transcribe", language };
+      return {
+        status: "completed",
+        rawText,
+        text,
+        model: "gpt-transcribe",
+        refinementModel: refinement.model,
+        language
+      };
     } catch (error) {
       console.error("transcribeMemoryAudio failed", {
         userIdHash: safeLogIdentifier(uid),
@@ -1183,24 +1247,29 @@ exports.aiEditImage = onCall(
   }
 );
 
-function buildTranscriptionUpdate(existing, text, language) {
+function buildTranscriptionUpdate(
+  existing,
+  rawText,
+  refinedText,
+  language,
+  refinementModel = "deterministic-fallback"
+) {
   const update = {
-    transcriptionRaw: text,
+    transcriptionRaw: rawText,
     transcriptionStatus: "completed",
     transcriptionLanguage: language,
     transcriptionModel: "gpt-transcribe",
+    transcriptionRefinementModel: refinementModel,
+    transcriptionRefinementVersion: TRANSCRIPTION_REFINEMENT_VERSION,
     transcriptionVersion: normalizedTranscriptionVersion(existing.transcriptionVersion) + 1,
     transcriptionLeaseExpiresAt: admin.firestore.FieldValue.delete(),
     transcriptionUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp()
   };
   const edited = existing.transcriptionEdited;
-  const hasIntentionalEdit = typeof edited === "string" && (edited.length === 0 || edited.trim().length > 0);
-  if (!hasIntentionalEdit) {
-    update.transcription = text;
-    if (typeof edited === "string") {
-      update.transcriptionEdited = admin.firestore.FieldValue.delete();
-    }
+  update.transcription = refinedText;
+  if (typeof edited === "string" && edited.length > 0 && !edited.trim()) {
+    update.transcriptionEdited = admin.firestore.FieldValue.delete();
   }
   return update;
 }
@@ -1209,6 +1278,14 @@ Object.defineProperty(exports, "_test", {
   enumerable: false,
   value: {
     transcriptionPrompt,
+    transcriptWords,
+    orderedTranscriptWordIndexes,
+    validateTranscriptRefinement,
+    validateSemanticTranscriptRefinement,
+    splitTranscriptForRefinement,
+    transcriptionRefinementMessages,
+    refineTranscriptWithOpenAI,
+    refineTranscriptForReading,
     validateTranscriptionRequest,
     validateEnhancementTranscriptionRequest,
     validateTranscriptionAudio,

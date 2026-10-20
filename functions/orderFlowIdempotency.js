@@ -324,6 +324,18 @@ function missingCartSessionDisposition({ attemptStripeSessionId, existingOrderCo
   return { action: "mark_abandoned" };
 }
 
+function stripeAmountMatches(paidTotal, expectedTotal) {
+  return Number.isSafeInteger(paidTotal) && Number.isSafeInteger(expectedTotal) &&
+    paidTotal > 0 && expectedTotal > 0 && paidTotal === expectedTotal;
+}
+
+function expectedInteriorDimensionsInches(podPackageId) {
+  const value = String(podPackageId || "").trim();
+  if (value.startsWith("1100X0850")) return { width: 11.25, height: 8.75 };
+  if (value.startsWith("0850X1100")) return { width: 8.75, height: 11.25 };
+  throw new Error("Unsupported POD package for interior validation");
+}
+
 module.exports = {
   FULFILLMENT_LEASE_MILLIS,
   LULU_STATUS_HISTORY_LIMIT,
@@ -334,6 +346,8 @@ module.exports = {
   claimOrderForFulfillment,
   commitSingleBookOrderOnce,
   fulfillmentClaimDecision,
+  expectedInteriorDimensionsInches,
   missingCartSessionDisposition,
+  stripeAmountMatches,
   stripeSessionOrderId
 };

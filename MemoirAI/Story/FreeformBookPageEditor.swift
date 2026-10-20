@@ -93,7 +93,7 @@ struct FreeformBookPageEditor: View {
                         }
 
                     ZStack {
-                        Color(red: 0.99, green: 0.97, blue: 0.94)
+                        BookInteriorStyle.paper
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 guard cropElementID == nil else { return }
@@ -105,9 +105,15 @@ struct FreeformBookPageEditor: View {
                             editorElement(element, canvasSize: canvasSize)
                         }
 
+                        let showsChrome = BookPageChromePolicy.showsChrome(
+                            document: document, memoryID: memoryID,
+                            isPrecomposed: BookPageChromePolicy.isPrecomposedIllustration(
+                                document: document, isIllustration: isIllustrationPage
+                            )
+                        )
                         BookPageDocumentChrome(
-                            memoryID: memoryID,
-                            pageNumber: pageNumber,
+                            memoryID: showsChrome ? memoryID : nil,
+                            pageNumber: showsChrome ? pageNumber : nil,
                             isLandscape: isLandscapePage,
                             isIllustration: isIllustrationPage
                         )
@@ -993,7 +999,7 @@ struct BookPageDocumentView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                Color(red: 0.99, green: 0.97, blue: 0.94)
+                BookInteriorStyle.paper
                 ForEach(document.elements) { element in
                     BookPageElementView(element: element, semanticTemplate: document.semanticTemplate)
                         .frame(
@@ -1019,35 +1025,27 @@ struct BookPageDocumentChrome: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let logicalPageWidth: CGFloat = isLandscape ? 792 : 612
-            let chromeScale = geometry.size.width / logicalPageWidth
-            ZStack {
+            let scale = geometry.size.width / (isLandscape ? 792 : 612)
+            if isIllustration {
                 if let memoryID, !BookInteriorAnchor.isNonMemoryPage(memoryID) {
-                    QRWatermark(
-                        memoryID: memoryID,
-                        topInset: isLandscape && isIllustration
-                            ? geometry.size.height * 0.065 + (6 * chromeScale)
-                            : 0,
-                        qrSide: 60 * chromeScale,
-                        imagePadding: 8 * chromeScale,
-                        trailingPadding: 12 * chromeScale,
-                        topPadding: 8 * chromeScale
-                    )
+                    QRWatermark(memoryID: memoryID,
+                                topInset: geometry.size.height * (isLandscape ? 0.10 : 0.065) + 6 * scale,
+                                qrSide: 60 * scale, imagePadding: 8 * scale,
+                                trailingPadding: 12 * scale, topPadding: 8 * scale)
                 }
-
                 if let pageNumber {
                     Text("\(pageNumber)")
-                        .font(.system(size: max(4, 10 * chromeScale), design: .serif))
-                        .foregroundStyle(Color(red: 0.30, green: 0.27, blue: 0.23))
-                        .position(
-                            x: isLandscape ? geometry.size.width * 0.89 : geometry.size.width * 0.50,
-                            y: isLandscape
-                                ? geometry.size.height * (isIllustration ? 0.0325 : 0.10)
-                                : geometry.size.height * 0.96
-                        )
+                        .font(.custom("GillSans", size: geometry.size.height * 0.015))
+                        .foregroundStyle(BookInteriorStyle.ink)
+                        .position(x: geometry.size.width * 0.89,
+                                  y: geometry.size.height * (isLandscape ? 0.05 : 0.0325))
                 }
+            } else if let pageNumber {
+                FieldnotesMemoryChrome(pageNumber: pageNumber, frameWidth: geometry.size.width,
+                                       frameHeight: geometry.size.height)
             }
         }
+        .allowsHitTesting(false)
     }
 }
 
@@ -1139,43 +1137,45 @@ private struct BookPageElementView: View {
                 case .realistic: .realistic
                 case .custom: .custom
                 }
-                let fontSize = BookPageTextSizing.pointSize(for: content, pageHeight: pageHeight)
+                let preferredSize = BookPageTextSizing.pointSize(for: content, pageHeight: pageHeight)
+                let fontSize = preferredSize
                 let textColor: Color = switch content.color {
-                case .ink: Color(red: 0.20, green: 0.20, blue: 0.20)
+                case .ink: BookInteriorStyle.ink
                 case .brown: Color(red: 0.40, green: 0.30, blue: 0.20)
                 case .mutedBrown: Color(red: 0.40, green: 0.30, blue: 0.20).opacity(0.70)
                 case .white: .white
                 case nil:
                     switch content.role {
                     case .title:
-                        semanticTemplate == nil
-                            ? Color(red: 0.40, green: 0.30, blue: 0.20)
-                            : Color(red: 0.20, green: 0.18, blue: 0.15)
-                    case .subtitle: Color(red: 0.40, green: 0.30, blue: 0.20).opacity(0.70)
+                        semanticTemplate == .interiorClosing
+                            ? Color(red: 0.20, green: 0.18, blue: 0.15)
+                            : BookInteriorStyle.ink
+                    case .subtitle: BookInteriorStyle.ink.opacity(0.70)
                     case .body:
-                        semanticTemplate == .interiorTitle
-                            ? Color(red: 0.42, green: 0.38, blue: 0.33)
-                            : Color(red: 0.20, green: 0.20, blue: 0.20)
-                    case .custom: Color(red: 0.20, green: 0.20, blue: 0.20)
+                        BookInteriorStyle.ink
+                    case .custom: BookInteriorStyle.ink
                     }
                 }
                 Group {
                     switch content.role {
                     case .title:
                         if semanticTemplate != nil {
-                            Text(content.text)
+                            Text(semanticTemplate == .interiorTitle
+                                 ? BookInteriorStyle.openingTitle(content.text) : content.text)
                                 .font(
-                                    content.typographyPreset.interiorTitleTypography == .rounded
-                                        ? .system(size: fontSize, weight: .semibold, design: .rounded)
+                                    semanticTemplate == .interiorTitle || semanticTemplate == .interiorClosing
+                                        ? .custom("GillSans", size: fontSize)
                                         : .custom("Georgia-Bold", size: fontSize)
                                 )
                                 .lineLimit(3)
-                                .minimumScaleFactor(0.65)
+                                .minimumScaleFactor(semanticTemplate == .interiorTitle ? 0.55 : 0.65)
                                 .allowsTightening(true)
                         } else {
                             Text(content.text)
                                 .font(titleFont(style: fontStyle, size: fontSize))
-                                .fontWeight(.bold)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.6)
+
                         }
                     case .subtitle:
                         Text(content.text)
@@ -1184,23 +1184,21 @@ private struct BookPageElementView: View {
                     case .body:
                         if semanticTemplate == .interiorClosing {
                             Text(content.text)
-                                .font(.system(size: fontSize, weight: .semibold))
+                                .font(.custom("GillSans", size: fontSize))
                                 .lineLimit(2)
                                 .minimumScaleFactor(0.72)
                         } else if semanticTemplate == .interiorTitle {
                             Text(content.text)
                                 .font(
-                                    content.typographyPreset.interiorTitleTypography == .rounded
-                                        ? .system(size: fontSize, weight: .regular, design: .rounded)
-                                        : .custom("Georgia", size: fontSize)
+                                    .custom("Georgia", size: fontSize)
                                 )
-                                .lineSpacing(pageHeight * 0.006)
+                                .lineSpacing(fontSize * BookInteriorStyle.lineSpacing / BookInteriorStyle.bodySize)
                                 .lineLimit(3)
                                 .minimumScaleFactor(0.72)
                         } else {
                             Text(content.text)
                                 .font(bodyFont(style: fontStyle, size: fontSize))
-                                .lineSpacing(pageHeight * 0.006)
+                                .lineSpacing(fontSize * BookInteriorStyle.lineSpacing / BookInteriorStyle.bodySize)
                         }
                     case .custom:
                         Text(content.text)
@@ -1212,7 +1210,9 @@ private struct BookPageElementView: View {
                 .frame(
                     maxWidth: .infinity,
                     maxHeight: .infinity,
-                    alignment: semanticTemplate == nil ? content.alignment.frameAlignment : .center
+                    alignment: content.role == .title
+                            ? (content.alignment == .leading ? .leading : content.alignment == .trailing ? .trailing : .center)
+                            : content.alignment.frameAlignment
                 )
                 .clipped()
             case .image(let image):
@@ -1222,22 +1222,13 @@ private struct BookPageElementView: View {
     }
 
     private func titleFont(style: BookFontStyle, size: CGFloat) -> Font {
-        switch style {
-        case .kidsBook: return .custom("TimesNewRomanPS-BoldMT", size: size)
-        case .comic: return .system(size: size, weight: .heavy, design: .serif)
-        case .realistic: return .custom("Georgia-Bold", size: size)
-        case .custom: return .system(size: size, weight: .semibold, design: .serif)
-        }
+        .custom("GillSans", size: size)
     }
 
     private func bodyFont(style: BookFontStyle, size: CGFloat) -> Font {
-        switch style {
-        case .kidsBook: return .custom("TimesNewRomanPSMT", size: size)
-        case .comic: return .system(size: size, weight: .semibold, design: .serif)
-        case .realistic: return .custom("Georgia", size: size)
-        case .custom: return .system(size: size, weight: .regular, design: .serif)
-        }
+        .custom("Georgia", size: size)
     }
+
 }
 
 @MainActor
@@ -1247,19 +1238,24 @@ enum BookPagePrintRenderer {
         pixelSize: CGSize,
         memoryID: UUID? = nil,
         pageNumber: Int? = nil,
-        isLandscape: Bool = false
+        isLandscape: Bool = false,
+        isIllustration: Bool = false,
+        isPrecomposed: Bool = false
     ) -> UIImage? {
         guard pixelSize.width > 0, pixelSize.height > 0 else { return nil }
         let page = BookPageDocumentView(document: document)
             .frame(width: pixelSize.width, height: pixelSize.height)
+        let showsChrome = BookPageChromePolicy.showsChrome(
+            document: document, memoryID: memoryID, isPrecomposed: isPrecomposed
+        )
         let content: AnyView
         content = AnyView(
             page.overlay(
                 BookPageDocumentChrome(
-                    memoryID: memoryID,
-                    pageNumber: pageNumber,
+                    memoryID: showsChrome ? memoryID : nil,
+                    pageNumber: showsChrome ? pageNumber : nil,
                     isLandscape: isLandscape,
-                    isIllustration: false
+                    isIllustration: isIllustration
                 )
             )
         )

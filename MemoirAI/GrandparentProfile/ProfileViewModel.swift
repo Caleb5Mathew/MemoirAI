@@ -384,7 +384,7 @@ class ProfileViewModel: ObservableObject {
     }
 
     func updateName(for profile: Profile, to newName: String) {
-        guard let index = profiles.firstIndex(of: profile) else { return }
+        guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { return }
         profiles[index].name = newName
         profiles[index].updatedAt = Date()
         saveProfiles()

@@ -183,6 +183,8 @@ struct MemoirAIApp: App {
         if let apiKey = Bundle.main.object(forInfoDictionaryKey: "RevenueCatAPIKey") as? String,
            !apiKey.isEmpty {
             Purchases.configure(withAPIKey: apiKey, appUserID: uuid)
+            // Standard Apple Ads attribution does not require ATT authorization.
+            Purchases.shared.attribution.enableAdServicesAttributionTokenCollection()
             print("RevenueCat configured")
 
             Task { @MainActor in
@@ -195,13 +197,11 @@ struct MemoirAIApp: App {
         }
 
         // ─ Mixpanel ───────────────────────────────────────────────
-        Mixpanel.initialize(token: "6437139af64d0541c2a8a8e5157ae72f",
-                            trackAutomaticEvents: true)
-        Mixpanel.mainInstance().useIPAddressForGeoLocation = false
-        Mixpanel.mainInstance().track(event: "App Launched")
+        ProductAnalytics.configure()
+        ProductAnalytics.shared.track("App Launched")
 
         if !UserDefaults.standard.bool(forKey: "hasLaunchedBefore") {
-            Mixpanel.mainInstance().track(event: "First Launch")
+            ProductAnalytics.shared.track("First Launch")
             UserDefaults.standard.set(true, forKey: "hasLaunchedBefore")
         }
     }
@@ -233,7 +233,9 @@ struct MemoirAIApp: App {
                     .padding(32)
                 case .ready:
                     #if DEBUG
-                    if let chapter = relationshipJourneyUITestChapter {
+                    if ProcessInfo.processInfo.arguments.contains("-UITestMemoirName") {
+                        StorybookNameUITestHarness()
+                    } else if let chapter = relationshipJourneyUITestChapter {
                         GeometryReader { container in
                             RelationshipJourneyView(
                                 chapter: chapter,
@@ -296,7 +298,7 @@ struct MemoirAIApp: App {
                     PermissionManager.shared.handleAppDidBecomeActive()
                     Task { @MainActor in
                         guard Purchases.isConfigured else { return }
-                        await RCSubscriptionManager.shared.refreshCustomerInfo()
+                        await RCSubscriptionManager.shared.refreshCustomerInfo(forceRefresh: true)
                     }
                     Task {
                         await profileVM.retryPendingProfileMutations()
@@ -337,6 +339,7 @@ struct MemoirAIApp: App {
                 return
             }
             UserDefaults.standard.removeObject(forKey: CheckoutReturnPolicy.pendingSessionDefaultsKey)
+            UserDefaults.standard.set(normalized, forKey: CheckoutReturnPolicy.confirmedSessionDefaultsKey)
             OrderCartStore.shared.clear()
             NotificationCenter.default.post(
                 name: .orderComplete,

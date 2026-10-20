@@ -31,8 +31,10 @@ const {
   validateCheckoutBookArtifacts
 } = require("./storageArtifactUrls");
 const naming = require("./naming");
+const adminBrowser = require("./adminUserBrowser");
 const { createOrderMirrorHandler } = require("./purchasedBooks");
 const { opsAlertSmtpUrl, sendOpsAlert } = require("./opsAlerts");
+const { createPaidBookOrderAlertHandler } = require("./paidBookOrderAlerts");
 const {
   buildArtifactFulfillmentIncident,
   deliverFulfillmentIncidentAlert
@@ -68,7 +70,9 @@ const {
   chooseMonotonicOrderStatus,
   claimOrderForFulfillment,
   commitSingleBookOrderOnce,
+  expectedInteriorDimensionsInches,
   missingCartSessionDisposition,
+  stripeAmountMatches,
   stripeSessionOrderId
 } = require("./orderFlowIdempotency");
 
@@ -78,6 +82,20 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 const bucket = admin.storage().bucket();
+
+exports.onPaidBookCheckoutEmail = onDocumentCreated(
+  {
+    document: "users/{userId}/paidBookCheckouts/{checkoutId}",
+    timeoutSeconds: 120,
+    retry: true,
+    secrets: [opsAlertSmtpUrl]
+  },
+  createPaidBookOrderAlertHandler({
+    db,
+    sendAlert: sendOpsAlert,
+    serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp()
+  })
+);
 
 const stripeSecretKey = defineSecret("STRIPE_SECRET_KEY");
 const stripeWebhookSecret = defineSecret("STRIPE_WEBHOOK_SECRET");
@@ -897,7 +915,7 @@ function luluFallbackDiagnostics(error) {
   };
 }
 
-async function getLuluAccessToken(forcePreferredEnvironment = null) {
+async function getLuluAccessToken(forcePreferredEnvironment = null, allowAlternateEnvironment = true) {
   const clientKey = luluClientKey.value();
   const clientSecret = luluClientSecret.value();
   if (!clientKey || !clientSecret) {
@@ -913,7 +931,7 @@ async function getLuluAccessToken(forcePreferredEnvironment = null) {
     const token = await requestLuluAccessToken(LULU_ENDPOINTS[preferred].authUrl, encoded);
     return { accessToken: token, luluBaseUrl: LULU_ENDPOINTS[preferred].baseUrl, environment: preferred };
   } catch (firstErr) {
-    if (!isLikelyLuluInvalidClientError(firstErr)) {
+    if (!allowAlternateEnvironment || !isLikelyLuluInvalidClientError(firstErr)) {
       throw firstErr;
     }
     console.warn(`Lulu auth invalid_client on ${preferred}; retrying ${alternate}.`);
@@ -1856,71 +1874,6 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
     return { submitted: false, skipped: true, reason: "already_submitted", luluPrintJobId: orderData.luluPrintJobId };
   }
 
-  const coverStoragePath = orderData.coverPdfStoragePath;
-  const interiorStoragePath = orderData.interiorPdfStoragePath;
-  const coverGeneration = String(orderData.coverArtifactGeneration || "").trim();
-  const interiorGeneration = String(orderData.interiorArtifactGeneration || "").trim();
-  if (!coverStoragePath || !interiorStoragePath || !coverGeneration || !interiorGeneration) {
-    throw new Error("Order missing immutable PDF artifact identity");
-  }
-  const expectedPaths = canonicalBookArtifactPaths(userId, orderData.bookVersionId);
-  assertCanonicalBookArtifact(coverStoragePath, expectedPaths.cover, "Cover");
-  assertCanonicalBookArtifact(interiorStoragePath, expectedPaths.interior, "Interior");
-
-  const coverFile = bucket.file(coverStoragePath, { generation: coverGeneration });
-  const interiorFile = bucket.file(interiorStoragePath, { generation: interiorGeneration });
-  const [coverExists, interiorExists] = await Promise.all([
-    coverFile.exists(),
-    interiorFile.exists()
-  ]);
-  if (!coverExists[0]) {
-    throw new Error(`Paid cover PDF generation ${coverGeneration} is unavailable`);
-  }
-  if (!interiorExists[0]) {
-    throw new Error(`Paid interior PDF generation ${interiorGeneration} is unavailable`);
-  }
-
-  const podPackageId = String(orderData.selectedPodPackageId || "").trim();
-  const pageCount = Number(orderData.pageCount || 0);
-  if (!podPackageId || !Number.isSafeInteger(pageCount) || pageCount <= 0) {
-    throw new Error("Order missing immutable POD package or page count");
-  }
-  let luluAuthForSubmit = null;
-  if (podPackageId && pageCount > 0) {
-    try {
-      luluAuthForSubmit = await getLuluAccessToken();
-      const dims = await luluPostCoverDimensions(
-        luluAuthForSubmit.accessToken,
-        luluAuthForSubmit.luluBaseUrl,
-        podPackageId,
-        pageCount
-      );
-      const expW = parseFloat(dims.width);
-      const expH = parseFloat(dims.height);
-      if (Number.isFinite(expW) && Number.isFinite(expH)) {
-        const [coverBuf] = await coverFile.download();
-        const coverPdf = await PDFDocument.load(coverBuf);
-        const page0 = coverPdf.getPage(0);
-        const { width: wPt, height: hPt } = page0.getSize();
-        const wIn = wPt / 72;
-        const hIn = hPt / 72;
-        const tol = 0.0625;
-        if (Math.abs(wIn - expW) > tol || Math.abs(hIn - expH) > tol) {
-          throw new Error(
-            `cover_dimensions_mismatch pod=${podPackageId} pages=${pageCount} ` +
-              `expected=${expW.toFixed(4)}x${expH.toFixed(4)}in actual=${wIn.toFixed(4)}x${hIn.toFixed(4)}in`
-          );
-        }
-      }
-    } catch (dimErr) {
-      const msg = String(dimErr?.message || dimErr);
-      if (msg.includes("cover_dimensions_mismatch")) {
-        throw dimErr;
-      }
-      console.warn(`submitPaidOrderToLulu: cover dimension check skipped order=${orderId}: ${msg}`);
-    }
-  }
-
   const claim = await claimOrderForFulfillment({
     runTransaction: (callback) => db.runTransaction(callback),
     orderRef,
@@ -1939,10 +1892,113 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
   }
   const claimedOrderData = claim.order;
   const leaseToken = claim.leaseToken;
+  let coverStoragePath;
+  let interiorStoragePath;
+  let coverGeneration;
+  let interiorGeneration;
+  let coverFile;
+  let interiorFile;
+  let podPackageId;
+  let pageCount;
+  let luluAuthForSubmit = null;
+
+  try {
+    coverStoragePath = claimedOrderData.coverPdfStoragePath;
+    interiorStoragePath = claimedOrderData.interiorPdfStoragePath;
+    coverGeneration = String(claimedOrderData.coverArtifactGeneration || "").trim();
+    interiorGeneration = String(claimedOrderData.interiorArtifactGeneration || "").trim();
+    if (!coverStoragePath || !interiorStoragePath || !coverGeneration || !interiorGeneration) {
+      throw new Error("Order missing immutable PDF artifact identity");
+    }
+    const expectedPaths = canonicalBookArtifactPaths(userId, claimedOrderData.bookVersionId);
+    assertCanonicalBookArtifact(coverStoragePath, expectedPaths.cover, "Cover");
+    assertCanonicalBookArtifact(interiorStoragePath, expectedPaths.interior, "Interior");
+
+    coverFile = bucket.file(coverStoragePath, { generation: coverGeneration });
+    interiorFile = bucket.file(interiorStoragePath, { generation: interiorGeneration });
+    const [coverExists, interiorExists] = await Promise.all([
+      coverFile.exists(),
+      interiorFile.exists()
+    ]);
+    if (!coverExists[0]) {
+      throw new Error(`Paid cover PDF generation ${coverGeneration} is unavailable`);
+    }
+    if (!interiorExists[0]) {
+      throw new Error(`Paid interior PDF generation ${interiorGeneration} is unavailable`);
+    }
+
+    podPackageId = String(claimedOrderData.selectedPodPackageId || "").trim();
+    pageCount = Number(claimedOrderData.pageCount || 0);
+    if (!podPackageId || !Number.isSafeInteger(pageCount) || pageCount <= 0) {
+      throw new Error("Order missing immutable POD package or page count");
+    }
+
+      luluAuthForSubmit = await getLuluAccessToken("production", false);
+      const dims = await luluPostCoverDimensions(
+        luluAuthForSubmit.accessToken,
+        luluAuthForSubmit.luluBaseUrl,
+        podPackageId,
+        pageCount
+      );
+      const expW = parseFloat(dims.width);
+      const expH = parseFloat(dims.height);
+      if (Number.isFinite(expW) && Number.isFinite(expH)) {
+        const [[coverBuf], [interiorBuf]] = await Promise.all([
+          coverFile.download(),
+          interiorFile.download()
+        ]);
+        const coverPdf = await PDFDocument.load(coverBuf);
+        if (coverPdf.getPageCount() !== 1) {
+          throw new Error(`cover_page_count_mismatch expected=1 actual=${coverPdf.getPageCount()}`);
+        }
+        const page0 = coverPdf.getPage(0);
+        const { width: wPt, height: hPt } = page0.getSize();
+        const wIn = wPt / 72;
+        const hIn = hPt / 72;
+        const tol = 0.0625;
+        if (Math.abs(wIn - expW) > tol || Math.abs(hIn - expH) > tol) {
+          throw new Error(
+            `cover_dimensions_mismatch pod=${podPackageId} pages=${pageCount} ` +
+              `expected=${expW.toFixed(4)}x${expH.toFixed(4)}in actual=${wIn.toFixed(4)}x${hIn.toFixed(4)}in`
+          );
+        }
+        const interiorPdf = await PDFDocument.load(interiorBuf);
+        if (interiorPdf.getPageCount() !== pageCount) {
+          throw new Error(
+            `interior_page_count_mismatch expected=${pageCount} actual=${interiorPdf.getPageCount()}`
+          );
+        }
+        const expectedInterior = expectedInteriorDimensionsInches(podPackageId);
+        for (let index = 0; index < interiorPdf.getPageCount(); index += 1) {
+          const size = interiorPdf.getPage(index).getSize();
+          const actualWidth = size.width / 72;
+          const actualHeight = size.height / 72;
+          if (
+            Math.abs(actualWidth - expectedInterior.width) > tol ||
+            Math.abs(actualHeight - expectedInterior.height) > tol
+          ) {
+            throw new Error(
+              `interior_dimensions_mismatch page=${index + 1} ` +
+                `expected=${expectedInterior.width}x${expectedInterior.height}in ` +
+                `actual=${actualWidth.toFixed(4)}x${actualHeight.toFixed(4)}in`
+            );
+          }
+        }
+      }
+  } catch (preflightError) {
+    const message = String(preflightError?.message || preflightError || "Fulfillment preflight failed");
+    await failFulfillmentLease({ orderRef, leaseToken, error: message });
+    sendOpsAlert(
+      `Order fulfillment preflight FAILED — ${orderId}`,
+      `Order ${orderId} (user ${userId}, source=${source}) failed before Lulu submission:\n${message}\n\n` +
+        "Ops: https://memoirai-7db06.web.app/ops"
+    ).catch(() => {});
+    throw preflightError;
+  }
   let auth = null;
 
   try {
-    auth = luluAuthForSubmit || await getLuluAccessToken();
+    auth = luluAuthForSubmit || await getLuluAccessToken("production", false);
     const existingLuluJob = await luluFindPrintJobByExternalId(
       auth.accessToken,
       auth.luluBaseUrl,
@@ -2007,7 +2063,7 @@ async function submitPaidOrderToLulu({ orderRef, orderData, orderId, userId, sou
   } catch (err) {
     const luluError = String(err?.message || err || "Unknown Lulu submit error");
     try {
-      auth = auth || await getLuluAccessToken();
+      auth = auth || await getLuluAccessToken("production", false);
       const existingLuluJob = await luluFindPrintJobByExternalId(
         auth.accessToken,
         auth.luluBaseUrl,
@@ -3901,8 +3957,30 @@ async function commitPaidCartCheckoutFromStripeSession(pendRef, session, opts = 
   const isStripeTestMode = opts.isStripeTestMode != null ? opts.isStripeTestMode : session.livemode === false;
   const paidTotal = session.amount_total;
   const expectedTotal = pend.totalCents || 0;
-  if (paidTotal !== expectedTotal) {
+  if (!stripeAmountMatches(paidTotal, expectedTotal)) {
     console.warn(`Cart amount mismatch session=${paidTotal} expected=${expectedTotal} group=${cartOrderGroupId}`);
+    await pendRef.set({
+      status: "paid_fulfillment_hold",
+      fulfillmentHold: true,
+      fulfillmentHoldReason: "stripe_amount_mismatch",
+      paidAmountCents: Number.isSafeInteger(paidTotal) ? paidTotal : null,
+      expectedAmountCents: Number.isSafeInteger(expectedTotal) ? expectedTotal : null,
+      stripeSessionId: session.id,
+      stripePaymentIntentId: session.payment_intent || null,
+      paidAt: admin.firestore.FieldValue.serverTimestamp(),
+      fulfillmentHoldAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await releaseCheckoutLease({
+      db,
+      userId: userIdFromMeta,
+      leaseId: pend.checkoutLeaseId
+    }).catch(() => {});
+    sendOpsAlert(
+      `Paid cart amount mismatch — ${cartOrderGroupId}`,
+      `Stripe session ${session.id} paid ${paidTotal} cents; expected ${expectedTotal} cents. ` +
+        "Fulfillment is on hold. Do not print until reviewed."
+    ).catch(() => {});
+    return { ok: false, reason: "fulfillment_hold_amount_mismatch" };
   }
 
   const shippingAddress = pend.shippingAddress || {};
@@ -5036,16 +5114,17 @@ exports.adminSyncOrderFromLulu = onCall(
   }
 );
 
+const userBrowserHandlers = adminBrowser.createUserBrowserHandlers({ db, auth: admin.auth(), assertAdmin: assertMemoirAdmin });
+exports.adminListUsers = onCall({ timeoutSeconds: 60 }, userBrowserHandlers.listUsers);
+exports.adminListUserMemories = onCall({ timeoutSeconds: 60 }, userBrowserHandlers.listMemories);
+
 /** Admin/support: list `bookVersions` for a user (callable). Requires `ADMIN_EMAILS` or Auth claim `admin`. */
 exports.adminListUserBooks = onCall({ timeoutSeconds: 60 }, async (request) => {
   assertMemoirAdmin(request);
-  const targetUid = String(request.data?.userId || "").trim();
-  if (!targetUid) {
-    throw new HttpsError("invalid-argument", "userId is required");
-  }
-  const lim = Math.min(100, Math.max(1, parseInt(request.data?.limit, 10) || 50));
-  const snap = await db.collection("users").doc(targetUid).collection("bookVersions").limit(lim).get();
-  const books = snap.docs.map((d) => {
+  const targetUid = adminBrowser.requireUserId(request.data?.userId);
+  const scope = `users/${targetUid}/bookVersions`;
+  const page = await adminBrowser.queryPage(db.collection(scope), adminBrowser.pageOptions(request.data || {}, scope, "createdAt"));
+  const books = page.docs.map((d) => {
     const data = d.data() || {};
     return {
       bookVersionId: d.id,
@@ -5062,10 +5141,10 @@ exports.adminListUserBooks = onCall({ timeoutSeconds: 60 }, async (request) => {
       paidAt: data.paidAt || null,
       pdfURL: data.pdfURL != null ? String(data.pdfURL) : null,
       coverURL: data.coverURL != null ? String(data.coverURL) : null,
-      createdAt: data.createdAt || null
+      createdAt: adminBrowser.isoTimestamp(data.createdAt)
     };
   });
-  return { books, count: books.length };
+  return { books, count: books.length, nextCursor: page.nextCursor };
 });
 
 /** Admin: verify PDFs for an order before submitting to Lulu (callable). */
@@ -5247,43 +5326,42 @@ exports.adminVerifyOrderPdfs = onCall(
 
 // ── User / book / memory display naming + purchasedBooks mirror (Firestore v2) ──
 exports.onUserDocumentBootstrapHandle = onDocumentCreated(
-  { document: "users/{userId}" },
+  { document: "users/{userId}", retry: true },
   async (event) => {
     const uid = event.params.userId;
     const snap = event.data;
     if (!snap) return;
     const data = snap.data() || {};
-    if (data.userHandle) return;
     try {
-      await naming.ensureUserHandleAllocated(db, uid);
+      if (data.accountCreatedAt == null) {
+        let authUser;
+        try { authUser = await admin.auth().getUser(uid); }
+        catch (error) { if (error.code !== "auth/user-not-found") throw error; }
+        await adminBrowser.updateMissingTimestamp(db, snap.ref, "accountCreatedAt", adminBrowser.accountCreationTimestamp(authUser, snap.createTime));
+      }
+      if (data.userHandle) return;
+      await naming.ensureUserHandleAllocated(db, uid, { requireExisting: true });
     } catch (e) {
       console.error("onUserDocumentBootstrapHandle failed", uid, String(e?.message || e));
+      throw e;
     }
   }
 );
 
 exports.onBookVersionDisplayNaming = onDocumentCreated(
-  { document: "users/{userId}/bookVersions/{bookVersionId}" },
+  { document: "users/{userId}/bookVersions/{bookVersionId}", retry: true },
   async (event) => {
     const snap = event.data;
     if (!snap) return;
     const data = snap.data() || {};
-    if (data.bookDisplayName) return;
     const userId = event.params.userId;
     try {
-      const handle = await naming.resolveUserHandleForNaming(db, userId);
-      const seq = await naming.allocateGlobalCounter(db, "globalBooks");
-      const bookDisplayName = naming.bookDisplayNameFor(handle, seq);
-      await snap.ref.set(
-        {
-          bookDisplayName,
-          bookSeq: seq,
-          userHandle: handle
-        },
-        { merge: true }
-      );
+      await adminBrowser.updateMissingTimestamp(db, snap.ref, "createdAt", snap.createTime);
+      if (data.bookDisplayName) return;
+      await naming.ensureBookDisplayNameAllocated(db, snap.ref, userId);
     } catch (e) {
       console.error("onBookVersionDisplayNaming failed", userId, String(e?.message || e));
+      throw e;
     }
   }
 );
@@ -5322,6 +5400,9 @@ exports.onMemoryDisplayNaming = onDocumentCreated(
             transaction.delete(memoryIndexRef);
           }
           return;
+        }
+        if (currentMemory.data()?.createdAt == null) {
+          transaction.update(snap.ref, { createdAt: snap.createTime });
         }
         const indexDecision = memoryIndexClaimDecision(currentIndex, userId);
         if (indexDecision === "claim") {
@@ -5470,6 +5551,8 @@ exports.createStorybookJob = onCall(
 );
 
 Object.assign(exports, require("./storybookWorker"));
+
+Object.assign(exports, require("./onboardingPreview"));
 
 // Server-side AI proxy callables (onCall; secrets OPENAI_API_KEY + GEMINI_API_KEY) — client never holds provider keys.
 Object.assign(exports, require("./aiProxy"));

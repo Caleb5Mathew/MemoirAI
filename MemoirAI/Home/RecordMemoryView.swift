@@ -797,6 +797,10 @@ struct RecordMemoryView: View {
             }
         } catch {
             print("🔴 Enhanced audio session setup error: \(error.localizedDescription)")
+            recordingStartErrorMessage = RecordingStartErrorPolicy.message(
+                detail: "Check that your microphone is available, then try again."
+            )
+            return
         }
         
         let fileName = UUID().uuidString + ".m4a"
@@ -819,6 +823,7 @@ struct RecordMemoryView: View {
             recorder.prepareToRecord()
             guard recorder.record(forDuration: RecordingDurationPolicy.maximumRecordingDuration) else {
                 print("❌ Recorder refused to start")
+                recordingStartErrorMessage = RecordingStartErrorPolicy.message()
                 try? FileManager.default.removeItem(at: fileURL)
                 return
             }
@@ -840,6 +845,9 @@ struct RecordMemoryView: View {
         } catch {
             try? FileManager.default.removeItem(at: fileURL)
             print("❌ Failed to start recording: \(error.localizedDescription)")
+            recordingStartErrorMessage = RecordingStartErrorPolicy.message(
+                detail: "Check that another app is not using the microphone, then try again."
+            )
         }
     }
     
@@ -974,6 +982,8 @@ struct RecordMemoryView: View {
             newEntry.transcriptionLanguage = "en"
             newEntry.audioData    = nil
             newEntry.createdAt    = Date()
+            newEntry.chapter      = "Other Memories"
+            newEntry.memoirModeRaw = MemoirMode.normal.rawValue
             newEntry.profileID    = profile.id
             newEntry.firebaseUserId = firebaseUserId
             

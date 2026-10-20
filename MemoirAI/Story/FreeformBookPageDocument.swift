@@ -90,8 +90,8 @@ enum BookPageCanonicalLayout {
         }
         if isLandscape {
             return BookPageCanonicalIllustrationLayout(
-                imageFrame: NormalizedPageRect(x: 0, y: 0.065, width: 1, height: 0.935),
-                titleFrame: NormalizedPageRect(x: 0.08, y: 0, width: 0.72, height: 0.065),
+                imageFrame: NormalizedPageRect(x: 0, y: 0.10, width: 1, height: 0.90),
+                titleFrame: NormalizedPageRect(x: 0.07, y: 0, width: 0.77, height: 0.10),
                 imageFit: .fill
             )
         }
@@ -106,24 +106,119 @@ enum BookPageCanonicalLayout {
         if isLandscape {
             return BookPageCanonicalTextLayout(
                 titleFrame: hasTitle
-                    ? NormalizedPageRect(x: 0.085, y: 0.085, width: 0.72, height: 0.07)
+                    ? NormalizedPageRect(
+                        x: Double(BookInteriorStyle.memoryHorizontalInset),
+                        y: Double(BookInteriorStyle.memoryTitleY),
+                        width: Double(BookInteriorStyle.memoryContentWidth),
+                        height: Double(BookInteriorStyle.memoryTitleHeight)
+                    )
                     : nil,
                 subtitleFrame: nil,
-                bodyFrame: NormalizedPageRect(x: 0.085, y: 0.18, width: 0.81, height: 0.755)
+                bodyFrame: NormalizedPageRect(
+                    x: Double(BookInteriorStyle.memoryHorizontalInset),
+                    y: Double(BookInteriorStyle.memoryBodyY),
+                    width: Double(BookInteriorStyle.memoryContentWidth),
+                    height: Double(BookInteriorStyle.memoryBodyHeight)
+                )
             )
         }
-        let titleFrame = hasTitle
-            ? NormalizedPageRect(x: 0.06, y: 0.05, width: 0.84, height: 0.07)
-            : nil
-        let subtitleFrame = hasSubtitle
-            ? NormalizedPageRect(x: 0.06, y: hasTitle ? 0.125 : 0.05, width: 0.84, height: 0.045)
-            : nil
-        let bodyTop = hasSubtitle ? (hasTitle ? 0.18 : 0.11) : (hasTitle ? 0.13 : 0.05)
         return BookPageCanonicalTextLayout(
-            titleFrame: titleFrame,
-            subtitleFrame: subtitleFrame,
-            bodyFrame: NormalizedPageRect(x: 0.06, y: bodyTop, width: 0.84, height: min(0.75, 0.92 - bodyTop))
+            titleFrame: hasTitle
+                ? NormalizedPageRect(
+                    x: Double(BookInteriorStyle.memoryHorizontalInset),
+                    y: Double(BookInteriorStyle.memoryTitleY),
+                    width: Double(BookInteriorStyle.memoryContentWidth),
+                    height: Double(BookInteriorStyle.memoryTitleHeight)
+                )
+                : nil,
+            subtitleFrame: nil,
+            bodyFrame: NormalizedPageRect(
+                x: Double(BookInteriorStyle.memoryHorizontalInset),
+                y: Double(BookInteriorStyle.memoryBodyY),
+                width: Double(BookInteriorStyle.memoryContentWidth),
+                height: Double(BookInteriorStyle.memoryBodyHeight)
+            )
         )
+    }
+
+    static func isUntouchedGeneratedTextDocument(
+        _ document: BookPageDocument,
+        body: String,
+        title: String?,
+        typographyPreset: BookPageTypographyPreset,
+        isLandscape: Bool
+    ) -> Bool {
+        guard document.semanticTemplate == nil else { return false }
+        let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let textElements = document.elements.compactMap { element -> (BookPageElement, BookPageTextContent)? in
+            guard case .text(let content) = element.content else { return nil }
+            return (element, content)
+        }
+        guard textElements.count == document.elements.count,
+              textElements.count == (trimmedTitle.isEmpty ? 1 : 2) else { return false }
+
+        let layouts: [(BookPageCanonicalTextLayout, Double)] = [
+            (text(isLandscape: isLandscape, hasTitle: !trimmedTitle.isEmpty, hasSubtitle: false), Double(BookInteriorStyle.bodySize)),
+            (
+                BookPageCanonicalTextLayout(
+                    titleFrame: trimmedTitle.isEmpty
+                        ? nil
+                        : NormalizedPageRect(x: 0.10, y: 0.15, width: 0.80, height: 0.08),
+                    subtitleFrame: nil,
+                    bodyFrame: NormalizedPageRect(x: 0.10, y: 0.31, width: 0.80, height: 0.57)
+                ),
+                0.0265
+            )
+        ]
+
+        return layouts.contains { candidate in
+            let (layout, bodyFontSize) = candidate
+            let titleMatches: Bool
+            if trimmedTitle.isEmpty {
+                titleMatches = !textElements.contains { $0.1.role == .title }
+            } else {
+                titleMatches = textElements.contains { candidate in
+                    let (element, content) = candidate
+                    return content.role == .title &&
+                        content.text == trimmedTitle &&
+                        content.fontSize == 0.054 &&
+                        content.alignment == .leading &&
+                        content.typographyPreset == typographyPreset &&
+                        content.color == nil &&
+                        element.frame == layout.titleFrame
+                }
+            }
+            let bodyMatches = textElements.contains { candidate in
+                let (element, content) = candidate
+                return content.role == .body &&
+                    content.text == body &&
+                    content.fontSize == bodyFontSize &&
+                    content.alignment == .leading &&
+                    content.typographyPreset == typographyPreset &&
+                    content.color == nil &&
+                    element.frame == layout.bodyFrame
+            }
+            return titleMatches && bodyMatches
+        }
+    }
+}
+
+enum BookPageChromePolicy {
+    static func isPrecomposedIllustration(document: BookPageDocument, isIllustration: Bool) -> Bool {
+        guard isIllustration else { return false }
+        let hasTitle = document.elements.contains { element in
+            if case .text(let text) = element.content { return text.role == .title }
+            return false
+        }
+        return !hasTitle && document.elements.contains { element in
+            guard case .image = element.content else { return false }
+            return element.frame == NormalizedPageRect(x: 0, y: 0, width: 1, height: 1)
+        }
+    }
+
+    static func showsChrome(document: BookPageDocument, memoryID: UUID?, isPrecomposed: Bool) -> Bool {
+        guard document.semanticTemplate == nil, !isPrecomposed else { return false }
+        return memoryID.map { !BookInteriorAnchor.isNonMemoryPage($0) } ?? true
     }
 }
 
@@ -134,7 +229,7 @@ enum BookPageTextSizing {
 }
 
 enum BookInteriorPageDocumentFactory {
-    static let semanticTemplateVersion = 3
+    static let semanticTemplateVersion = 5
 
     struct Layout: Equatable, Sendable {
         let titleFrame: NormalizedPageRect
@@ -150,6 +245,44 @@ enum BookInteriorPageDocumentFactory {
     }
 
     static func layout(pageAspectRatio: Double, isKidsBook: Bool) -> Layout {
+        let isLandscape = pageAspectRatio > 1
+        return Layout(
+            titleFrame: NormalizedPageRect(x: 0.11, y: 0.24, width: 0.78, height: 0.27),
+            titleBodyFrame: NormalizedPageRect(x: 0.11, y: 0.53, width: 0.74, height: 0.09),
+            titleFontSize: isLandscape ? 0.099 : 0.070,
+            titleBodyFontSize: isLandscape ? 0.031 : 0.026,
+            closingIconFrame: isLandscape
+                ? NormalizedPageRect(x: 0.11, y: 0.20, width: 0.075, height: 0.10)
+                : NormalizedPageRect(x: 0.11, y: 0.21, width: 0.12, height: 0.09),
+            closingHeadingFrame: isLandscape
+                ? NormalizedPageRect(x: 0.11, y: 0.42, width: 0.78, height: 0.16)
+                : NormalizedPageRect(x: 0.11, y: 0.41, width: 0.78, height: 0.15),
+            closingBadgeFrame: NormalizedPageRect(x: 0, y: 0, width: 0, height: 0),
+            closingStoreTextFrame: isLandscape
+                ? NormalizedPageRect(x: 0.11, y: 0.63, width: 0.54, height: 0.07)
+                : NormalizedPageRect(x: 0.11, y: 0.62, width: 0.68, height: 0.06),
+            closingHeadingFontSize: isLandscape ? 0.075 : 0.060,
+            closingStoreFontSize: isLandscape ? 0.028 : 0.025
+        )
+    }
+
+    private static func legacyVersionFourLayout(pageAspectRatio: Double, isKidsBook: Bool) -> Layout {
+        let closing = legacyVersionThreeLayout(pageAspectRatio: pageAspectRatio, isKidsBook: isKidsBook)
+        return Layout(
+            titleFrame: NormalizedPageRect(x: 0.11, y: 0.24, width: 0.78, height: 0.27),
+            titleBodyFrame: NormalizedPageRect(x: 0.11, y: 0.53, width: 0.74, height: 0.09),
+            titleFontSize: pageAspectRatio > 1 ? 0.099 : 0.070,
+            titleBodyFontSize: pageAspectRatio > 1 ? 0.031 : 0.026,
+            closingIconFrame: closing.closingIconFrame,
+            closingHeadingFrame: closing.closingHeadingFrame,
+            closingBadgeFrame: closing.closingBadgeFrame,
+            closingStoreTextFrame: closing.closingStoreTextFrame,
+            closingHeadingFontSize: closing.closingHeadingFontSize,
+            closingStoreFontSize: closing.closingStoreFontSize
+        )
+    }
+
+    private static func legacyVersionThreeLayout(pageAspectRatio: Double, isKidsBook: Bool) -> Layout {
         let isLandscape = pageAspectRatio > 1
         if isLandscape {
             return Layout(
@@ -253,11 +386,10 @@ enum BookInteriorPageDocumentFactory {
                     typographyPreset: typographyPreset
                 )
                 document.updateFontSize(id: titleID, fontSize: layout.titleFontSize)
-                document.updateTextAlignment(id: titleID, alignment: .center)
+                document.updateTextAlignment(id: titleID, alignment: .leading)
             }
 
-            let trimmedBody = (canonicalText(in: legacyDocument, role: .body) ?? body)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedBody = openingBody(canonicalText(in: legacyDocument, role: .body) ?? body)
             if !trimmedBody.isEmpty {
                 if let preservedBody = canonicalElementToPreserve(
                     in: legacyDocument,
@@ -267,6 +399,7 @@ enum BookInteriorPageDocumentFactory {
                     typographyPreset: typographyPreset
                 ) {
                     try document.appendPreservingIdentity(preservedBody)
+                    document.updateText(id: preservedBody.id, text: trimmedBody)
                 } else {
                     let bodyID = try document.addText(
                         trimmedBody,
@@ -275,7 +408,7 @@ enum BookInteriorPageDocumentFactory {
                         typographyPreset: typographyPreset
                     )
                     document.updateFontSize(id: bodyID, fontSize: layout.titleBodyFontSize)
-                    document.updateTextAlignment(id: bodyID, alignment: .center)
+                    document.updateTextAlignment(id: bodyID, alignment: .leading)
                 }
             }
         } else if memoryID == BookInteriorAnchor.closingPageMemoryId {
@@ -296,7 +429,7 @@ enum BookInteriorPageDocumentFactory {
                     typographyPreset: typographyPreset
                 )
                 document.updateFontSize(id: headingID, fontSize: layout.closingHeadingFontSize)
-                document.updateTextAlignment(id: headingID, alignment: .center)
+                document.updateTextAlignment(id: headingID, alignment: .leading)
             }
 
             if let preservedStoreText = canonicalElementToPreserve(
@@ -314,10 +447,10 @@ enum BookInteriorPageDocumentFactory {
                     frame: layout.closingStoreTextFrame,
                     role: .body,
                     typographyPreset: typographyPreset,
-                    color: .white
+                    color: .ink
                 )
                 document.updateFontSize(id: storeID, fontSize: layout.closingStoreFontSize)
-                document.updateTextAlignment(id: storeID, alignment: .center)
+                document.updateTextAlignment(id: storeID, alignment: .leading)
             }
 
         }
@@ -326,6 +459,17 @@ enum BookInteriorPageDocumentFactory {
             try appendEditableElements(from: legacyDocument, to: &document)
         }
         return document
+    }
+
+    private static func openingBody(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = "A collection of memories from "
+        let suffix = "’s life."
+        if trimmed.hasPrefix(prefix), trimmed.hasSuffix(suffix),
+           trimmed.count > prefix.count + suffix.count {
+            return "A collection of life stories"
+        }
+        return trimmed
     }
 
     private static func nonempty(_ value: String?, fallback: String) -> String {
@@ -363,39 +507,49 @@ enum BookInteriorPageDocumentFactory {
               case .text(let text) = element.content else {
             return nil
         }
-        guard document.semanticTemplateVersion == 2 else { return element }
+        guard [2, 3, 4].contains(document.semanticTemplateVersion) else { return element }
 
-        let oldLayout = legacyVersionTwoLayout(
-            pageAspectRatio: pageAspectRatio,
-            isKidsBook: isKidsBook
-        )
+        let oldLayout: Layout
+        switch document.semanticTemplateVersion {
+        case 2:
+            oldLayout = legacyVersionTwoLayout(pageAspectRatio: pageAspectRatio, isKidsBook: isKidsBook)
+        case 3:
+            oldLayout = legacyVersionThreeLayout(pageAspectRatio: pageAspectRatio, isKidsBook: isKidsBook)
+        default:
+            oldLayout = legacyVersionFourLayout(pageAspectRatio: pageAspectRatio, isKidsBook: isKidsBook)
+        }
         let expectedFrame: NormalizedPageRect
         let expectedFontSize: Double
         let expectedColor: BookPageTextColor?
+        let expectedAlignment: BookPageTextAlignment
         switch (semanticTemplate, role) {
         case (.interiorTitle, .title):
             expectedFrame = oldLayout.titleFrame
             expectedFontSize = oldLayout.titleFontSize
             expectedColor = nil
+            expectedAlignment = document.semanticTemplateVersion == 4 ? .leading : .center
         case (.interiorTitle, .body):
             expectedFrame = oldLayout.titleBodyFrame
             expectedFontSize = oldLayout.titleBodyFontSize
             expectedColor = nil
+            expectedAlignment = document.semanticTemplateVersion == 4 ? .leading : .center
         case (.interiorClosing, .title):
             expectedFrame = oldLayout.closingHeadingFrame
             expectedFontSize = oldLayout.closingHeadingFontSize
             expectedColor = nil
+            expectedAlignment = .center
         case (.interiorClosing, .body):
             expectedFrame = oldLayout.closingStoreTextFrame
             expectedFontSize = oldLayout.closingStoreFontSize
             expectedColor = .white
+            expectedAlignment = .center
         default:
             return element
         }
 
         let matchesOldDefault = element.frame == expectedFrame
             && text.fontSize == expectedFontSize
-            && text.alignment == .center
+            && text.alignment == expectedAlignment
             && text.color == expectedColor
             && text.typographyPreset == typographyPreset
         return matchesOldDefault ? nil : element

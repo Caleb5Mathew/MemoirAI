@@ -16,9 +16,11 @@ struct ContentView: View {
     // For deep-linking to memory details
     @StateObject private var nav = NavigationRouter.shared
     @State private var path = NavigationPath()
+    @State private var finishedDebugOnboarding = false
     
     // Local fallback for immediate availability even before iCloud sync
     @AppStorage("hasCompletedOnboarding_local") private var localCompleted: Bool = false
+    @AppStorage(CheckoutReturnPolicy.confirmedSessionDefaultsKey) private var confirmedCheckoutSessionID = ""
 
     // Shown exactly once, on first launch, before onboarding. UserDefaults-only (not mirrored
     // to iCloud KV): iCloudManager's KV sync semantics are onboarding-specific (see its
@@ -39,13 +41,10 @@ struct ContentView: View {
     @State private var programmaticNavigationReset = false
     
     var body: some View {
-        #if targetEnvironment(simulator)
-        let done = true
-        let seenWelcomeAuth = true
-        #else
-        let done = localCompleted || iCloudManager.hasCompletedOnboarding
-        let seenWelcomeAuth = hasSeenWelcomeAuth
-        #endif
+        let done = OnboardingDebugConfiguration.replayOnLaunch
+            ? finishedDebugOnboarding
+            : (localCompleted || iCloudManager.hasCompletedOnboarding)
+        let seenWelcomeAuth = OnboardingDebugConfiguration.replayOnLaunch || hasSeenWelcomeAuth
 
         return Group {
             if !seenWelcomeAuth {
@@ -163,10 +162,17 @@ struct ContentView: View {
                     }
                 }
             } else {
-                OnboardingFlow()
+                OnboardingFlow(onFinished: { finishedDebugOnboarding = true })
             }
         }
         .id(authService.user?.uid ?? "signed-out")
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .active {
+                ProductAnalytics.shared.setSessionActive(true)
+            } else if phase == .background {
+                ProductAnalytics.shared.setSessionActive(false)
+            }
+        }
         .onChange(of: authService.user?.uid) { oldUserID, newUserID in
             guard oldUserID != newUserID else { return }
             path = NavigationPath()
@@ -208,6 +214,33 @@ struct ContentView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(deepLinkErrorMessage)
+        }
+        .overlay(alignment: .top) {
+            if !confirmedCheckoutSessionID.isEmpty {
+                HStack(spacing: 12) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Order confirmed")
+                            .font(.headline)
+                        Text("Follow printing and delivery in My Orders.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Done") { confirmedCheckoutSessionID = "" }
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding(16)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .accessibilityElement(children: .contain)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .orderComplete)) { notification in
+            guard let sessionID = notification.userInfo?["sessionId"] as? String else { return }
+            confirmedCheckoutSessionID = sessionID
         }
     }
     

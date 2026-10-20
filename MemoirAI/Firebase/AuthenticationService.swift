@@ -278,6 +278,7 @@ final class AuthenticationService: ObservableObject {
                 if previousUserID != user?.uid, self?.sessionPreparationTask == nil {
                     self?.isSessionPrepared = false
                 }
+                ProductAnalytics.shared.updateIdentity(userID: user?.uid, isGuest: user?.isAnonymous ?? true)
                 self?.user = user
                 self?.isSignedIn = user != nil
                 
@@ -285,6 +286,10 @@ final class AuthenticationService: ObservableObject {
                     let tokenResult = try? await user.getIDTokenResult()
                     let hasMemoirGuestClaim = tokenResult?.claims["memoirGuest"] as? Bool == true
                     self?.recoveredGuestUserID = hasMemoirGuestClaim ? user.uid : nil
+                    guard Auth.auth().currentUser?.uid == user.uid else { return }
+                    ProductAnalytics.shared.updateIdentity(
+                        userID: user.uid, isGuest: user.isAnonymous || hasMemoirGuestClaim
+                    )
                     print("Auth state changed: signed in")
                     if self?.isGuestUser(user) == false {
                         UserDefaults.standard.removeObject(forKey: MemoirPersistenceUserDefaults.suggestAccountLinkAfterBook)
@@ -525,6 +530,17 @@ final class AuthenticationService: ObservableObject {
         credential: ASAuthorizationAppleIDCredential,
         preserveCurrentAccount: Bool = false
     ) async throws -> AccountLinkOutcome {
+        ProductAnalytics.shared.track("Authentication Started", ["provider": "apple", "auth_operation": "link_account"])
+        var analyticsSucceeded = false
+        defer {
+            if analyticsSucceeded, let activeUser = Auth.auth().currentUser {
+                ProductAnalytics.shared.updateIdentity(userID: activeUser.uid, isGuest: isGuestUser(activeUser))
+            }
+            ProductAnalytics.shared.track(analyticsSucceeded ? "Authentication Succeeded" : "Authentication Failed", [
+                "provider": "apple", "auth_operation": "link_account"
+            ])
+        }
+
         guard let nonce = currentNonce else {
             throw AuthError.missingNonce
         }
@@ -563,6 +579,7 @@ final class AuthenticationService: ObservableObject {
             try await changeRequest.commitChanges()
         }
 
+        analyticsSucceeded = true
         return outcome
     }
 
@@ -570,6 +587,17 @@ final class AuthenticationService: ObservableObject {
     /// Welcome flows may return `.signedInExistingAccount` for a returning user.
     @discardableResult
     func linkGoogleAccount(preserveCurrentAccount: Bool = false) async throws -> AccountLinkOutcome {
+        ProductAnalytics.shared.track("Authentication Started", ["provider": "google", "auth_operation": "link_account"])
+        var analyticsSucceeded = false
+        defer {
+            if analyticsSucceeded, let activeUser = Auth.auth().currentUser {
+                ProductAnalytics.shared.updateIdentity(userID: activeUser.uid, isGuest: isGuestUser(activeUser))
+            }
+            ProductAnalytics.shared.track(analyticsSucceeded ? "Authentication Succeeded" : "Authentication Failed", [
+                "provider": "google", "auth_operation": "link_account"
+            ])
+        }
+
         guard let clientID = FirebaseApp.app()?.options.clientID else {
             throw AuthError.missingClientID
         }
@@ -607,6 +635,7 @@ final class AuthenticationService: ObservableObject {
 
             let outcome = try await linkOrSignIn(with: credential, preserveCurrentAccount: preserveCurrentAccount)
             print(outcome == .linkedNewAccount ? "Linked Google account" : "✅ Signed in with Google (existing account)")
+            analyticsSucceeded = true
             return outcome
         } catch {
             errorMessage = error.localizedDescription
@@ -656,6 +685,17 @@ final class AuthenticationService: ObservableObject {
     /// credential so existing local/Firestore data is preserved under the same uid. If the
     /// current user is already authenticated with another provider, creates a brand new account.
     func createEmailAccount(email: String, password: String) async throws {
+        ProductAnalytics.shared.track("Authentication Started", ["provider": "email", "auth_operation": "create_account"])
+        var analyticsSucceeded = false
+        defer {
+            if analyticsSucceeded, let activeUser = Auth.auth().currentUser {
+                ProductAnalytics.shared.updateIdentity(userID: activeUser.uid, isGuest: isGuestUser(activeUser))
+            }
+            ProductAnalytics.shared.track(analyticsSucceeded ? "Authentication Succeeded" : "Authentication Failed", [
+                "provider": "email", "auth_operation": "create_account"
+            ])
+        }
+
         guard Self.isValidEmail(email) else { throw AuthError.invalidEmail }
         guard Self.isValidPassword(password) else { throw AuthError.weakPassword }
         guard await prepareAuthenticatedSessionForLaunch() else {
@@ -682,12 +722,24 @@ final class AuthenticationService: ObservableObject {
             errorMessage = mapped.errorDescription
             throw mapped
         }
+        analyticsSucceeded = true
     }
 
     /// Signs in an existing email/password account. This never links — if the current session
     /// is anonymous it is replaced by the authenticated user (matching Firebase's default
     /// `signIn` behavior), which is correct for a returning user reclaiming their real account.
     func signInWithEmail(email: String, password: String) async throws {
+        ProductAnalytics.shared.track("Authentication Started", ["provider": "email", "auth_operation": "sign_in"])
+        var analyticsSucceeded = false
+        defer {
+            if analyticsSucceeded, let activeUser = Auth.auth().currentUser {
+                ProductAnalytics.shared.updateIdentity(userID: activeUser.uid, isGuest: isGuestUser(activeUser))
+            }
+            ProductAnalytics.shared.track(analyticsSucceeded ? "Authentication Succeeded" : "Authentication Failed", [
+                "provider": "email", "auth_operation": "sign_in"
+            ])
+        }
+
         guard Self.isValidEmail(email) else { throw AuthError.invalidEmail }
         guard await prepareAuthenticatedSessionForLaunch() else {
             throw AuthError.guestRecoveryUnavailable
@@ -711,6 +763,7 @@ final class AuthenticationService: ObservableObject {
             errorMessage = mapped.errorDescription
             throw mapped
         }
+        analyticsSucceeded = true
     }
 
     private func canReplaceAnonymousAccount(_ user: User) async throws -> Bool {
@@ -875,6 +928,8 @@ final class AuthenticationService: ObservableObject {
             await revokeGuestRecoveryBeforeAccountReplacement()
             PushTokenService.shared.unregisterCurrentUser()
             try Auth.auth().signOut()
+            ProductAnalytics.shared.track("Signed Out")
+            ProductAnalytics.shared.updateIdentity(userID: nil, isGuest: true)
             GIDSignIn.sharedInstance.signOut()
             clearLocalCaches()
             print("✅ Signed out successfully")

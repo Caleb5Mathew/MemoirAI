@@ -33,9 +33,9 @@ struct StoryPageLocalColors {
     let fullScreenOverlayBackground = Color.black.opacity(0.85)
     
     // Book-specific colors - elegant and clean
-    let bookPageBackground = Color(red: 0.99, green: 0.97, blue: 0.94) // Warm paper white
-    let bookTextColor = Color(red: 0.2, green: 0.2, blue: 0.2) // Soft black for readability
-    let chapterTitleColor = Color(red: 0.4, green: 0.3, blue: 0.2) // Elegant brown
+    let bookPageBackground = BookInteriorStyle.paper // Warm paper white
+    let bookTextColor = BookInteriorStyle.ink // Soft black for readability
+    let chapterTitleColor = BookInteriorStyle.ink // Elegant brown
     let pageNumberColor = Color(red: 0.5, green: 0.5, blue: 0.5) // Subtle gray
     let decorativeElementColor = Color(red: 0.6, green: 0.4, blue: 0.3) // Warm accent
 }
@@ -56,37 +56,16 @@ enum BookFontStyle {
         }
     }
     
-    // Title font at ~3.5% of frame height for proper book typography
     func titleFont(for frameHeight: CGFloat) -> Font {
-        let size = frameHeight * 0.035  // ~28pt at 792pt, ~21pt at 612pt
-        switch self {
-        case .kidsBook:  return .custom("TimesNewRomanPS-BoldMT", size: size)
-        case .comic:     return .system(size: size, weight: .heavy, design: .serif)
-        case .realistic: return .custom("Georgia-Bold", size: size) ?? .system(size: size, weight: .bold, design: .serif)
-        case .custom:    return .system(size: size, weight: .semibold, design: .serif)
-        }
+        .custom("GillSans", size: frameHeight * 0.040)
     }
-    
-    // Body font at ~2.0% of frame height for proper book typography
+
     func bodyFont(for frameHeight: CGFloat) -> Font {
-        let size = frameHeight * 0.020  // ~16pt at 792pt, ~12pt at 612pt
-        switch self {
-        case .kidsBook:  return .custom("TimesNewRomanPSMT", size: size)
-        case .comic:     return .system(size: size, weight: .semibold, design: .serif)
-        case .realistic: return .custom("Georgia", size: size) ?? .system(size: size, weight: .regular, design: .serif)
-        case .custom:    return .system(size: size, weight: .regular, design: .serif)
-        }
+        .custom("Georgia", size: frameHeight * BookInteriorStyle.bodySize)
     }
-    
-    // Page number font at ~1.5% of frame height
+
     func pageNumberFont(for frameHeight: CGFloat) -> Font {
-        let size = frameHeight * 0.015  // ~12pt at 792pt, ~9pt at 612pt
-        switch self {
-        case .kidsBook:  return .custom("TimesNewRomanPSMT", size: size)
-        case .comic:     return .system(size: size, weight: .regular, design: .serif)
-        case .realistic: return .custom("Georgia", size: size) ?? .system(size: size, weight: .regular, design: .serif)
-        case .custom:    return .system(size: size, weight: .regular, design: .serif)
-        }
+        .custom("GillSans", size: frameHeight * 0.015)
     }
 }
 
@@ -146,15 +125,15 @@ extension Font {
     
     // Kids book fonts - Times New Roman 12pt for publisher standard (11×8.5" print)
     static func kidsBookTitleFont(for frameHeight: CGFloat) -> Font {
-        .custom("TimesNewRomanPS-BoldMT", size: frameHeight * 0.035)
+        .custom("GillSans", size: frameHeight * 0.040)
     }
     
     static func kidsBookBodyFont(for frameHeight: CGFloat) -> Font {
-        .custom("TimesNewRomanPSMT", size: frameHeight * 0.020)
+        .custom("Georgia", size: frameHeight * BookInteriorStyle.bodySize)
     }
     
     static func kidsBookPageNumberFont(for frameHeight: CGFloat) -> Font {
-        .custom("TimesNewRomanPSMT", size: frameHeight * 0.015)
+        .custom("GillSans", size: frameHeight * 0.015)
     }
     
     // Professional vertical book fonts - elegant serif fonts
@@ -184,6 +163,13 @@ struct StoryPage: View {
     @State private var userGender: String = ""
     @State private var headshotImage: UIImage?
     @State private var grandparentName: String = ""
+    @State private var setupProfileID: UUID?
+    @State private var setupUserID: String?
+    @State private var showMemoirNamePrompt = false
+    @State private var memoirNameDraft = ""
+    @State private var memoirNameProfileID: UUID?
+    @State private var memoirNameUserID: String?
+    @State private var continueGenerationAfterName = false
     @State private var showProfileSetup: Bool = false
     @State private var didCompleteProfileSetup: Bool = false // Track if user completed setup or just exited
     @Environment(\.dismiss) private var dismiss
@@ -239,6 +225,8 @@ struct StoryPage: View {
 
     // Order book sheet
     @State private var orderBookRecordForSheet: BookVersionRecord?
+    @State private var showInteriorUpgradeConfirmation = false
+    @State private var confirmedInteriorUpgradeBookID: String?
     @State private var isOrderPreparing = false
     @State private var orderNotReadyAlert = false
     @State private var orderNotReadyAlertTitle = "Book PDF Still Preparing"
@@ -735,7 +723,7 @@ struct StoryPage: View {
                     .padding(.horizontal, 30)
 
                 Button(action: {
-                    showProfileSetup = true
+                    prepareStorybookSetup()
                 }) {
                     Text("Create My Storybook")
                         .font(.headline)
@@ -766,6 +754,56 @@ struct StoryPage: View {
         .padding()
     }
 
+    private func prepareStorybookSetup() {
+        didCompleteProfileSetup = false
+        setupProfileID = profileVM.selectedProfile.id
+        setupUserID = Auth.auth().currentUser?.uid
+        guard ensureMemoirName(continueGeneration: false) else { return }
+        showProfileSetup = true
+    }
+
+    private func ensureMemoirName(continueGeneration: Bool) -> Bool {
+        let profile = profileVM.selectedProfile
+        var resolvedName = StorybookMemoirNamePolicy.usableName(profile.name)
+        if resolvedName == nil {
+            let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
+            request.predicate = MemoryUserScope.profilePredicate(profileID: profile.id)
+            do {
+                resolvedName = vm.memoirName(profileName: profile.name, memories: try context.fetch(request))
+            } catch {
+                vm.errorMessage = "Your saved memories could not be read. Try again before creating the book."
+                return false
+            }
+        }
+        if let resolvedName {
+            if profile.name != resolvedName { profileVM.updateName(for: profile, to: resolvedName) }
+            grandparentName = resolvedName
+            return true
+        }
+        memoirNameDraft = ""
+        memoirNameProfileID = profile.id
+        memoirNameUserID = Auth.auth().currentUser?.uid
+        continueGenerationAfterName = continueGeneration
+        showMemoirNamePrompt = true
+        return false
+    }
+
+    private func saveMemoirName() {
+        guard let profileID = memoirNameProfileID,
+              profileVM.selectedProfile.id == profileID,
+              Auth.auth().currentUser?.uid == memoirNameUserID,
+              let profile = profileVM.profiles.first(where: { $0.id == profileID }),
+              let name = StorybookMemoirNamePolicy.usableName(memoirNameDraft) else { return }
+        profileVM.updateName(for: profile, to: name)
+        grandparentName = name
+        memoirNameProfileID = nil
+        if continueGenerationAfterName {
+            generateStorybookWithPaywallCheck()
+        } else {
+            showProfileSetup = true
+        }
+    }
+
     private func resetGenerationState() {
         // Don't clear vm.pageItems - let persistence handle this
         vm.errorMessage = nil
@@ -777,6 +815,8 @@ struct StoryPage: View {
         
     private func generateStorybookWithPaywallCheck() {
         guard !isCheckingSubscription else { return }
+        guard ensureMemoirName(continueGeneration: true) else { return }
+        let generationProfileID = profileVM.selectedProfile.id
         guard let firebaseUserID = Auth.auth().currentUser?.uid else {
             vm.errorMessage = "Sign in before creating a storybook. Your memories are still saved on this device."
             return
@@ -788,6 +828,7 @@ struct StoryPage: View {
             defer { isCheckingSubscription = false }
             await subscriptionManager.refreshCustomerInfo(forceRefresh: true)
             vm.isLoading = false
+            guard profileVM.selectedProfile.id == generationProfileID else { return }
             guard Auth.auth().currentUser?.uid == firebaseUserID,
                   subscriptionManager.isIdentityReady(for: firebaseUserID) else {
                 vm.errorMessage = subscriptionManager.identityErrorMessage
@@ -865,16 +906,17 @@ struct StoryPage: View {
         hasRequestedGeneration = true
         vm.isLoading = true
 
-        let currentProfileID = profileVM.selectedProfile.id
+        let generationProfile = profileVM.selectedProfile
+        let currentProfileID = generationProfile.id
         let finalPageCount = pagesExpected // Pass the adjusted page count
         let wasSubscribed = isSubscribed // Capture subscription state before async
         let useTutorialBonus = pendingTutorialBonusGeneration
         
         Task { @MainActor in
-            vm.syncFaceDescriptionFromProfile(profileVM.selectedProfile)
+            vm.syncFaceDescriptionFromProfile(generationProfile)
             await vm.generateStorybook(
                 forProfileID: currentProfileID,
-                profileName: profileVM.selectedProfile.name,
+                profileName: generationProfile.name,
                 overridePageCount: finalPageCount,
                 profileEthnicity: userRace
             )
@@ -965,6 +1007,16 @@ struct StoryPage: View {
             storybookScreenEntry: storybookScreenEntry,
             isOpeningBook: $isOpeningBook
         )
+        .alert("Whose memoir is this?", isPresented: $showMemoirNamePrompt) {
+            TextField("Person’s name", text: $memoirNameDraft)
+                .textInputAutocapitalization(.words)
+                .accessibilityIdentifier("memoirNameInput")
+            Button("Cancel", role: .cancel) { memoirNameProfileID = nil }
+            Button("Save & Continue") { saveMemoirName() }
+                .disabled(StorybookMemoirNamePolicy.usableName(memoirNameDraft) == nil)
+        } message: {
+            Text("Enter their name for the book title. We’ll save it to this profile.")
+        }
         .onChange(of: vm.pageItems.count) { _, _ in
             currentPageIndex = StorybookPagePresentationPolicy.clampedPageIndex(
                 currentPageIndex,
@@ -985,6 +1037,15 @@ struct StoryPage: View {
         }
         .fullScreenCover(item: $orderBookRecordForSheet) { record in
             OrderBookView(book: record)
+        }
+        .alert("Update book layout?", isPresented: $showInteriorUpgradeConfirmation) {
+            Button("Cancel", role: .cancel) { confirmedInteriorUpgradeBookID = nil }
+            Button("Update & Continue") {
+                confirmedInteriorUpgradeBookID = vm.currentBookVersionRecord?.bookVersionId
+                orderBookTapped()
+            }
+        } message: {
+            Text("We’ll save a new copy with the updated interior so your printed book matches this preview. Your original book and previous orders stay saved.")
         }
         .alert(orderNotReadyAlertTitle, isPresented: $orderNotReadyAlert) {
             Button("Retry") {
@@ -1431,7 +1492,9 @@ struct StoryPage: View {
 
     private func orderBookTapped() {
         guard !isOrderPreparing, !vm.isSavingBookRevision, !vm.isUploadingToCloud else { return }
-        guard !vm.hasUnpublishedBookChanges else {
+        let retryingInteriorUpgrade = confirmedInteriorUpgradeBookID != nil
+            && confirmedInteriorUpgradeBookID == vm.currentBookVersionRecord?.bookVersionId
+        guard !vm.hasUnpublishedBookChanges || retryingInteriorUpgrade else {
             orderNotReadyAlertTitle = "Unsaved Book Changes"
             orderNotReadyAlertMessage = "Your latest edit has not synced yet. Check your connection, save it again, and then order."
             orderNotReadyAlert = true
@@ -1440,6 +1503,27 @@ struct StoryPage: View {
         isOrderPreparing = true
         Task {
             _ = await vm.fetchCurrentBookVersionRecord()
+            if let record = vm.currentBookVersionRecord,
+               BookInteriorUpgradePolicy.needsUpdate(layoutVersion: record.layoutVersion) {
+                guard confirmedInteriorUpgradeBookID == record.bookVersionId else {
+                    isOrderPreparing = false
+                    showInteriorUpgradeConfirmation = true
+                    return
+                }
+                let saved = await vm.saveCurrentBookInPlace(reason: "interiorDesignUpdate")
+                guard saved, BookInteriorUpgradePolicy.canOrderPublishedUpdate(
+                    previousBookID: record.bookVersionId,
+                    record: vm.currentBookVersionRecord,
+                    hasUnpublishedChanges: vm.hasUnpublishedBookChanges
+                ) else {
+                    isOrderPreparing = false
+                    orderNotReadyAlertTitle = "Book Update Not Ready"
+                    orderNotReadyAlertMessage = "Your original book is safe. Check your connection and retry to publish the updated copy before ordering."
+                    orderNotReadyAlert = true
+                    return
+                }
+                confirmedInteriorUpgradeBookID = nil
+            }
             let versionId = vm.currentBookVersionRecord?.bookVersionId ?? vm.lastSyncedBookVersionId
             if !vm.isBookOrderable, let id = versionId {
                 let r = vm.currentBookVersionRecord
@@ -1584,6 +1668,11 @@ struct StoryPage: View {
     }
     
     private func handleProfileSetupDismiss() {
+        guard setupProfileID == profileVM.selectedProfile.id,
+              setupUserID == Auth.auth().currentUser?.uid else {
+            didCompleteProfileSetup = false
+            return
+        }
         if didCompleteProfileSetup {
             generateStorybookWithPaywallCheck()
             didCompleteProfileSetup = false
@@ -1647,8 +1736,7 @@ struct StoryPage: View {
     private func regenerateStorybook() {
         // Route through the same setup path as first-time creation:
         // ProfileSetupView -> Review Settings -> Save & Generate.
-        didCompleteProfileSetup = false
-        showProfileSetup = true
+        prepareStorybookSetup()
     }
     
     // MARK: – Helper to count memories needing enhancement
@@ -1963,10 +2051,10 @@ extension StoryPage {
         }
         .overlay {
             if !isPrecomposed {
-                // QR Watermark — below illustration title bar (kids + portrait both use barHeight 6.5%)
+                // Keep the memory link below the illustration title.
                 QRWatermark(
                     memoryID: memoryID,
-                    topInset: frameHeight * 0.065 + 6
+                    topInset: frameHeight * (isKidsBook ? 0.10 : 0.065) + 6
                 )
             }
         }
@@ -2081,9 +2169,7 @@ extension StoryPage {
                     )
                 }
             }
-            .overlay(
-                QRWatermark(memoryID: memoryID)
-            )
+
         }
     }
 
@@ -2290,7 +2376,7 @@ struct KidsBookIllustrationPage: View {
     let pageNumber: Int
     
     private let colors = StoryPageLocalColors()
-    private var barHeight: CGFloat { frameHeight * 0.065 }
+    private var barHeight: CGFloat { frameHeight * 0.10 }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -2299,25 +2385,25 @@ struct KidsBookIllustrationPage: View {
                 Text(title ?? "Memory")
                     .font(.kidsBookTitleFont(for: frameHeight))
                     .foregroundColor(colors.chapterTitleColor)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.6)
                     .multilineTextAlignment(.leading)
-                    // Serif cap height leaves empty space above glyphs; nudge down so the bar feels vertically balanced.
-                    .offset(y: max(1, barHeight * 0.1))
                 Spacer()
                 Text("\(pageNumber)")
                     .font(.kidsBookPageNumberFont(for: frameHeight))
                     .foregroundColor(colors.pageNumberColor)
             }
-            .padding(.horizontal, frameWidth * 0.08)
+            .padding(.horizontal, frameWidth * 0.07)
             .padding(.vertical, barHeight * 0.1)
-            .frame(maxWidth: .infinity, minHeight: barHeight, alignment: .center)
+            .frame(maxWidth: .infinity)
+            .frame(height: barHeight)
             .background(colors.bookPageBackground)
 
             // Full page illustration fills remaining space
             Image(uiImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: frameWidth, height: frameHeight - barHeight)
                 .clipped()
         }
         .frame(width: frameWidth, height: frameHeight)
@@ -2337,53 +2423,9 @@ struct KidsBookTextPage: View {
     let frameHeight: CGFloat
     let pageNumber: Int
     
-    private let colors = StoryPageLocalColors()
-    private var barHeight: CGFloat { frameHeight * 0.07 }
-    // Book-like margins for 11×8.5" print: ~0.5" top/bottom, ~0.75" sides
-    private var topMargin: CGFloat { frameHeight * 0.065 }
-    private var bottomMargin: CGFloat { frameHeight * 0.065 }
-    private var sideMargin: CGFloat { frameWidth * 0.085 }
-    private var rightMargin: CGFloat { frameWidth * 0.105 }
-    
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer().frame(height: topMargin)
-            
-            // Header bar: title left, page number right (vertically centered in the bar)
-            HStack(alignment: .center) {
-                Text(title ?? "")
-                    .font(fontStyle.titleFont(for: frameHeight))
-                    .foregroundColor(colors.chapterTitleColor)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.leading)
-                    .offset(y: max(1, barHeight * 0.1))
-                Spacer()
-                Text("\(pageNumber)")
-                    .font(fontStyle.pageNumberFont(for: frameHeight))
-                    .foregroundColor(colors.pageNumberColor)
-            }
-            .padding(.horizontal, sideMargin)
-            .padding(.vertical, barHeight * 0.1)
-            .frame(maxWidth: .infinity, minHeight: barHeight, alignment: .center)
-            .background(colors.bookPageBackground)
-            
-            // Body text with book-like spacing below header
-            Text(text)
-                .font(fontStyle.bodyFont(for: frameHeight))
-                .lineSpacing(frameHeight * 0.006)
-                .multilineTextAlignment(.leading)
-                .foregroundColor(colors.bookTextColor)
-                .padding(.leading, sideMargin)
-                .padding(.trailing, rightMargin)
-                .padding(.top, frameHeight * 0.045)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .lineLimit(nil)
-            
-            Spacer().frame(height: bottomMargin)
-        }
-        .frame(width: frameWidth, height: frameHeight)
-        .background(colors.bookPageBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        FieldnotesMemoryPage(title: title, text: text, pageNumber: pageNumber,
+                             frameWidth: frameWidth, frameHeight: frameHeight)
     }
 }
 
@@ -2400,7 +2442,7 @@ struct VerticalBookIllustrationPage: View {
     let totalPages: Int
     
     private let colors = StoryPageLocalColors()
-    private var barHeight: CGFloat { frameHeight * 0.065 }
+    private var barHeight: CGFloat { frameHeight * 0.10 }
     private var headerTitle: String {
         let t = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return t.isEmpty ? "Memory" : t
@@ -2479,63 +2521,91 @@ struct VerticalBookTextPage: View {
     let frameHeight: CGFloat
     let pageNumber: Int
     
-    private let colors = StoryPageLocalColors()
-    
     var body: some View {
-        ZStack {
-            // Book page background
-            colors.bookPageBackground
-            
-            VStack(spacing: 0) {
-                // Header section with title on first page
-                if let title = title {
-                    VStack(alignment: .leading, spacing: frameHeight * 0.015) {
-                        Text(title)
-                            .font(fontStyle.titleFont(for: frameHeight))
-                            .foregroundColor(colors.chapterTitleColor)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+        FieldnotesMemoryPage(title: title, text: text, pageNumber: pageNumber,
+                             frameWidth: frameWidth, frameHeight: frameHeight)
+    }
+}
 
-                        if let subtitle = subtitle, !subtitle.isEmpty {
-                            Text(subtitle)
-                                .font(.system(size: max(12, frameHeight * 0.021), weight: .regular))
-                                .foregroundColor(colors.chapterTitleColor.opacity(0.7))
-                                .italic()
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                    .padding(.leading, frameWidth * 0.06)
-                    .padding(.trailing, frameWidth * 0.10) // Extra right padding to avoid QR code
-                    .padding(.top, frameHeight * 0.05)
-                }
-                
-                // Text content with art-style appropriate typography (fixed height, no scroll)
-                VStack(alignment: .leading, spacing: frameHeight * 0.015) {
-                    Text(text)
-                        .font(fontStyle.bodyFont(for: frameHeight))
-                        .lineSpacing(frameHeight * 0.006) // Tight line spacing like real books
-                        .multilineTextAlignment(.leading)
-                        .foregroundColor(colors.bookTextColor)
-                }
-                .padding(.leading, frameWidth * 0.06)
-                .padding(.trailing, frameWidth * 0.10) // Extra right padding to avoid QR code
-                .frame(maxWidth: .infinity, maxHeight: frameHeight * 0.75, alignment: .topLeading)
-                .lineLimit(nil)
-                
-                Spacer()
-                
-                // Page number at bottom - small and professional
-                Text("\(pageNumber)")
-                    .font(fontStyle.pageNumberFont(for: frameHeight))
-                    .foregroundColor(colors.pageNumberColor)
-                    .padding(.bottom, frameHeight * 0.03)
-            }
+struct FieldnotesMemoryPage: View {
+    let title: String?
+    let text: String
+    let pageNumber: Int
+    let frameWidth: CGFloat
+    let frameHeight: CGFloat
+
+    var body: some View {
+        let bodySize = frameHeight * BookInteriorStyle.bodySize
+        ZStack(alignment: .topLeading) {
+            BookInteriorStyle.paper
+            FieldnotesMemoryChrome(pageNumber: pageNumber, frameWidth: frameWidth, frameHeight: frameHeight)
+            Text(title ?? "Memory")
+                .font(.custom("GillSans", size: frameHeight * 0.054))
+                .foregroundStyle(BookInteriorStyle.ink)
+                .lineLimit(2)
+                .minimumScaleFactor(0.6)
+                .frame(
+                    width: frameWidth * BookInteriorStyle.memoryContentWidth,
+                    height: frameHeight * BookInteriorStyle.memoryTitleHeight,
+                    alignment: .leading
+                )
+                .offset(
+                    x: frameWidth * BookInteriorStyle.memoryHorizontalInset,
+                    y: frameHeight * BookInteriorStyle.memoryTitleY
+                )
+            Text(text)
+                .font(.custom("Georgia", size: bodySize))
+                .lineSpacing(bodySize * BookInteriorStyle.lineSpacing / BookInteriorStyle.bodySize)
+                .foregroundStyle(BookInteriorStyle.ink)
+                .frame(
+                    width: frameWidth * BookInteriorStyle.memoryContentWidth,
+                    height: frameHeight * BookInteriorStyle.memoryBodyHeight,
+                    alignment: .topLeading
+                )
+                .offset(
+                    x: frameWidth * BookInteriorStyle.memoryHorizontalInset,
+                    y: frameHeight * BookInteriorStyle.memoryBodyY
+                )
         }
         .frame(width: frameWidth, height: frameHeight)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(colors.bookFrameStroke.opacity(0.3), lineWidth: 0.5)
-        )
+        .clipped()
+    }
+}
+
+struct FieldnotesMemoryChrome: View {
+    let pageNumber: Int
+    let frameWidth: CGFloat
+    let frameHeight: CGFloat
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Text("MEMORY")
+                .font(.custom("GillSans", size: frameHeight * 0.015))
+                .tracking(frameWidth * 0.002)
+                .foregroundStyle(BookInteriorStyle.accent)
+                .offset(
+                    x: frameWidth * BookInteriorStyle.memoryHorizontalInset,
+                    y: frameHeight * BookInteriorStyle.memoryKickerY
+                )
+            Rectangle().fill(BookInteriorStyle.rule)
+                .frame(
+                    width: frameWidth * BookInteriorStyle.memoryContentWidth,
+                    height: max(0.4, frameHeight * 0.001)
+                )
+                .offset(
+                    x: frameWidth * BookInteriorStyle.memoryHorizontalInset,
+                    y: frameHeight * BookInteriorStyle.memoryRuleY
+                )
+            Text(String(format: "%02d", pageNumber))
+            .font(.custom("GillSans", size: frameHeight * 0.015))
+            .foregroundStyle(BookInteriorStyle.ink)
+            .frame(width: frameWidth * BookInteriorStyle.memoryContentWidth, alignment: .trailing)
+            .offset(
+                x: frameWidth * BookInteriorStyle.memoryHorizontalInset,
+                y: frameHeight * BookInteriorStyle.memoryPageNumberY
+            )
+        }
+        .frame(width: frameWidth, height: frameHeight, alignment: .topLeading)
     }
 }
 
@@ -3016,32 +3086,34 @@ extension View {
                     : nil
                 Task { @MainActor in
                     defer { isOpeningBook.wrappedValue = false }
+                    #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("-UITestSeedStorybook") {
                         vm.seedStorybookForUITesting(
                             profileID: profileVM.selectedProfile.id,
                             profileName: profileVM.selectedProfile.name
                         )
                         hasRequestedGeneration.wrappedValue = true
-                    } else {
-                        if storybookScreenEntry.resumesPendingGeneration {
-                            let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
-                                profileID: profileVM.selectedProfile.id,
-                                profileName: profileVM.selectedProfile.name,
-                                profileEthnicity: profileVM.selectedProfile.ethnicity,
-                                routedJobID: routedJobID
-                            )
-                            if resuming {
-                                hasRequestedGeneration.wrappedValue = true
-                                return
-                            }
-                        }
-                        vm.loadStorybookForProfile(
-                            profileVM.selectedProfile.id,
-                            name: profileVM.selectedProfile.name,
-                            profileEthnicity: profileVM.selectedProfile.ethnicity
-                        )
-                        hasRequestedGeneration.wrappedValue = vm.hasGeneratedStorybook
+                        return
                     }
+                    #endif
+                    if storybookScreenEntry.resumesPendingGeneration {
+                        let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
+                            profileID: profileVM.selectedProfile.id,
+                            profileName: profileVM.selectedProfile.name,
+                            profileEthnicity: profileVM.selectedProfile.ethnicity,
+                            routedJobID: routedJobID
+                        )
+                        if resuming {
+                            hasRequestedGeneration.wrappedValue = true
+                            return
+                        }
+                    }
+                    vm.loadStorybookForProfile(
+                        profileVM.selectedProfile.id,
+                        name: profileVM.selectedProfile.name,
+                        profileEthnicity: profileVM.selectedProfile.ethnicity
+                    )
+                    hasRequestedGeneration.wrappedValue = vm.hasGeneratedStorybook
                 }
                 
                 if let image = StorybookHeadshotOverride.resolvedHeadshot(profilePhotoData: profileVM.selectedProfile.photoData) {

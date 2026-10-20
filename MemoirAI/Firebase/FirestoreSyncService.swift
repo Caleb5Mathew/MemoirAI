@@ -1169,12 +1169,13 @@ final class FirestoreSyncService {
                 }
                 memoryData["transcriptionLanguage"] = FieldValue.delete()
                 memoryData["transcriptionModel"] = FieldValue.delete()
+                memoryData["transcriptionRefinementModel"] = FieldValue.delete()
+                memoryData["transcriptionRefinementVersion"] = FieldValue.delete()
                 memoryData["transcriptionVersion"] = 0
                 memoryData["transcriptionJobId"] = FieldValue.delete()
                 memoryData["transcriptionLeaseExpiresAt"] = FieldValue.delete()
                 memoryData["transcriptionAudioSHA256"] = FieldValue.delete()
             case .writeEditedText(let editedText):
-                memoryData["transcription"] = editedText
                 memoryData["transcriptionEdited"] = editedText
             case .writeLegacyText(let legacyText):
                 memoryData["transcription"] = legacyText
@@ -1598,9 +1599,12 @@ final class FirestoreSyncService {
                    renderedPageImages == nil,
                    index < book.pageItems.count,
                    let document = book.pageItems[index].freeformDocument {
-                    let memoryID = book.pageItems[index].url
-                        .flatMap(URL.init(string:))
-                        .flatMap(MemoryLinks.parseMemoryDeepLink)
+                    let memoryID = page.memoryId.flatMap(UUID.init(uuidString:))
+                        ?? book.pageItems[index].url.flatMap(URL.init(string:)).flatMap(MemoryLinks.parseMemoryDeepLink)
+                    let isIllustration = page.type == "illustration"
+                    let isPrecomposed = BookPageChromePolicy.isPrecomposedIllustration(
+                        document: document, isIllustration: isIllustration
+                    )
                     recoveredFreeformImage = await MainActor.run {
                         BookPagePrintRenderer.render(
                             document: document,
@@ -1610,7 +1614,9 @@ final class FirestoreSyncService {
                             ),
                             memoryID: memoryID,
                             pageNumber: index + 1,
-                            isLandscape: baseRecord.orientation == "landscape"
+                            isLandscape: baseRecord.orientation == "landscape",
+                            isIllustration: isIllustration,
+                            isPrecomposed: isPrecomposed
                         )
                     }
                 } else {

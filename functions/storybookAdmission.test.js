@@ -7,6 +7,7 @@ const {
   FREE_PAGE_LIMIT,
   fetchLegacyRevenueCatEntitlement,
   isAdmittedStorybookJob,
+  MAX_MEMORY_CANDIDATES_PER_JOB,
   MAX_PAGES_PER_JOB,
   paidStorybookUsagePeriod,
   releaseStorybookActiveLease,
@@ -31,6 +32,23 @@ assert.strictEqual(sanitizeStorybookJobPayload(base, "user-1", "job_1").status, 
 assert.throws(
   () => sanitizeStorybookJobPayload({ ...base, pageCountTarget: MAX_PAGES_PER_JOB + 1 }, "user-1", "job_1"),
   /pageCountTarget/
+);
+assert.strictEqual(
+  sanitizeStorybookJobPayload({
+    ...base,
+    pageCountTarget: MAX_PAGES_PER_JOB,
+    pinnedMemoryIds: Array.from({ length: 10 }, (_, index) =>
+      `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`
+    )
+  }, "user-1", "job_1").pinnedMemoryIds.length,
+  10
+);
+assert.throws(
+  () => sanitizeStorybookJobPayload({
+    ...base,
+    pinnedMemoryIds: Array.from({ length: MAX_MEMORY_CANDIDATES_PER_JOB + 1 }, () => memoryId)
+  }, "user-1", "job_1"),
+  /pinnedMemoryIds/
 );
 assert.throws(
   () => sanitizeStorybookJobPayload({

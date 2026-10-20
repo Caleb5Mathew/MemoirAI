@@ -3,7 +3,7 @@ import UIKit
 import FirebaseFirestore
 
 struct BookPrintSpec {
-    static let layoutVersion = 1
+    static let layoutVersion = 3
 
     let widthPt: CGFloat
     let heightPt: CGFloat
@@ -34,6 +34,18 @@ struct BookPrintSpec {
 
     static func forArtStyle(_ artStyle: String) -> BookPrintSpec {
         artStyle.lowercased().contains("kid") ? .kidsLandscape : .standardPortrait
+    }
+}
+
+enum BookInteriorUpgradePolicy {
+    static func needsUpdate(layoutVersion: Int) -> Bool {
+        layoutVersion < BookPrintSpec.layoutVersion
+    }
+
+    static func canOrderPublishedUpdate(previousBookID: String, record: BookVersionRecord?, hasUnpublishedChanges: Bool) -> Bool {
+        guard let record else { return false }
+        return !hasUnpublishedChanges && record.bookVersionId != previousBookID
+            && !needsUpdate(layoutVersion: record.layoutVersion)
     }
 }
 
@@ -276,7 +288,7 @@ struct BookVersionRecord: Codable, Identifiable {
             if orientation == "landscape" { return "11x8.5" }
             return "8.5x11"
         }()
-        let layoutVersion = data["layoutVersion"] as? Int ?? BookPrintSpec.layoutVersion
+        let layoutVersion = data["layoutVersion"] as? Int ?? 1
         let renderedAt = (data["renderedAt"] as? Timestamp)?.dateValue()
         let syncedAt = (data["syncedAt"] as? Timestamp)?.dateValue()
         let coverArtRevision: Int? = {

@@ -64,8 +64,9 @@ struct MainTabView: View {
                     tutorialCoordinator.runMigrationIfNeeded(profileID: profileVM.selectedProfile.id)
                     tutorialCoordinator.refreshAvailability(profileID: profileVM.selectedProfile.id)
                 }
-                .onChange(of: selectedTab) { _, _ in
-                    Haptics.selection()
+                .onChange(of: selectedTab, initial: true) { oldTab, newTab in
+                    if oldTab != newTab { Haptics.selection() }
+                    ProductAnalytics.shared.track("Tab Viewed", ["tab": newTab == 1 ? "memories" : "home"])
                 }
                 .onChange(of: profileVM.selectedProfile.id) { _, newID in
                     tutorialCoordinator.registerActiveProfile(newID)

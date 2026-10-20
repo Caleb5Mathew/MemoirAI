@@ -69,10 +69,11 @@ async function allocateGlobalCounter(db, counterDocId) {
  * @param {string} uid
  * @returns {Promise<string>}
  */
-async function ensureUserHandleAllocated(db, uid) {
+async function ensureUserHandleAllocated(db, uid, { requireExisting = false } = {}) {
   const userRef = db.collection("users").doc(uid);
   return db.runTransaction(async (tx) => {
     const userSnap = await tx.get(userRef);
+    if (requireExisting && !userSnap.exists) return null;
     const d = userSnap.exists ? userSnap.data() || {} : {};
     const existing = d.userHandle != null ? String(d.userHandle).trim() : "";
     if (existing) {
@@ -121,7 +122,28 @@ async function resolveUserHandleForNaming(db, uid) {
   return ensureUserHandleAllocated(db, uid);
 }
 
+async function ensureBookDisplayNameAllocated(db, bookRef, uid) {
+  const handle = await ensureUserHandleAllocated(db, uid, { requireExisting: true });
+  if (!handle) return null;
+  const userRef = db.collection("users").doc(uid);
+  const counterRef = db.collection("counters").doc("globalBooks");
+  return db.runTransaction(async transaction => {
+    const [book, user] = await Promise.all([transaction.get(bookRef), transaction.get(userRef)]);
+    if (!book.exists || !user.exists) return null;
+    const existing = book.data().bookDisplayName;
+    if (existing) return existing;
+    const counter = await transaction.get(counterRef);
+    const previous = counter.exists && Number.isFinite(Number(counter.data().next)) ? Number(counter.data().next) : 0;
+    const sequence = previous + 1;
+    const bookDisplayName = bookDisplayNameFor(handle, sequence);
+    transaction.set(counterRef, { next: sequence, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    transaction.update(bookRef, { bookDisplayName, bookSeq: sequence, userHandle: handle });
+    return bookDisplayName;
+  });
+}
+
 module.exports = {
+  ensureBookDisplayNameAllocated,
   slugifyName,
   bookDisplayNameFor,
   memoryDisplayNameFor,

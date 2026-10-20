@@ -7,6 +7,7 @@ const STORYBOOK_SUBSCRIPTION_PRODUCTS = [
 ];
 const PAID_PAGE_LIMIT = 100;
 const MAX_PAGES_PER_JOB = 9;
+const MAX_MEMORY_CANDIDATES_PER_JOB = 200;
 // The app offers three preview images plus one one-time tutorial image. The
 // server caps the combined lifetime allowance so a modified client cannot
 // exceed what the product promises.
@@ -53,7 +54,10 @@ function sanitizeStorybookJobPayload(input, userId, jobId) {
   }
 
   const pinnedMemoryIds = Array.isArray(input?.pinnedMemoryIds) ? input.pinnedMemoryIds : [];
-  if (pinnedMemoryIds.length > MAX_PAGES_PER_JOB || pinnedMemoryIds.some((id) => !UUID_PATTERN.test(String(id)))) {
+  if (
+    pinnedMemoryIds.length > MAX_MEMORY_CANDIDATES_PER_JOB ||
+    pinnedMemoryIds.some((id) => !UUID_PATTERN.test(String(id)))
+  ) {
     throw new Error("invalid pinnedMemoryIds");
   }
 
@@ -621,6 +625,7 @@ function createStorybookJobHandler({
 module.exports = {
   FREE_PAGE_LIMIT,
   MAX_PAGES_PER_JOB,
+  MAX_MEMORY_CANDIDATES_PER_JOB,
   MAX_WORKER_ATTEMPTS,
   STORYBOOK_ADMISSION_VERSION,
   WORKER_HEARTBEAT_STALE_MS,

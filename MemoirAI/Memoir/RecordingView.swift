@@ -3,7 +3,6 @@ import AVFoundation
 import CoreData
 import PhotosUI
 import Speech
-import Mixpanel
 import UIKit
 
 enum RecordingLayoutPolicy {
@@ -708,6 +707,9 @@ struct RecordingView: View {
             }
         } catch {
             print("⚠️ Enhanced audio session setup error: \(error)")
+            recordingStartErrorMessage = RecordingStartErrorPolicy.message(
+                detail: "Check that your microphone is available, then try again."
+            )
         }
     }
 
@@ -753,7 +755,7 @@ struct RecordingView: View {
             recorder.isMeteringEnabled = true
             recorder.prepareToRecord()
             guard recorder.record(forDuration: RecordingDurationPolicy.maximumRecordingDuration) else {
-                debugBanner = "Recorder could not start"
+                recordingStartErrorMessage = RecordingStartErrorPolicy.message()
                 try? FileManager.default.removeItem(at: fileURL)
                 return
             }
@@ -764,12 +766,9 @@ struct RecordingView: View {
             isPaused = false
             
             // Track recording started
-            Mixpanel.mainInstance().track(
-                event: "Started Recording",
-                properties: AnalyticsPrivacyPolicy.sanitized([
-                    "has_custom_prompt": !activePromptText.isEmpty
-                ])
-            )
+            ProductAnalytics.shared.track("Started Recording", [
+                "has_custom_prompt": !activePromptText.isEmpty
+            ])
             
             // Start audio level monitoring
             if let recorder = audioRecorder {
@@ -784,7 +783,9 @@ struct RecordingView: View {
         } catch {
             try? FileManager.default.removeItem(at: fileURL)
             print("⚠️ Error starting recorder: \(error.localizedDescription)")
-            debugBanner = "Recorder error: \(error.localizedDescription)"
+            recordingStartErrorMessage = RecordingStartErrorPolicy.message(
+                detail: "Check that another app is not using the microphone, then try again."
+            )
         }
     }
 
@@ -851,23 +852,14 @@ struct RecordingView: View {
         // 0️⃣ Don't do anything if there's nothing to save
         guard hasUnsavedData(), !isSaving else { return }
         guard let firebaseUserId = MemoryUserScope.currentFirebaseUserId else {
+            ProductAnalytics.shared.track("Memory Save Failed", ["failure_stage": "auth"])
             saveErrorMessage = "MemoirAI is still connecting to your private account. Your recording is unchanged; check your connection and try saving again."
             return
         }
         isSaving = true       // you can overlay a ProgressView if desired
 
-        // Track memory saved
-        Mixpanel.mainInstance().track(
-            event: "Saved Memory",
-            properties: AnalyticsPrivacyPolicy.sanitized([
-                "has_audio": audioURL != nil,
-                "has_text": !typedText.isEmpty,
-                "has_photos": false,
-                "recording_duration": recordingTime
-            ])
-        )
-
         // Capture current values before we mutate UI state
+        let recordingDurationToSave = recordingTime
         let promptToSave      = activePromptText.isEmpty ? prompt.text : activePromptText
         let textToSave        = typedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? nil
@@ -886,6 +878,7 @@ struct RecordingView: View {
                 print("❌ Could not read the completed recording; memory was not saved")
                 DispatchQueue.main.async {
                     isSaving = false
+                    ProductAnalytics.shared.track("Memory Save Failed", ["failure_stage": "audio_file"])
                     saveErrorMessage = "The completed recording could not be read. Your recording was not deleted; try saving again."
                 }
                 return
@@ -910,6 +903,16 @@ struct RecordingView: View {
             // 4️⃣ Save the background context
             do {
                 try bgContext.save()
+                let hasAudio = entry.hasAudio
+                let hasText = !(entry.text?.isEmpty ?? true)
+                let hasPhotos = !(entry.photos?.allObjects.isEmpty ?? true)
+                Task { @MainActor in
+                    ProductAnalytics.shared.track("Saved Memory", [
+                        "has_audio": hasAudio, "has_text": hasText,
+                        "has_photos": hasPhotos, "save_scope": "local",
+                        "recording_duration": recordingDurationToSave
+                    ])
+                }
                 
                 // 4.5️⃣ Sync to Firebase with profile info (fire and forget)
                 FirestoreSyncService.shared.queueMemorySyncWithProfile(entry, profile: profile)
@@ -917,6 +920,7 @@ struct RecordingView: View {
                 print("❌ BG save failed:", error)
                 DispatchQueue.main.async {
                     isSaving = false
+                    ProductAnalytics.shared.track("Memory Save Failed", ["failure_stage": "local_save"])
                     saveErrorMessage = "This memory could not be saved on your device. Your draft is unchanged; free some storage and try again."
                 }
                 return

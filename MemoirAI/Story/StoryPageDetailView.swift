@@ -691,7 +691,7 @@ struct StoryPageDetailView: View {
         }
         .overlay {
             if !isPrecomposed {
-                QRWatermark(memoryID: memoryID, topInset: frameHeight * 0.065 + 6)
+                QRWatermark(memoryID: memoryID, topInset: frameHeight * (isKidsBook ? 0.10 : 0.065) + 6)
             }
         }
     }
@@ -746,7 +746,7 @@ struct StoryPageDetailView: View {
                     )
                 }
             }
-            .overlay(QRWatermark(memoryID: memoryID))
+
         }
     }
     
@@ -792,12 +792,13 @@ struct StoryPageDetailView: View {
             } else if isKidsBook {
                 // KidsBookIllustrationPage layout: top bar (title + page#) + image
                 VStack(spacing: 0) {
-                    let barHeight = frameHeight * 0.065
+                    let barHeight = frameHeight * 0.10
                     HStack(alignment: .center) {
                         TextField("Memory", text: $editedTitle, axis: .vertical)
                             .font(.kidsBookTitleFont(for: frameHeight))
                             .foregroundColor(colors.chapterTitleColor)
-                            .offset(y: max(1, barHeight * 0.1))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.6)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 2)
                                     .stroke(colors.chapterTitleColor.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
@@ -867,7 +868,7 @@ struct StoryPageDetailView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay {
             if !isPrecomposed {
-                QRWatermark(memoryID: memoryID, topInset: frameHeight * 0.065 + 6)
+                QRWatermark(memoryID: memoryID, topInset: frameHeight * (isKidsBook ? 0.10 : 0.065) + 6)
             }
         }
         .onChange(of: editedTitle) { newValue in
@@ -877,106 +878,39 @@ struct StoryPageDetailView: View {
     
     @ViewBuilder
     private func inlineEditableTextPage(pageIndex: Int, total: Int, memoryID: UUID, frameWidth: CGFloat, frameHeight: CGFloat) -> some View {
-        Group {
-            if isKidsBook {
-                // KidsBookTextPage layout: topMargin, header bar (title + page#), body TextEditor, bottomMargin
-                let topMargin = frameHeight * 0.065
-                let barHeight = frameHeight * 0.07
-                let sideMargin = frameWidth * 0.085
-                let rightMargin = frameWidth * 0.105
-                let bottomMargin = frameHeight * 0.065
-                
-                VStack(spacing: 0) {
-                    Spacer().frame(height: topMargin)
-                    HStack(alignment: .center) {
-                        TextField("Memory", text: $editedTitle, axis: .vertical)
-                            .font(fontStyle.titleFont(for: frameHeight))
-                            .foregroundColor(colors.chapterTitleColor)
-                            .offset(y: max(1, barHeight * 0.1))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 2)
-                                    .stroke(colors.chapterTitleColor.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                            )
-                        Spacer()
-                        Text("\(currentPageIndex + 1)")
-                            .font(fontStyle.pageNumberFont(for: frameHeight))
-                            .foregroundColor(colors.pageNumberColor)
-                    }
-                    .padding(.horizontal, sideMargin)
-                    .padding(.vertical, barHeight * 0.1)
-                    .frame(maxWidth: .infinity, minHeight: barHeight, alignment: .center)
-                    .background(colors.bookPageBackground)
-                    
-                    TextEditor(text: $editedBody)
-                        .font(fontStyle.bodyFont(for: frameHeight))
-                        .lineSpacing(12)
-                        .foregroundColor(colors.bookTextColor)
-                        .scrollContentBackground(.hidden)
-                        .padding(.leading, sideMargin)
-                        .padding(.trailing, rightMargin)
-                        .padding(.top, frameHeight * 0.045)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 2)
-                                .stroke(colors.bookFrameStroke.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                        )
-                    
-                    Spacer().frame(height: bottomMargin)
-                }
-            } else {
-                // VerticalBookTextPage layout: title, subtitle, body, page number
-                ZStack {
-                    colors.bookPageBackground
-                    VStack(spacing: 0) {
-                        VStack(alignment: .leading, spacing: frameHeight * 0.015) {
-                            TextField("Title", text: $editedTitle)
-                                .font(fontStyle.titleFont(for: frameHeight))
-                                .foregroundColor(colors.chapterTitleColor)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .stroke(colors.chapterTitleColor.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                                )
-                            
-                            TextField("Subtitle", text: $editedSubtitle)
-                                .font(.system(size: max(12, frameHeight * 0.021), weight: .regular))
-                                .foregroundColor(colors.chapterTitleColor.opacity(0.7))
-                                .italic()
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .stroke(colors.chapterTitleColor.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                                )
-                        }
-                        .padding(.leading, frameWidth * 0.06)
-                        .padding(.trailing, frameWidth * 0.10)
-                        .padding(.top, frameHeight * 0.05)
-                        
-                        TextEditor(text: $editedBody)
-                            .font(fontStyle.bodyFont(for: frameHeight))
-                            .lineSpacing(frameHeight * 0.006)
-                            .foregroundColor(colors.bookTextColor)
-                            .scrollContentBackground(.hidden)
-                            .frame(maxWidth: .infinity, maxHeight: frameHeight * 0.75, alignment: .topLeading)
-                            .padding(.leading, frameWidth * 0.06)
-                            .padding(.trailing, frameWidth * 0.10)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 2)
-                                    .stroke(colors.bookFrameStroke.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                            )
-                        
-                        Spacer()
-                        Text("\(currentPageIndex + 1)")
-                            .font(fontStyle.pageNumberFont(for: frameHeight))
-                            .foregroundColor(colors.pageNumberColor)
-                            .padding(.bottom, frameHeight * 0.03)
-                    }
-                }
-            }
+        ZStack(alignment: .topLeading) {
+            BookInteriorStyle.paper
+            FieldnotesMemoryChrome(pageNumber: currentPageIndex + 1, frameWidth: frameWidth, frameHeight: frameHeight)
+            TextField("Memory", text: $editedTitle, axis: .vertical)
+                .font(.custom("GillSans", size: frameHeight * 0.054))
+                .foregroundStyle(BookInteriorStyle.ink)
+                .lineLimit(2)
+                .minimumScaleFactor(0.6)
+                .frame(
+                    width: frameWidth * BookInteriorStyle.memoryContentWidth,
+                    height: frameHeight * BookInteriorStyle.memoryTitleHeight,
+                    alignment: .leading
+                )
+                .offset(
+                    x: frameWidth * BookInteriorStyle.memoryHorizontalInset,
+                    y: frameHeight * BookInteriorStyle.memoryTitleY
+                )
+            TextEditor(text: $editedBody)
+                .font(.custom("Georgia", size: frameHeight * BookInteriorStyle.bodySize))
+                .lineSpacing(frameHeight * BookInteriorStyle.lineSpacing)
+                .foregroundStyle(BookInteriorStyle.ink)
+                .scrollContentBackground(.hidden)
+                .frame(
+                    width: frameWidth * BookInteriorStyle.memoryContentWidth,
+                    height: frameHeight * BookInteriorStyle.memoryBodyHeight
+                )
+                .offset(
+                    x: frameWidth * BookInteriorStyle.memoryHorizontalInset - 5,
+                    y: frameHeight * BookInteriorStyle.memoryBodyY - 8
+                )
         }
-        .background(colors.bookPageBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(QRWatermark(memoryID: memoryID))
+        .frame(width: frameWidth, height: frameHeight)
+        .clipped()
         .onChange(of: editedTitle) { newValue in
             if newValue.count > titleCharLimit { editedTitle = String(newValue.prefix(titleCharLimit)) }
         }

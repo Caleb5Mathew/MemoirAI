@@ -71,6 +71,10 @@ Email/password sign-in must be enabled in Authentication → Sign-in method.
 
 ## Daily workflow
 
+The hosted dashboard works on any computer at **https://memoirai-7db06.web.app/ops**. Sign in with an authorized Google account. Publishing a dashboard update updates this same address for everyone; refresh an already-open tab to load it.
+
+Open **Users** to browse accounts, newest signup first. Use the sort menu to switch to oldest first. Click a user to see their books and memories, newest first in each section. **Load more** retrieves older records. You can also open a user directly with their Firebase UID. Memories expand to show the saved transcript; book links open the available PDFs and covers.
+
 1. Open **Print Ops** URL and sign in.
 2. **Needs your Print** — orders with `paid` or `lulu_failed` and no Lulu job yet.
 3. Check cover preview, PDF links, address, Stripe link.

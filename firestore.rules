@@ -316,6 +316,13 @@ service cloud.firestore {
         allow read, write: if false;
       }
 
+      // Server-generated one-page onboarding preview state. The owner may
+      // observe completion, but only the callable may create or mutate it.
+      match /onboardingPreviewJobs/{jobId} {
+        allow read: if isOwner(userId);
+        allow create, update, delete: if false;
+      }
+
       match /bookVersions/{bookVersionId} {
         allow read: if isOwner(userId);
         allow create: if isOwner(userId);

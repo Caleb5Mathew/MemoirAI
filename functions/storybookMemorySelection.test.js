@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { chapterMemories } = require("./storybookMemorySelection");
+const { chapterMemories, preferredMemoryTranscript } = require("./storybookMemorySelection");
 
 test("keeps only memories assigned to a chapter", () => {
   const memories = [
@@ -38,4 +38,23 @@ test("restricts a new job to its explicitly pinned memoir memories", () => {
 test("ignores invalid pin collections without breaking legacy jobs", () => {
   const memories = [{ id: "life", chapter: "Beginnings" }];
   assert.deepEqual(chapterMemories(memories, "life"), memories);
+});
+
+test("selects narrator edit before refined and raw transcripts", () => {
+  assert.equal(preferredMemoryTranscript({
+    transcriptionEdited: "Narrator edit",
+    transcription: "Refined copy",
+    transcriptionRaw: "Um, raw copy"
+  }), "Narrator edit");
+  assert.equal(preferredMemoryTranscript({
+    transcriptionEdited: "   ",
+    transcription: "Refined copy",
+    transcriptionRaw: "Um, raw copy"
+  }), "Refined copy");
+  assert.equal(preferredMemoryTranscript({ transcriptionRaw: "  Raw copy  " }), "Raw copy");
+  assert.equal(preferredMemoryTranscript({
+    transcriptionEdited: "",
+    transcription: "Refined copy",
+    transcriptionRaw: "Raw copy"
+  }), "");
 });

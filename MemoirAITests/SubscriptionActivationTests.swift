@@ -13,14 +13,19 @@ struct SubscriptionActivationTests {
         mappedEntitlement: Bool = true,
         entitlementID: String = "Basic",
         expired: Bool = false,
+        billingIssue: Bool = false,
+        gracePeriod: Bool = false,
+        graceExpired: Bool = false,
+        refunded: Bool = false,
+        additionalSubscriptions: [String: [String: Any]] = [:],
         requestDate: String = "2026-09-24T12:00:00Z"
     ) throws -> CustomerInfo {
         let purchaseDate = "2026-09-24T11:00:00Z"
         let expiration = expired ? "2026-09-24T11:30:00Z" : "2099-10-24T12:00:00Z"
-        var subscriptions: [String: Any] = [:]
+        var subscriptions: [String: Any] = additionalSubscriptions
         var entitlements: [String: Any] = [:]
         if let product {
-            subscriptions[product] = [
+            var subscription: [String: Any] = [
                 "purchase_date": purchaseDate,
                 "expires_date": expiration,
                 "store": "app_store",
@@ -28,11 +33,22 @@ struct SubscriptionActivationTests {
                 "period_type": "normal",
                 "ownership_type": "PURCHASED"
             ]
+            if billingIssue {
+                subscription["billing_issues_detected_at"] = "2026-09-24T11:30:00Z"
+            }
+            if gracePeriod {
+                subscription["grace_period_expires_date"] = graceExpired
+                    ? "2026-09-24T11:45:00Z" : "2099-10-24T12:00:00Z"
+            }
+            if refunded {
+                subscription["refunded_at"] = "2026-09-24T11:40:00Z"
+            }
+            subscriptions[product] = subscription
             if mappedEntitlement {
                 entitlements[entitlementID] = [
                     "product_identifier": product,
                     "purchase_date": purchaseDate,
-                    "expires_date": expiration
+                    "expires_date": gracePeriod ? "2099-10-24T12:00:00Z" : expiration
                 ]
             }
         }
@@ -207,4 +223,132 @@ struct SubscriptionActivationTests {
             #expect(manager.canGenerate(pages: 1_000))
         }
     }
+
+    @Test func billingGracePreservesPaidAccessAndConsumedAllowance() throws {
+        try withManager { manager, _ in
+            try manager.applyPurchaseResult(customerInfo(product: monthly), for: "user-a")
+            manager.consume(pages: 8)
+            try manager.applyPurchaseResult(customerInfo(
+                product: monthly, expired: true, billingIssue: true, gracePeriod: true,
+                requestDate: "2026-09-24T12:01:00Z"
+            ), for: "user-a")
+            #expect(manager.hasBillingIssue)
+            #expect(manager.hasActiveSubscription)
+            #expect(manager.remainingAllowance == 92)
+        }
+    }
+
+    @Test func billingGraceWithoutEntitlementMappingStillPreservesAccess() throws {
+        try withManager { manager, _ in
+            try manager.applyPurchaseResult(customerInfo(
+                product: monthly, mappedEntitlement: false, expired: true,
+                billingIssue: true, gracePeriod: true
+            ), for: "user-a")
+            #expect(manager.hasBillingIssue)
+            #expect(manager.hasActiveSubscription)
+            #expect(manager.canGenerate(pages: 1))
+        }
+    }
+
+    @Test func expiredBillingIssueShowsRecoveryWithoutGrantingAccess() throws {
+        try withManager { manager, _ in
+            try manager.applyPurchaseResult(customerInfo(
+                product: monthly, mappedEntitlement: false, expired: true, billingIssue: true
+            ), for: "user-a")
+            #expect(manager.hasBillingIssue)
+            #expect(!manager.hasActiveSubscription)
+            #expect(!manager.canGenerate(pages: 1))
+        }
+    }
+
+    @Test func recoveredPaymentClearsWarningAndRestoresAccess() throws {
+        try withManager { manager, _ in
+            try manager.applyPurchaseResult(customerInfo(
+                product: monthly, expired: true, billingIssue: true
+            ), for: "user-a")
+            try manager.applyPurchaseResult(customerInfo(
+                product: monthly, requestDate: "2026-09-24T12:01:00Z"
+            ), for: "user-a")
+            #expect(!manager.hasBillingIssue)
+            #expect(manager.hasActiveSubscription)
+            #expect(manager.canGenerate(pages: 1))
+        }
+    }
+
+    @Test func accountChangeClearsBillingStateAndRejectsPreviousAccountCallback() throws {
+        let suite = "SubscriptionActivationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var userID = "user-a"
+        let manager = RCSubscriptionManager(
+            storage: defaults, firebaseUserID: { userID },
+            revenueCatUserID: { userID }, identifiedUserID: userID
+        )
+        let issue = try customerInfo(product: monthly, expired: true, billingIssue: true)
+        try manager.applyPurchaseResult(issue, for: userID)
+        #expect(manager.hasBillingIssue)
+        userID = "user-b"
+        manager.clearIdentityState()
+        #expect(!manager.hasBillingIssue)
+        #expect(throws: (any Error).self) {
+            try manager.applyPurchaseResult(issue, for: "user-a")
+        }
+        #expect(!manager.hasBillingIssue)
+    }
+
+    @Test func healthyCurrentSubscriptionSuppressesOlderProductBillingFailure() throws {
+        try withManager { manager, _ in
+            let oldMonthly: [String: Any] = [
+                "purchase_date": "2026-08-01T12:00:00Z",
+                "expires_date": "2026-09-01T12:00:00Z",
+                "billing_issues_detected_at": "2026-09-01T12:00:00Z",
+                "store": "app_store", "is_sandbox": true,
+                "period_type": "normal", "ownership_type": "PURCHASED"
+            ]
+            try manager.applyPurchaseResult(customerInfo(
+                product: yearly, additionalSubscriptions: [monthly: oldMonthly]
+            ), for: "user-a")
+            #expect(!manager.hasBillingIssue)
+            #expect(manager.activeTier == .yearly)
+        }
+    }
+
+    @Test func delayedBillingFailureCannotOverwriteRecoveredPayment() throws {
+        try withManager { manager, _ in
+            try manager.applyPurchaseResult(customerInfo(
+                product: monthly, requestDate: "2026-09-24T12:01:00Z"
+            ), for: "user-a")
+            try manager.applyPurchaseResult(customerInfo(
+                product: monthly, expired: true, billingIssue: true
+            ), for: "user-a")
+            #expect(!manager.hasBillingIssue)
+            #expect(manager.hasActiveSubscription)
+        }
+    }
+
+
+    @Test func expiredGraceWithoutEntitlementCannotGrantAccess() throws {
+        try withManager { manager, _ in
+            try manager.applyPurchaseResult(customerInfo(
+                product: monthly, mappedEntitlement: false, expired: true,
+                billingIssue: true, gracePeriod: true, graceExpired: true
+            ), for: "user-a")
+            #expect(manager.hasBillingIssue)
+            #expect(!manager.hasActiveSubscription)
+            #expect(!manager.canGenerate(pages: 1))
+        }
+    }
+
+    @Test func refundedSubscriptionCannotUseGraceFallback() throws {
+        try withManager { manager, _ in
+            try manager.applyPurchaseResult(customerInfo(
+                product: monthly, mappedEntitlement: false, expired: true,
+                billingIssue: true, gracePeriod: true, refunded: true
+            ), for: "user-a")
+            #expect(!manager.hasBillingIssue)
+            #expect(!manager.hasActiveSubscription)
+            #expect(!manager.canGenerate(pages: 1))
+        }
+    }
+
 }

@@ -2,6 +2,10 @@ import Testing
 @testable import MemoirAI
 
 struct CheckoutReturnPolicyTests {
+    @Test func confirmationUsesASeparateDurableKey() {
+        #expect(CheckoutReturnPolicy.confirmedSessionDefaultsKey != CheckoutReturnPolicy.pendingSessionDefaultsKey)
+    }
+
     @Test func acceptsStripeSessionIDsAndRejectsForgedLinks() {
         let valid = "cs_live_1234567890abcdef"
         #expect(CheckoutReturnPolicy.normalizeSessionID("  \(valid)  ") == valid)

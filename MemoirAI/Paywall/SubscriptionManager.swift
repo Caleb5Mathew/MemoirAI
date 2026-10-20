@@ -142,6 +142,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     @Published private(set) var identifiedFirebaseUserID: String?
     @Published private(set) var identityErrorMessage: String?
     @Published private(set) var activationErrorMessage: String?
+    @Published private(set) var hasBillingIssue = false
 
     private var storage = UserDefaults.standard
     private var firebaseUserIDProvider: () -> String? = { Auth.auth().currentUser?.uid }
@@ -294,6 +295,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         latestCustomerInfoDate = nil
         customerInfoUserID = nil
         activationErrorMessage = nil
+        hasBillingIssue = false
         identityErrorMessage = nil
         if !isDeveloperUnlockedSession {
             activeTier = nil
@@ -307,6 +309,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         guard !firebaseUserID.isEmpty, firebaseUserIDProvider() == firebaseUserID else { return false }
         if let identifiedFirebaseUserID, identifiedFirebaseUserID != firebaseUserID {
             self.identifiedFirebaseUserID = nil
+            hasBillingIssue = false
             if !isDeveloperUnlockedSession {
                 activeTier = nil
                 remainingAllowance = 0
@@ -332,6 +335,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
                     identifiedFirebaseUserID: identifiedFirebaseUserID
                 ) else { return false }
                 _ = try applyPurchaseResult(info, for: firebaseUserID)
+                Purchases.shared.attribution.enableAdServicesAttributionTokenCollection()
                 return true
             } catch {
                 guard firebaseUserIDProvider() == firebaseUserID else { return false }
@@ -362,6 +366,8 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
                 identifiedFirebaseUserID: identifiedFirebaseUserID
             ) else { return false }
             _ = try applyPurchaseResult(result.customerInfo, for: firebaseUserID)
+            // The SDK caches tokens per identity; attach attribution to the subscription owner.
+            Purchases.shared.attribution.enableAdServicesAttributionTokenCollection()
             print("RCManager: RevenueCat identity linked to Firebase user.")
             return true
         } catch {
@@ -448,6 +454,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         customerInfoUserID = firebaseUserID
         latestCustomerInfoDate = info.requestDate
         activationErrorMessage = nil
+        hasBillingIssue = billingIssueRequiresAttention(in: info)
         evaluateEntitlements(from: info, for: firebaseUserID)
         if !hasActiveSubscription && !info.activeSubscriptions.isEmpty {
             activationErrorMessage = "Your purchase could not be matched to a MemoirAI subscription. Restore purchases or contact support."
@@ -463,7 +470,29 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             }
         }
         // A verified subscription remains valid if its dashboard entitlement mapping is missing.
-        return info.activeSubscriptions.sorted().first { mapProductIdToTier($0) != nil }
+        if let activeProduct = info.activeSubscriptions.sorted().first(where: { mapProductIdToTier($0) != nil }) {
+            return activeProduct
+        }
+        // RevenueCat may report the paid period as expired while Apple's grace period remains valid.
+        return info.subscriptionsByProductIdentifier.values
+            .filter {
+                mapProductIdToTier($0.productIdentifier) != nil
+                    && $0.refundedAt == nil
+                    && $0.billingIssuesDetectedAt != nil
+                    && ($0.gracePeriodExpiresDate.map { $0 > info.requestDate } ?? false)
+            }
+            .max { $0.purchaseDate < $1.purchaseDate }?.productIdentifier
+    }
+
+    private func billingIssueRequiresAttention(in info: CustomerInfo) -> Bool {
+        if let activeProductID = activeSubscriptionProductID(in: info) {
+            return info.subscriptionsByProductIdentifier[activeProductID]?.billingIssuesDetectedAt != nil
+        }
+        // A past monthly billing failure must not override a newer annual subscription.
+        let latestSubscription = info.subscriptionsByProductIdentifier.values
+            .filter { mapProductIdToTier($0.productIdentifier) != nil }
+            .max { $0.purchaseDate < $1.purchaseDate }
+        return latestSubscription?.billingIssuesDetectedAt != nil && latestSubscription?.refundedAt == nil
     }
 
     private func evaluateEntitlements(from info: CustomerInfo, for firebaseUserID: String) {

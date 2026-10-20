@@ -26,6 +26,30 @@ enum CoverFontPreset: String, Codable, CaseIterable {
     case customClean
 }
 
+enum StorybookMemoirNamePolicy {
+    static func usableName(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let value = raw.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        let placeholders: Set<String> = ["grandparent", "narrator", "the narrator", "the memoir narrator", "memoir narrator", "the storyteller", "memoir", "memoirai reader", "your name", "name", "unknown"]
+        guard !value.isEmpty, value.count <= 100,
+              !placeholders.contains(value.lowercased()) else { return nil }
+        return value
+    }
+
+    static func resolvedName(profileName: String?, narratorNames: [String]) -> String? {
+        if let name = usableName(profileName) { return name }
+        let candidates = narratorNames.compactMap(usableName)
+        let unique = Set(candidates.map { $0.lowercased() })
+        guard unique.count == 1 else { return nil }
+        return candidates.first
+    }
+
+    static func bookTitle(for name: String) -> String {
+        guard let name = usableName(name) else { return "Memoir" }
+        return "\(name)’s Memoir"
+    }
+}
+
 struct CoverCopyPolicy {
     let artStyle: ArtStyle
     let profileDisplayName: String
@@ -38,7 +62,7 @@ struct CoverCopyPolicy {
 
     /// Default cover / print title before user edits.
     func defaultBookTitle() -> String {
-        "\(shortName)'s Memoir"
+        StorybookMemoirNamePolicy.bookTitle(for: profileDisplayName)
     }
 
     /// Subject's display name for the closing page credit line.
@@ -57,7 +81,7 @@ struct CoverCopyPolicy {
 
     /// Short line under the title on the interior title page.
     func interiorTitlePageBlurb() -> String {
-        "A collection of memories from \(shortName)’s life."
+        "A collection of life stories"
     }
 
     /// Deterministic back-cover pitch when AI is unavailable.

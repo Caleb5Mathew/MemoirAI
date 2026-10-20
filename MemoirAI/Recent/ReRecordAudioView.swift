@@ -27,6 +27,7 @@ struct ReRecordAudioView: View {
     @State private var isSaving = false
     @State private var didSaveRecording = false
     @State private var showCloudTranscriptionDisclosure = false
+    @State private var recordingStartErrorMessage: String?
 
     // Interruption / backgrounding — set when the system (not the user) paused
     // an in-progress recording, so the UI can explain why.
@@ -194,6 +195,17 @@ struct ReRecordAudioView: View {
         } message: {
             Text(CloudTranscriptionDisclosure.message)
         }
+        .alert(
+            "Recording unavailable",
+            isPresented: Binding(
+                get: { recordingStartErrorMessage != nil },
+                set: { if !$0 { recordingStartErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { recordingStartErrorMessage = nil }
+        } message: {
+            Text(recordingStartErrorMessage ?? RecordingStartErrorPolicy.message())
+        }
         .fullScreenCover(isPresented: $permissionManager.showMicrophonePermissionAlert) {
             MicrophonePermissionAlert(
                 isPresented: $permissionManager.showMicrophonePermissionAlert,
@@ -225,14 +237,19 @@ struct ReRecordAudioView: View {
         return String(format: "%02d:%02d", minutes, seconds)
     }
 
-    private func setupAudioSession() {
+    private func setupAudioSession() -> Bool {
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetooth])
             try session.setMode(.measurement)
             try session.setActive(true)
+            return true
         } catch {
             print("ReRecord audio session error: \(error)")
+            recordingStartErrorMessage = RecordingStartErrorPolicy.message(
+                detail: "Check that your microphone is available, then try again."
+            )
+            return false
         }
     }
 
@@ -266,7 +283,7 @@ struct ReRecordAudioView: View {
             }
             return
         }
-        setupAudioSession()
+        guard setupAudioSession() else { return }
         let filename = UUID().uuidString + ".m4a"
         let fileURL = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -286,6 +303,8 @@ struct ReRecordAudioView: View {
             recorder.prepareToRecord()
             guard recorder.record(forDuration: RecordingDurationPolicy.maximumRecordingDuration) else {
                 print("ReRecord recorder refused to start")
+                recordingStartErrorMessage = RecordingStartErrorPolicy.message()
+                try? FileManager.default.removeItem(at: fileURL)
                 return
             }
             audioRecorder = recorder
@@ -299,6 +318,10 @@ struct ReRecordAudioView: View {
             startRecordingTimer()
         } catch {
             print("ReRecord start error: \(error)")
+            recordingStartErrorMessage = RecordingStartErrorPolicy.message(
+                detail: "Check that another app is not using the microphone, then try again."
+            )
+            try? FileManager.default.removeItem(at: fileURL)
         }
     }
 

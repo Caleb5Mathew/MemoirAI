@@ -13,7 +13,7 @@ const {
   canStartProviderAttempt
 } = require("./retryDeadlinePolicy");
 
-const GEMINI_IMAGE_MODEL = "gemini-3-pro-image-preview";
+const GEMINI_IMAGE_MODEL = "gemini-3-pro-image";
 const GEMINI_TEXT_MODEL = "gemini-2.5-flash";
 const OPENAI_TEXT_MODEL = "gpt-5-mini";
 const GEMINI_MAX_SERIALIZED_REQUEST_BYTES = 19 * 1024 * 1024;
@@ -1785,7 +1785,7 @@ async function generateIllustrationBuffer(
   prompt,
   size,
   referenceImageBuffers,
-  { deadlineAtMs } = {}
+  { deadlineAtMs, model = GEMINI_IMAGE_MODEL, textFirst: textFirstOverride, responseModalities = ["IMAGE"] } = {}
 ) {
   const anti =
     "Do not include any words, letters, numbers, captions, signs, logos, or typographic marks in the image.";
@@ -1823,7 +1823,7 @@ async function generateIllustrationBuffer(
   }
   // Experiment flag: prompt text before reference images may reduce the model echoing
   // an attached reference into the output. Default off; compare leak-rate logs first.
-  const textFirst = process.env.STORYBOOK_PARTS_TEXT_FIRST === "true";
+  const textFirst = textFirstOverride ?? process.env.STORYBOOK_PARTS_TEXT_FIRST === "true";
   const parts = textFirst
     ? [{ text: promptForGeneration }, ...imageParts]
     : [...imageParts, { text: promptForGeneration }];
@@ -1831,13 +1831,13 @@ async function generateIllustrationBuffer(
   const body = {
     contents: [{ parts }],
     generationConfig: {
-      responseModalities: ["IMAGE"],
+      responseModalities,
       imageConfig: { aspectRatio }
     }
   };
   const serializedBody = serializedGeminiRequestBody(body);
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
   const timeoutMs = deadlineAtMs == null
     ? 180_000
     : boundedProviderRequestTimeoutMs({
@@ -2025,7 +2025,7 @@ async function generateIllustrationBufferGuarded(
   size,
   referenceImageBuffers,
   log,
-  { deadlineAtMs, beforeAttempt, identityReferenceBuffer, expectedNarratorAge } = {}
+  { deadlineAtMs, beforeAttempt, identityReferenceBuffer, expectedNarratorAge, model, textFirst } = {}
 ) {
   const emit = (event, details) => {
     try {
@@ -2039,7 +2039,7 @@ async function generateIllustrationBufferGuarded(
     prompt,
     size,
     referenceImageBuffers,
-    { deadlineAtMs }
+    { deadlineAtMs, model, textFirst }
   );
   const hasRefs = Array.isArray(referenceImageBuffers) && referenceImageBuffers.some((b) => b && b.length);
   if (!hasRefs) return first;
@@ -2077,7 +2077,7 @@ async function generateIllustrationBufferGuarded(
       `${prompt}\n\n${retryClauses}`,
       size,
       referenceImageBuffers,
-      { deadlineAtMs }
+      { deadlineAtMs, model, textFirst }
     );
     emit("storybook.leakRetryResult", { ok: true, bytes: retry.length });
     return retry;
@@ -2602,6 +2602,7 @@ Extract title and featuring list.`;
 }
 
 module.exports = {
+  GEMINI_IMAGE_MODEL,
   createStorybookAI,
   normalizeArtStyleKey,
   inferNarratorPresence,
