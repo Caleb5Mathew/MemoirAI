@@ -7,6 +7,7 @@ final class OnboardingLayoutMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.setupWidth, 375)
         XCTAssertEqual(metrics.horizontalPadding, 20)
         XCTAssertEqual(metrics.recordHeadingSize, 28)
+        XCTAssertEqual(metrics.tourHeadingSize, 28)
         XCTAssertEqual(metrics.textEditorHeight, 132)
         XCTAssertLessThanOrEqual(metrics.bookStageHeight + 390, 667)
         XCTAssertGreaterThanOrEqual(metrics.minimumHitTarget, 44)
@@ -18,6 +19,7 @@ final class OnboardingLayoutMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.setupWidth, 402)
         XCTAssertEqual(metrics.bookStageHeight, 310)
         XCTAssertEqual(metrics.recordHeadingSize, 30)
+        XCTAssertEqual(metrics.tourHeadingSize, 30)
         XCTAssertEqual(metrics.revealHeadingSize, 28)
         XCTAssertEqual(metrics.textEditorHeight, 160)
     }

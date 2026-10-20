@@ -263,7 +263,7 @@ struct OnboardingFlow: View {
                 .clipped()
                 VStack(alignment: .leading, spacing: 12) {
                     Text(alexKicker(focus)).font(.custom("AvenirNext-Bold", size: 9, relativeTo: .caption)).tracking(1.5).foregroundStyle(colors.rust)
-                    Text(alexHeadline(focus)).font(.custom("IowanOldStyle-Roman", size: layout.headingSize, relativeTo: .largeTitle)).tracking(-1.1).foregroundStyle(colors.ink)
+                    Text(alexHeadline(focus)).font(.custom("IowanOldStyle-Roman", size: layout.tourHeadingSize, relativeTo: .largeTitle)).tracking(-1.1).foregroundStyle(colors.ink)
                     if !alexCaption(focus).isEmpty {
                         Text(alexCaption(focus)).font(.custom("AvenirNext-Regular", size: 13, relativeTo: .body)).foregroundStyle(colors.muted).lineSpacing(4)
                     }

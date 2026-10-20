@@ -35,7 +35,7 @@ struct MainTabView: View {
                         .resizable().scaledToFit().frame(width: 34, height: 34)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                         .accessibilityHidden(true)
-                    Text("memoir").font(LinenTheme.heading(27))
+                    Text("memoir").font(LinenTheme.heading(27)).tracking(-1.2)
                     Spacer(minLength: 8)
                     Button { showProfileSwitcher = true } label: {
                         Image(systemName: "arrow.left.arrow.right")
@@ -67,9 +67,7 @@ struct MainTabView: View {
                             Text("Home")
                         }
                         .tag(0)
-                        .onAppear {
-                            UITabBar.appearance().isHidden = false
-                        }
+                        .toolbar(.hidden, for: .tabBar)
 
                     RecentMemoriesView(selectedTab: $selectedTab)
                         .environmentObject(profileVM)
@@ -78,17 +76,12 @@ struct MainTabView: View {
                             Text("Saved Stories")
                         }
                         .tag(1)
-                        .onAppear {
-                            UITabBar.appearance().isHidden = false
-                        }
+                        .toolbar(.hidden, for: .tabBar)
                 }
-                .ignoresSafeArea(edges: .bottom)
+                .toolbar(.hidden, for: .tabBar)
                 .tint(LinenTheme.accent)
                 .background(LinenTheme.paper)
                 .onAppear {
-                    let cream = UIColor(LinenTheme.paper)
-                    UITabBar.appearance().backgroundColor = cream
-                    UITabBar.appearance().barTintColor = cream
                     tutorialCoordinator.runMigrationIfNeeded(profileID: profileVM.selectedProfile.id)
                     tutorialCoordinator.refreshAvailability(profileID: profileVM.selectedProfile.id)
                 }
@@ -119,7 +112,8 @@ struct MainTabView: View {
                     }
                     .adaptiveContentWidth(AdaptiveLayoutPolicy.bannerMaxWidth)
                     .padding(.horizontal, 16)
-                    .padding(.top, 8)
+                    .padding(.top, showBookBackupNudge || pendingAccessRequestCount > 0 ||
+                             (!notificationPromptDismissed && NotificationPermissionPolicy.action(for: notificationManager.authorizationStatus) != .none) ? 8 : 0)
                 }
                 .sheet(isPresented: $showAccessRequests, onDismiss: {
                     Task { await refreshPendingAccessRequestCount() }
@@ -136,6 +130,8 @@ struct MainTabView: View {
                     notificationManager.refreshAuthorizationStatus()
                     Task { await refreshPendingAccessRequestCount() }
                 }
+                bottomNavigation
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .sheet(isPresented: $showProfileHub) { LinenProfileHub().environmentObject(profileVM) }
@@ -154,6 +150,37 @@ struct MainTabView: View {
             Text(accountLinkError ?? "Please try again.")
         }
         // (Onboarding overlay removed – handled globally)
+    }
+
+    private var bottomNavigation: some View {
+        HStack(spacing: 20) {
+            ForEach(0..<2) { tab in
+                Button { selectedTab = tab } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: tab == 0 ? "house" : "bookmark")
+                            .font(.system(size: 18, weight: .regular))
+                        Text(tab == 0 ? "Home" : "Saved Stories")
+                            .font(LinenTheme.body(12, weight: selectedTab == tab ? .bold : .regular))
+                    }
+                    .foregroundStyle(selectedTab == tab ? LinenTheme.accent : LinenTheme.secondary)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 45)
+                    .background(selectedTab == tab ? LinenTheme.surface : Color.clear, in: Capsule())
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
+                .accessibilityIdentifier(tab == 0 ? "linenHomeTab" : "linenSavedStoriesTab")
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
+        .frame(maxWidth: .infinity)
+        .background(LinenTheme.paper)
+        .overlay(alignment: .top) { Rectangle().fill(LinenTheme.line).frame(height: 1) }
     }
 
     private var notificationPermissionBanner: some View {

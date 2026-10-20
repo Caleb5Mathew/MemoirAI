@@ -53,27 +53,34 @@ struct HomepageView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(profileVM.selectedProfile.name.isEmpty ? "Welcome to Memoir" : "Hello, \(profileVM.selectedProfile.name).")
-                            .font(LinenTheme.heading(33))
+                            .font(LinenTheme.heading(30))
+                            .tracking(-0.9)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text("Keep the stories that matter.")
                             .font(LinenTheme.body(14))
                             .foregroundStyle(LinenTheme.secondary)
                     }
-                    .padding(.vertical, 18)
+                    .padding(.top, 18)
+                    .padding(.bottom, 6)
 
                     Button {
                         if hasChosenMemoirMode { navigateToMemoir = true }
                         else { showMemoirPicker = true }
                     } label: {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 16) {
                             if !dynamicTypeSize.isAccessibilitySize && availableWidth >= 360 {
                                 Image("LinenJourney")
                                     .resizable().scaledToFill()
-                                    .frame(width: 109, height: 164)
+                                    .frame(width: availableWidth < 390 ? 88 : 100, height: 151)
                                     .clipShape(UnevenRoundedRectangle(topLeadingRadius: 55, bottomLeadingRadius: 12, bottomTrailingRadius: 12, topTrailingRadius: 55))
                                     .accessibilityHidden(true)
                             }
                             VStack(alignment: .leading, spacing: 10) {
-                                Text("Your\nMemoir").font(LinenTheme.heading(31))
+                                Text("Your\nMemoir")
+                                    .font(LinenTheme.heading(29))
+                                    .tracking(-0.9)
+                                    .lineSpacing(-5)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 Text("Tell your story.").font(LinenTheme.body(13))
                                 ProgressView(value: Double(min(100, completionPercentage)), total: 100)
                                     .tint(LinenTheme.accent)
@@ -88,7 +95,7 @@ struct HomepageView: View {
                         }
                         .foregroundStyle(LinenTheme.ink)
                         .padding(21)
-                        .frame(maxWidth: .infinity, minHeight: 205, alignment: .leading)
+                        .frame(maxWidth: .infinity, minHeight: 193, alignment: .leading)
                         .background(LinenTheme.card, in: RoundedRectangle(cornerRadius: 25))
                         .contentShape(RoundedRectangle(cornerRadius: 25))
                     }
@@ -104,25 +111,34 @@ struct HomepageView: View {
                         .accessibilityIdentifier("tutorialContinueYourMemoir")
                         
                     Button(action: openStorybook) {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 16) {
                             if !dynamicTypeSize.isAccessibilitySize && availableWidth >= 360 {
-                            VStack(alignment: .center, spacing: 8) {
+                            VStack(alignment: .center, spacing: 5) {
                                 Text("MEMOIR").font(LinenTheme.body(8, weight: .semibold)).tracking(1)
                                 Text("A\nlife\nto\nkeep.")
-                                    .font(LinenTheme.heading(17))
+                                    .font(LinenTheme.heading(20))
+                                    .tracking(-0.7)
+                                    .lineSpacing(-4)
+                                    .multilineTextAlignment(.center)
                                     .lineLimit(nil)
                                     .fixedSize(horizontal: false, vertical: true)
-                                Image("LinenJourney").resizable().scaledToFill().frame(width: 65, height: 28).clipped()
+                                Image("LinenJourney").resizable().scaledToFill().frame(width: 65, height: 25).clipped()
                             }
                             .foregroundStyle(LinenTheme.ink)
-                            .padding(12)
-                            .frame(width: 91, height: 158)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 11)
+                            .frame(width: 91, height: 151)
                             .background(Color(red: 0.73, green: 0.63, blue: 0.45), in: UnevenRoundedRectangle(topLeadingRadius: 2, bottomLeadingRadius: 2, bottomTrailingRadius: 8, topTrailingRadius: 8))
                             .rotationEffect(.degrees(8))
+                            .dynamicTypeSize(.medium)
                             .accessibilityHidden(true)
                             }
                             VStack(alignment: .leading, spacing: 10) {
-                                Text("Your\nBook").font(LinenTheme.heading(31))
+                                Text("Your\nBook")
+                                    .font(LinenTheme.heading(29))
+                                    .tracking(-0.9)
+                                    .lineSpacing(-5)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 Text("Bring it to life in print.").font(LinenTheme.body(13))
                             }
                             Spacer(minLength: 0)
@@ -132,7 +148,7 @@ struct HomepageView: View {
                         }
                         .foregroundStyle(LinenTheme.onAccent)
                         .padding(21)
-                        .frame(maxWidth: .infinity, minHeight: 205, alignment: .leading)
+                        .frame(maxWidth: .infinity, minHeight: 193, alignment: .leading)
                         .background(LinenTheme.forest, in: RoundedRectangle(cornerRadius: 25))
                         .contentShape(RoundedRectangle(cornerRadius: 25))
                     }
@@ -150,7 +166,7 @@ struct HomepageView: View {
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 28)
-                .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
+                .adaptiveContentWidth(560)
             }
             .linenScreen()
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }

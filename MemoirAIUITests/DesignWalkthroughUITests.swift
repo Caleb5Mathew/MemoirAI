@@ -15,6 +15,39 @@ final class DesignWalkthroughUITests: XCTestCase {
     }
 
     @MainActor
+    func testLinenNavigationKeepsBothDestinationsReachable() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITest", "-linen-preview"]
+        app.launch()
+
+        let home = app.buttons["linenHomeTab"]
+        let saved = app.buttons["linenSavedStoriesTab"]
+        XCTAssertTrue(home.waitForExistence(timeout: 10))
+        XCTAssertTrue(saved.isHittable)
+        XCTAssertFalse(app.tabBars.firstMatch.exists, "Only the custom Linen navigation should be visible")
+        XCTAssertGreaterThanOrEqual(home.frame.height, 44)
+        XCTAssertGreaterThanOrEqual(saved.frame.height, 44)
+
+        saved.tap()
+        let create = app.buttons["createNewMemoryButton"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        XCTAssertTrue(create.isHittable)
+        XCTAssertLessThanOrEqual(create.frame.maxY, saved.frame.minY)
+        XCTAssertFalse(app.tabBars.firstMatch.exists)
+        home.tap()
+        XCTAssertTrue(app.buttons["tutorialContinueYourMemoir"].waitForExistence(timeout: 5))
+        let book = app.buttons["tutorialYourBook"]
+        if !book.isHittable { app.swipeUp() }
+        XCTAssertTrue(book.isHittable)
+        XCTAssertLessThanOrEqual(book.frame.width, 512)
+        XCTAssertGreaterThanOrEqual(book.frame.minX, app.frame.minX)
+        XCTAssertLessThanOrEqual(book.frame.maxX, app.frame.maxX)
+        XCTAssertTrue(app.buttons["Switch profiles"].isHittable)
+        XCTAssertTrue(app.buttons["Your profile"].isHittable)
+        snap(app, name: "linen-home-proportions")
+    }
+
+    @MainActor
     func testYourBookRepeatedNavigation() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-UITest", "-UITestSeedStorybook"]
