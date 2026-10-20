@@ -1,6 +1,18 @@
 # Memoir product measurement plan
 
-Updated October 19, 2026. Engineering handoff for the current working tree; event availability in source does not establish released-build coverage or validated dashboard counts.
+Updated October 20, 2026. Engineering handoff for the current working tree; event availability in source does not establish released-build coverage or validated dashboard counts.
+
+## Live dashboard and event dictionary status — October 20
+
+The main implementation session verified **69 app-event descriptions and category tags imported into Mixpanel Lexicon** in project 3768856. The maintained source dictionary is [`analytics/event-catalog.json`](analytics/event-catalog.json), with a CSV handoff and interpretation guide alongside it. Lexicon descriptions/tags apply to event definitions; the new `event_category` event property requires the updated app binary and does not backfill old events.
+
+The **Memoir — Production & QA** board (11597434) now includes saved report **93515841**, a four-step activation funnel: `Onboarding Started` → `Onboarding Memory Saved Locally` → `Onboarding Preview Image Ready` → `Onboarding Personalized Reveal Viewed`. It uses a **seven-day conversion window**, **30-day report range**, and **First Step Defined** filters: `environment=production`, `traffic_type=external`, `device_type=physical`. The configured funnel is a diagnostic subset of the detailed sync-aware sequence below; it intentionally does not require `Onboarding Memory Synced` as a step. First-step filtering defines the entering population; it should not be described as independently checking those properties on every subsequent event.
+
+The same board now has saved retention report **93516004**: `Onboarding Personalized Reveal Viewed` → `Viewed Memory`, **Retention On Each Day**, a **30-day range**, and production/external/physical-device filters. This is return-to-memory-detail retention, not completed reading or payment. Repeated personalized reveals may re-enter cohorts; the report is **not first-ever activation retention**. D7 requires seven elapsed days, and no eligible entrants is not a zero-percent retention rate.
+
+The internal QA volume report **93494994** was corrected to use Mixpanel's built-in **All Events** aggregate and `traffic_type=internal`, replacing the development-only filter and non-aggregating named selection. Its saved query returned a nonempty result, displayed as an average of **0.3 per day** at verification; that display is not a total event count. The report measures event volume, not distinct people or revenue.
+
+Live import and saved-report configuration were verified by the main session. An empty eligible entrant population is not a measured zero-percent conversion rate. These checks do not establish a released-build customer cohort, nonzero funnel counts, mature retention, a paid transaction identity join, or end-to-end billing correctness. Do not present configuration as conversion evidence.
 
 ## Configuration and ownership
 
@@ -96,3 +108,7 @@ Priority 4: instrument physical commerce separately. Existing Stripe signed webh
 - Exercise fresh and cached preview, generation failure/retry, background/restart, local-save failure, restore, purchase cancellation and entitlement failure using safe test environments.
 - Confirm one paywall impression per presentation, retries remain visible, and no client event asserts revenue.
 - Record build/test results and physical-device delivery evidence; source inspection alone cannot certify end-to-end telemetry.
+
+## Verification evidence — October 20
+
+The main session reported that the backend root `npm test` suite passed, with output at `/tmp/memoir-oct20-backend-tests.log`. This is backend test evidence; it does not replace the separately coordinated iOS build/UI tests or a released-build purchase attribution test. Live QA volume is nonempty as described above; production funnel and retention configuration alone do not establish an eligible customer population or a nonzero conversion result.

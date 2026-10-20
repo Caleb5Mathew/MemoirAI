@@ -19,7 +19,7 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
     private let memoryId: UUID?
     private let service: MemoryEnhancementService
     private let onFinished: (CharacterDetails) -> Void
-    private let onPartialSave: ((CharacterDetails) async -> Void)?
+    private let onPartialSave: ((CharacterDetails) async throws -> Void)?
     /// Used only when normalizing narrator placeholder names on extracted cards.
     private let profileDisplayName: String?
     private let relationshipStyleProfileName: Bool
@@ -36,7 +36,7 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
         profileDisplayName: String? = nil,
         relationshipStyleProfileName: Bool = false,
         onFinished: @escaping (CharacterDetails) -> Void,
-        onPartialSave: ((CharacterDetails) async -> Void)? = nil
+        onPartialSave: ((CharacterDetails) async throws -> Void)? = nil
     ) {
         self.memoryText = (memory.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         self.memoryTitle = memory.prompt?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -135,14 +135,16 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
         defer { isAnalyzing = false }
         do {
             let details = try await extractDetails()
+            try await onPartialSave(details)
             lastPartialSavedTurnCount = turns.count
-            await onPartialSave(details)
         } catch {
+            errorMessage = "We couldn’t save your latest character details. Your interview draft is still available; please try again."
             print("MemoryEnhancementGuidedSessionViewModel persistPartialProgress: \(error)")
         }
     }
 
     func persistDraft() {
+        guard !didFinishExtraction else { return }
         guard let memoryId else { return }
         guard !currentQuestion.isEmpty || !turns.isEmpty else { return }
         EnhancementSessionDraft(turns: turns, currentQuestion: currentQuestion, promptContext: promptContext).save(memoryId: memoryId)
@@ -275,12 +277,10 @@ final class MemoryEnhancementGuidedSessionViewModel: ObservableObject {
 
     private func runExtraction() async throws {
         guard !didFinishExtraction else { return }
+        persistDraft()
         let details = try await extractDetails()
         didFinishExtraction = true
         extractionResult = details
-        if let memoryId {
-            EnhancementSessionDraft.clear(memoryId: memoryId)
-        }
         ProductAnalytics.shared.track("Memory Enhancement Guided Complete", [
                 "turns": turns.count,
                 "characters_extracted": details.characters.count

@@ -111,6 +111,7 @@ final class ProductAnalytics {
     func track(_ event: String, _ properties: Properties = [:]) {
         var safe = AnalyticsPrivacyPolicy.sanitized(properties)
         safe.merge(trustedContext) { _, trusted in trusted }
+        safe["event_category"] = AnalyticsEventCategory.category(for: event)
         safe["session_id"] = sessionID
         safe["account_type"] = userID == nil ? "unidentified" : (isGuest ? "guest" : "registered")
         send(event, safe)
@@ -168,5 +169,84 @@ final class ProductAnalytics {
             "character_count": max(0, characterCount),
             "duration_ms": max(0, Int(now().timeIntervalSince(started) * 1000))
         ])
+    }
+}
+
+/// Stable product areas for filtering events without renaming historical event streams.
+enum AnalyticsEventCategory {
+    static let categories: [String: String] = [
+        "Authentication Failed": "Account access",
+        "Authentication Started": "Account access",
+        "Authentication Succeeded": "Account access",
+        "Signed Out": "Account access",
+        "App Launched": "App lifecycle",
+        "First Launch": "App lifecycle",
+        "Session Ended": "App lifecycle",
+        "Session Started": "App lifecycle",
+        "Book Generation Cancelled": "Book creation",
+        "Book Generation Completed": "Book creation",
+        "Book Generation Failed": "Book creation",
+        "Book Generation Requested": "Book creation",
+        "Book Illustrations Completed": "Book creation",
+        "Memory Save Failed": "Memory creation",
+        "Opened Prompt": "Memory creation",
+        "Saved Memory": "Memory creation",
+        "Started Recording": "Memory creation",
+        "Memory Enhancement Auto Saved": "Memory enhancement",
+        "Memory Enhancement Flow Opened": "Memory enhancement",
+        "Memory Enhancement Save Failed": "Memory enhancement",
+        "Memory Enhancement Guided Complete": "Memory enhancement",
+        "Memory Playback Completed": "Memory reading and listening",
+        "Memory Playback Failed": "Memory reading and listening",
+        "Memory Playback Requested": "Memory reading and listening",
+        "Memory Playback Started": "Memory reading and listening",
+        "Viewed Memory": "Memory reading and listening",
+        "Memory Share Cancelled": "Memory sharing",
+        "Memory Share Failed": "Memory sharing",
+        "Memory Share Sheet Presented": "Memory sharing",
+        "Memory Shared": "Memory sharing",
+        "Input Completed": "Navigation and input",
+        "Input Started": "Navigation and input",
+        "Screen Viewed": "Navigation and input",
+        "Tab Viewed": "Navigation and input",
+        "UI Action": "Navigation and input",
+        "Onboarding Photo Added": "Onboarding capture",
+        "Onboarding Preparation Failed": "Onboarding capture",
+        "Onboarding Recording Failed": "Onboarding capture",
+        "Onboarding Recording Started": "Onboarding capture",
+        "Onboarding Recording Stopped": "Onboarding capture",
+        "Onboarding Generation Started": "Onboarding generation",
+        "Onboarding Memory Saved Locally": "Onboarding generation",
+        "Onboarding Memory Synced": "Onboarding generation",
+        "Onboarding Personalized Reveal Viewed": "Onboarding generation",
+        "Onboarding Preview Failed": "Onboarding generation",
+        "Onboarding Preview Image Ready": "Onboarding generation",
+        "Onboarding Action": "Onboarding navigation",
+        "Onboarding Audience Selected": "Onboarding navigation",
+        "Onboarding Backgrounded": "Onboarding navigation",
+        "Onboarding Completed": "Onboarding navigation",
+        "Onboarding Foregrounded": "Onboarding navigation",
+        "Onboarding Started": "Onboarding navigation",
+        "Onboarding Step Exited": "Onboarding navigation",
+        "Onboarding Step Viewed": "Onboarding navigation",
+        "Onboarding Tour Finished": "Onboarding navigation",
+        "Onboarding Sample Playback Started": "Onboarding sample tour",
+        "Onboarding Sample Playback Stopped": "Onboarding sample tour",
+        "Onboarding Paywall Viewed": "Subscriptions",
+        "Paywall Dismissed": "Subscriptions",
+        "Paywall Preparation Failed": "Subscriptions",
+        "Paywall Viewed": "Subscriptions",
+        "Subscription Activation Failed": "Subscriptions",
+        "Subscription Activation Started": "Subscriptions",
+        "Subscription Activation Succeeded": "Subscriptions",
+        "Subscription Purchase Cancelled": "Subscriptions",
+        "Subscription Purchase Failed": "Subscriptions",
+        "Subscription Purchase Started": "Subscriptions",
+        "Subscription Restore Failed": "Subscriptions",
+        "Subscription Restore Started": "Subscriptions",
+    ]
+
+    static func category(for event: String) -> String {
+        categories[event] ?? "Uncategorized"
     }
 }

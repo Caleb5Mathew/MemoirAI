@@ -63,6 +63,75 @@ struct ProductAnalyticsTests {
         #expect(events.map(\.0) == ["Screen Viewed", "UI Action", "Input Started", "Input Completed"])
         #expect(events.last?.1["character_count"] as? Int == 42)
     }
+
+    @Test func assignsTrustedEventCategoryWithoutRenamingEvents() throws {
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        var events: [(String, Properties)] = []
+        let analytics = ProductAnalytics(send: { events.append(($0, $1)) }, identify: { _ in }, reset: {}, defaults: defaults)
+        analytics.track("Onboarding Preview Image Ready", ["event_category": "Subscriptions"])
+        analytics.track("Subscription Activation Succeeded")
+        analytics.track("Future Event", ["event_category": "Subscriptions"])
+        #expect(events.map(\.0) == ["Onboarding Preview Image Ready", "Subscription Activation Succeeded", "Future Event"])
+        #expect(events[0].1["event_category"] as? String == "Onboarding generation")
+        #expect(events[1].1["event_category"] as? String == "Subscriptions")
+        #expect(events[2].1["event_category"] as? String == "Uncategorized")
+    }
+
+    @Test func distinguishesProductStagesInEventCategories() {
+        #expect(AnalyticsEventCategory.category(for: "Onboarding Sample Playback Started") == "Onboarding sample tour")
+        #expect(AnalyticsEventCategory.category(for: "Memory Playback Completed") == "Memory reading and listening")
+        #expect(AnalyticsEventCategory.category(for: "Book Generation Completed") == "Book creation")
+        #expect(AnalyticsEventCategory.category(for: "Saved Memory") == "Memory creation")
+        #expect(AnalyticsEventCategory.category(for: "Unknown Event") == "Uncategorized")
+        #expect(AnalyticsEventCategory.categories.values.allSatisfy { !$0.isEmpty })
+    }
+
+    @Test func enhancementDraftSurvivesFailedSaveUntilSuccessfulRetry() throws {
+        enum SaveError: Error { case storageUnavailable }
+        let memoryID = UUID()
+        defer { EnhancementSessionDraft.clear(memoryId: memoryID) }
+        let draft = EnhancementSessionDraft(
+            turns: [MemoryEnhancementTurn(question: "Who was there?", answer: "My sister")],
+            currentQuestion: "What happened next?", promptContext: nil
+        )
+        draft.save(memoryId: memoryID)
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        let analytics = ProductAnalytics(send: { _, _ in }, identify: { _ in }, reset: {}, defaults: defaults)
+        let failed = MemoryEnhancementSaveOperation.perform(characterCount: 1, memoryID: memoryID, analytics: analytics) {
+            throw SaveError.storageUnavailable
+        }
+        #expect(!failed)
+        #expect(EnhancementSessionDraft.load(memoryId: memoryID) == draft)
+        let saved = MemoryEnhancementSaveOperation.perform(characterCount: 1, memoryID: memoryID, analytics: analytics) {
+            #expect(EnhancementSessionDraft.load(memoryId: memoryID) == draft)
+        }
+        #expect(saved)
+        #expect(EnhancementSessionDraft.load(memoryId: memoryID) == nil)
+    }
+
+    @Test func enhancementSaveFailureDoesNotReportSuccessAndCanRetry() throws {
+        enum SaveError: Error { case storageUnavailable }
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        var events: [(String, Properties)] = []
+        var persisted = false
+        let analytics = ProductAnalytics(send: { events.append(($0, $1)) }, identify: { _ in }, reset: {}, defaults: defaults)
+        let failed = MemoryEnhancementSaveOperation.perform(characterCount: 2, analytics: analytics) {
+            throw SaveError.storageUnavailable
+        }
+        #expect(!failed)
+        #expect(events.map(\.0) == ["Memory Enhancement Save Failed"])
+        #expect(events[0].1["failure_stage"] as? String == "local_save")
+        #expect(events[0].1["characters_saved"] == nil)
+        let retried = MemoryEnhancementSaveOperation.perform(characterCount: 2, analytics: analytics) {
+            persisted = true
+            #expect(events.map(\.0) == ["Memory Enhancement Save Failed"])
+        }
+        #expect(retried && persisted)
+        #expect(events.map(\.0) == ["Memory Enhancement Save Failed", "Memory Enhancement Auto Saved"])
+        #expect(events[1].1["characters_saved"] as? Int == 2)
+        #expect(events[1].1["event_category"] as? String == "Memory enhancement")
+    }
+
 }
 
 @MainActor

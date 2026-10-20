@@ -62,13 +62,18 @@ struct MemoryEnhancementCoordinatorView: View {
                         },
                         onBack: { route = .intro },
                         onPartialSave: { details in
-                            persistExtractedCharacterDetails(
-                                details,
-                                memory: memory,
-                                context: context,
-                                profile: profileVM.selectedProfile,
-                                mergeWithExisting: true
-                            )
+                            do {
+                                try persistExtractedCharacterDetails(
+                                    details,
+                                    memory: memory,
+                                    context: context,
+                                    profile: profileVM.selectedProfile,
+                                    mergeWithExisting: true
+                                )
+                            } catch {
+                                ProductAnalytics.shared.track("Memory Enhancement Save Failed", ["failure_stage": "local_save"])
+                                throw error
+                            }
                         }
                     )
                 } else {
@@ -97,13 +102,18 @@ struct MemoryEnhancementCoordinatorView: View {
                         },
                         onBack: { route = .intro },
                         onPartialSave: { details in
-                            persistExtractedCharacterDetails(
-                                details,
-                                memory: memory,
-                                context: context,
-                                profile: profileVM.selectedProfile,
-                                mergeWithExisting: true
-                            )
+                            do {
+                                try persistExtractedCharacterDetails(
+                                    details,
+                                    memory: memory,
+                                    context: context,
+                                    profile: profileVM.selectedProfile,
+                                    mergeWithExisting: true
+                                )
+                            } catch {
+                                ProductAnalytics.shared.track("Memory Enhancement Save Failed", ["failure_stage": "local_save"])
+                                throw error
+                            }
                         }
                     )
                 } else {
@@ -152,6 +162,7 @@ private struct MemoryEnhancementAutoSaveSuccessView: View {
     let onFinished: () -> Void
 
     @State private var didRunSave = false
+    @State private var saveFailed = false
 
     private var header: Color { LinenTheme.ink }
     private var terracotta: Color { LinenTheme.accent }
@@ -172,16 +183,24 @@ private struct MemoryEnhancementAutoSaveSuccessView: View {
                     Circle()
                         .fill(terracotta.opacity(0.15))
                         .frame(width: 96, height: 96)
-                    Image(systemName: "checkmark.circle.fill")
+                    Image(systemName: saveFailed ? "exclamationmark.circle" : "checkmark.circle.fill")
                         .font(LinenTheme.body(56))
                         .foregroundStyle(terracotta)
                 }
 
-                Text("Enhanced")
+                Text(saveFailed ? "Couldn’t save yet" : "Enhanced")
                     .font(LinenTheme.heading(25))
                     .foregroundStyle(header)
 
-                if characterCount == 0 {
+                if saveFailed {
+                    Text("Your changes haven’t been saved. Please try again.")
+                        .font(LinenTheme.body(16, weight: .medium))
+                        .foregroundStyle(LinenTheme.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Try again", action: save)
+                        .buttonStyle(.borderedProminent)
+                        .tint(terracotta)
+                } else if characterCount == 0 {
                     Text("We saved your answers. You can add people to this memory anytime from the memory screen.")
                         .font(LinenTheme.body(16, weight: .medium))
                         .foregroundStyle(LinenTheme.secondary)
@@ -205,16 +224,21 @@ private struct MemoryEnhancementAutoSaveSuccessView: View {
         .onAppear {
             guard !didRunSave else { return }
             didRunSave = true
-            persistExtractedCharacterDetails(
+            save()
+        }
+    }
+
+    private func save() {
+        saveFailed = !MemoryEnhancementSaveOperation.perform(characterCount: characterCount, memoryID: memory.id, analytics: .shared) {
+            try persistExtractedCharacterDetails(
                 characterDetails,
                 memory: memory,
                 context: context,
                 profile: profileVM.selectedProfile,
                 mergeWithExisting: false
             )
-            ProductAnalytics.shared.track("Memory Enhancement Auto Saved", [
-                    "characters_saved": characterCount
-                ])
+        }
+        if !saveFailed {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 onFinished()
             }
@@ -230,7 +254,7 @@ private func persistExtractedCharacterDetails(
     context: NSManagedObjectContext,
     profile: Profile,
     mergeWithExisting: Bool
-) {
+) throws {
     let merged: CharacterDetails
     if mergeWithExisting {
         let existing = memory.parsedCharacterDetails ?? CharacterDetails()
@@ -252,22 +276,42 @@ private func persistExtractedCharacterDetails(
         }
     }
 
+    let encoded = try JSONEncoder().encode(details)
+    let jsonString = String(decoding: encoded, as: UTF8.self)
+    let previousDetails = memory.value(forKey: "characterDetails")
+    memory.setValue(jsonString, forKey: "characterDetails")
     do {
-        if let encoded = try? JSONEncoder().encode(details),
-           let jsonString = String(data: encoded, encoding: .utf8) {
-            memory.setValue(jsonString, forKey: "characterDetails")
-        }
-
-        if let encoded = try? JSONEncoder().encode(details),
-           let jsonString = String(data: encoded, encoding: .utf8) {
-            UserDefaults.standard.set(jsonString, forKey: "characterDetails_\(memory.id?.uuidString ?? "unknown")")
-        }
-
         try context.save()
-        context.refresh(memory, mergeChanges: true)
-        NotificationCenter.default.post(name: .memorySaved, object: nil)
-        FirestoreSyncService.shared.queueMemorySyncWithProfile(memory, profile: profile)
     } catch {
-        print("Memory enhancement auto-save failed: \(error)")
+        memory.setValue(previousDetails, forKey: "characterDetails")
+        throw error
+    }
+    if let memoryID = memory.id {
+        UserDefaults.standard.set(jsonString, forKey: "characterDetails_\(memoryID.uuidString)")
+    }
+    context.refresh(memory, mergeChanges: true)
+    NotificationCenter.default.post(name: .memorySaved, object: nil)
+    FirestoreSyncService.shared.queueMemorySyncWithProfile(memory, profile: profile)
+}
+
+@MainActor
+enum MemoryEnhancementSaveOperation {
+    static func perform(
+        characterCount: Int,
+        memoryID: UUID? = nil,
+        analytics: ProductAnalytics,
+        persist: () throws -> Void
+    ) -> Bool {
+        do {
+            try persist()
+            if let memoryID {
+                EnhancementSessionDraft.clear(memoryId: memoryID)
+            }
+            analytics.track("Memory Enhancement Auto Saved", ["characters_saved": characterCount])
+            return true
+        } catch {
+            analytics.track("Memory Enhancement Save Failed", ["failure_stage": "local_save"])
+            return false
+        }
     }
 }

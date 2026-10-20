@@ -10,7 +10,7 @@ struct MemoryEnhancementGuidedSessionView: View {
     let relationshipStyleProfileName: Bool
     let onComplete: (CharacterDetails) -> Void
     let onBack: () -> Void
-    let onPartialSave: ((CharacterDetails) async -> Void)?
+    let onPartialSave: ((CharacterDetails) async throws -> Void)?
 
     @StateObject private var vm: MemoryEnhancementGuidedSessionViewModel
     @StateObject private var audioMonitor = AudioLevelMonitor()
@@ -54,7 +54,7 @@ struct MemoryEnhancementGuidedSessionView: View {
         relationshipStyleProfileName: Bool,
         onComplete: @escaping (CharacterDetails) -> Void,
         onBack: @escaping () -> Void,
-        onPartialSave: ((CharacterDetails) async -> Void)? = nil
+        onPartialSave: ((CharacterDetails) async throws -> Void)? = nil
     ) {
         self.memory = memory
         self.service = service
