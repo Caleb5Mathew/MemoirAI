@@ -4,6 +4,15 @@ import UIKit
 @testable import MemoirAI
 
 struct RuntimeFlowPolicyTests {
+    @Test func parentBeforeTheyCameUsesSpecificPreParenthoodDayPrompt() throws {
+        let chapter = try #require(allParentChapters.first { $0.number == 1 })
+        let question = chapter.prompts[1]
+        #expect(question.text == "Where were you living, and what did an average day look like to you just before you became a parent?")
+        let recognized = parentPromptTextsIncludingPrevious(question.text, chapterTitle: chapter.title)
+        #expect(recognized.contains("Where were you living, and what filled your days, just before you became a parent?"))
+        #expect(recognized.contains("What was an ordinary day like before you became a parent?"))
+    }
+
     @Test func parentTraditionQuestionPreservesBothEarlierWordings() throws {
         let chapter = try #require(allParentChapters.first { $0.number == 5 })
         let question = chapter.prompts[1]

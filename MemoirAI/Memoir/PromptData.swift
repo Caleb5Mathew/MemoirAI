@@ -933,7 +933,7 @@ let allChapters: [Chapter] = [
 let allParentChapters: [Chapter] = [
     Chapter(number: 1, title: "Before They Came", prompts: [
         MemoryPrompt(text: "What is one of your happiest memories from before you became a parent?", x: 0.25, y: 0.78),
-        MemoryPrompt(text: "Where were you living, and what filled your days, just before you became a parent?", x: 0.40, y: 0.62),
+        MemoryPrompt(text: "Where were you living, and what did an average day look like to you just before you became a parent?", x: 0.40, y: 0.62),
         MemoryPrompt(text: "When you were young, what was something you hoped to do someday?", x: 0.35, y: 0.44),
         MemoryPrompt(text: "Tell me about a choice you made before parenthood that changed your life.", x: 0.50, y: 0.28)
     ]),
@@ -1079,7 +1079,10 @@ let previousParentChapters: [Chapter] = [
 // Keep these aliases so wording improvements never detach an existing memory from its journey slot.
 private let recentParentPromptAliases: [String: [String]] = [
     "1-0": ["Tell me about something you loved doing before you had children."],
-    "1-1": ["What was an ordinary day like before you became a parent?"],
+    "1-1": [
+        "Where were you living, and what filled your days, just before you became a parent?",
+        "What was an ordinary day like before you became a parent?"
+    ],
     "1-2": ["What did you dream of doing when you were younger?"],
     "2-2": ["What surprised you about becoming {kid}'s parent?"],
     "3-2": ["Tell me about a time you comforted {kid}."],
