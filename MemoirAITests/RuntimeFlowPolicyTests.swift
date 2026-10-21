@@ -4,6 +4,16 @@ import UIKit
 @testable import MemoirAI
 
 struct RuntimeFlowPolicyTests {
+    @Test func parentTraditionQuestionPreservesBothEarlierWordings() throws {
+        let chapter = try #require(allParentChapters.first { $0.number == 5 })
+        let question = chapter.prompts[1]
+        #expect(question.text.contains("tradition or lesson"))
+        let recognized = parentPromptTextsIncludingPrevious(question.text, chapterTitle: chapter.title)
+        #expect(recognized.contains("Tell me about a tradition from your childhood you wanted to share with your children."))
+        let original = try #require(previousParentChapters.first { $0.number == 5 })
+        #expect(recognized.contains(original.prompts[1].text))
+    }
+
     @Test func parentPromptRevisionPreservesEveryShippedSlot() {
         for chapter in allParentChapters {
             let previous = previousParentChapters.first { $0.number == chapter.number }
@@ -11,7 +21,8 @@ struct RuntimeFlowPolicyTests {
             #expect(previous?.prompts.count == chapter.prompts.count)
             for (index, prompt) in chapter.prompts.enumerated() {
                 let old = previous?.prompts[index]
-                #expect(old?.isPerChild == prompt.isPerChild)
+                let becameUniversal = chapter.number == 2 && index == 2
+                #expect(old?.isPerChild == prompt.isPerChild || becameUniversal)
                 #expect(old?.x == prompt.x)
                 #expect(old?.y == prompt.y)
                 let names = prompt.isPerChild ? ["Maya", "Leo", "your child"] : [""]
@@ -20,10 +31,61 @@ struct RuntimeFlowPolicyTests {
                     let oldText = old?.text.replacingOccurrences(of: "{kid}", with: name)
                     let recognized = parentPromptTextsIncludingPrevious(currentText, chapterTitle: chapter.title)
                     #expect(recognized.contains(currentText))
-                    #expect(oldText.map(recognized.contains) == true)
+                    if let oldText, !becameUniversal {
+                        #expect(recognized.contains(oldText) || parentPromptMatchesSavedText(
+                            currentText,
+                            savedPromptText: oldText,
+                            chapterTitle: chapter.title
+                        ))
+                    }
                 }
             }
         }
+    }
+
+    @Test func revisedParentQuestionsKeepRecentSavedMemoriesAttached() throws {
+        let cases: [(chapter: Int, prompt: Int, old: String)] = [
+            (1, 0, "Tell me about something you loved doing before you had children."),
+            (1, 1, "What was an ordinary day like before you became a parent?"),
+            (1, 2, "What did you dream of doing when you were younger?"),
+            (3, 2, "Tell me about a time you comforted Maya."),
+            (5, 2, "What do you remember about the home you grew up in?"),
+            (5, 3, "Tell me about someone who helped raise you."),
+            (6, 0, "Where do you go when you want a little time to yourself?"),
+            (6, 1, "Tell me about a meal that brings back a memory for you."),
+            (6, 2, "What is a song that takes you back to being young?"),
+            (6, 3, "Tell me about a day with a friend that you still remember."),
+            (7, 2, "What is one way you show your children love that they might not notice?"),
+            (7, 3, "What were you hoping to teach your children through a family rule?"),
+            (8, 0, "What was something difficult about parenting that your children may not have seen?"),
+            (8, 1, "Tell me about someone who helped you through a hard time."),
+            (8, 3, "What helped you keep going during a difficult time?"),
+            (9, 1, "What is a little routine you share with Maya?"),
+            (9, 2, "How did an inside joke between you and Maya start?"),
+            (9, 3, "Tell me about an ordinary day with Maya you would like to remember.")
+        ]
+        for item in cases {
+            let chapter = try #require(allParentChapters.first { $0.number == item.chapter })
+            let prompt = chapter.prompts[item.prompt]
+            let current = prompt.text.replacingOccurrences(of: "{kid}", with: "Maya")
+            #expect(parentPromptMatchesSavedText(current, savedPromptText: item.old, chapterTitle: chapter.title))
+        }
+    }
+
+    @Test func generalParenthoodSurpriseQuestionRecognizesEarlierChildSpecificAnswers() throws {
+        let chapter = try #require(allParentChapters.first { $0.number == 2 })
+        let question = chapter.prompts[2]
+        #expect(!question.isPerChild)
+        #expect(parentPromptMatchesSavedText(
+            question.text,
+            savedPromptText: "What surprised you about becoming Maya's parent?",
+            chapterTitle: chapter.title
+        ))
+        #expect(!parentPromptMatchesSavedText(
+            question.text,
+            savedPromptText: "What surprised you about becoming Maya's parent?",
+            chapterTitle: "Beginnings"
+        ))
     }
 
     @Test func parentPromptAliasesDoNotMixChildrenOrChapters() throws {
