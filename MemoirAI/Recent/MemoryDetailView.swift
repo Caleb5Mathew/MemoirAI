@@ -925,7 +925,7 @@ struct MemoryDetailView: View {
                     Image(systemName: "chevron.left")
                         .font(LinenTheme.body(16, weight: .semibold))
                         .foregroundColor(headerColor.opacity(0.75))
-                        .frame(width: 40, height: 40)
+                        .frame(width: 44, height: 44)
                         .background(
                             Circle()
                                 .fill(
@@ -944,6 +944,7 @@ struct MemoryDetailView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
                 .allowsHitTesting(true)
+                .accessibilityLabel("Back")
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Button(action: shareMemory) {
@@ -1016,12 +1017,14 @@ struct MemoryDetailView: View {
                 }) {
                     Image(systemName: isEditing ? "checkmark" : "pencil")
                 }
+                .accessibilityLabel(isEditing ? "Save memory text" : "Edit memory text")
 
                 // TRANSCRIBE ALL BUTTON
                 Button(action: handleBatchTranscription) {
                     Image(systemName: "waveform.badge.mic")
                 }
                 .disabled(!transcriptionManager.hasUntranscribed)
+                .accessibilityLabel("Transcribe pending recordings")
             }
         }
         .tint(terracotta)

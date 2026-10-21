@@ -4,6 +4,23 @@ import UIKit
 @testable import MemoirAI
 
 struct RuntimeFlowPolicyTests {
+    @Test func blankMemoryDraftsAreNotSaveable() {
+        #expect(!MemoryDraftPolicy.hasContent(text: " \n ", audioURL: nil))
+        #expect(MemoryDraftPolicy.normalizedText("  A memory. \n") == "A memory.")
+        #expect(MemoryDraftPolicy.hasContent(text: "", audioURL: URL(fileURLWithPath: "/tmp/audio.m4a")))
+    }
+
+    @Test func profileNamesTrimWhitespaceAndRejectBlankInput() {
+        #expect(ProfileNamePolicy.normalized("  Alex  ") == "Alex")
+        #expect(ProfileNamePolicy.normalized(" \n ") == nil)
+    }
+
+    @Test func memoirProgressNeverExceedsOneHundredPercent() {
+        #expect(MemoirProgressPolicy.percentage(completed: 41, total: 40) == 100)
+        #expect(MemoirProgressPolicy.percentage(completed: -1, total: 40) == 0)
+        #expect(MemoirProgressPolicy.percentage(completed: 5, total: 0) == 0)
+    }
+
     @Test func parentBeforeTheyCameUsesSpecificPreParenthoodDayPrompt() throws {
         let chapter = try #require(allParentChapters.first { $0.number == 1 })
         let question = chapter.prompts[1]
@@ -161,13 +178,19 @@ struct RuntimeFlowPolicyTests {
         ))
     }
 
-    @Test func developerGenerationNeverExhaustsAllowance() {
+    @Test func developerGenerationUsesBoundedAllowance() {
         #expect(GenerationAllowancePolicy.canGenerate(
-            pages: Int.max, remaining: 0, hasSubscription: false, developerUnlocked: true
+            pages: 2_000, remaining: 2_000, hasSubscription: false, developerUnlocked: true
+        ))
+        #expect(!GenerationAllowancePolicy.canGenerate(
+            pages: 2_001, remaining: 2_000, hasSubscription: false, developerUnlocked: true
         ))
         #expect(GenerationAllowancePolicy.remainingAfterConsumption(
-            pages: Int.max, remaining: Int.max, developerUnlocked: true
-        ) == Int.max)
+            pages: 9, remaining: 2_000, developerUnlocked: true
+        ) == 1_991)
+        #expect(DeveloperAccessStoragePolicy.allowance == 2_000)
+        #expect(DeveloperAccessStoragePolicy.unlockKey(userID: "user-a") !=
+                DeveloperAccessStoragePolicy.unlockKey(userID: "user-b"))
     }
 
     @Test func regularGenerationStillRequiresSubscriptionAndAllowance() {
@@ -191,7 +214,11 @@ struct RuntimeFlowPolicyTests {
         ) == 3)
     }
 
+    @MainActor
     @Test func developerCodeDigestComparisonIsExact() {
+        #expect(RCSubscriptionManager.verifyDeveloperPassword("Apologist123!"))
+        #expect(RCSubscriptionManager.verifyDeveloperPassword("apologist 123!"))
+        #expect(!RCSubscriptionManager.verifyDeveloperPassword("apologist123!"))
         #expect(DeveloperAccessCodePolicy.constantTimeMatches(
             candidateDigest: "abcdef",
             expectedDigest: "abcdef"

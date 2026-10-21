@@ -5546,7 +5546,11 @@ exports.createStorybookJob = onCall(
     db,
     serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
     timestampFromDate: (date) => admin.firestore.Timestamp.fromDate(date),
-    HttpsError
+    HttpsError,
+    isDeveloper: (token) => isMemoirAdminToken(
+      token,
+      process.env.DEVELOPER_ACCESS_EMAILS || process.env.ADMIN_EMAILS
+    )
   })
 );
 

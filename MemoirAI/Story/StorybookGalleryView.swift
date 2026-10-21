@@ -60,6 +60,7 @@ struct StorybookGalleryView: View {
     @State private var styleFilter: BookStyleFilter = .all
     @State private var debugSessionID: String = String(UUID().uuidString.prefix(8))
     @State private var isLoadingBooks: Bool = true
+    @State private var bookLoadError: String?
     /// True after tapping a book when `onBookSelected` is set — shows loading on top of the library until the parent dismisses the cover.
     @State private var isOpeningSelection: Bool = false
     @State private var bookPendingDelete: BookVersionRecord?
@@ -125,6 +126,27 @@ struct StorybookGalleryView: View {
                 if isLoadingBooks {
                     loadingStateView
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let bookLoadError, allBooks.isEmpty {
+                    VStack(spacing: 18) {
+                        Image(systemName: "wifi.exclamationmark")
+                            .font(.system(size: 42, weight: .medium))
+                            .foregroundColor(Palette.terracotta)
+                        Text("Your library couldn’t load")
+                            .font(LinenTheme.heading(25))
+                            .foregroundColor(Palette.primaryText)
+                        Text(bookLoadError)
+                            .font(LinenTheme.body(15))
+                            .foregroundColor(Palette.secondaryText)
+                            .multilineTextAlignment(.center)
+                        Button("Try Again") {
+                            Task { await loadBooks() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Palette.terracotta)
+                        .accessibilityIdentifier("retryBookLibraryLoad")
+                    }
+                    .padding(32)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if filteredBooks.isEmpty {
                     emptyStateView
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -295,6 +317,7 @@ struct StorybookGalleryView: View {
                 } label: {
                     circleIconLabel(systemName: "arrow.up.arrow.down")
                 }
+                .accessibilityLabel("Sort books")
             }
         }
     }
@@ -303,13 +326,14 @@ struct StorybookGalleryView: View {
         Button(action: action) {
             circleIconLabel(systemName: systemName)
         }
+        .accessibilityLabel(systemName == "chevron.left" ? "Back" : "Gallery action")
     }
 
     private func circleIconLabel(systemName: String) -> some View {
         Image(systemName: systemName)
             .font(.system(size: 15, weight: .semibold))
             .foregroundColor(Palette.primaryText.opacity(0.8))
-            .frame(width: 42, height: 42)
+            .frame(width: 44, height: 44)
             .background(
                 Circle()
                     .fill(Palette.surface)
@@ -430,8 +454,15 @@ struct StorybookGalleryView: View {
     @MainActor
     private func loadBooks() async {
         isLoadingBooks = true
+        bookLoadError = nil
         let profileID = profileVM.selectedProfile.id
-        var cloudBooks = await FirestoreSyncService.shared.fetchBookVersions(profileID: profileID)
+        var cloudBooks: [BookVersionRecord] = []
+        do {
+            cloudBooks = try await FirestoreSyncService.shared.fetchBookVersions(profileID: profileID)
+        } catch {
+            bookLoadError = "Check your connection and try again. Your saved books have not been removed."
+            print("❌ Gallery: cloud library fetch failed: \(error.localizedDescription)")
+        }
         if !cloudBooks.isEmpty, !FirestoreSyncService.shared.isDuplicateBookCleanupDone(profileID: profileID) {
             let pruned = await FirestoreSyncService.shared.runOneTimeDuplicateBookVersionCleanup(
                 profileID: profileID,

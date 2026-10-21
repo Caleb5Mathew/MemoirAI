@@ -19,6 +19,7 @@ struct AddProfileView: View {
     @FocusState private var isNameFieldFocused: Bool
     @State private var photoSelection: PhotosPickerItem? = nil
     @State private var selectedPhotoData: Data? = nil
+    @State private var photoLoadError: String?
     @State private var showPaywall = false
     
     // Developer unlock states
@@ -243,17 +244,25 @@ struct AddProfileView: View {
 
             Spacer(minLength: 24)
 
-            // Save Button (always enabled)
+            if let photoLoadError {
+                Text(photoLoadError)
+                    .font(LinenTheme.body(13))
+                    .foregroundColor(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+
             Button(action: saveProfile) {
                 Text("Save Profile")
                     .font(LinenTheme.body(16, weight: .semibold))
                     .foregroundColor(LinenTheme.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(LinenTheme.accent)
+                    .background(normalizedName == nil ? LinenTheme.secondary.opacity(0.35) : LinenTheme.accent)
                     .cornerRadius(24)
                     .padding(.horizontal)
             }
+            .disabled(normalizedName == nil)
 
             // Cancel Button
             Button("Cancel") {
@@ -276,15 +285,24 @@ struct AddProfileView: View {
             do {
                 if let data = try await item.loadTransferable(type: Data.self) {
                     selectedPhotoData = data
+                    photoLoadError = nil
+                } else {
+                    photoLoadError = "That photo could not be loaded. Choose another image."
                 }
             } catch {
+                photoLoadError = "That photo could not be loaded. Choose another image."
                 print("Failed to load photo: \(error)")
             }
         }
     }
 
+    private var normalizedName: String? {
+        ProfileNamePolicy.normalized(name)
+    }
+
     private func saveProfile() {
-        let profile = Profile(name: name, photoData: selectedPhotoData)
+        guard let normalizedName else { return }
+        let profile = Profile(name: normalizedName, photoData: selectedPhotoData)
         
         if profileVM.addProfile(profile) {
             dismiss()

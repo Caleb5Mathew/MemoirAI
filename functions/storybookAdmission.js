@@ -6,6 +6,7 @@ const STORYBOOK_SUBSCRIPTION_PRODUCTS = [
   "com.Buildr.MemoirAI.ProYearly"
 ];
 const PAID_PAGE_LIMIT = 100;
+const DEVELOPER_PAGE_LIMIT = 2000;
 const MAX_PAGES_PER_JOB = 9;
 const MAX_MEMORY_CANDIDATES_PER_JOB = 200;
 // The app offers three preview images plus one one-time tutorial image. The
@@ -485,7 +486,8 @@ function createStorybookJobHandler({
   timestampFromDate,
   HttpsError,
   fetchImpl = fetch,
-  nowDate = () => new Date()
+  nowDate = () => new Date(),
+  isDeveloper = () => false
 }) {
   return async (request) => {
     if (!request.auth?.uid) throw new HttpsError("unauthenticated", "Must be signed in");
@@ -515,22 +517,25 @@ function createStorybookJobHandler({
     }
 
     const now = nowDate();
-    let entitlement;
-    try {
-      entitlement = await fetchRevenueCatEntitlement(userId, fetchImpl, now);
-    } catch (error) {
-      console.error("storybook RevenueCat verification failed", String(error?.message || error));
-      throw new HttpsError("unavailable", "Subscription verification is temporarily unavailable.");
+    const hasDeveloperAccess = Boolean(isDeveloper(request.auth.token || {}));
+    let entitlement = null;
+    if (!hasDeveloperAccess) {
+      try {
+        entitlement = await fetchRevenueCatEntitlement(userId, fetchImpl, now);
+      } catch (error) {
+        console.error("storybook RevenueCat verification failed", String(error?.message || error));
+        throw new HttpsError("unavailable", "Subscription verification is temporarily unavailable.");
+      }
     }
 
     const isPaid = Boolean(entitlement);
-    if (!isPaid && payload.pageCountTarget > FREE_PAGE_LIMIT) {
+    if (!hasDeveloperAccess && !isPaid && payload.pageCountTarget > FREE_PAGE_LIMIT) {
       throw new HttpsError("permission-denied", "A subscription is required for this book size.");
     }
 
     const dayKey = now.toISOString().slice(0, 10);
     const paidPeriod = isPaid ? paidStorybookUsagePeriod(now) : null;
-    const periodKey = paidPeriod?.periodKey || "free_lifetime";
+    const periodKey = hasDeveloperAccess ? "developer_lifetime" : (paidPeriod?.periodKey || "free_lifetime");
     const activeRef = userRef.collection("aiUsage").doc("storybook_active");
     const usageRef = userRef.collection("aiUsage").doc(`storybook_${periodKey}`);
     const globalRef = db.collection("globalAIUsage").doc(`storybook_${dayKey}`);
@@ -561,7 +566,9 @@ function createStorybookJobHandler({
         throw new HttpsError("resource-exhausted", "Another storybook is already being generated.");
       }
 
-      const perUserLimit = isPaid ? PAID_PAGE_LIMIT : FREE_PAGE_LIMIT;
+      const perUserLimit = hasDeveloperAccess
+        ? DEVELOPER_PAGE_LIMIT
+        : (isPaid ? PAID_PAGE_LIMIT : FREE_PAGE_LIMIT);
       const usedPages = Number(usage.data()?.reservedPages || 0);
       const globalPages = Number(globalUsage.data()?.reservedPages || 0);
       if (usedPages + payload.pageCountTarget > perUserLimit) {
@@ -595,7 +602,7 @@ function createStorybookJobHandler({
       transaction.create(jobRef, {
         ...payload,
         admissionVersion: STORYBOOK_ADMISSION_VERSION,
-        entitlementKind: isPaid ? "paid" : "freePreview",
+        entitlementKind: hasDeveloperAccess ? "developer" : (isPaid ? "paid" : "freePreview"),
         reservationState: "reserved",
         reservedPageCount: payload.pageCountTarget,
         usageDocumentId: usageRef.path.split("/").pop(),
@@ -624,6 +631,7 @@ function createStorybookJobHandler({
 
 module.exports = {
   FREE_PAGE_LIMIT,
+  DEVELOPER_PAGE_LIMIT,
   MAX_PAGES_PER_JOB,
   MAX_MEMORY_CANDIDATES_PER_JOB,
   MAX_WORKER_ATTEMPTS,

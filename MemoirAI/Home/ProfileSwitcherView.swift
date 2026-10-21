@@ -29,6 +29,7 @@ struct ProfileSwitcherView: View {
 
                             )
                     }
+                    .accessibilityLabel("Close profile switcher")
                     
                     Spacer()
                     
@@ -142,12 +143,17 @@ struct ProfileRowView: View {
             )
 
             // Profile Name
-            Text(profile.name)
-                .font(LinenTheme.body(18, weight: .medium))
-                .foregroundColor(darkText)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Spacer()
+            Button(action: onTap) {
+                Text(profile.name)
+                    .font(LinenTheme.body(18, weight: .medium))
+                    .foregroundColor(darkText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Switch to \(profile.name)")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
 
             HStack(spacing: 12) {
                 // Checkmark if selected
@@ -165,14 +171,14 @@ struct ProfileRowView: View {
                             .font(LinenTheme.body(13, weight: .semibold))
                     }
                     .foregroundColor(terracotta)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
+                    .frame(minWidth: 64, minHeight: 44)
                     .background(
                         Capsule()
                             .fill(terracotta.opacity(0.12))
                     )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Edit \(profile.name)")
             }
         }
         .padding()
@@ -181,12 +187,7 @@ struct ProfileRowView: View {
                 .fill(LinenTheme.surface)
 
         )
-        .contentShape(RoundedRectangle(cornerRadius: 16))
-        .onTapGesture(perform: onTap)
         .accessibilityElement(children: .contain)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityLabel("\(profile.name) profile")
-        .accessibilityHint("Tap to switch profile. Use Edit to change profile details.")
     }
 }
 

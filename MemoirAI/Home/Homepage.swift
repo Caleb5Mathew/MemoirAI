@@ -18,6 +18,14 @@ enum HomeGreeting {
     }
 }
 
+enum MemoirProgressPolicy {
+    static func percentage(completed: Int, total: Int) -> Int {
+        guard total > 0 else { return 0 }
+        let value = Int((Double(max(0, completed)) / Double(total)) * 100)
+        return min(100, value)
+    }
+}
+
 struct HomepageView: View {
     // MARK: – Environment & Context
     @EnvironmentObject var profileVM: ProfileViewModel
@@ -55,8 +63,7 @@ struct HomepageView: View {
     /// Completion percentage (0-100)
     private var completionPercentage: Int {
         let totalMemories = activeChapters.reduce(0) { $0 + $1.prompts.count }
-        guard totalMemories > 0 else { return 0 }
-        return Int((Double(completedMemoriesCount) / Double(totalMemories)) * 100)
+        return MemoirProgressPolicy.percentage(completed: completedMemoriesCount, total: totalMemories)
     }
 
     // MARK: – Body
@@ -96,7 +103,7 @@ struct HomepageView: View {
                                     .lineSpacing(-5)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Text("Tell your story.").font(LinenTheme.body(13))
-                                ProgressView(value: Double(min(100, completionPercentage)), total: 100)
+                                ProgressView(value: Double(completionPercentage), total: 100)
                                     .tint(LinenTheme.accent)
                                     .accessibilityLabel("Memoir completion")
                                 Text("\(completionPercentage)%")

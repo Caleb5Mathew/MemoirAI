@@ -3,6 +3,7 @@ import RevenueCat
 import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
 import CryptoKit
 
 // Updated subscription tiers to match RevenueCat package identifiers
@@ -43,12 +44,24 @@ struct DeveloperEntitlementSyncPolicy {
 
 struct GenerationAllowancePolicy {
     static func canGenerate(pages: Int, remaining: Int, hasSubscription: Bool, developerUnlocked: Bool) -> Bool {
-        developerUnlocked || pages <= 0 || (hasSubscription && remaining >= pages)
+        pages <= 0 || ((developerUnlocked || hasSubscription) && remaining >= pages)
     }
 
-    static func remainingAfterConsumption(pages: Int, remaining: Int, developerUnlocked: Bool) -> Int {
-        guard !developerUnlocked, pages > 0 else { return remaining }
+    static func remainingAfterConsumption(pages: Int, remaining: Int, developerUnlocked _: Bool) -> Int {
+        guard pages > 0 else { return remaining }
         return pages >= remaining ? 0 : remaining - pages
+    }
+}
+
+struct DeveloperAccessStoragePolicy {
+    static let allowance = 2_000
+
+    static func unlockKey(userID: String) -> String {
+        "memoirai_persistentDevMode_\(userID)"
+    }
+
+    static func allowanceKey(userID: String) -> String {
+        "memoirai_developerAllowance_\(userID)"
     }
 }
 
@@ -65,11 +78,17 @@ struct DeveloperAccessCodePolicy {
 
 enum DeveloperAccessError: LocalizedError {
     case incorrectCode
+    case notSignedIn
+    case notAuthorized
 
     var errorDescription: String? {
         switch self {
         case .incorrectCode:
             return "Incorrect access code."
+        case .notSignedIn:
+            return "Sign in before enabling developer access."
+        case .notAuthorized:
+            return "This account is not authorized for developer access."
         }
     }
 }
@@ -173,7 +192,6 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     // Maximum images per subscription period
     private let maxImagesPerPeriod: Int = 100
     /// When true, developer unlock survives cold launch until toggled off in Profile Edit or Settings.
-    private let persistentDevModeKey = "memoirai_persistentDevMode"
     /// Session developer unlock (also true when persistent dev mode is on).
     @Published private(set) var isDeveloperUnlockedSession: Bool = false
     /// Mirrors UserDefaults for SwiftUI; use for gates like headshot bypass.
@@ -183,10 +201,11 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     private override init() {
         super.init()
 
-        isPersistentDevMode = storage.bool(forKey: persistentDevModeKey)
-        if isPersistentDevMode {
-            unlockDeveloperMode()
-            print("RCManager: Restored persistent developer mode from storage.")
+        if let userID = firebaseUserIDProvider() {
+            restoreDeveloperMode(for: userID)
+            if isPersistentDevMode {
+                print("RCManager: Restored persistent developer mode from storage.")
+            }
         }
 
         // Add a small delay to ensure RevenueCat is fully configured
@@ -211,8 +230,8 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             }
 
             await MainActor.run {
-                if storage.bool(forKey: persistentDevModeKey) {
-                    unlockDeveloperMode()
+                if let userID = firebaseUserIDProvider() {
+                    restoreDeveloperMode(for: userID)
                 }
             }
         }
@@ -220,16 +239,23 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
 
     /// Enables developer unlock and persists it across app restarts until `disablePersistentDevMode()`.
     func enablePersistentDevMode() {
-        storage.set(true, forKey: persistentDevModeKey)
+        guard let userID = firebaseUserIDProvider(), !userID.isEmpty else { return }
+        storage.set(true, forKey: DeveloperAccessStoragePolicy.unlockKey(userID: userID))
+        let allowanceKey = DeveloperAccessStoragePolicy.allowanceKey(userID: userID)
+        if storage.object(forKey: allowanceKey) == nil {
+            storage.set(DeveloperAccessStoragePolicy.allowance, forKey: allowanceKey)
+        }
         storage.synchronize()
         isPersistentDevMode = true
-        unlockDeveloperMode()
+        unlockDeveloperMode(for: userID)
         print("RCManager: Persistent developer mode enabled – survives app restart until disabled.")
     }
 
     /// Turns off persisted dev unlock and re-evaluates real subscription state.
     func disablePersistentDevMode() {
-        storage.set(false, forKey: persistentDevModeKey)
+        if let userID = firebaseUserIDProvider() {
+            storage.removeObject(forKey: DeveloperAccessStoragePolicy.unlockKey(userID: userID))
+        }
         storage.synchronize()
         isPersistentDevMode = false
         isDeveloperUnlockedSession = false
@@ -238,6 +264,14 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         nextRenewalDate = nil
         Task { await refreshCustomerInfo() }
         print("RCManager: Persistent developer mode disabled.")
+    }
+
+    func clearDeveloperSessionForAccountChange() {
+        isPersistentDevMode = false
+        isDeveloperUnlockedSession = false
+        activeTier = nil
+        remainingAllowance = 0
+        nextRenewalDate = nil
     }
 
     func loadOfferings() async {
@@ -307,6 +341,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     @discardableResult
     func identify(firebaseUserID: String) async -> Bool {
         guard !firebaseUserID.isEmpty, firebaseUserIDProvider() == firebaseUserID else { return false }
+        restoreDeveloperMode(for: firebaseUserID)
         if let identifiedFirebaseUserID, identifiedFirebaseUserID != firebaseUserID {
             self.identifiedFirebaseUserID = nil
             hasBillingIssue = false
@@ -413,7 +448,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             print("❌ RCManager: CustomerInfo refresh failed: \(error).")
             if isDeveloperUnlockedSession {
                 // Keep dev access active for this app session.
-                unlockDeveloperMode()
+                unlockDeveloperMode(for: firebaseUserID)
             } else if !SubscriptionRefreshFailurePolicy.shouldPreserveLastVerifiedAccess(
                 hasActiveTier: activeTier != nil
             ) {
@@ -507,7 +542,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         } else {
             if isDeveloperUnlockedSession {
                 print("RCManager: No active subscription found, but developer mode is active for this session.")
-                unlockDeveloperMode()
+                unlockDeveloperMode(for: firebaseUserID)
             } else {
                 print("RCManager: No active subscription found. User cannot generate images.")
                 activeTier = nil
@@ -601,7 +636,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             
             print("RCManager: First-time setup for \(tier.displayName). Starting allowance: \(remainingAllowance)")
             storage.synchronize()
-            if isDeveloperUnlockedSession { unlockDeveloperMode() }
+            if isDeveloperUnlockedSession { unlockDeveloperMode(for: firebaseUserID) }
             return
         }
         
@@ -636,7 +671,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
 
         // Apply developer override for current app session only.
         if isDeveloperUnlockedSession {
-            self.unlockDeveloperMode()
+            self.unlockDeveloperMode(for: firebaseUserID)
         }
     }
 
@@ -681,9 +716,23 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
 
     // 🔥 ENHANCED: Better consumption tracking
     func consume(pages: Int) {
-        guard !isDeveloperUnlockedSession else { return }
         guard pages > 0 else {
             print("RCManager: Consume called with 0 pages. No action taken.")
+            return
+        }
+
+        if isDeveloperUnlockedSession {
+            remainingAllowance = GenerationAllowancePolicy.remainingAfterConsumption(
+                pages: pages,
+                remaining: remainingAllowance,
+                developerUnlocked: true
+            )
+            if let userID = firebaseUserIDProvider() {
+                storage.set(
+                    remainingAllowance,
+                    forKey: DeveloperAccessStoragePolicy.allowanceKey(userID: userID)
+                )
+            }
             return
         }
 
@@ -784,7 +833,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     }
     
     var monthlyAllowanceStatus: String {
-        if isDeveloperUnlockedSession { return "Unlimited developer access" }
+        if isDeveloperUnlockedSession { return "\(remainingAllowance)/2,000 developer images remaining" }
         guard hasActiveSubscription else { return "No active subscription" }
         return "\(remainingAllowance)/100 monthly allowance remaining"
     }
@@ -797,8 +846,10 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     // MARK: – Developer mode unlock
 
     /// SHA-256 digest (hex) of the developer unlock password. Never store the plaintext.
-    private static let developerPasswordDigestHex =
-        "03a3f52f7b1fbdbd8224152e8fcc06e7eff398f63c9961fce7d032f560002128"
+    private static let developerPasswordDigests = [
+        "03a3f52f7b1fbdbd8224152e8fcc06e7eff398f63c9961fce7d032f560002128",
+        "e2cac86982d8d0cb8352effe6af7f8d1dcd89bd98485551309111e6daf677818"
+    ]
 
     /// Verifies a candidate developer unlock password against the stored digest
     /// using a constant-time comparison to avoid timing side-channels.
@@ -806,10 +857,12 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         let inputDigest = SHA256.hash(data: Data(input.utf8))
         let inputDigestHex = inputDigest.map { String(format: "%02x", $0) }.joined()
 
-        return DeveloperAccessCodePolicy.constantTimeMatches(
-            candidateDigest: inputDigestHex,
-            expectedDigest: developerPasswordDigestHex
-        )
+        return developerPasswordDigests.contains { expectedDigest in
+            DeveloperAccessCodePolicy.constantTimeMatches(
+                candidateDigest: inputDigestHex,
+                expectedDigest: expectedDigest
+            )
+        }
     }
 
     func authorizeDeveloperAccess(_ input: String) async throws {
@@ -817,13 +870,37 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             throw DeveloperAccessError.incorrectCode
         }
 
+        guard firebaseUserIDProvider() != nil else {
+            throw DeveloperAccessError.notSignedIn
+        }
+        let result = try await Functions.functions().httpsCallable("verifyDeveloperAccess").call()
+        guard let payload = result.data as? [String: Any], payload["authorized"] as? Bool == true else {
+            throw DeveloperAccessError.notAuthorized
+        }
+
         enablePersistentDevMode()
     }
 
-    private func unlockDeveloperMode() {
+    private func restoreDeveloperMode(for userID: String) {
+        let unlocked = storage.bool(forKey: DeveloperAccessStoragePolicy.unlockKey(userID: userID))
+        isPersistentDevMode = unlocked
+        if unlocked {
+            unlockDeveloperMode(for: userID)
+        } else if isDeveloperUnlockedSession {
+            isDeveloperUnlockedSession = false
+            activeTier = nil
+            remainingAllowance = 0
+            nextRenewalDate = nil
+        }
+    }
+
+    private func unlockDeveloperMode(for userID: String) {
         isDeveloperUnlockedSession = true
         activeTier = .monthly
-        remainingAllowance = Int.max
+        let storedAllowance = storage.object(
+            forKey: DeveloperAccessStoragePolicy.allowanceKey(userID: userID)
+        ) as? Int
+        remainingAllowance = storedAllowance ?? DeveloperAccessStoragePolicy.allowance
         print("RCManager: Developer mode unlocked for this session.")
     }
 }

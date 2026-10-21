@@ -5,6 +5,7 @@ const {
   claimStorybookWorkerJob,
   createStorybookJobHandler,
   FREE_PAGE_LIMIT,
+  DEVELOPER_PAGE_LIMIT,
   fetchLegacyRevenueCatEntitlement,
   isAdmittedStorybookJob,
   MAX_MEMORY_CANDIDATES_PER_JOB,
@@ -242,6 +243,37 @@ const timestampFromDate = (date) => ({ toDate: () => date });
         FREE_PAGE_LIMIT);
     }
   }
+
+  const developerDb = new FakeFirestore();
+  const developerHandler = createStorybookJobHandler({
+    db: developerDb,
+    serverTimestamp,
+    timestampFromDate,
+    HttpsError: FakeHttpsError,
+    nowDate: () => now,
+    isDeveloper: (token) => token.email === "developer@example.com",
+    fetchImpl: async () => { throw new Error("Developer admission must not query RevenueCat"); }
+  });
+  const developerResult = await developerHandler({
+    auth: { uid: "developer-1", token: { email: "developer@example.com" } },
+    data: { jobId: "developer_job_1", job: {
+      ...base,
+      bookVersionId: "developer_job_1",
+      pageCountTarget: 9,
+      subjectPhotoStoragePath: "",
+      clientVersion: 2
+    } }
+  });
+  assert.strictEqual(developerResult.allowanceRemaining, DEVELOPER_PAGE_LIMIT - 9);
+  assert.strictEqual(
+    developerDb.rows.get("users/developer-1/storybookJobs/developer_job_1").entitlementKind,
+    "developer"
+  );
+  assert.strictEqual(
+    developerDb.rows.get("users/developer-1/aiUsage/storybook_developer_lifetime").limit,
+    DEVELOPER_PAGE_LIMIT
+  );
+
   const db = new FakeFirestore();
   let revenueCatCalls = 0;
   const handler = createStorybookJobHandler({

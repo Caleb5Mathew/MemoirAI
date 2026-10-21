@@ -245,9 +245,10 @@ struct RecordingView: View {
                                 .multilineTextAlignment(.center)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .lineLimit(nil)
+                                .accessibilityIdentifier("recordingQuestionText")
                                 .padding(.horizontal, 24)
                                 .padding(.vertical, 18)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .center)
                                 .background(LinenTheme.paper)
                                 .cornerRadius(20)
 
@@ -307,7 +308,7 @@ struct RecordingView: View {
                                 isRecording: isRecording,
                                 isPaused: isPaused
                             )
-                            .frame(maxWidth: geo.size.width * 0.8)
+                            .frame(maxWidth: contentWidth * 0.8)
                         }
                         
                         // Real-time transcription display
@@ -332,7 +333,7 @@ struct RecordingView: View {
                                             .stroke(LinenTheme.line, lineWidth: 1)
                                     )
                             }
-                            .frame(maxWidth: geo.size.width * 0.8)
+                            .frame(maxWidth: contentWidth * 0.8)
                         }
 
                         // Recording Timer Display
@@ -356,17 +357,11 @@ struct RecordingView: View {
                             }
                         }
                     }
-                    .frame(maxWidth: geo.size.width * 0.9)
+                    .frame(maxWidth: contentWidth - 48)
                     .multilineTextAlignment(.center)
 
                     // Text entry
                     ZStack(alignment: .topLeading) {
-                        if typedText.isEmpty {
-                            Text("Type your answer...")
-                                .foregroundColor(LinenTheme.secondary)
-                                .padding(.top, 12)
-                                .padding(.leading, 36)
-                        }
                         TextEditor(text: $typedText)
                             .font(LinenTheme.body(16))
                             .foregroundColor(LinenTheme.ink)
@@ -380,6 +375,14 @@ struct RecordingView: View {
                             .onTapGesture {
                                 triggerHaptic(.selection)
                             }
+                        if typedText.isEmpty {
+                            Text("Type your answer...")
+                                .font(LinenTheme.body(16))
+                                .foregroundColor(LinenTheme.secondary)
+                                .padding(.top, 16)
+                                .padding(.leading, 37)
+                                .allowsHitTesting(false)
+                        }
                         Image(systemName: "pencil")
                             .foregroundColor(LinenTheme.secondary)
                             .padding(.top, 14)
@@ -414,6 +417,7 @@ struct RecordingView: View {
                         Spacer(minLength: 24)
                     }
                     .frame(width: contentWidth)
+                    .frame(maxWidth: .infinity)
                     .frame(minHeight: geo.size.height)
                     .tutorialAnchor(.recordingSaveMemory)
                     .background(
@@ -868,9 +872,7 @@ struct RecordingView: View {
         // Capture current values before we mutate UI state
         let recordingDurationToSave = recordingTime
         let promptToSave      = activePromptText.isEmpty ? prompt.text : activePromptText
-        let textToSave        = typedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? nil
-            : typedText
+        let textToSave        = MemoryDraftPolicy.normalizedText(typedText)
         let audioURLToSave    = audioURL
         let profile = profileVM.selectedProfile
         let memoirModeToSave = memoirMode ?? MemoirModeClassifier.mode(forCurrentChapterTitle: chapterTitle)
@@ -974,7 +976,7 @@ struct RecordingView: View {
 
     // MARK: - Unsaved Data Check & Cleanup
     func hasUnsavedData() -> Bool {
-        !typedText.isEmpty || audioURL != nil
+        MemoryDraftPolicy.hasContent(text: typedText, audioURL: audioURL)
     }
 
     func cleanup() {
@@ -983,5 +985,15 @@ struct RecordingView: View {
         interruptionObserver.onInterruptionEnded = nil
         interruptionObserver.onRouteChangeDeviceUnavailable = nil
         interruptionObserver.onAppBackgrounded = nil
+    }
+}
+enum MemoryDraftPolicy {
+    static func normalizedText(_ text: String) -> String? {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    static func hasContent(text: String, audioURL: URL?) -> Bool {
+        normalizedText(text) != nil || audioURL != nil
     }
 }

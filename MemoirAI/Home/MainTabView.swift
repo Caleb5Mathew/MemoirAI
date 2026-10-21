@@ -205,8 +205,11 @@ struct MainTabView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary.opacity(0.7))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss notification reminder")
             }
 
             Button(action == .openSettings ? "Open Notification Settings" : "Enable Notifications") {

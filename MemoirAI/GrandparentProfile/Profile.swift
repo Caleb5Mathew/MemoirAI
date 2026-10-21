@@ -117,3 +117,9 @@ struct Profile: Identifiable, Codable, Equatable {
         return copy
     }
 }
+enum ProfileNamePolicy {
+    static func normalized(_ name: String) -> String? {
+        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : normalized
+    }
+}

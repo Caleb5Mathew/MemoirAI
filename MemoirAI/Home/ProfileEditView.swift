@@ -490,7 +490,7 @@ struct ProfileEditView: View {
                         Text("Developer Mode Active")
                             .font(LinenTheme.body(17, weight: .semibold))
                             .foregroundColor(DS.textPrimary)
-                        Text("Subscription bypass and elevated allowance persist across app launches until you disable.")
+                        Text("Subscription tools, unlimited profiles, and a 2,000-image developer allowance stay active for this account until you disable them.")
                             .font(LinenTheme.body(13))
                             .foregroundColor(DS.textSecondary)
                             .multilineTextAlignment(.center)
@@ -607,7 +607,7 @@ struct ProfileEditView: View {
 
         let updatedProfile = Profile(
             id: profile.id,
-            name: name.isEmpty ? "Grandparent" : name,
+            name: ProfileNamePolicy.normalized(name) ?? "Grandparent",
             photoData: photoData,
             birthdate: selectedBirthdate,
             ethnicity: ethnicity.isEmpty ? nil : ethnicity,

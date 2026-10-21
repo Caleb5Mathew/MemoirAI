@@ -460,7 +460,7 @@ struct SettingsView: View {
                 Text(isSubscribed ? "Your subscription" : "Free preview")
                     .font(LinenTheme.body(16, weight: .semibold))
                 Spacer()
-                Text(subscriptionManager.isDeveloperUnlockedSession ? "Unlimited" : "\(actualRemainingImages) left")
+                Text("\(actualRemainingImages) left")
                     .font(LinenTheme.heading(22))
                     .foregroundColor(canGenerate ? LinenTheme.forest : LinenTheme.secondary)
             }
@@ -469,7 +469,7 @@ struct SettingsView: View {
                 .accessibilityLabel("Available illustration allowance")
             if isSubscribed {
                 Text(subscriptionManager.isDeveloperUnlockedSession
-                     ? "Developer access"
+                     ? "Developer access · 2,000-image allowance"
                      : "Illustrations reset \(subscriptionManager.getRenewalDateString())")
                     .font(LinenTheme.body(14))
                     .foregroundColor(LinenTheme.secondary)

@@ -927,6 +927,9 @@ final class AuthenticationService: ObservableObject {
         do {
             await revokeGuestRecoveryBeforeAccountReplacement()
             PushTokenService.shared.unregisterCurrentUser()
+            await MainActor.run {
+                RCSubscriptionManager.shared.clearDeveloperSessionForAccountChange()
+            }
             try Auth.auth().signOut()
             ProductAnalytics.shared.track("Signed Out")
             ProductAnalytics.shared.updateIdentity(userID: nil, isGuest: true)

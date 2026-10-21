@@ -328,27 +328,28 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testRecordingWritingLayoutKeepsNavigationVisible() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest"]
+        app.launchArguments = ["-UITest", "-UITestNormalChapter", "1"]
         app.launch()
 
-        sleep(3)
-        dismissSystemDialogIfPresent()
-
-        let continueMemories = app.buttons["tutorialContinueYourMemoir"]
-        XCTAssertTrue(continueMemories.waitForExistence(timeout: 5))
-        continueMemories.tap()
-        selectDefaultMemoirIfNeeded(in: app)
-
-        let currentChapterCard = app.buttons["currentChapterCard"]
-        XCTAssertTrue(currentChapterCard.waitForExistence(timeout: 5))
-        currentChapterCard.tap()
-
         let promptNode = app.descendants(matching: .any).matching(identifier: "chapterPromptNode").firstMatch
-        XCTAssertTrue(promptNode.waitForExistence(timeout: 5))
+        XCTAssertTrue(promptNode.waitForExistence(timeout: 10))
         promptNode.tap()
 
         let editor = app.textViews["recordingTextEditor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let question = app.staticTexts["recordingQuestionText"]
+        XCTAssertTrue(question.exists)
+        let microphone = app.buttons["Tap to Record"]
+        XCTAssertTrue(microphone.exists)
+        XCTAssertEqual(question.frame.midX, app.frame.midX, accuracy: 2,
+                       "The question's text block must center on the screen, not align to its card's leading edge")
+        XCTAssertEqual(microphone.frame.midX, app.frame.midX, accuracy: 2)
+        let save = app.buttons["Save Memory"]
+        XCTAssertTrue(save.exists)
+        XCTAssertEqual(save.frame.midX, app.frame.midX, accuracy: 2)
+        XCTAssertLessThanOrEqual(save.frame.width, 712)
+        XCTAssertTrue(app.staticTexts["Type your answer..."].exists)
+        snap(app, name: "recording-centered-before-keyboard")
         editor.tap()
         editor.typeText("A short test memory")
 

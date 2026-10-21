@@ -694,17 +694,12 @@ final class FirestoreSyncService {
         }
     }
 
-    private func fetchBookVersionsClientFilter(profileID: UUID, userId: String) async -> [BookVersionRecord] {
+    private func fetchBookVersionsClientFilter(profileID: UUID, userId: String) async throws -> [BookVersionRecord] {
         let ref = db.collection("users").document(userId).collection("bookVersions")
-        do {
-            let snapshot = try await ref.order(by: "createdAt", descending: true).limit(to: 80).getDocuments()
-            let wanted = profileID.uuidString
-            return snapshot.documents.compactMap { BookVersionRecord.fromFirestoreData($0.data()) }
-                .filter { $0.profileId == wanted }
-        } catch {
-            print("❌ fetchBookVersionsClientFilter failed: \(error.localizedDescription)")
-            return []
-        }
+        let snapshot = try await ref.order(by: "createdAt", descending: true).limit(to: 80).getDocuments()
+        let wanted = profileID.uuidString
+        return snapshot.documents.compactMap { BookVersionRecord.fromFirestoreData($0.data()) }
+            .filter { $0.profileId == wanted }
     }
     
     // MARK: - Pending memory sync (resume interrupted uploads)
@@ -1907,10 +1902,16 @@ final class FirestoreSyncService {
     }
     
     /// Fetch all canonical book versions for a profile, newest first.
-    func fetchBookVersions(profileID: UUID) async -> [BookVersionRecord] {
-        guard let userId = Auth.auth().currentUser?.uid else { return [] }
+    func fetchBookVersions(profileID: UUID) async throws -> [BookVersionRecord] {
+        guard let userId = Auth.auth().currentUser?.uid else {
+            throw NSError(
+                domain: "MemoirAI.BookLibrary",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Sign in to load your book library."]
+            )
+        }
         // Avoid composite-index requirement by using createdAt ordering only and profile client filter.
-        return await fetchBookVersionsClientFilter(profileID: profileID, userId: userId)
+        return try await fetchBookVersionsClientFilter(profileID: profileID, userId: userId)
     }
     
     /// Fetch latest canonical book version for a profile.

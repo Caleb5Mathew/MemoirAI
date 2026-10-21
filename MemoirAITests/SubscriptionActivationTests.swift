@@ -219,9 +219,45 @@ struct SubscriptionActivationTests {
         try withManager { manager, _ in
             manager.enablePersistentDevMode()
             try manager.applyPurchaseResult(customerInfo(product: monthly), for: "user-a")
-            #expect(manager.remainingAllowance == Int.max)
-            #expect(manager.canGenerate(pages: 1_000))
+            #expect(manager.remainingAllowance == 2_000)
+            #expect(manager.canGenerate(pages: 2_000))
+            #expect(!manager.canGenerate(pages: 2_001))
         }
+    }
+
+    @MainActor
+    @Test func developerAccessDoesNotFollowAccountSwitches() async throws {
+        let suite = "SubscriptionActivationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var currentUser = "user-a"
+        let manager = RCSubscriptionManager(
+            storage: defaults,
+            firebaseUserID: { currentUser },
+            revenueCatUserID: { currentUser },
+            identifiedUserID: "user-a"
+        )
+
+        manager.enablePersistentDevMode()
+        #expect(manager.isDeveloperUnlocked)
+
+        manager.clearDeveloperSessionForAccountChange()
+        #expect(!manager.isDeveloperUnlocked)
+        #expect(manager.remainingAllowance == 0)
+        let restoredSameAccount = await manager.identify(firebaseUserID: "user-a")
+        #expect(restoredSameAccount)
+        #expect(manager.isDeveloperUnlocked)
+
+        currentUser = "user-b"
+        let identifiedUserB = await manager.identify(firebaseUserID: "user-b")
+        #expect(identifiedUserB)
+        #expect(!manager.isDeveloperUnlocked)
+
+        currentUser = "user-a"
+        let identifiedUserA = await manager.identify(firebaseUserID: "user-a")
+        #expect(identifiedUserA)
+        #expect(manager.isDeveloperUnlocked)
+        #expect(manager.remainingAllowance == DeveloperAccessStoragePolicy.allowance)
     }
 
     @Test func billingGracePreservesPaidAccessAndConsumedAllowance() throws {

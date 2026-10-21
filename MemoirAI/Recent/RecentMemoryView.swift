@@ -17,6 +17,7 @@ struct RecentMemoriesView: View {
     @State private var sortAscending = false
     @State private var showSortOptions = false
     @State private var selectedMemoryID: UUID? = nil
+    @State private var pendingDeleteMemoryID: UUID? = nil
     @State private var showCreateMemory = false
     @State private var selectedMemoirMode: MemoirMode? = nil
 
@@ -131,7 +132,7 @@ struct RecentMemoriesView: View {
                                     )
                                     .contextMenu {
                                         Button(role: .destructive, action: {
-                                            delete(entry)
+                                            pendingDeleteMemoryID = entry.id
                                         }) {
                                             Label("Delete", systemImage: "trash")
                                         }
@@ -212,6 +213,29 @@ struct RecentMemoriesView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .analyticsScreen("memories")
+            .confirmationDialog(
+                "Delete this memory?",
+                isPresented: Binding(
+                    get: { pendingDeleteMemoryID != nil },
+                    set: { if !$0 { pendingDeleteMemoryID = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete Memory", role: .destructive) {
+                    guard let memoryID = pendingDeleteMemoryID,
+                          let entry = entries.first(where: { $0.id == memoryID }) else {
+                        pendingDeleteMemoryID = nil
+                        return
+                    }
+                    pendingDeleteMemoryID = nil
+                    delete(entry)
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingDeleteMemoryID = nil
+                }
+            } message: {
+                Text("This removes the recording and its saved text from this device and your account.")
+            }
         }
     }
 
@@ -579,16 +603,7 @@ struct MemoryCard: View {
     }
     
     var body: some View {
-        Button(action: {
-            print("🔵 MemoryCard tapped - Memory ID: \(entry.id?.uuidString.prefix(8) ?? "nil")…")
-            if let id = entry.id {
-                selectedMemoryID = id
-                print("🔵 Set selectedMemoryID to: \(id.uuidString.prefix(8))…")
-            } else {
-                print("❌ Memory entry has no ID!")
-            }
-        }) {
-            VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
                 // Header section with title and badges
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -792,7 +807,7 @@ struct MemoryCard: View {
                     .padding(.top, 16)
                     .padding(.bottom, 20)
                 }
-            }
+        }
             .background(LinenTheme.card)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
@@ -801,8 +816,14 @@ struct MemoryCard: View {
             )
             .scaleEffect(isPressed ? 0.98 : 1.0)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isPressed)
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture {
+            guard !showCharacterDetails, !showEnhancementCoordinator, let id = entry.id else { return }
+            selectedMemoryID = id
         }
-        .buttonStyle(PlainButtonStyle())
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Open \(displayTitle)")
         .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity, pressing: { pressing in
             isPressed = pressing
         }, perform: {})

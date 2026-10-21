@@ -417,7 +417,7 @@ struct StoryPage: View {
             if error.contains("Maximum images reached") || error.contains("Not enough images") {
                 // Show subscription status
                 VStack(spacing: 8) {
-                    Text(subscriptionManager.isDeveloperUnlockedSession ? "Unlimited images" : "Images remaining: \(subscriptionManager.remainingAllowance)/100")
+                    Text(subscriptionManager.isDeveloperUnlockedSession ? "Developer images: \(subscriptionManager.remainingAllowance)/2,000" : "Images remaining: \(subscriptionManager.remainingAllowance)/100")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.gray)
                     
@@ -1168,7 +1168,7 @@ struct StoryPage: View {
                 showSubscriptionTooltip = false
             }
         }) {
-            Text(subscriptionManager.isDeveloperUnlockedSession ? "Unlimited images" : "\(subscriptionManager.remainingAllowance)/100 images")
+            Text(subscriptionManager.isDeveloperUnlockedSession ? "\(subscriptionManager.remainingAllowance)/2,000 developer images" : "\(subscriptionManager.remainingAllowance)/100 images")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(subscriptionManager.remainingAllowance <= 5 ? .red : .gray)
         }

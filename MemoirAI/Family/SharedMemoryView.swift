@@ -16,6 +16,7 @@ struct SharedMemoryView: View {
     @State private var playbackTask: Task<Void, Never>? = nil
     @State private var isVisible = false
     @State private var playbackError: String? = nil
+    @State private var playbackEndObserver: NSObjectProtocol? = nil
 
     private let darkText = LinenTheme.ink
     private let terracotta = LinenTheme.accent
@@ -120,6 +121,11 @@ struct SharedMemoryView: View {
             isPlaying = false
             return
         }
+        if let player {
+            player.play()
+            isPlaying = true
+            return
+        }
         guard player == nil, !isLoadingAudio else { return }
         isLoadingAudio = true
         playbackTask = Task { @MainActor in
@@ -155,13 +161,28 @@ struct SharedMemoryView: View {
                 print("[SharedMemory] audio session error: \(error.localizedDescription)")
             }
             guard let localAudioURL, isVisible, !Task.isCancelled else { return }
-            player = AVPlayer(url: localAudioURL)
-            player?.play()
+            let newPlayer = AVPlayer(url: localAudioURL)
+            player = newPlayer
+            playbackEndObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: newPlayer.currentItem,
+                queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    newPlayer.seek(to: .zero)
+                    isPlaying = false
+                }
+            }
+            newPlayer.play()
             isPlaying = true
         }
     }
 
     private func stopPlayback() {
+        if let playbackEndObserver {
+            NotificationCenter.default.removeObserver(playbackEndObserver)
+            self.playbackEndObserver = nil
+        }
         player?.pause()
         player = nil
         isPlaying = false
