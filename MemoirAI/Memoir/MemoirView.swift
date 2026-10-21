@@ -188,7 +188,7 @@ struct MemoirView: View {
                             .minimumScaleFactor(0.75)
                             .fixedSize(horizontal: false, vertical: true)
 
-                        Text("\(filledPromptSlotsForChapter(entries: entries, chapter: chapter)) of \(chapter.prompts.count) memories recorded")
+                        Text("\(filledPromptSlotsForChapter(entries: entries, chapter: chapter, childNames: profileVM.selectedProfile.childNames)) of \(chapter.prompts.count) memories recorded")
                             .font(LinenTheme.body(14))
                             .foregroundColor(colors.deepGreen)
                             .lineLimit(2)
@@ -221,7 +221,7 @@ struct MemoirView: View {
     private var modeToggle: some View {
         if showModePicker {
             VStack(spacing: 10) {
-                ForEach(MemoirMode.allCases, id: \.rawValue) { mode in
+                ForEach([MemoirMode.normal, .parent], id: \.rawValue) { mode in
                     let isSelected = memoirMode == mode
                     Button {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -353,7 +353,7 @@ struct MemoirView: View {
         LazyVGrid(columns: chapterGridColumns, spacing: 16) {
             ForEach(1...chapters.count, id: \.self) { chapterNumber in
                 if let chapter = chapters.first(where: { $0.number == chapterNumber }) {
-                    let isDone = filledPromptSlotsForChapter(entries: entries, chapter: chapter) >= chapter.prompts.count
+                    let isDone = filledPromptSlotsForChapter(entries: entries, chapter: chapter, childNames: profileVM.selectedProfile.childNames) >= chapter.prompts.count
 
                     Button(action: {
                         navigateToChapter = chapterNumber
@@ -368,7 +368,7 @@ struct MemoirView: View {
                                     .font(LinenTheme.body(16, weight: .medium))
                                     .foregroundStyle(LinenTheme.ink)
                                     .multilineTextAlignment(.leading)
-                                Text("\(filledPromptSlotsForChapter(entries: entries, chapter: chapter)) of \(chapter.prompts.count) memories")
+                                Text("\(filledPromptSlotsForChapter(entries: entries, chapter: chapter, childNames: profileVM.selectedProfile.childNames)) of \(chapter.prompts.count) memories")
                                     .font(LinenTheme.body(12))
                                     .foregroundStyle(LinenTheme.secondary)
                             }
@@ -416,11 +416,11 @@ struct MemoirView: View {
 
     // MARK: — Data helpers
        private var firstIncompleteChapter: Chapter? {
-        chapters.first { filledPromptSlotsForChapter(entries: entries, chapter: $0) < $0.prompts.count }
+        chapters.first { filledPromptSlotsForChapter(entries: entries, chapter: $0, childNames: profileVM.selectedProfile.childNames) < $0.prompts.count }
     }
 
     private func completedChaptersCount() -> Int {
-        chapters.filter { filledPromptSlotsForChapter(entries: entries, chapter: $0) >= $0.prompts.count }.count
+        chapters.filter { filledPromptSlotsForChapter(entries: entries, chapter: $0, childNames: profileVM.selectedProfile.childNames) >= $0.prompts.count }.count
     }
 
     private func fetchEntries() {

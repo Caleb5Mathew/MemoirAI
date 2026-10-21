@@ -102,6 +102,9 @@ struct SubscriptionPaywallView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
+        // The illustrated header needs white system icons; the paywall itself stays light.
+        .environment(\.colorScheme, .light)
+        .preferredColorScheme(!isPreparing && accountID != nil && preparationError == nil ? .dark : .light)
         .analyticsScreen("paywall")
         .interactiveDismissDisabled(isActivating || isPurchasing)
         .task { await prepare() }

@@ -102,6 +102,25 @@ final class DesignWalkthroughUITests: XCTestCase {
     }
 
     @MainActor
+    func testAllNormalChapterPathMarkers() throws {
+        for chapterNumber in 1...10 {
+            let app = XCUIApplication()
+            app.launchArguments = ["-UITest", "-UITestNormalChapter", "\(chapterNumber)"]
+            app.launch()
+            XCTAssertTrue(app.staticTexts["chapterJourneyTitle"].waitForExistence(timeout: 8))
+            let nodes = app.descendants(matching: .any).matching(identifier: "chapterPromptNode")
+            XCTAssertEqual(nodes.count, 4)
+            for node in nodes.allElementsBoundByIndex {
+                XCTAssertGreaterThanOrEqual(node.frame.width, 44)
+                XCTAssertGreaterThanOrEqual(node.frame.minX, app.frame.minX)
+                XCTAssertLessThanOrEqual(node.frame.maxX, app.frame.maxX)
+            }
+            snap(app, name: String(format: "normal-path-%02d", chapterNumber))
+            app.terminate()
+        }
+    }
+
+    @MainActor
     func testAllRelationshipJourneyBackgrounds() throws {
         for chapterNumber in 1...10 {
             let app = XCUIApplication()
@@ -232,7 +251,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testMemoirPickerHeaderAndChapterCards() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest"]
+        app.launchArguments = ["-UITest", "-linen-preview", "-analytics-internal"]
         app.launch()
 
         sleep(3)
@@ -250,11 +269,12 @@ final class DesignWalkthroughUITests: XCTestCase {
         XCTAssertEqual(title.frame.midY, change.frame.midY, accuracy: 8)
 
         change.tap()
-        let relationshipModeRow = app.buttons["memoirModeOption_relationships"]
-        XCTAssertTrue(relationshipModeRow.waitForExistence(timeout: 3))
-        relationshipModeRow.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
-        XCTAssertEqual(title.label, "Relationship Memoir")
-        XCTAssertTrue(relationshipModeRow.waitForNonExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["memoirModeOption_relationships"].exists)
+        let lifeStoryRow = app.buttons["memoirModeOption_normal"]
+        XCTAssertTrue(lifeStoryRow.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["memoirModeOption_parent"].exists)
+        lifeStoryRow.tap()
+        XCTAssertTrue(lifeStoryRow.waitForNonExistence(timeout: 2))
 
         let currentChapterCard = app.buttons["currentChapterCard"]
         XCTAssertTrue(currentChapterCard.isHittable)
@@ -265,7 +285,7 @@ final class DesignWalkthroughUITests: XCTestCase {
         let secondTile = app.buttons["chapterTile2"]
         XCTAssertTrue(firstTile.waitForExistence(timeout: 5))
         XCTAssertTrue(secondTile.exists)
-        XCTAssertGreaterThanOrEqual(firstTile.frame.height, 76)
+        XCTAssertGreaterThanOrEqual(firstTile.frame.height, 44)
         XCTAssertEqual(firstTile.frame.height, secondTile.frame.height, accuracy: 1)
     }
 

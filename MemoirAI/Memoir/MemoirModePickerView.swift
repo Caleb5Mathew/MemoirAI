@@ -2,7 +2,7 @@
 //  MemoirModePickerView.swift
 //  MemoirAI
 //
-//  Sheet to choose Normal / Parent / Relationships before entering MemoirView.
+//  Sheet to choose My Life Story or Parenthood before entering MemoirView.
 //
 
 import SwiftUI
@@ -45,12 +45,6 @@ struct MemoirModePickerView: View {
                                 title: "Parenthood",
                                 description: "The joys and lessons of raising a family.",
                                 systemImage: "figure.and.child.holdinghands"
-                            )
-                            modeCard(
-                                mode: .relationships,
-                                title: "Love & Relationships",
-                                description: "The story of your partnership together.",
-                                systemImage: "heart.fill"
                             )
                         }
                     }

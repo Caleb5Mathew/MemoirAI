@@ -39,7 +39,7 @@ struct PerChildRecordingView: View {
             chapterTitleMatches($0.chapter, chapterTitle)
         }
         for (i, sub) in prompts.enumerated() {
-            if !entries.contains(where: { $0.prompt == sub.text }) {
+            if !entries.contains(where: { parentPromptTextsIncludingPrevious(sub.text, chapterTitle: chapterTitle).contains($0.prompt ?? "") }) {
                 return i
             }
         }

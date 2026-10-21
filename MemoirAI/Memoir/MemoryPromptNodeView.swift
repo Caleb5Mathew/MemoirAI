@@ -49,8 +49,8 @@ struct MemoryPromptNodeView: View {
     /// How many of the child variants have been recorded. Drives partial-progress styling.
     var completedChildCount: Int = 0
 
-    let greenColor = Color.green
-    let micColor = Color(red: 0.88, green: 0.52, blue: 0.28)
+    let greenColor = Color(red: 0.35, green: 0.43, blue: 0.32)
+    let micColor = Color(red: 0.94, green: 0.88, blue: 0.73)
     let brownBorder = Color(red: 101/255, green: 69/255, blue: 44/255) // warm brown
 
     var body: some View {
@@ -69,20 +69,23 @@ struct MemoryPromptNodeView: View {
 
             // Main disc
             Circle()
-                .fill(circleColor)
+                .fill(LinearGradient(
+                    colors: [circleColor, circleColor.opacity(0.92)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ))
                 .frame(width: 60, height: 60)
-                .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 3))
+                .overlay(Circle().strokeBorder(borderColor, lineWidth: 1.5))
+                .shadow(color: brownBorder.opacity(0.18), radius: 3, x: 0, y: 2)
 
             // Icon
             Image(systemName: iconName)
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundColor(iconColor)
         }
-        .overlay(
-            Circle()
-                .stroke(borderColor, lineWidth: 3)
-                .frame(width: 72, height: 72)
-        )
+        .frame(width: 60, height: 60)
+        .contentShape(Circle())
         .overlay(alignment: .topTrailing) {
             if childCount > 1 {
                 Text("\(completedChildCount)/\(childCount)")
@@ -123,7 +126,7 @@ struct MemoryPromptNodeView: View {
 
     // Icon color
     var iconColor: Color {
-        return .white
+        return isCompleted ? .white : Color(red: 0.36, green: 0.39, blue: 0.27)
     }
 
     // Border color
@@ -133,7 +136,7 @@ struct MemoryPromptNodeView: View {
         } else if isSelected {
             return LinenTheme.accent
         } else {
-            return Color.clear
+            return brownBorder.opacity(0.45)
         }
     }
 }

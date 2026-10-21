@@ -4,6 +4,75 @@ import UIKit
 @testable import MemoirAI
 
 struct RuntimeFlowPolicyTests {
+    @Test func parentPromptRevisionPreservesEveryShippedSlot() {
+        for chapter in allParentChapters {
+            let previous = previousParentChapters.first { $0.number == chapter.number }
+            #expect(previous?.title == chapter.title)
+            #expect(previous?.prompts.count == chapter.prompts.count)
+            for (index, prompt) in chapter.prompts.enumerated() {
+                let old = previous?.prompts[index]
+                #expect(old?.isPerChild == prompt.isPerChild)
+                #expect(old?.x == prompt.x)
+                #expect(old?.y == prompt.y)
+                let names = prompt.isPerChild ? ["Maya", "Leo", "your child"] : [""]
+                for name in names {
+                    let currentText = prompt.text.replacingOccurrences(of: "{kid}", with: name)
+                    let oldText = old?.text.replacingOccurrences(of: "{kid}", with: name)
+                    let recognized = parentPromptTextsIncludingPrevious(currentText, chapterTitle: chapter.title)
+                    #expect(recognized.contains(currentText))
+                    #expect(oldText.map(recognized.contains) == true)
+                }
+            }
+        }
+    }
+
+    @Test func parentPromptAliasesDoNotMixChildrenOrChapters() throws {
+        let chapter = try #require(allParentChapters.first { $0.number == 2 })
+        let old = try #require(previousParentChapters.first { $0.number == 2 })
+        let current = chapter.prompts[0].text.replacingOccurrences(of: "{kid}", with: "Maya")
+        let otherChild = old.prompts[0].text.replacingOccurrences(of: "{kid}", with: "Leo")
+        #expect(!parentPromptTextsIncludingPrevious(current, chapterTitle: chapter.title).contains(otherChild))
+        #expect(parentPromptTextsIncludingPrevious(current, chapterTitle: "Beginnings") == [current])
+        #expect(parentPromptTextsIncludingPrevious("My own question", chapterTitle: chapter.title) == ["My own question"])
+    }
+
+    @Test func parentProgressRecognizesOldAndNewRecordingsForEverySlot() throws {
+        for chapter in allParentChapters {
+            let previous = try #require(previousParentChapters.first { $0.number == chapter.number })
+            for (index, prompt) in chapter.prompts.enumerated() {
+                for source in [prompt, previous.prompts[index]] {
+                    let recorded = Set(expandedChildPrompts(for: source, childNames: ["Maya", "Leo"]).map(\.text))
+                    #expect(isPromptSlotRecorded(prompt, chapterTitle: chapter.title, childNames: ["Maya", "Leo"], recordedPromptTexts: recorded))
+                }
+                #expect(!isPromptSlotRecorded(prompt, chapterTitle: chapter.title, childNames: ["Maya", "Leo"], recordedPromptTexts: []))
+            }
+        }
+    }
+
+    @Test func parentProgressRequiresEveryChildButAcceptsMixedPromptVersions() throws {
+        let chapter = try #require(allParentChapters.first { $0.number == 2 })
+        let previous = try #require(previousParentChapters.first { $0.number == 2 })
+        let prompt = chapter.prompts[0]
+        let maya = prompt.text.replacingOccurrences(of: "{kid}", with: "Maya")
+        let leo = previous.prompts[0].text.replacingOccurrences(of: "{kid}", with: "Leo")
+        #expect(!isPromptSlotRecorded(prompt, chapterTitle: chapter.title, childNames: ["Maya", "Leo"], recordedPromptTexts: [maya]))
+        #expect(isPromptSlotRecorded(prompt, chapterTitle: chapter.title, childNames: ["Maya", "Leo"], recordedPromptTexts: [maya, leo]))
+        #expect(!isPromptSlotRecorded(prompt, chapterTitle: chapter.title, childNames: ["Maya", "Leo", "Sam"], recordedPromptTexts: [maya, leo]))
+        #expect(!isPromptSlotRecorded(chapter.prompts[1], chapterTitle: chapter.title, childNames: ["Maya", "Leo"], recordedPromptTexts: [maya, leo]))
+    }
+
+    @Test func parentProgressWithoutChildNamesMatchesNeutralRecordings() throws {
+        let chapter = try #require(allParentChapters.first { $0.number == 2 })
+        let previous = try #require(previousParentChapters.first { $0.number == 2 })
+        let prompt = chapter.prompts[0]
+        for source in [prompt, previous.prompts[0]] {
+            let neutral = source.text.replacingOccurrences(of: "{kid}", with: "your child")
+            #expect(isPromptSlotRecorded(prompt, chapterTitle: chapter.title, childNames: [], recordedPromptTexts: [neutral]))
+        }
+        let named = prompt.text.replacingOccurrences(of: "{kid}", with: "Maya")
+        #expect(!isPromptSlotRecorded(prompt, chapterTitle: chapter.title, childNames: [], recordedPromptTexts: [named]))
+    }
+
     @Test func onlyAutomaticStorybookEntryResumesPendingGeneration() {
         #expect(!StorybookScreenEntry.standard.resumesPendingGeneration)
         #expect(StorybookScreenEntry.autoResumePendingGeneration.resumesPendingGeneration)
@@ -575,8 +644,8 @@ struct RuntimeFlowPolicyTests {
         #expect(growingUp.count == 4)
         #expect(growingUp != beginnings)
         #expect(parentAlias == growingUp)
-        #expect(growingUp[0] == CGPoint(x: 0.53, y: 0.80))
-        #expect(growingUp[2] == CGPoint(x: 0.73, y: 0.45))
+        #expect(growingUp[0] == CGPoint(x: 0.55, y: 0.80))
+        #expect(growingUp[2] == CGPoint(x: 0.66, y: 0.44))
 
         for title in allChapters.map(\.title) + allParentChapters.map(\.title) {
             let coordinates = ChapterJourneyNodeLayoutPolicy.coordinates(forChapterTitle: title)
@@ -586,6 +655,27 @@ struct RuntimeFlowPolicyTests {
                     && (0...1).contains($0.x)
                     && (0...1).contains($0.y)
             })
+        }
+    }
+
+    @Test func chapterPathMarkersRemainFullyVisibleAcrossDeviceWidths() {
+        let sizes = [
+            CGSize(width: 320, height: 568), CGSize(width: 375, height: 812),
+            CGSize(width: 393, height: 852), CGSize(width: 430, height: 932),
+            CGSize(width: 768, height: 1024), CGSize(width: 1024, height: 1366),
+            CGSize(width: 1366, height: 1024), CGSize(width: 852, height: 393)
+        ]
+        for size in sizes {
+            let frame = ChapterJourneyLayoutPolicy.artworkFrame(in: CGRect(origin: .zero, size: size))
+            for chapter in allChapters + allParentChapters {
+                for anchor in ChapterJourneyNodeLayoutPolicy.coordinates(forChapterTitle: chapter.title) {
+                    let point = ChapterJourneyLayoutPolicy.point(normalizedX: anchor.x, normalizedY: anchor.y, in: frame)
+                    #expect(point.x >= 30)
+                    #expect(point.x <= size.width - 30)
+                    #expect(point.y >= 160)
+                    #expect(point.y <= frame.height - 30)
+                }
+            }
         }
     }
 

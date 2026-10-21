@@ -101,7 +101,7 @@ struct ChapterJourneyView: View {
         let expanded = expandedChildPrompts(for: prompt, childNames: childNames)
         let entries = chapterEntries
         return expanded.filter { sub in
-            entries.contains(where: { $0.prompt == sub.text })
+            entries.contains(where: { parentPromptTextsIncludingPrevious(sub.text, chapterTitle: chapter.title).contains($0.prompt ?? "") })
         }.count
     }
 
@@ -117,11 +117,11 @@ struct ChapterJourneyView: View {
                 if prompt.isPerChild {
                     let expanded = expandedChildPrompts(for: prompt, childNames: childNames)
                     let allDone = !expanded.isEmpty && expanded.allSatisfy { sub in
-                        entriesForProfileAndChapter.contains(where: { $0.prompt == sub.text })
+                        entriesForProfileAndChapter.contains(where: { parentPromptTextsIncludingPrevious(sub.text, chapterTitle: chapter.title).contains($0.prompt ?? "") })
                     }
                     return allDone ? prompt.id : nil
                 }
-                if entriesForProfileAndChapter.contains(where: { $0.prompt == prompt.text }) {
+                if entriesForProfileAndChapter.contains(where: { parentPromptTextsIncludingPrevious(prompt.text, chapterTitle: chapter.title).contains($0.prompt ?? "") }) {
                     return prompt.id
                 }
                 if useLegacyIndexMatch,
@@ -179,7 +179,7 @@ struct ChapterJourneyView: View {
             .frame(width: geo.size.width, height: geo.size.height)
             .overlay(alignment: .top) {
                 headerStack
-                    .padding(.top, containerSafeAreaInsets.top)
+                    .padding(.top, containerSafeAreaInsets.top + 8)
             }
 //            .navigationBarBackButtonHidden(true)
             .fullScreenCover(item: $selectedPrompt, onDismiss: {
@@ -393,13 +393,13 @@ struct ChapterJourneyView: View {
             let expanded = expandedChildPrompts(for: prompt, childNames: childNames)
             let entries = chapterEntries
             let remaining = expanded.filter { sub in
-                !entries.contains(where: { $0.prompt == sub.text })
+                !entries.contains(where: { parentPromptTextsIncludingPrevious(sub.text, chapterTitle: chapter.title).contains($0.prompt ?? "") })
             }
 
             if remaining.isEmpty {
                 // All children recorded: open detail for the first child's entry.
                 if let first = expanded.first,
-                   let entry = entries.first(where: { $0.prompt == first.text }),
+                   let entry = entries.first(where: { parentPromptTextsIncludingPrevious(first.text, chapterTitle: chapter.title).contains($0.prompt ?? "") }),
                    let id = entry.id {
                     selectedEntryID = id
                 }
@@ -436,7 +436,7 @@ struct ChapterJourneyView: View {
                         chapter.title,
                         memoirMode: memoirMode
                       ) else { return false }
-                if e.prompt == prompt.text { return true }
+                if parentPromptTextsIncludingPrevious(prompt.text, chapterTitle: chapter.title).contains(e.prompt ?? "") { return true }
                 if let i = promptIndex, useLegacyIndexMatch, let leg = legacyChapter,
                    i < leg.prompts.count, e.prompt == leg.prompts[i].text {
                     return true

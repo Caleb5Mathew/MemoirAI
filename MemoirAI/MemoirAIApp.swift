@@ -154,6 +154,21 @@ struct MemoirAIApp: App {
     let persistenceController = PersistenceController.shared
 
     #if DEBUG
+    private var normalJourneyUITestChapter: Chapter? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flagIndex = arguments.firstIndex(of: "-UITestNormalChapter"),
+              arguments.indices.contains(flagIndex + 1),
+              let number = Int(arguments[flagIndex + 1]),
+              let source = allChapters.first(where: { $0.number == number }) else {
+            return nil
+        }
+        let anchors = ChapterJourneyNodeLayoutPolicy.coordinates(forChapterTitle: source.title)
+        let prompts = zip(source.prompts, anchors).map { prompt, point in
+            MemoryPrompt(text: prompt.text, x: point.x, y: point.y)
+        }
+        return Chapter(number: number, title: source.title, prompts: prompts)
+    }
+
     private var relationshipJourneyUITestChapter: Chapter? {
         let arguments = ProcessInfo.processInfo.arguments
         guard let flagIndex = arguments.firstIndex(of: "-UITestRelationshipChapter"),
@@ -235,6 +250,15 @@ struct MemoirAIApp: App {
                     #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("-UITestMemoirName") {
                         StorybookNameUITestHarness()
+                    } else if let chapter = normalJourneyUITestChapter {
+                        GeometryReader { container in
+                            ChapterJourneyView(
+                                chapter: chapter,
+                                containerSafeAreaInsets: container.safeAreaInsets,
+                                memoirMode: .normal
+                            )
+                            .ignoresSafeArea()
+                        }
                     } else if let chapter = relationshipJourneyUITestChapter {
                         GeometryReader { container in
                             RelationshipJourneyView(

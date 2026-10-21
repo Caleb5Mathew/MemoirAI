@@ -98,7 +98,7 @@ enum MemoirModeClassifier {
         case .normal:
             legacy = allChaptersLegacyKnownPrompts.filter { (1...10).contains($0.number) }
         case .parent:
-            legacy = allChaptersLegacyKnownPrompts.filter { (101...110).contains($0.number) }
+            legacy = allChaptersLegacyKnownPrompts.filter { (101...110).contains($0.number) } + previousParentChapters
         case .relationships:
             legacy = allChaptersLegacyKnownPrompts.filter { (201...299).contains($0.number) }
         }
@@ -285,15 +285,16 @@ func normalChapterPromptTextsIncludingLegacy(for chapter: Chapter) -> [String] {
 }
 
 /// How many prompt nodes are satisfied for this chapter (current or legacy prompt text per index). Used for hub + homepage progress.
-func filledPromptSlotsForChapter(entries: [MemoryEntry], chapter: Chapter) -> Int {
+func filledPromptSlotsForChapter(entries: [MemoryEntry], chapter: Chapter, childNames: [String] = []) -> Int {
     let entriesForChapter = entries.filter { chapterTitleMatches($0.chapter, chapter.title) }
     let legacySameNumber = allChaptersLegacyKnownPrompts.first { $0.number == chapter.number }
     let useLegacyIndexMatch = currentMemoirMode() == .normal
         && allChapters.contains(where: { $0.number == chapter.number && $0.title == chapter.title })
         && legacySameNumber != nil
+    let recordedPromptTexts = Set(entriesForChapter.compactMap(\.prompt))
     var filled = 0
     for (index, prompt) in chapter.prompts.enumerated() {
-        if entriesForChapter.contains(where: { $0.prompt == prompt.text }) {
+        if isPromptSlotRecorded(prompt, chapterTitle: chapter.title, childNames: childNames, recordedPromptTexts: recordedPromptTexts) {
             filled += 1
             continue
         }
@@ -344,46 +345,47 @@ enum ChapterJourneyNodeLayoutPolicy {
         CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.47, y: 0.30)
     ]
 
+    // Anchors follow the painted path in source artwork, before viewport cropping.
     private static let trailCoordinatesByArtwork: [String: [CGPoint]] = [
         "beginnings": [
-            CGPoint(x: 0.57, y: 0.80), CGPoint(x: 0.39, y: 0.62),
-            CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.47, y: 0.30)
+            CGPoint(x: 0.56, y: 0.80), CGPoint(x: 0.34, y: 0.63),
+            CGPoint(x: 0.66, y: 0.44), CGPoint(x: 0.49, y: 0.30)
         ],
         "growing up": [
-            CGPoint(x: 0.53, y: 0.80), CGPoint(x: 0.36, y: 0.60),
-            CGPoint(x: 0.73, y: 0.45), CGPoint(x: 0.47, y: 0.30)
+            CGPoint(x: 0.55, y: 0.80), CGPoint(x: 0.35, y: 0.63),
+            CGPoint(x: 0.66, y: 0.44), CGPoint(x: 0.48, y: 0.30)
         ],
         "belonging": [
-            CGPoint(x: 0.44, y: 0.78), CGPoint(x: 0.55, y: 0.62),
-            CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.55, y: 0.28)
+            CGPoint(x: 0.60, y: 0.80), CGPoint(x: 0.35, y: 0.63),
+            CGPoint(x: 0.65, y: 0.44), CGPoint(x: 0.47, y: 0.30)
         ],
         "becoming": [
-            CGPoint(x: 0.48, y: 0.80), CGPoint(x: 0.62, y: 0.63),
-            CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.52, y: 0.28)
+            CGPoint(x: 0.60, y: 0.80), CGPoint(x: 0.35, y: 0.63),
+            CGPoint(x: 0.62, y: 0.44), CGPoint(x: 0.49, y: 0.30)
         ],
         "love": [
-            CGPoint(x: 0.62, y: 0.78), CGPoint(x: 0.38, y: 0.63),
-            CGPoint(x: 0.73, y: 0.45), CGPoint(x: 0.48, y: 0.28)
+            CGPoint(x: 0.60, y: 0.80), CGPoint(x: 0.35, y: 0.63),
+            CGPoint(x: 0.62, y: 0.44), CGPoint(x: 0.48, y: 0.30)
         ],
         "care": [
-            CGPoint(x: 0.41, y: 0.80), CGPoint(x: 0.61, y: 0.60),
-            CGPoint(x: 0.38, y: 0.43), CGPoint(x: 0.56, y: 0.28)
+            CGPoint(x: 0.59, y: 0.80), CGPoint(x: 0.35, y: 0.63),
+            CGPoint(x: 0.60, y: 0.44), CGPoint(x: 0.47, y: 0.30)
         ],
         "work & purpose": [
-            CGPoint(x: 0.43, y: 0.80), CGPoint(x: 0.60, y: 0.63),
-            CGPoint(x: 0.38, y: 0.46), CGPoint(x: 0.58, y: 0.30)
+            CGPoint(x: 0.55, y: 0.80), CGPoint(x: 0.34, y: 0.63),
+            CGPoint(x: 0.68, y: 0.44), CGPoint(x: 0.48, y: 0.30)
         ],
         "hard seasons": [
-            CGPoint(x: 0.43, y: 0.80), CGPoint(x: 0.42, y: 0.63),
-            CGPoint(x: 0.72, y: 0.44), CGPoint(x: 0.45, y: 0.30)
+            CGPoint(x: 0.58, y: 0.80), CGPoint(x: 0.35, y: 0.63),
+            CGPoint(x: 0.66, y: 0.44), CGPoint(x: 0.47, y: 0.30)
         ],
         "change": [
-            CGPoint(x: 0.58, y: 0.78), CGPoint(x: 0.42, y: 0.61),
-            CGPoint(x: 0.75, y: 0.45), CGPoint(x: 0.45, y: 0.29)
+            CGPoint(x: 0.58, y: 0.80), CGPoint(x: 0.36, y: 0.63),
+            CGPoint(x: 0.71, y: 0.44), CGPoint(x: 0.50, y: 0.30)
         ],
         "legacy": [
-            CGPoint(x: 0.35, y: 0.78), CGPoint(x: 0.60, y: 0.60),
-            CGPoint(x: 0.36, y: 0.45), CGPoint(x: 0.71, y: 0.30)
+            CGPoint(x: 0.60, y: 0.80), CGPoint(x: 0.37, y: 0.63),
+            CGPoint(x: 0.65, y: 0.44), CGPoint(x: 0.48, y: 0.30)
         ]
     ]
 
@@ -591,7 +593,7 @@ let allChaptersLegacyKnownPrompts: [Chapter] = [
 func isKnownMemoirPrompt(chapterTitle: String, promptText: String) -> Bool {
     let trimmedChapter = chapterTitle.trimmingCharacters(in: .whitespacesAndNewlines)
     let trimmedPrompt = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
-    for chapters in [allChapters, allParentChapters, allRelationshipChapters, allChaptersLegacyKnownPrompts] {
+    for chapters in [allChapters, allParentChapters, previousParentChapters, allRelationshipChapters, allChaptersLegacyKnownPrompts] {
         for ch in chapters where ch.title.caseInsensitiveCompare(trimmedChapter) == .orderedSame {
             if ch.prompts.contains(where: { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(trimmedPrompt) == .orderedSame }) {
                 return true
@@ -930,6 +932,79 @@ let allChapters: [Chapter] = [
 
 let allParentChapters: [Chapter] = [
     Chapter(number: 1, title: "Before They Came", prompts: [
+        MemoryPrompt(text: "Tell me about something you loved doing before you had children.", x: 0.25, y: 0.78),
+        MemoryPrompt(text: "What was an ordinary day like before you became a parent?", x: 0.40, y: 0.62),
+        MemoryPrompt(text: "What did you dream of doing when you were younger?", x: 0.35, y: 0.44),
+        MemoryPrompt(text: "Tell me about a choice you made before parenthood that changed your life.", x: 0.50, y: 0.28)
+    ]),
+
+    Chapter(number: 2, title: "The Day They Arrived", prompts: [
+        MemoryPrompt(text: "Tell me about the day {kid} joined your family.", x: 0.20, y: 0.80, isPerChild: true),
+        MemoryPrompt(text: "What do you remember about the first time you held {kid}?", x: 0.45, y: 0.60, isPerChild: true),
+        MemoryPrompt(text: "What surprised you about becoming {kid}'s parent?", x: 0.70, y: 0.45, isPerChild: true),
+        MemoryPrompt(text: "Tell me about your first night at home with {kid}.", x: 0.60, y: 0.30, isPerChild: true)
+    ]),
+
+    Chapter(number: 3, title: "The Little Years", prompts: [
+        MemoryPrompt(text: "What is one little thing {kid} did as a toddler that still makes you smile?", x: 0.22, y: 0.76, isPerChild: true),
+        MemoryPrompt(text: "Tell me about a bedtime with {kid} when they were little.", x: 0.44, y: 0.60, isPerChild: true),
+        MemoryPrompt(text: "Tell me about a time you comforted {kid}.", x: 0.65, y: 0.44, isPerChild: true),
+        MemoryPrompt(text: "What is something funny {kid} used to say?", x: 0.48, y: 0.28, isPerChild: true)
+    ]),
+
+    Chapter(number: 4, title: "What They've Taught", prompts: [
+        MemoryPrompt(text: "Tell me about a time {kid} helped you see something differently.", x: 0.30, y: 0.80, isPerChild: true),
+        MemoryPrompt(text: "When did {kid} make a difficult day a little easier?", x: 0.55, y: 0.63, isPerChild: true),
+        MemoryPrompt(text: "What has {kid} taught you about being patient?", x: 0.75, y: 0.44, isPerChild: true),
+        MemoryPrompt(text: "Tell me about a time you changed your mind after listening to {kid}.", x: 0.60, y: 0.28, isPerChild: true)
+    ]),
+
+    Chapter(number: 5, title: "Where You Come From", prompts: [
+        MemoryPrompt(text: "What were you like as a child?", x: 0.26, y: 0.78),
+        MemoryPrompt(text: "Tell me about a tradition from your childhood you wanted to share with your children.", x: 0.42, y: 0.63),
+        MemoryPrompt(text: "What do you remember about the home you grew up in?", x: 0.66, y: 0.45),
+        MemoryPrompt(text: "Tell me about someone who helped raise you.", x: 0.52, y: 0.28)
+    ]),
+
+    Chapter(number: 6, title: "What You Love", prompts: [
+        MemoryPrompt(text: "Where do you go when you want a little time to yourself?", x: 0.25, y: 0.80),
+        MemoryPrompt(text: "Tell me about a meal that brings back a memory for you.", x: 0.46, y: 0.60),
+        MemoryPrompt(text: "What is a song that takes you back to being young?", x: 0.70, y: 0.43),
+        MemoryPrompt(text: "Tell me about a day with a friend that you still remember.", x: 0.56, y: 0.28)
+    ]),
+
+    Chapter(number: 7, title: "What You Believe", prompts: [
+        MemoryPrompt(text: "What is something you wanted to do differently from your own parents?", x: 0.24, y: 0.80),
+        MemoryPrompt(text: "Tell me about a time you stood up for something you believed in.", x: 0.45, y: 0.63),
+        MemoryPrompt(text: "What is one way you show your children love that they might not notice?", x: 0.70, y: 0.46),
+        MemoryPrompt(text: "What were you hoping to teach your children through a family rule?", x: 0.56, y: 0.30)
+    ]),
+
+    Chapter(number: 8, title: "When Life Was Hard", prompts: [
+        MemoryPrompt(text: "What was something difficult about parenting that your children may not have seen?", x: 0.30, y: 0.80),
+        MemoryPrompt(text: "Tell me about someone who helped you through a hard time.", x: 0.48, y: 0.63),
+        MemoryPrompt(text: "Tell me about a parenting mistake you learned from.", x: 0.70, y: 0.44),
+        MemoryPrompt(text: "What helped you keep going during a difficult time?", x: 0.55, y: 0.30)
+    ]),
+
+    Chapter(number: 9, title: "Your Little World", prompts: [
+        MemoryPrompt(text: "Tell me about a place you like spending time with {kid}.", x: 0.26, y: 0.78, isPerChild: true),
+        MemoryPrompt(text: "What is a little routine you share with {kid}?", x: 0.45, y: 0.61, isPerChild: true),
+        MemoryPrompt(text: "How did an inside joke between you and {kid} start?", x: 0.66, y: 0.45, isPerChild: true),
+        MemoryPrompt(text: "Tell me about an ordinary day with {kid} you would like to remember.", x: 0.50, y: 0.29, isPerChild: true)
+    ]),
+
+    Chapter(number: 10, title: "When They're Older", prompts: [
+        MemoryPrompt(text: "What do you hope {kid} knows about your love for them?", x: 0.25, y: 0.78, isPerChild: true),
+        MemoryPrompt(text: "What lesson from your own life would you like to pass on to {kid}?", x: 0.44, y: 0.60, isPerChild: true),
+        MemoryPrompt(text: "What would you want to tell {kid} when life feels difficult?", x: 0.68, y: 0.45, isPerChild: true),
+        MemoryPrompt(text: "What is one memory with {kid} you hope they carry with them?", x: 0.52, y: 0.30, isPerChild: true)
+    ])
+]
+
+// Shipped questions remain aliases for recordings saved before the wording update.
+let previousParentChapters: [Chapter] = [
+    Chapter(number: 1, title: "Before They Came", prompts: [
         MemoryPrompt(text: "Tell me about a day from your twenties that shows who you were before you had kids. Where were you, what were you doing, who were you with?", x: 0.25, y: 0.78),
         MemoryPrompt(text: "Walk me through the home you lived in right before your first child was on the way. What did each room look like?", x: 0.40, y: 0.62),
         MemoryPrompt(text: "Describe a day from your life before kids where you felt completely free. What did the scene look like?", x: 0.35, y: 0.44),
@@ -999,6 +1074,42 @@ let allParentChapters: [Chapter] = [
         MemoryPrompt(text: "If you could send {kid} one image from this point in your life together to remember forever, what would it be?", x: 0.52, y: 0.30, isPerChild: true)
     ])
 ]
+
+/// Resolves a displayed parent question to its current and previously shipped wording.
+/// Child names are extracted from the concrete prompt so one child's memory never fills another's slot.
+func parentPromptTextsIncludingPrevious(_ promptText: String, chapterTitle: String) -> [String] {
+    guard let chapter = allParentChapters.first(where: { $0.title == chapterTitle }),
+          let previous = previousParentChapters.first(where: { $0.number == chapter.number }) else {
+        return [promptText]
+    }
+    for (index, prompt) in chapter.prompts.enumerated() {
+        guard previous.prompts.indices.contains(index) else { continue }
+        if !prompt.isPerChild {
+            if prompt.text == promptText { return [promptText, previous.prompts[index].text] }
+            continue
+        }
+        let parts = prompt.text.components(separatedBy: "{kid}")
+        guard parts.count == 2, promptText.hasPrefix(parts[0]), promptText.hasSuffix(parts[1]),
+              promptText.count > parts[0].count + parts[1].count else { continue }
+        let childName = String(promptText.dropFirst(parts[0].count).dropLast(parts[1].count))
+        return [promptText, previous.prompts[index].text.replacingOccurrences(of: "{kid}", with: childName)]
+    }
+    return [promptText]
+}
+
+/// A slot is complete only after every child variant has a recording, matching the journey nodes.
+func isPromptSlotRecorded(
+    _ prompt: MemoryPrompt,
+    chapterTitle: String,
+    childNames: [String],
+    recordedPromptTexts: Set<String>
+) -> Bool {
+    let expanded = expandedChildPrompts(for: prompt, childNames: childNames)
+    return !expanded.isEmpty && expanded.allSatisfy { concretePrompt in
+        parentPromptTextsIncludingPrevious(concretePrompt.text, chapterTitle: chapterTitle)
+            .contains(where: recordedPromptTexts.contains)
+    }
+}
 
 // MARK: - Per-child prompt expansion
 

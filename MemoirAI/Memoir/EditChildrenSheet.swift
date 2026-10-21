@@ -11,15 +11,6 @@ struct EditChildrenSheet: View {
     @State private var names: [String] = [""]
     @FocusState private var focusedIndex: Int?
 
-    // Match the rest of the app's palette.
-    private let cream       = Color(red: 0.98, green: 0.94, blue: 0.86)
-    private let deepGreen   = Color(red: 0.10, green: 0.22, blue: 0.14)
-    private let terracotta  = Color(red: 0.83, green: 0.45, blue: 0.14)
-    private var inputFill: Color { cream.opacity(0.7) }
-
-    private let headerFontSize: CGFloat = 28
-    private let bodyFontSize: CGFloat = 18
-
     private var trimmedNames: [String] {
         names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -29,15 +20,15 @@ struct EditChildrenSheet: View {
 
     var body: some View {
         ZStack {
-            cream.ignoresSafeArea()
+            LinenTheme.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 topBar
 
                 ScrollView {
-                    VStack(spacing: 28) {
+                    VStack(alignment: .leading, spacing: 24) {
                         header
-                            .padding(.top, 24)
+                            .padding(.top, 20)
 
                         nameRows
                             .padding(.horizontal, 20)
@@ -46,19 +37,25 @@ struct EditChildrenSheet: View {
                             .padding(.horizontal, 20)
 
                         footerNote
-                            .padding(.horizontal, 28)
+                            .padding(.horizontal, 20)
                             .padding(.top, 4)
 
                         Spacer(minLength: 24)
                     }
+                    .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
                 }
-
-                saveButton
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 20)
+                .scrollDismissesKeyboard(.interactively)
+                .scrollBounceBehavior(.basedOnSize)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    saveButton
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                        .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
+                        .background(LinenTheme.paper)
+                }
             }
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .tint(LinenTheme.accent)
         .onAppear {
             let current = profileVM.selectedProfile.childNames
             if !current.isEmpty {
@@ -77,30 +74,30 @@ struct EditChildrenSheet: View {
                 dismiss()
             } label: {
                 Text("Cancel")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(deepGreen.opacity(0.7))
+                    .font(LinenTheme.body(16, weight: .medium))
+                    .foregroundColor(LinenTheme.secondary)
+                    .frame(minHeight: 44)
             }
             Spacer()
         }
         .padding(.horizontal, 20)
-        .padding(.top, 16)
+        .padding(.top, 8)
+        .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
     }
 
     private var header: some View {
-        VStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Who is this book for?")
-                .font(.customSerifFallback(size: headerFontSize))
-                .fontWeight(.light)
-                .foregroundColor(deepGreen)
-                .multilineTextAlignment(.center)
+                .font(LinenTheme.heading(25))
+                .foregroundColor(LinenTheme.ink)
+                .multilineTextAlignment(.leading)
 
             Text("Add the children this memoir is about.")
-                .font(.system(size: bodyFontSize))
-                .fontWeight(.light)
-                .foregroundColor(.black.opacity(0.6))
-                .multilineTextAlignment(.center)
+                .font(LinenTheme.body(16))
+                .foregroundColor(LinenTheme.secondary)
+                .multilineTextAlignment(.leading)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 20)
     }
 
     private var nameRows: some View {
@@ -108,9 +105,8 @@ struct EditChildrenSheet: View {
             ForEach(names.indices, id: \.self) { index in
                 HStack(spacing: 12) {
                     TextField("Child's name", text: $names[index])
-                        .font(.system(size: bodyFontSize))
-                        .fontWeight(.light)
-                        .foregroundColor(deepGreen)
+                        .font(LinenTheme.body(16))
+                        .foregroundColor(LinenTheme.ink)
                         .textInputAutocapitalization(.words)
                         .disableAutocorrection(false)
                         .focused($focusedIndex, equals: index)
@@ -124,9 +120,7 @@ struct EditChildrenSheet: View {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 14)
-                        .background(inputFill)
-                        .cornerRadius(16)
-                        .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
+                        .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 12))
 
                     if names.count > 1 {
                         Button {
@@ -134,13 +128,12 @@ struct EditChildrenSheet: View {
                         } label: {
                             Image(systemName: "xmark")
                                 .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(deepGreen.opacity(0.6))
-                                .frame(width: 36, height: 36)
-                                .background(Color.white.opacity(0.7))
-                                .clipShape(Circle())
-                                .shadow(color: Color.black.opacity(0.05), radius: 3, x: 0, y: 1)
+                                .foregroundColor(LinenTheme.secondary)
+                                .frame(width: 44, height: 44)
+                                .background(LinenTheme.surface, in: Circle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Remove child \(index + 1)")
                     }
                 }
             }
@@ -155,37 +148,32 @@ struct EditChildrenSheet: View {
                 Image(systemName: "plus")
                     .font(.system(size: 14, weight: .semibold))
                 Text("Add another child")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(LinenTheme.body(15, weight: .medium))
             }
-            .foregroundColor(terracotta)
+            .foregroundColor(LinenTheme.accent)
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(terracotta.opacity(0.5), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
-            )
+            .background(LinenTheme.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
     }
 
     private var footerNote: some View {
         Text("Questions about each child are asked once for each name. Questions about your own life are shared across all children.")
-            .font(.system(size: 13))
-            .fontWeight(.light)
-            .foregroundColor(.black.opacity(0.55))
-            .multilineTextAlignment(.center)
+            .font(LinenTheme.body(13))
+            .foregroundColor(LinenTheme.secondary)
+            .multilineTextAlignment(.leading)
     }
 
     private var saveButton: some View {
         Button(action: saveAndDismiss) {
             Text("Save")
-                .font(.system(size: bodyFontSize, weight: .semibold))
-                .foregroundColor(.white)
+                .font(LinenTheme.body(16, weight: .semibold))
+                .foregroundColor(LinenTheme.onAccent)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(canSave ? terracotta : terracotta.opacity(0.4))
-                .cornerRadius(24)
+                .background(canSave ? LinenTheme.forest : LinenTheme.forest.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
         .disabled(!canSave)
