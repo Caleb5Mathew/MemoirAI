@@ -47,6 +47,32 @@ final class OnboardingV5Tests: XCTestCase {
         XCTAssertTrue(message.contains("Try again"))
     }
 
+    func testPreviewQuotaUsedMessageIsSpecific() {
+        let error = NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.resourceExhausted.rawValue,
+                            userInfo: [FunctionsErrorDetailsKey: ["reason": "preview-quota-used"]])
+        XCTAssertTrue(OnboardingPreviewErrorPolicy.message(for: error).contains("free preview has already been used"))
+    }
+
+    func testPreviewAttemptsExhaustedDoesNotClaimPreviewWasUsed() {
+        let error = NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.resourceExhausted.rawValue,
+                            userInfo: [FunctionsErrorDetailsKey: ["reason": "preview-attempts-exhausted"]])
+        let message = OnboardingPreviewErrorPolicy.message(for: error)
+        XCTAssertTrue(message.contains("after several attempts"))
+        XCTAssertTrue(message.contains("saved memory"))
+        XCTAssertFalse(message.contains("already been used"))
+        XCTAssertFalse(message.contains("Try again"))
+    }
+
+    func testPreviewUnknownExhaustionDoesNotInventQuotaReason() {
+        for details in [[:], ["reason": "unknown"]] {
+            let error = NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.resourceExhausted.rawValue,
+                                userInfo: [FunctionsErrorDetailsKey: details])
+            let message = OnboardingPreviewErrorPolicy.message(for: error)
+            XCTAssertTrue(message.contains("saved memory"))
+            XCTAssertFalse(message.contains("already been used"))
+        }
+    }
+
     func testBundledSampleNarrationDecodesCompletely() throws {
         let url = try XCTUnwrap(Bundle.main.url(forResource: "alex-sample", withExtension: "mp3"))
         let player = try AVAudioPlayer(contentsOf: url)

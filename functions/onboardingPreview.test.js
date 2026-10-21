@@ -207,7 +207,7 @@ function fakeDatabase() {
   assert.equal(cached.readingText, first.readingText);
   assert.equal(imageCalls, 1);
   await assert.rejects(handler({ ...request, data: { ...request.data, storyText: 'A completely different childhood story.' } }), { code: 'already-exists' });
-  await assert.rejects(handler({ ...request, data: { ...request.data, requestId: 'second-preview' } }), { code: 'resource-exhausted' });
+  await assert.rejects(handler({ ...request, data: { ...request.data, requestId: 'second-preview' } }), { code: 'resource-exhausted', details: { reason: 'preview-quota-used' } });
   await assert.rejects(handler({ data: request.data }), { code: 'unauthenticated' });
 
   const jobKey = `users/${uid}/onboardingPreviewJobs/${valid.requestId}`;
@@ -222,7 +222,7 @@ function fakeDatabase() {
   assert(db.records.get(jobKey).errorCode.isEqual(admin.firestore.FieldValue.delete()),
     'A successful retry must delete the previous failure code');
   db.records.set(jobKey, { ...job, status: 'failed', attempts: 3 });
-  await assert.rejects(handler(request), { code: 'resource-exhausted' });
+  await assert.rejects(handler(request), { code: 'resource-exhausted', details: { reason: 'preview-attempts-exhausted' } });
   assert.equal(imageCalls, 2);
   const untrustedFlagRequest = { ...request, data: { ...request.data, requestId: "untrusted", onboardingPreviewTester: true } };
   await assert.rejects(handler(untrustedFlagRequest), { code: "resource-exhausted" });

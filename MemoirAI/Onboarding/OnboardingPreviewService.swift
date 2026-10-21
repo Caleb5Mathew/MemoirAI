@@ -169,7 +169,15 @@ enum OnboardingPreviewErrorPolicy {
         guard ns.domain == FunctionsErrorDomain else { return error.localizedDescription }
         switch ns.code {
         case FunctionsErrorCode.resourceExhausted.rawValue:
-            return "Your free preview has already been used. Your saved memory is still available in your memoir."
+            let reason = (ns.userInfo[FunctionsErrorDetailsKey] as? [String: Any])?["reason"] as? String
+            switch reason {
+            case "preview-quota-used":
+                return "Your free preview has already been used. Your saved memory is still available in your memoir."
+            case "preview-attempts-exhausted":
+                return "We couldn’t create this preview after several attempts. Your saved memory is still available in your memoir."
+            default:
+                return "This preview can’t continue right now. Your saved memory is still available in your memoir."
+            }
         case FunctionsErrorCode.unauthenticated.rawValue:
             return "Your connection to Memoir expired. Reopen the app to reconnect to your saved memory."
         case FunctionsErrorCode.unavailable.rawValue, FunctionsErrorCode.deadlineExceeded.rawValue:

@@ -245,14 +245,14 @@ function createOnboardingPreviewHandler({
         }
         const attempts = Number(existing.attempts || 1);
         if (!Number.isSafeInteger(attempts) || attempts >= MAX_GENERATION_ATTEMPTS) {
-          throw new HttpsError("resource-exhausted", "This preview could not be completed after several attempts. Your memory is still saved.");
+          throw new HttpsError("resource-exhausted", "This preview could not be completed after several attempts. Your memory is still saved.", { reason: "preview-attempts-exhausted" });
         }
         transaction.update(jobRef, { status: "generating", attempts: attempts + 1, updatedAt: timestamp });
         return { action: "generate" };
       }
       const reserved = Number(usage.data()?.reserved || 0);
       if (!Number.isSafeInteger(reserved) || reserved < 0 || reserved >= previewLimit) {
-        throw new HttpsError("resource-exhausted", "The onboarding preview has already been used.");
+        throw new HttpsError("resource-exhausted", "The onboarding preview has already been used.", { reason: "preview-quota-used" });
       }
       transaction.set(usageRef, { reserved: reserved + 1, limit: previewLimit, updatedAt: timestamp }, { merge: true });
       transaction.create(jobRef, {
