@@ -341,3 +341,26 @@ function fakeDatabase() {
   assert.equal(openAITextRequestOptions(now + ONBOARDING_TITLE_WINDOW_MS, now).timeout, 15_000,
     "Title generation must have a usable provider budget after the shared persistence reserve");
 }
+
+{
+  const memory = 'When I was eight, my dad brought a radio to the kitchen table and asked me to hold the torch.';
+  const options = { profileName: 'Alex', storyText: memory, hasHeadshot: true, hasStyleReference: true };
+  const prompt = buildOnboardingIllustrationPrompt(options);
+  assert(prompt.startsWith('CAST THE SUBJECT BEFORE DRAWING:'));
+  assert(prompt.includes('that CHILD carries the portrait identity'));
+  assert(prompt.includes("never infer a parent's gray hair, wrinkles, or age"));
+  assert(prompt.includes('handheld electric flashlight'));
+  assert(prompt.includes(`MEMORY ABOUT ALEX:\n${memory}\n`), 'Illustration guidance must not rewrite the source memory');
+  assert.equal(options.storyText, memory);
+  const adultMemory = 'At forty, I repaired a radio and asked my dad to hold the torch.';
+  const adultPrompt = buildOnboardingIllustrationPrompt({ ...options, storyText: adultMemory });
+  assert(adultPrompt.includes('explicitly stated age or clear life stage overrides this default'));
+  assert(adultPrompt.includes(`MEMORY ABOUT ALEX:\n${adultMemory}\n`));
+  const helperPrompt = buildOnboardingIllustrationPrompt({ ...options, storytellerRole: 'helper' });
+  assert(helperPrompt.includes('refer to the helper unless the transcript explicitly quotes Alex'));
+  const fireMemory = 'Dad fixed the radio while I held a burning torch at the bonfire.';
+  const firePrompt = buildOnboardingIllustrationPrompt({ ...options, storyText: fireMemory });
+  assert(!firePrompt.includes('OBJECT CASTING FOR THIS ILLUSTRATION ONLY'));
+  const noPhoto = buildOnboardingIllustrationPrompt({ ...options, hasHeadshot: false });
+  assert(!noPhoto.includes('CAST THE SUBJECT BEFORE DRAWING:'));
+}

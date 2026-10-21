@@ -1,3 +1,20 @@
+function onboardingObjectClarification(storyText) {
+  const text = String(storyText || "");
+  // Explicit flame contexts take precedence over the regional meaning of torch.
+  if (/\b(?:flames?|fire|campfire|bonfire|burning|blowtorch|welding|soldering|olympic|procession)\b/i.test(text)) return "";
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  const repair = /\b(?:radio|engine|car|bicycle|bike|repair(?:ing|ed)?|fix(?:ing|ed)?|workbench)\b/i;
+  const heldTorch = /\b(?:hold|held|holding|shine|shone|shining|point|pointed|pointing)\b[^.!?]{0,45}\btorch\b/i;
+  const torchIllumination = /\btorch\b[^.!?]{0,45}\b(?:light|lit|illuminate|dark|see)\b/i;
+  const clarified = sentences.some((sentence, index) =>
+    /\btorch\b/i.test(sentence) &&
+    ((heldTorch.test(sentence) && repair.test(sentences.slice(Math.max(0, index - 1), index + 2).join(" "))) || torchIllumination.test(sentence))
+  );
+  return clarified
+    ? "OBJECT CASTING FOR THIS ILLUSTRATION ONLY: In this memory, torch means a handheld electric flashlight. Draw a battery powered flashlight with a lens and a beam of light, never a flame, burning torch, gas canister, or blowtorch. Keep the original narrated word torch unchanged in the book text."
+    : "";
+}
+
 function buildFastOnboardingIllustrationPrompt({ profileName, storyText, hasHeadshot, hasStyleReference = false, storytellerRole = "subject", subjectAppearance = "" }) {
   if (!["subject", "helper"].includes(storytellerRole)) throw new Error("Invalid storyteller role.");
   if (!String(profileName || "").trim() || !String(storyText || "").trim()) throw new Error("A subject and memory are required.");
@@ -13,4 +30,4 @@ function buildFastOnboardingIllustrationPrompt({ profileName, storyText, hasHead
   return `Create ONE SINGLE full-bleed wordless 4:3 landscape scene, not panels, a collage, or a sequence. One moment only. CAST BEFORE DRAWING: ${role} ${identity} ${references} Use stated age/life stage; explicit adulthood overrides childhood. If childhood has no age, choose plausible school age 6–12 as a visual assumption, never a biographical fact. Preserve action, setting, people count and relationships; invent no dates, locations or events. Resolve regional words from context (a torch lighting a repair means a flashlight, not flame). Choose one coherent moment. Avoid photographic, realistic oil-painting, cinematic or detailed digital-portrait rendering. Never embed reference photos, frames or insets. No text, letters, numbers, captions, signs, logos, signatures, watermarks, music symbols, borders or QR codes.${hasHeadshot ? `\nFINAL CAST CHECK: The portrait belongs only to ${profileName}; a childhood self and their parent must not become the child plus the present-day portrait adult.` : ""}\n\nMEMORY ABOUT ${profileName}:\n${storyText}`;
 }
 
-module.exports = { buildFastOnboardingIllustrationPrompt };
+module.exports = { buildFastOnboardingIllustrationPrompt, onboardingObjectClarification };

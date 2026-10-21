@@ -45,3 +45,24 @@ test('descriptor mode binds broad appearance only to named subject',()=>{
  assert.match(prompt,/guidance for Alex alone: warm brown skin and a round face/);
  assert.match(prompt,/never detailed anatomical rendering/);
 });
+
+const { onboardingObjectClarification } = require('./onboardingIllustrationPolicy');
+test('clarifies regional torch only when the recalled task establishes electric illumination',()=>{
+ for(const memory of [
+  'At eight my dad brought a radio to the table and asked me to hold the torch.',
+  'We were fixing the radio. Dad asked me to hold his torch while he worked.',
+  'I shone the torch under the car.',
+  'The torch lit the dark cupboard.'
+ ]) assert.match(onboardingObjectClarification(memory),/handheld electric flashlight/);
+});
+test('does not replace a genuine flame torch or add an object to unrelated stories',()=>{
+ for(const memory of [
+  'I held a torch at the Olympic procession.',
+  'Dad repaired the radio while I watched the campfire.',
+  'I held a burning torch while Dad fixed the car.',
+  'Dad was soldering a radio with a torch.',
+  'My dad owned a torch.',
+  'My dad fixed the radio and I listened.',
+  'I held a torch on stage.'
+ ]) assert.equal(onboardingObjectClarification(memory),'');
+});
