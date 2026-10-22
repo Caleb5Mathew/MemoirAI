@@ -48,6 +48,22 @@ struct ProfileMutationQueueTests {
         #expect(result.count == 2)
     }
 
+    @Test func queuedProfileMutationPreservesInterviewModePreference() {
+        let profileID = UUID()
+        let profile = Profile(id: profileID, name: "Caleb", interviewModeEnabled: true)
+        let mutation = PendingProfileMutation(
+            userID: "user-a",
+            profileID: profileID,
+            kind: .upsert,
+            profile: profile,
+            queuedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        let result = ProfileMutationQueuePolicy.enqueued(mutation, into: [])
+
+        #expect(result.first?.profile?.interviewModeEnabled == true)
+    }
+
     @Test func remoteUpsertIsRejectedAfterCrossDeviceDeletion() {
         #expect(!ProfileRemoteUpsertPolicy.shouldApply(
             pendingUpdatedAt: Date(timeIntervalSince1970: 20),

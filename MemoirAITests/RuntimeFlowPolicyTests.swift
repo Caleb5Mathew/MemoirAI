@@ -232,7 +232,7 @@ struct RuntimeFlowPolicyTests {
     @MainActor
     @Test func developerCodeDigestComparisonIsExact() {
         #expect(RCSubscriptionManager.verifyDeveloperPassword("Apologist123!"))
-        #expect(RCSubscriptionManager.verifyDeveloperPassword("apologist 123!"))
+        #expect(!RCSubscriptionManager.verifyDeveloperPassword("apologist 123!"))
         #expect(!RCSubscriptionManager.verifyDeveloperPassword("apologist123!"))
         #expect(DeveloperAccessCodePolicy.constantTimeMatches(
             candidateDigest: "abcdef",

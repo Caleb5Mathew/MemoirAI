@@ -112,6 +112,27 @@ struct OnboardingAndProfileRecoveryPolicyTests {
         ))
     }
 
+    @Test func legacyProfileDefaultsInterviewModeToDisabled() throws {
+        let profile = Profile(name: "Caleb")
+        let encoded = try JSONEncoder().encode(profile)
+        var legacy = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "interviewModeEnabled")
+
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        let decoded = try JSONDecoder().decode(Profile.self, from: legacyData)
+
+        #expect(!decoded.interviewModeEnabled)
+    }
+
+    @Test func profileRoundTripsInterviewModePreference() throws {
+        let profile = Profile(name: "Caleb", interviewModeEnabled: true)
+
+        let encoded = try JSONEncoder().encode(profile)
+        let decoded = try JSONDecoder().decode(Profile.self, from: encoded)
+
+        #expect(decoded.interviewModeEnabled)
+    }
+
     @Test func profilePhotoStoragePathIsCanonicalAndUserScoped() {
         let profileID = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!
         #expect(ProfilePhotoStorageScope.path(

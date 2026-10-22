@@ -847,8 +847,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
 
     /// SHA-256 digest (hex) of the developer unlock password. Never store the plaintext.
     private static let developerPasswordDigests = [
-        "03a3f52f7b1fbdbd8224152e8fcc06e7eff398f63c9961fce7d032f560002128",
-        "e2cac86982d8d0cb8352effe6af7f8d1dcd89bd98485551309111e6daf677818"
+        "03a3f52f7b1fbdbd8224152e8fcc06e7eff398f63c9961fce7d032f560002128"
     ]
 
     /// Verifies a candidate developer unlock password against the stored digest

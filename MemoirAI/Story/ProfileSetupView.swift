@@ -410,6 +410,7 @@ struct ProfileSetupView: View {
             updatedAt: Date(),
             childNames: profile.childNames,
             transcriptionGlossary: profile.transcriptionGlossary,
+            interviewModeEnabled: profile.interviewModeEnabled,
             faceDescription: profile.faceDescription,
             faceDescriptionPhotoHash: profile.faceDescriptionPhotoHash
         )

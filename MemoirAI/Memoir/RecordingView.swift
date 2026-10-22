@@ -126,6 +126,8 @@ struct RecordingView: View {
     @FocusState private var isTextFocused: Bool
     @State private var audioRecorder: AVAudioRecorder?
     @State private var audioURL: URL?
+    @State private var recordingUsesInterviewMode = false
+    @State private var recordingInterviewAudioProcessed = false
     @State private var isRecording = false
     @State private var isPaused = false
     @State private var showExitConfirm = false
@@ -777,10 +779,16 @@ struct RecordingView: View {
             audioURL = fileURL
             isRecording = true
             isPaused = false
+            recordingUsesInterviewMode = InterviewAudioPolicy.shouldProcess(
+                isDeveloperUnlocked: RCSubscriptionManager.shared.isDeveloperUnlockedSession,
+                isEnabledForProfile: profileVM.selectedProfile.interviewModeEnabled
+            )
+            recordingInterviewAudioProcessed = false
             
             // Track recording started
             ProductAnalytics.shared.track("Started Recording", [
-                "has_custom_prompt": !activePromptText.isEmpty
+                "has_custom_prompt": !activePromptText.isEmpty,
+                "interview_mode": recordingUsesInterviewMode
             ])
             
             // Start audio level monitoring
@@ -856,6 +864,8 @@ struct RecordingView: View {
             try? FileManager.default.removeItem(at: audioURL)
         }
         audioURL = nil
+        recordingUsesInterviewMode = false
+        recordingInterviewAudioProcessed = false
         recordingTime = 0
         typedText = ""
         photoItems.removeAll()
@@ -879,10 +889,28 @@ struct RecordingView: View {
         let audioURLToSave    = audioURL
         let profile = profileVM.selectedProfile
         let memoirModeToSave = memoirMode ?? MemoirModeClassifier.mode(forCurrentChapterTitle: chapterTitle)
+        let interviewAudioWasAlreadyProcessed = recordingInterviewAudioProcessed
+        let shouldProcessInterviewAudio = recordingUsesInterviewMode && !interviewAudioWasAlreadyProcessed
 
-        // 1️⃣ Spin up a private background context so we never block the UI
-        let bgContext = PersistenceController.shared.container.newBackgroundContext()
-        bgContext.perform {
+        Task {
+            let interviewModeApplied: Bool
+            do {
+                let processedNow = try await InterviewAudioProcessor.processIfNeeded(
+                    at: audioURLToSave,
+                    shouldProcess: shouldProcessInterviewAudio
+                )
+                interviewModeApplied = interviewAudioWasAlreadyProcessed || processedNow
+                recordingInterviewAudioProcessed = interviewModeApplied
+            } catch {
+                isSaving = false
+                ProductAnalytics.shared.track("Memory Save Failed", ["failure_stage": "interview_audio_processing"])
+                saveErrorMessage = "Interview Mode couldn’t prepare this recording. Your original recording is unchanged; try saving again or turn Interview Mode off."
+                return
+            }
+
+            // 1️⃣ Spin up a private background context so we never block the UI
+            let bgContext = PersistenceController.shared.container.newBackgroundContext()
+            await bgContext.perform {
             let audioFileSize = audioURLToSave.flatMap {
                 (try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? NSNumber)?.int64Value
             }
@@ -899,6 +927,7 @@ struct RecordingView: View {
             // 2️⃣ Create the MemoryEntry in the background
             let entry = MemoryEntry(context: bgContext)
             entry.id           = UUID()
+            entry.interviewModeApplied = interviewModeApplied
             entry.prompt       = promptToSave
             entry.text         = textToSave
             entry.audioData    = nil
@@ -922,7 +951,8 @@ struct RecordingView: View {
                     ProductAnalytics.shared.track("Saved Memory", [
                         "has_audio": hasAudio, "has_text": hasText,
                         "has_photos": hasPhotos, "save_scope": "local",
-                        "recording_duration": recordingDurationToSave
+                        "recording_duration": recordingDurationToSave,
+                        "interview_mode": interviewModeApplied
                     ])
                 }
                 
@@ -954,6 +984,7 @@ struct RecordingView: View {
                         NotificationCenter.default.post(name: .memorySaved, object: nil)
                     }
                 }
+            }
             }
         }
     }

@@ -59,6 +59,8 @@ struct RecordMemoryView: View {
     @State private var isPaused = false
     @State private var audioRecorder: AVAudioRecorder?
     @State private var audioURL: URL?
+    @State private var recordingUsesInterviewMode = false
+    @State private var recordingInterviewAudioProcessed = false
     @State private var showExitConfirm = false
     @State private var isSaving = false
     @State private var shouldDismissAfterSave = false
@@ -832,6 +834,11 @@ struct RecordMemoryView: View {
             audioURL = fileURL
             isRecording = true
             isPaused = false
+            recordingUsesInterviewMode = InterviewAudioPolicy.shouldProcess(
+                isDeveloperUnlocked: RCSubscriptionManager.shared.isDeveloperUnlockedSession,
+                isEnabledForProfile: profileVM.selectedProfile.interviewModeEnabled
+            )
+            recordingInterviewAudioProcessed = false
             
             // Start audio level monitoring
             if let recorder = audioRecorder {
@@ -908,6 +915,8 @@ struct RecordMemoryView: View {
             try? FileManager.default.removeItem(at: audioURL)
         }
         audioURL = nil
+        recordingUsesInterviewMode = false
+        recordingInterviewAudioProcessed = false
         recordingTime = 0 // Reset timer
     }
 
@@ -955,10 +964,27 @@ struct RecordMemoryView: View {
             : typedText
         let audioURLToSave = audioURL          // capture
         let profile = profileVM.selectedProfile
+        let interviewAudioWasAlreadyProcessed = recordingInterviewAudioProcessed
+        let shouldProcessInterviewAudio = recordingUsesInterviewMode && !interviewAudioWasAlreadyProcessed
         
-        // 🔥 ENHANCED: Use background context like RecordingView
-        let bgContext = PersistenceController.shared.container.newBackgroundContext()
-        bgContext.perform {
+        Task {
+            let interviewModeApplied: Bool
+            do {
+                let processedNow = try await InterviewAudioProcessor.processIfNeeded(
+                    at: audioURLToSave,
+                    shouldProcess: shouldProcessInterviewAudio
+                )
+                interviewModeApplied = interviewAudioWasAlreadyProcessed || processedNow
+                recordingInterviewAudioProcessed = interviewModeApplied
+            } catch {
+                isSaving = false
+                saveErrorMessage = "Interview Mode couldn’t prepare this recording. Your original recording is unchanged; try saving again or turn Interview Mode off."
+                return
+            }
+
+            // 🔥 ENHANCED: Use background context like RecordingView
+            let bgContext = PersistenceController.shared.container.newBackgroundContext()
+            await bgContext.perform {
             let audioFileSize = audioURLToSave.flatMap {
                 (try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? NSNumber)?.int64Value
             }
@@ -974,6 +1000,7 @@ struct RecordMemoryView: View {
             // 1️⃣ Create & save the entry in background context
             let newEntry = MemoryEntry(context: bgContext)
             newEntry.id           = UUID()
+            newEntry.interviewModeApplied = interviewModeApplied
             newEntry.prompt       = promptToSave
             newEntry.text         = textToSave
             newEntry.audioFileURL = audioURLToSave?.absoluteString
@@ -1026,6 +1053,8 @@ struct RecordMemoryView: View {
                 typedText = ""
                 selectedPrompt = nil
                 audioURL = nil
+                recordingUsesInterviewMode = false
+                recordingInterviewAudioProcessed = false
                 isRecording = false
                 isPaused = false
                 showExitConfirm = false
@@ -1036,6 +1065,7 @@ struct RecordMemoryView: View {
                 if promptToSave == passedPrompt {
                     UserDefaults.standard.set(true, forKey: promptKey)
                 }
+            }
             }
         }
     }

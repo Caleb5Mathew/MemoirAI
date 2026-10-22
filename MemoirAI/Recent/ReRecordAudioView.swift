@@ -20,6 +20,8 @@ struct ReRecordAudioView: View {
 
     @State private var audioRecorder: AVAudioRecorder?
     @State private var audioURL: URL?
+    @State private var recordingUsesInterviewMode = false
+    @State private var recordingInterviewAudioProcessed = false
     @State private var isRecording = false
     @State private var isPaused = false
     @State private var recordingTime: TimeInterval = 0
@@ -28,6 +30,7 @@ struct ReRecordAudioView: View {
     @State private var didSaveRecording = false
     @State private var showCloudTranscriptionDisclosure = false
     @State private var recordingStartErrorMessage: String?
+    @State private var saveErrorMessage: String?
 
     // Interruption / backgrounding — set when the system (not the user) paused
     // an in-progress recording, so the UI can explain why.
@@ -215,6 +218,17 @@ struct ReRecordAudioView: View {
         } message: {
             Text(recordingStartErrorMessage ?? RecordingStartErrorPolicy.message())
         }
+        .alert(
+            "Couldn’t save recording",
+            isPresented: Binding(
+                get: { saveErrorMessage != nil },
+                set: { if !$0 { saveErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { saveErrorMessage = nil }
+        } message: {
+            Text(saveErrorMessage ?? "Please try again.")
+        }
         .fullScreenCover(isPresented: $permissionManager.showMicrophonePermissionAlert) {
             MicrophonePermissionAlert(
                 isPresented: $permissionManager.showMicrophonePermissionAlert,
@@ -320,6 +334,11 @@ struct ReRecordAudioView: View {
             audioURL = fileURL
             isRecording = true
             isPaused = false
+            recordingUsesInterviewMode = InterviewAudioPolicy.shouldProcess(
+                isDeveloperUnlocked: RCSubscriptionManager.shared.isDeveloperUnlockedSession,
+                isEnabledForProfile: profileVM.selectedProfile.interviewModeEnabled
+            )
+            recordingInterviewAudioProcessed = false
             if let recorder = audioRecorder {
                 audioMonitor.startMonitoring(recorder: recorder)
             }
@@ -370,6 +389,8 @@ struct ReRecordAudioView: View {
             try? FileManager.default.removeItem(at: url)
         }
         audioURL = nil
+        recordingUsesInterviewMode = false
+        recordingInterviewAudioProcessed = false
         recordingTime = 0
     }
 
@@ -415,9 +436,26 @@ struct ReRecordAudioView: View {
         let capturedURL = url
         let objectID = memoryObjectID
         let profile = profileVM.selectedProfile
+        let interviewAudioWasAlreadyProcessed = recordingInterviewAudioProcessed
+        let shouldProcessInterviewAudio = recordingUsesInterviewMode && !interviewAudioWasAlreadyProcessed
 
-        let bgContext = PersistenceController.shared.container.newBackgroundContext()
-        bgContext.perform {
+        Task {
+            let interviewModeApplied: Bool
+            do {
+                let processedNow = try await InterviewAudioProcessor.processIfNeeded(
+                    at: capturedURL,
+                    shouldProcess: shouldProcessInterviewAudio
+                )
+                interviewModeApplied = interviewAudioWasAlreadyProcessed || processedNow
+                recordingInterviewAudioProcessed = interviewModeApplied
+            } catch {
+                isSaving = false
+                saveErrorMessage = "Interview Mode couldn’t prepare this recording. Your original recording is unchanged; try saving again or turn Interview Mode off."
+                return
+            }
+
+            let bgContext = PersistenceController.shared.container.newBackgroundContext()
+            await bgContext.perform {
             guard let entry = try? bgContext.existingObject(with: objectID) as? MemoryEntry else {
                 Task { @MainActor in
                     isSaving = false
@@ -437,6 +475,7 @@ struct ReRecordAudioView: View {
             let previousAudioURL = entry.audioFileURL.flatMap(URL.init(string:))
             entry.audioData = nil
             entry.audioFileURL = capturedURL.absoluteString
+            entry.interviewModeApplied = interviewModeApplied
             entry.text = nil
             entry.transcriptionRawText = nil
             entry.transcriptionEditedText = nil
@@ -468,6 +507,7 @@ struct ReRecordAudioView: View {
                 isSaving = false
                 didSaveRecording = true
                 dismiss()
+            }
             }
         }
     }

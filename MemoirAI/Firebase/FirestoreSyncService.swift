@@ -1086,6 +1086,7 @@ final class FirestoreSyncService {
                 "prompt": prompt,
                 "createdAt": createdAt,
                 "chapter": chapter,
+                "interviewModeApplied": entry.interviewModeApplied,
                 "profileID": profileID,
                 "syncedAt": FieldValue.serverTimestamp()
             ]
@@ -2584,6 +2585,11 @@ final class FirestoreSyncService {
                 ))?.rawValue
             }
             entry.characterDetails = data["characterDetails"] as? String
+            if let interviewModeApplied = data["interviewModeApplied"] as? Bool {
+                entry.interviewModeApplied = interviewModeApplied
+            } else if existingEntry == nil {
+                entry.interviewModeApplied = false
+            }
             if let ts = data["createdAt"] as? Timestamp {
                 entry.createdAt = ts.dateValue()
             } else {
@@ -2676,6 +2682,7 @@ final class FirestoreSyncService {
                 "name": profile.name,
                 "childNames": profile.childNames,
                 "transcriptionGlossary": profile.transcriptionGlossary,
+                "interviewModeEnabled": profile.interviewModeEnabled,
                 "syncedAt": FieldValue.serverTimestamp()
             ]
             

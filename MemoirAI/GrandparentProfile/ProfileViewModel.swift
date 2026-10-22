@@ -727,6 +727,7 @@ class ProfileViewModel: ObservableObject {
                         "updatedAt": Timestamp(date: profile.updatedAt),
                         "childNames": profile.childNames,
                         "transcriptionGlossary": profile.transcriptionGlossary,
+                        "interviewModeEnabled": profile.interviewModeEnabled,
                         "faceDescription": profile.faceDescription.map { $0 as Any } ?? NSNull(),
                         "faceDescriptionPhotoHash": profile.faceDescriptionPhotoHash.map { $0 as Any } ?? NSNull(),
                         "syncedAt": FieldValue.serverTimestamp()
@@ -855,6 +856,9 @@ class ProfileViewModel: ObservableObject {
                     transcriptionGlossary: data["transcriptionGlossary"] as? [String]
                         ?? local?.transcriptionGlossary
                         ?? [],
+                    interviewModeEnabled: data["interviewModeEnabled"] as? Bool
+                        ?? local?.interviewModeEnabled
+                        ?? false,
                     faceDescription: data["faceDescription"] as? String ?? local?.faceDescription,
                     faceDescriptionPhotoHash: data["faceDescriptionPhotoHash"] as? String
                         ?? local?.faceDescriptionPhotoHash

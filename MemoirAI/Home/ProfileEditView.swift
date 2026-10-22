@@ -31,6 +31,7 @@ struct ProfileEditView: View {
     @State private var ethnicity: String
     @State private var gender: String
     @State private var transcriptionTerms: String
+    @State private var interviewModeEnabled: Bool
     @State private var currentPhoto: UIImage?
 
     @State private var showBirthdayPicker = false
@@ -67,6 +68,7 @@ struct ProfileEditView: View {
         self._ethnicity = State(initialValue: resolvedProfile.ethnicity ?? "")
         self._gender = State(initialValue: resolvedProfile.gender ?? "Male")
         self._transcriptionTerms = State(initialValue: resolvedProfile.transcriptionGlossary.joined(separator: ", "))
+        self._interviewModeEnabled = State(initialValue: resolvedProfile.interviewModeEnabled)
         self._currentPhoto = State(initialValue: resolvedProfile.uiImage)
 
         if let initialGender = resolvedProfile.gender {
@@ -495,6 +497,29 @@ struct ProfileEditView: View {
                             .foregroundColor(DS.textSecondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 28)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Toggle("Interview Mode", isOn: Binding(
+                                get: { interviewModeEnabled },
+                                set: { enabled in
+                                    interviewModeEnabled = enabled
+                                    var updatedProfile = profileVM.profiles.first {
+                                        $0.id == profile.id
+                                    } ?? profile
+                                    updatedProfile.interviewModeEnabled = enabled
+                                    profileVM.updateProfile(updatedProfile)
+                                }
+                            ))
+                            .font(LinenTheme.body(15, weight: .semibold))
+                            .tint(DS.accent)
+                            .accessibilityIdentifier("interviewModeToggle")
+
+                            Text("Boosts quieter voices in new recordings when the speaker is farther from the phone.")
+                                .font(LinenTheme.body(12))
+                                .foregroundColor(DS.textSecondary)
+                        }
+                        .padding(16)
+                        .background(DS.fieldBg, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .padding(.horizontal, 24)
                         Button {
                             subscriptionManager.disablePersistentDevMode()
                             showDevModeSheet = false
@@ -616,6 +641,7 @@ struct ProfileEditView: View {
             updatedAt: Date(),
             childNames: profile.childNames,
             transcriptionGlossary: Array(glossary.prefix(40)),
+            interviewModeEnabled: interviewModeEnabled,
             faceDescription: profile.faceDescription,
             faceDescriptionPhotoHash: profile.faceDescriptionPhotoHash
         )
