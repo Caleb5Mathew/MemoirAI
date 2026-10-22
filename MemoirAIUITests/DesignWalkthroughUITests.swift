@@ -142,7 +142,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testWalkthroughScreenshots() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest"]
+        app.launchArguments = ["-UITest", "-linen-preview"]
         app.launch()
 
         sleep(3)
@@ -166,7 +166,7 @@ final class DesignWalkthroughUITests: XCTestCase {
         // Storybook screen: scroll first so the card is clear of the floating tab bar.
         app.swipeUp()
         sleep(1)
-        let yourBook = app.staticTexts["Your Book"]
+        let yourBook = app.buttons["tutorialYourBook"]
         XCTAssertTrue(yourBook.waitForExistence(timeout: 5), "Your Book link should appear")
         yourBook.tap()
         sleep(3)
@@ -317,7 +317,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testChapterJourneyScreenshot() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest"]
+        app.launchArguments = ["-UITest", "-linen-preview"]
         app.launch()
 
         sleep(3)
@@ -390,14 +390,14 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testShortBookPrintAvailabilityScreenshot() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-UITestSeedStorybook", "-UITestSeedPrintCart"]
+        app.launchArguments = ["-UITest", "-linen-preview", "-UITestSeedStorybook", "-UITestSeedPrintCart"]
         app.launch()
 
         sleep(3)
         dismissSystemDialogIfPresent()
         app.swipeUp()
 
-        let yourBook = app.staticTexts["Your Book"]
+        let yourBook = app.buttons["tutorialYourBook"]
         XCTAssertTrue(yourBook.waitForExistence(timeout: 5))
         yourBook.tap()
 
@@ -428,7 +428,7 @@ final class DesignWalkthroughUITests: XCTestCase {
         dismissSystemDialogIfPresent()
         app.swipeUp()
 
-        let yourBook = app.staticTexts["Your Book"]
+        let yourBook = app.buttons["tutorialYourBook"]
         XCTAssertTrue(yourBook.waitForExistence(timeout: 5))
         yourBook.tap()
 
@@ -444,8 +444,8 @@ final class DesignWalkthroughUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Add Photos"].isHittable)
         snap(app, name: "interior-title-page-editor-default-responsive")
         let originalTitle = try XCTUnwrap(
-            app.staticTexts
-                .matching(NSPredicate(format: "label == %@", "Grandparent's Memoir"))
+            app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", "Text box, Memoir"))
                 .allElementsBoundByIndex
                 .first(where: { $0.isHittable }),
             "Opening-page copy must be a selectable text layer"
@@ -465,7 +465,7 @@ final class DesignWalkthroughUITests: XCTestCase {
         let editedReaderTitle = app.staticTexts
             .matching(NSPredicate(
                 format: "label CONTAINS %@ AND label CONTAINS %@",
-                "Grandparent's Memoir",
+                "Memoir",
                 "Edited"
             ))
             .firstMatch
@@ -494,7 +494,7 @@ final class DesignWalkthroughUITests: XCTestCase {
         snap(app, name: "interior-page-reader-responsive")
         edit.tap()
 
-        XCTAssertTrue(app.staticTexts["Edit Page"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Edit page"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.otherElements["pageEditorLaunchPlaceholder"].exists)
         XCTAssertTrue(app.buttons["Save"].isHittable)
         snap(app, name: "interior-page-editor-responsive")
@@ -505,7 +505,7 @@ final class DesignWalkthroughUITests: XCTestCase {
         XCTAssertTrue(edit.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Opening page editor…"].exists)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.48)).tap()
-        XCTAssertTrue(app.staticTexts["Edit Page"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Edit page"].waitForExistence(timeout: 5))
 
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52)).tap()
         XCTAssertTrue(app.staticTexts["Drag to move · use corners to resize"].waitForExistence(timeout: 3))
@@ -518,7 +518,7 @@ final class DesignWalkthroughUITests: XCTestCase {
         snap(app, name: "interior-text-page-reader-responsive")
         XCTAssertTrue(edit.waitForExistence(timeout: 5))
         edit.tap()
-        XCTAssertTrue(app.staticTexts["Edit Page"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Edit page"].waitForExistence(timeout: 5))
         snap(app, name: "interior-text-page-editor-responsive")
     }
 
@@ -531,7 +531,7 @@ final class DesignWalkthroughUITests: XCTestCase {
         sleep(3)
         dismissSystemDialogIfPresent()
         app.swipeUp()
-        let yourBook = app.staticTexts["Your Book"]
+        let yourBook = app.buttons["tutorialYourBook"]
         XCTAssertTrue(yourBook.waitForExistence(timeout: 5))
         yourBook.tap()
 

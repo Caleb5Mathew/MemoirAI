@@ -124,6 +124,7 @@ struct FreeformBookPageEditor: View {
                     .overlay(Rectangle().stroke(LinenTheme.ink.opacity(0.34), lineWidth: 1.5))
                     .shadow(color: LinenTheme.ink.opacity(0.15), radius: 10, y: 4)
                     .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                    .accessibilityElement(children: .contain)
                     .accessibilityLabel("Book page canvas")
                 }
             }
@@ -337,6 +338,7 @@ struct FreeformBookPageEditor: View {
                     .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Add Text")
 
             PhotosPicker(
                 selection: $selectedPhotoItems,
@@ -363,6 +365,7 @@ struct FreeformBookPageEditor: View {
                     || document.imageCount >= BookPageCapacityPolicy.maximumImageCount
                     || document.storedImageByteCount >= BookPageCapacityPolicy.maximumStoredImageByteCount
             )
+            .accessibilityLabel(isImportingPhotos ? "Adding Photos" : "Add Photos")
 
             if let selectedElementID {
                 Menu {

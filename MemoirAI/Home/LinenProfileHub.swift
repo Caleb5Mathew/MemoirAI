@@ -36,7 +36,9 @@ struct LinenProfileHub: View {
                     NavigationLink { PendingRequestsView().navigationTitle("Family access") } label: {
                         LinenHubRow(title: "Family access", symbol: "person.2")
                     }
+                    .accessibilityIdentifier("profileHubFamilyAccess")
                     Button { showSettings = true } label: { LinenHubRow(title: "Settings", symbol: "slider.horizontal.3") }
+                        .accessibilityIdentifier("profileHubSettings")
                     NavigationLink {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 24) {

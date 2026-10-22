@@ -3,6 +3,7 @@ import XCTest
 final class ParenthoodPresentationUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
     }
 
     @MainActor
@@ -34,6 +35,11 @@ final class ParenthoodPresentationUITests: XCTestCase {
         let originalCount = fields.count
         fields.firstMatch.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3), "Software keyboard must be visible to validate this layout")
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let keyboardTutorialContinue = springboard.buttons["Continue"]
+        if keyboardTutorialContinue.waitForExistence(timeout: 1) {
+            keyboardTutorialContinue.tap()
+        }
         let save = app.buttons["Save"]
         XCTAssertTrue(save.exists)
         XCTAssertLessThanOrEqual(save.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
@@ -79,7 +85,7 @@ final class ParenthoodPresentationUITests: XCTestCase {
         let profile = app.buttons["Your profile"]
         XCTAssertTrue(profile.waitForExistence(timeout: 10))
         profile.tap()
-        let settings = app.buttons["Settings"]
+        let settings = app.buttons["profileHubSettings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 5))
         settings.tap()
         XCTAssertTrue(app.staticTexts["settingsHeaderTitle"].waitForExistence(timeout: 5))
