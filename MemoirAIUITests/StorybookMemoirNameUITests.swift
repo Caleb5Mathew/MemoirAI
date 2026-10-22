@@ -1,9 +1,13 @@
 import XCTest
 
 final class StorybookMemoirNameUITests: XCTestCase {
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+    }
+
     @MainActor
     func testSampleBookShowsPersonalizedOpeningAndMemoryPages() {
-        continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-UITest", "-UITestMemoirName", "-UITestSeedStorybook", "-UITestFieldnotesPreview"]
         app.launch()

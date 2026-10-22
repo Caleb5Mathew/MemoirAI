@@ -9,7 +9,7 @@ final class ParenthoodPresentationUITests: XCTestCase {
     @MainActor
     func testChildNamesKeyboardLayoutAndCancelPreservesNames() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview", "-analytics-internal"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview", "-analytics-internal"]
         app.launch()
         let memoir = app.buttons["tutorialContinueYourMemoir"]
         XCTAssertTrue(memoir.waitForExistence(timeout: 10))
@@ -80,7 +80,7 @@ final class ParenthoodPresentationUITests: XCTestCase {
     @MainActor
     func testPaywallStatusBarScreenshotWithoutPurchasing() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview", "-analytics-internal"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview", "-analytics-internal"]
         app.launch()
         let profile = app.buttons["Your profile"]
         XCTAssertTrue(profile.waitForExistence(timeout: 10))
@@ -96,7 +96,12 @@ final class ParenthoodPresentationUITests: XCTestCase {
         if !plans.isHittable { app.swipeUp() }
         plans.tap()
         let restore = app.buttons["Restore Purchases"]
-        XCTAssertTrue(restore.waitForExistence(timeout: 30), "RevenueCat paywall should load before visual status-bar review")
+        let unavailable = app.staticTexts["Subscription unavailable"]
+        let paywallLoaded = restore.waitForExistence(timeout: 30)
+        if !paywallLoaded, unavailable.exists {
+            throw XCTSkip("RevenueCat offerings are unavailable, so the real paywall cannot be reviewed")
+        }
+        XCTAssertTrue(paywallLoaded, "RevenueCat paywall should load before visual status-bar review")
         snapshot(app, "paywall-white-status-icons-review")
         let close = app.buttons["Close"].firstMatch
         XCTAssertTrue(close.isHittable)

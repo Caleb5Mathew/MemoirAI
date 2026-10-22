@@ -612,7 +612,7 @@ class StoryPageViewModel: ObservableObject {
     #if DEBUG
     func seedStorybookForUITesting(profileID: UUID, profileName: String) {
         let isBookPreview = ProcessInfo.processInfo.arguments.contains("-UITestFieldnotesPreview")
-        let style: ArtStyle = isBookPreview ? .kidsBook : .realistic
+        let style: ArtStyle = .kidsBook
         let policy = CoverCopyPolicy(artStyle: style, profileDisplayName: profileName)
         let memoryID = UUID(uuidString: "A11CE000-0000-4000-8000-000000000001")!
         let fallbackImage = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 1_000)).image { context in

@@ -12,12 +12,13 @@ final class DesignWalkthroughUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
     }
 
     @MainActor
     func testLinenNavigationKeepsBothDestinationsReachable() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview"]
         app.launch()
 
         let home = app.buttons["linenHomeTab"]
@@ -57,7 +58,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testEmptyBookEntryAndRapidRepeatedNavigation() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview"]
         app.launch()
         let home = app.buttons["linenHomeTab"]
         XCTAssertTrue(home.waitForExistence(timeout: 10))
@@ -80,7 +81,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testYourBookRepeatedNavigation() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview", "-UITestSeedStorybook"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview", "-UITestSeedStorybook"]
         app.launch()
         let home = app.buttons["linenHomeTab"]
         if home.waitForExistence(timeout: 5) { home.tap() }
@@ -105,7 +106,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     func testAllNormalChapterPathMarkers() throws {
         for chapterNumber in 1...10 {
             let app = XCUIApplication()
-            app.launchArguments = ["-UITest", "-UITestNormalChapter", "\(chapterNumber)"]
+            app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-UITestNormalChapter", "\(chapterNumber)"]
             app.launch()
             XCTAssertTrue(app.staticTexts["chapterJourneyTitle"].waitForExistence(timeout: 8))
             let nodes = app.descendants(matching: .any).matching(identifier: "chapterPromptNode")
@@ -124,7 +125,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     func testAllRelationshipJourneyBackgrounds() throws {
         for chapterNumber in 1...10 {
             let app = XCUIApplication()
-            app.launchArguments = ["-UITest", "-UITestRelationshipChapter", "\(chapterNumber)"]
+            app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-UITestRelationshipChapter", "\(chapterNumber)"]
             app.launch()
 
             XCTAssertTrue(
@@ -142,7 +143,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testWalkthroughScreenshots() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview"]
         app.launch()
 
         sleep(3)
@@ -251,7 +252,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testMemoirPickerHeaderAndChapterCards() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview", "-analytics-internal"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview", "-analytics-internal"]
         app.launch()
 
         sleep(3)
@@ -292,7 +293,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testChapterRowsOpenFromTheirFullVisibleWidth() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview", "-analytics-internal"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview", "-analytics-internal"]
         app.launch()
 
         let continueMemories = app.buttons["tutorialContinueYourMemoir"]
@@ -317,7 +318,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testChapterJourneyScreenshot() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview"]
         app.launch()
 
         sleep(3)
@@ -353,7 +354,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testRecordingWritingLayoutKeepsNavigationVisible() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-UITestNormalChapter", "1"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-UITestNormalChapter", "1"]
         app.launch()
 
         let promptNode = app.descendants(matching: .any).matching(identifier: "chapterPromptNode").firstMatch
@@ -390,7 +391,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testShortBookPrintAvailabilityScreenshot() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview", "-UITestSeedStorybook", "-UITestSeedPrintCart"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview", "-UITestSeedStorybook", "-UITestSeedPrintCart"]
         app.launch()
 
         sleep(3)
@@ -421,7 +422,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testInteriorPageEditorScreenshot() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview", "-UITestSeedStorybook"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview", "-UITestSeedStorybook"]
         app.launch()
 
         sleep(3)
@@ -440,6 +441,11 @@ final class DesignWalkthroughUITests: XCTestCase {
 
         edit.tap()
         XCTAssertTrue(app.otherElements["freeformPageEditor"].waitForExistence(timeout: 8))
+        let canvas = app.otherElements
+            .matching(NSPredicate(format: "label == %@", "Book page canvas"))
+            .firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 3))
+        XCTAssertGreaterThan(canvas.frame.width, canvas.frame.height, "Memoir interior pages must remain landscape")
         XCTAssertTrue(app.buttons["Add Text"].isHittable)
         XCTAssertTrue(app.buttons["Add Photos"].isHittable)
         snap(app, name: "interior-title-page-editor-default-responsive")
@@ -525,7 +531,7 @@ final class DesignWalkthroughUITests: XCTestCase {
     @MainActor
     func testClosingPageReaderAndEditorStayInSync() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITest", "-linen-preview", "-UITestSeedStorybook"]
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview", "-UITestSeedStorybook"]
         app.launch()
 
         sleep(3)

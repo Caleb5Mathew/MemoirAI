@@ -12,6 +12,7 @@ final class KidsBookDevPortalFlowTests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
     }
 
     /// Full flow: Home → Your Book → Settings → Dev portal unlock → Kid's Book + Normal → Create My Storybook → ProfileSetup (ethnicity Indian)

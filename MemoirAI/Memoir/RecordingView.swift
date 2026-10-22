@@ -359,7 +359,7 @@ struct RecordingView: View {
                             }
                         }
                     }
-                    .frame(maxWidth: contentWidth - 48)
+                    .frame(maxWidth: max(0, contentWidth - 48))
                     .multilineTextAlignment(.center)
 
                     // Text entry

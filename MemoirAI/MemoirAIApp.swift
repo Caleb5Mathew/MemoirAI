@@ -183,6 +183,12 @@ struct MemoirAIApp: App {
     @UIApplicationDelegateAdaptor(FBAppDelegate.self) var fbDelegate
 
     init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-UITestResetMemoirMode") {
+            UserDefaults.standard.set(MemoirMode.normal.rawValue, forKey: memoirModeKey)
+        }
+        #endif
+
         let rcUserDefaultsKey = "memoirai_rc_user_id"
         let uuid = UserDefaults.standard.string(forKey: rcUserDefaultsKey) ?? {
             let newID = UUID().uuidString

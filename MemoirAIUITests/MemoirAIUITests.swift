@@ -16,6 +16,7 @@ final class MemoirAIUITests: XCTestCase {
         continueAfterFailure = false
 
         // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
+        XCUIDevice.shared.orientation = .portrait
     }
 
     override func tearDownWithError() throws {
@@ -24,11 +25,10 @@ final class MemoirAIUITests: XCTestCase {
 
     @MainActor
     func testExample() throws {
-        // UI tests must launch the application that they test.
         let app = XCUIApplication()
+        app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview"]
         app.launch()
-
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
+        XCTAssertTrue(app.buttons["linenHomeTab"].waitForExistence(timeout: 10))
     }
 
     @MainActor
@@ -36,7 +36,9 @@ final class MemoirAIUITests: XCTestCase {
         if #available(macOS 10.15, iOS 13.0, tvOS 13.0, watchOS 7.0, *) {
             // This measures how long it takes to launch your application.
             measure(metrics: [XCTApplicationLaunchMetric()]) {
-                XCUIApplication().launch()
+                let app = XCUIApplication()
+                app.launchArguments = ["-UITest", "-UITestResetMemoirMode", "-linen-preview"]
+                app.launch()
             }
         }
     }
