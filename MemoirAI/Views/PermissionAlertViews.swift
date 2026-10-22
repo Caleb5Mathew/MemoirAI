@@ -5,12 +5,10 @@ struct SpeechRecognitionPermissionAlert: View {
     @Binding var isPresented: Bool
     let onSettingsTap: () -> Void
     
-    // App color theme
-    private let backgroundColor = Color(red: 1.0, green: 0.96, blue: 0.89)
-    private let cardColor = Color(red: 0.98, green: 0.93, blue: 0.80)
-    private let accentColor = Color(red: 0.88, green: 0.52, blue: 0.28)
-    private let headerColor = Color(red: 0.07, green: 0.21, blue: 0.13)
-    private let softGreen = Color(red: 0.15, green: 0.35, blue: 0.25)
+    private let cardColor = LinenTheme.paper
+    private let accentColor = LinenTheme.accent
+    private let headerColor = LinenTheme.ink
+    private let softGreen = LinenTheme.forest
     
     var body: some View {
         ZStack {
@@ -36,7 +34,7 @@ struct SpeechRecognitionPermissionAlert: View {
                     }
                     
                     Text("Enable Speech Recognition")
-                        .font(.custom("Georgia-Bold", size: 24))
+                        .font(LinenTheme.heading(24))
                         .foregroundColor(headerColor)
                         .multilineTextAlignment(.center)
                 }
@@ -44,21 +42,21 @@ struct SpeechRecognitionPermissionAlert: View {
                 // Description
                 VStack(spacing: 12) {
                     Text("Speech Recognition provides live captions while you record.")
-                        .font(.custom("Georgia", size: 16))
-                        .foregroundColor(.black.opacity(0.8))
+                        .font(LinenTheme.body(16))
+                        .foregroundColor(LinenTheme.ink)
                         .multilineTextAlignment(.center)
                         .lineSpacing(4)
                     
                     Text("Your saved recording can still be transcribed after upload when live captions are off.")
-                        .font(.custom("Georgia", size: 14))
-                        .foregroundColor(.gray)
+                        .font(LinenTheme.body(14))
+                        .foregroundColor(LinenTheme.secondary)
                         .multilineTextAlignment(.center)
                 }
                 
                 // Instructions
                 VStack(alignment: .leading, spacing: 12) {
                     Text("How to enable:")
-                        .font(.custom("Georgia-Bold", size: 16))
+                        .font(LinenTheme.body(16, weight: .semibold))
                         .foregroundColor(headerColor)
                     
                     VStack(alignment: .leading, spacing: 8) {
@@ -80,9 +78,9 @@ struct SpeechRecognitionPermissionAlert: View {
                             Image(systemName: "gear")
                                 .font(.system(size: 16, weight: .medium))
                             Text("Open Settings")
-                                .font(.custom("Georgia-Bold", size: 16))
+                                .font(LinenTheme.body(16, weight: .semibold))
                         }
-                        .foregroundColor(.white)
+                        .foregroundColor(LinenTheme.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                         .background(
@@ -93,8 +91,8 @@ struct SpeechRecognitionPermissionAlert: View {
                     
                     Button(action: { isPresented = false }) {
                         Text("Maybe Later")
-                            .font(.custom("Georgia", size: 16))
-                            .foregroundColor(.gray)
+                            .font(LinenTheme.body(16, weight: .medium))
+                            .foregroundColor(LinenTheme.secondary)
                     }
                 }
             }
@@ -118,13 +116,13 @@ struct SpeechRecognitionPermissionAlert: View {
                     .frame(width: 24, height: 24)
                 
                 Text(number)
-                    .font(.custom("Georgia-Bold", size: 12))
+                    .font(LinenTheme.body(12, weight: .bold))
                     .foregroundColor(softGreen)
             }
             
             Text(text)
-                .font(.custom("Georgia", size: 14))
-                .foregroundColor(.black.opacity(0.8))
+                .font(LinenTheme.body(14))
+                .foregroundColor(LinenTheme.ink)
             
             Spacer()
         }
@@ -136,12 +134,10 @@ struct MicrophonePermissionAlert: View {
     @Binding var isPresented: Bool
     let onSettingsTap: () -> Void
     
-    // App color theme
-    private let backgroundColor = Color(red: 1.0, green: 0.96, blue: 0.89)
-    private let cardColor = Color(red: 0.98, green: 0.93, blue: 0.80)
-    private let accentColor = Color(red: 0.88, green: 0.52, blue: 0.28)
-    private let headerColor = Color(red: 0.07, green: 0.21, blue: 0.13)
-    private let softGreen = Color(red: 0.15, green: 0.35, blue: 0.25)
+    private let cardColor = LinenTheme.paper
+    private let accentColor = LinenTheme.accent
+    private let headerColor = LinenTheme.ink
+    private let softGreen = LinenTheme.forest
     
     var body: some View {
         ZStack {
@@ -167,7 +163,7 @@ struct MicrophonePermissionAlert: View {
                     }
                     
                     Text("Enable Microphone Access")
-                        .font(.custom("Georgia-Bold", size: 24))
+                        .font(LinenTheme.heading(24))
                         .foregroundColor(headerColor)
                         .multilineTextAlignment(.center)
                 }
@@ -175,21 +171,21 @@ struct MicrophonePermissionAlert: View {
                 // Description
                 VStack(spacing: 12) {
                     Text("To record your voice memories, we need permission to access your microphone.")
-                        .font(.custom("Georgia", size: 16))
-                        .foregroundColor(.black.opacity(0.8))
+                        .font(LinenTheme.body(16))
+                        .foregroundColor(LinenTheme.ink)
                         .multilineTextAlignment(.center)
                         .lineSpacing(4)
                     
                     Text("Recordings are uploaded to your private account and sent to our transcription provider to create text. You can delete them at any time.")
-                        .font(.custom("Georgia", size: 14))
-                        .foregroundColor(.gray)
+                        .font(LinenTheme.body(14))
+                        .foregroundColor(LinenTheme.secondary)
                         .multilineTextAlignment(.center)
                 }
                 
                 // Instructions
                 VStack(alignment: .leading, spacing: 12) {
                     Text("How to enable:")
-                        .font(.custom("Georgia-Bold", size: 16))
+                        .font(LinenTheme.body(16, weight: .semibold))
                         .foregroundColor(headerColor)
                     
                     VStack(alignment: .leading, spacing: 8) {
@@ -211,9 +207,9 @@ struct MicrophonePermissionAlert: View {
                             Image(systemName: "gear")
                                 .font(.system(size: 16, weight: .medium))
                             Text("Open Settings")
-                                .font(.custom("Georgia-Bold", size: 16))
+                                .font(LinenTheme.body(16, weight: .semibold))
                         }
-                        .foregroundColor(.white)
+                        .foregroundColor(LinenTheme.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                         .background(
@@ -224,8 +220,8 @@ struct MicrophonePermissionAlert: View {
                     
                     Button(action: { isPresented = false }) {
                         Text("Maybe Later")
-                            .font(.custom("Georgia", size: 16))
-                            .foregroundColor(.gray)
+                            .font(LinenTheme.body(16, weight: .medium))
+                            .foregroundColor(LinenTheme.secondary)
                     }
                 }
             }
@@ -249,13 +245,13 @@ struct MicrophonePermissionAlert: View {
                     .frame(width: 24, height: 24)
                 
                 Text(number)
-                    .font(.custom("Georgia-Bold", size: 12))
+                    .font(LinenTheme.body(12, weight: .bold))
                     .foregroundColor(softGreen)
             }
             
             Text(text)
-                .font(.custom("Georgia", size: 14))
-                .foregroundColor(.black.opacity(0.8))
+                .font(LinenTheme.body(14))
+                .foregroundColor(LinenTheme.ink)
             
             Spacer()
         }
@@ -269,11 +265,9 @@ struct TranscriptionProgressAlert: View {
     let total: Int
     let onDismiss: () -> Void
     
-    // App color theme
-    private let backgroundColor = Color(red: 1.0, green: 0.96, blue: 0.89)
-    private let cardColor = Color(red: 0.98, green: 0.93, blue: 0.80)
-    private let accentColor = Color(red: 0.88, green: 0.52, blue: 0.28)
-    private let headerColor = Color(red: 0.07, green: 0.21, blue: 0.13)
+    private let cardColor = LinenTheme.paper
+    private let accentColor = LinenTheme.accent
+    private let headerColor = LinenTheme.ink
     
     var body: some View {
         ZStack {
@@ -296,7 +290,7 @@ struct TranscriptionProgressAlert: View {
                     }
                     
                     Text("Transcribing Your Memories")
-                        .font(.custom("Georgia-Bold", size: 24))
+                        .font(LinenTheme.heading(24))
                         .foregroundColor(headerColor)
                         .multilineTextAlignment(.center)
                 }
@@ -304,12 +298,12 @@ struct TranscriptionProgressAlert: View {
                 // Progress info
                 VStack(spacing: 16) {
                     Text("Converting your voice recordings to text...")
-                        .font(.custom("Georgia", size: 16))
-                        .foregroundColor(.black.opacity(0.8))
+                        .font(LinenTheme.body(16))
+                        .foregroundColor(LinenTheme.ink)
                         .multilineTextAlignment(.center)
                     
                     Text("\(processed) of \(total) completed")
-                        .font(.custom("Georgia-Bold", size: 18))
+                        .font(LinenTheme.body(18, weight: .semibold))
                         .foregroundColor(accentColor)
                 }
                 
@@ -320,8 +314,8 @@ struct TranscriptionProgressAlert: View {
                         .scaleEffect(y: 2)
                     
                     Text("Please wait...")
-                        .font(.custom("Georgia", size: 14))
-                        .foregroundColor(.gray)
+                        .font(LinenTheme.body(14))
+                        .foregroundColor(LinenTheme.secondary)
                 }
             }
             .padding(24)
@@ -358,6 +352,6 @@ struct PermissionAlertViews_Previews: PreviewProvider {
                 onDismiss: {}
             )
         }
-        .background(Color(red: 1.0, green: 0.96, blue: 0.89))
+        .background(LinenTheme.paper)
     }
 }

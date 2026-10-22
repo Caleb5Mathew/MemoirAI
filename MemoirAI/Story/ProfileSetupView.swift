@@ -8,19 +8,6 @@
 import SwiftUI
 import UIKit
 
-fileprivate struct LocalColors {
-    static let softCream   = Color(red: 0.98, green: 0.96, blue: 0.89)
-    static let terracotta  = Color(red: 0.82, green: 0.45, blue: 0.32)
-    static let defaultGray = Color.gray
-    static let subtleBG    = Color.black.opacity(0.05)
-}
-
-fileprivate extension Font {
-    static func appSerif(_ size: CGFloat) -> Font {
-        .system(size: size, design: .serif)
-    }
-}
-
 // Custom Gender Picker options (Decline option removed)
 fileprivate enum GenderOption: String, CaseIterable, Identifiable {
     case male = "Male"
@@ -43,7 +30,8 @@ private struct HeadshotPhotoSourceSheet: View {
     var body: some View {
         VStack(spacing: 16) {
             Text("Add Photo")
-                .font(.headline)
+                .font(LinenTheme.heading(22))
+                .foregroundStyle(LinenTheme.ink)
                 .padding(.top, 12)
 
             Button {
@@ -55,28 +43,34 @@ private struct HeadshotPhotoSourceSheet: View {
                 }
             } label: {
                 Label("Take Photo", systemImage: "camera.fill")
+                    .font(LinenTheme.body(16, weight: .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
             }
             .buttonStyle(.borderedProminent)
-            .tint(LocalColors.terracotta)
+            .tint(LinenTheme.accent)
 
             Button {
                 pickerSource = .photoLibrary
                 showImagePicker = true
             } label: {
                 Label("Choose from Library", systemImage: "photo.on.rectangle.angled")
+                    .font(LinenTheme.body(16, weight: .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
             }
             .buttonStyle(.bordered)
+            .tint(LinenTheme.accent)
 
             Button("Cancel", role: .cancel) {
                 dismiss()
             }
+            .font(LinenTheme.body(16, weight: .medium))
+            .tint(LinenTheme.secondary)
             .padding(.bottom, 8)
         }
         .padding(.horizontal, 24)
+        .background(LinenTheme.paper)
         .adaptiveSheetDetents(preferredHeight: 320)
         .presentationDragIndicator(.visible)
         .fullScreenCover(isPresented: $showImagePicker) {
@@ -98,13 +92,14 @@ private struct HeadshotPhotoSourceSheet: View {
 struct AppTextFieldStyle: TextFieldStyle {
     func _body(configuration: TextField<Self._Label>) -> some View {
         configuration
-            .font(.appSerif(18))
+            .font(LinenTheme.body(17))
+            .foregroundStyle(LinenTheme.ink)
             .padding(12)
-            .background(LocalColors.subtleBG)
+            .background(LinenTheme.surface)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                    .stroke(LinenTheme.line, lineWidth: 1)
             )
     }
 }
@@ -149,7 +144,7 @@ struct ProfileSetupView: View {
     
     var body: some View {
         ZStack {
-            LocalColors.softCream.ignoresSafeArea()
+            LinenTheme.paper.ignoresSafeArea()
             
             ScrollView { // Use a ScrollView to prevent overflow on smaller screens
                 VStack {
@@ -159,10 +154,10 @@ struct ProfileSetupView: View {
                             dismiss()
                         } label: {
                             Image(systemName: "xmark")
-                                .font(.title2)
-                                .foregroundColor(.black)
-                                .padding(8)
-                                .background(LocalColors.subtleBG)
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(LinenTheme.ink)
+                                .frame(width: 44, height: 44)
+                                .background(LinenTheme.surface)
                                 .clipShape(Circle())
                         }
                         Spacer()
@@ -186,7 +181,7 @@ struct ProfileSetupView: View {
                                         .shadow(radius: 4)
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 20)
-                                                .stroke(LocalColors.terracotta.opacity(0.35), lineWidth: 2)
+                                                .stroke(LinenTheme.line, lineWidth: 1)
                                         )
                                 }
                                 .buttonStyle(.plain)
@@ -194,17 +189,17 @@ struct ProfileSetupView: View {
                                 .accessibilityHint("Tap to replace your headshot with a new photo")
                                 
                                 Text("Tap your photo to upload or change your headshot")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
+                                    .font(LinenTheme.body(13, weight: .medium))
                                     .multilineTextAlignment(.center)
-                                    .foregroundColor(LocalColors.defaultGray)
+                                    .foregroundStyle(LinenTheme.secondary)
                                 
                                 Menu {
                                     Button("Crop Photo")    { showCropper       = true }
                                     Button("Replace Photo") { showSourceChooser = true }
                                 } label: {
                                     Text(hasUserAddedPhoto ? "Edit Photo" : "Add Photo")
-                                        .font(.callout.weight(.semibold))
+                                        .font(LinenTheme.body(15, weight: .semibold))
+                                        .foregroundStyle(LinenTheme.accent)
                                 }
                             }
                             .padding(.bottom, 4)
@@ -215,21 +210,21 @@ struct ProfileSetupView: View {
                                     VStack(spacing: 12) {
                                         Image(systemName: "person.crop.square")
                                             .font(.system(size: 80))
-                                            .foregroundColor(LocalColors.defaultGray.opacity(0.6))
+                                            .foregroundStyle(LinenTheme.secondary.opacity(0.65))
                                         Text("Add Headshot")
-                                            .font(.headline.weight(.semibold))
-                                            .foregroundColor(.black)
+                                            .font(LinenTheme.heading(22))
+                                            .foregroundStyle(LinenTheme.ink)
                                         Text("Tap to choose from camera or library")
-                                            .font(.subheadline)
-                                            .foregroundColor(LocalColors.defaultGray)
+                                            .font(LinenTheme.body(15))
+                                            .foregroundStyle(LinenTheme.secondary)
                                             .multilineTextAlignment(.center)
                                     }
                                     .frame(maxWidth: .infinity, minHeight: 200)
-                                    .background(LocalColors.subtleBG)
+                                    .background(LinenTheme.surface)
                                     .clipShape(RoundedRectangle(cornerRadius: 20))
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 20)
-                                            .stroke(LocalColors.terracotta.opacity(0.35), lineWidth: 2)
+                                            .stroke(LinenTheme.line, lineWidth: 1)
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -245,8 +240,8 @@ struct ProfileSetupView: View {
                         // Labeled input so the purpose is clear even after the user starts typing
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Ethnicity / Race")
-                                .font(.headline)
-                                .foregroundColor(.black)
+                                .font(LinenTheme.body(16, weight: .semibold))
+                                .foregroundStyle(LinenTheme.ink)
                             TextField("e.g., Hispanic, Asian, Black", text: $race)
                                 .textFieldStyle(AppTextFieldStyle())
                                 .accessibilityIdentifier("ethnicityRaceField")
@@ -259,6 +254,7 @@ struct ProfileSetupView: View {
                             }
                         }
                         .pickerStyle(SegmentedPickerStyle())
+                        .tint(LinenTheme.accent)
                         .onChange(of: selectedGender) { _ in
                             updateGenderBinding()
                             // Auto-save when user changes selection
@@ -289,9 +285,9 @@ struct ProfileSetupView: View {
                         A headshot helps lock the appearance.
                         Providing race/ethnicity and gender helps the AI create a more faithful and respectful portrait.
                         """)
-                        .font(.caption)
+                        .font(LinenTheme.body(13))
                         .multilineTextAlignment(.center)
-                        .foregroundColor(.gray)
+                        .foregroundStyle(LinenTheme.secondary)
                         .padding(.horizontal, 40)
                         .padding(.top, 12)
                     
@@ -302,12 +298,12 @@ struct ProfileSetupView: View {
                         showSettings = true
                     } label: {
                         Text("Review Settings")
-                            .font(.headline.weight(.semibold))
+                            .font(LinenTheme.body(16, weight: .semibold))
                             .accessibilityIdentifier("reviewSettingsButton")
-                            .foregroundColor(.white)
+                            .foregroundStyle(LinenTheme.onAccent)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
-                            .background(LocalColors.terracotta)
+                            .background(LinenTheme.accent)
                             .clipShape(RoundedRectangle(cornerRadius: 16))
                     }
                     .disabled(isGenerateButtonDisabled)
@@ -318,6 +314,9 @@ struct ProfileSetupView: View {
                 .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
             }
         }
+        .font(LinenTheme.body())
+        .foregroundStyle(LinenTheme.ink)
+        .tint(LinenTheme.accent)
         // ── Pick / crop modals ─────────────────────────────
         .sheet(isPresented: $showSourceChooser) {
             HeadshotPhotoSourceSheet(

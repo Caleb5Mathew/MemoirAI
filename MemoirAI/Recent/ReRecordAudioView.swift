@@ -33,10 +33,10 @@ struct ReRecordAudioView: View {
     // an in-progress recording, so the UI can explain why.
     @State private var interruptionBannerMessage: String? = nil
 
-    private let terracotta = Color(red: 210/255, green: 112/255, blue: 45/255)
-    private let softCream = Color(red: 253/255, green: 234/255, blue: 198/255)
-    private let headerColor = Color(red: 0.12, green: 0.22, blue: 0.18)
-    private let backgroundColor = Color(red: 0.98, green: 0.96, blue: 0.89)
+    private let terracotta = LinenTheme.accent
+    private let softCream = LinenTheme.surface
+    private let headerColor = LinenTheme.ink
+    private let backgroundColor = LinenTheme.paper
 
     private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
     private let maxRecordingDuration = RecordingDurationPolicy.maximumRecordingDuration
@@ -48,15 +48,15 @@ struct ReRecordAudioView: View {
                     VStack(spacing: 28) {
                         if let prompt = promptText, !prompt.isEmpty {
                             Text(prompt)
-                                .font(.system(size: 20, weight: .semibold, design: .serif))
+                                .font(LinenTheme.heading(20))
                                 .foregroundColor(headerColor)
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 20)
                         }
 
                         Text("Record a new voice answer for this memory.")
-                            .font(.system(size: 15, weight: .regular, design: .serif))
-                            .foregroundColor(headerColor.opacity(0.85))
+                            .font(LinenTheme.body(15))
+                            .foregroundColor(LinenTheme.secondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
 
@@ -65,11 +65,11 @@ struct ReRecordAudioView: View {
                                 Image(systemName: "pause.circle.fill")
                                     .font(.system(size: 15, weight: .semibold))
                                 Text(message)
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(LinenTheme.body(13, weight: .semibold))
                                     .multilineTextAlignment(.leading)
                                 Spacer(minLength: 0)
                             }
-                            .foregroundColor(.white)
+                            .foregroundColor(LinenTheme.onAccent)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
                             .background(terracotta)
@@ -86,13 +86,13 @@ struct ReRecordAudioView: View {
                                         Circle()
                                             .fill(terracotta)
                                             .frame(width: 80, height: 80)
-                                            .shadow(color: .orange.opacity(0.25), radius: 8, x: 0, y: 4)
+                                            .shadow(color: LinenTheme.accent.opacity(0.25), radius: 8, x: 0, y: 4)
                                         Image(systemName: "mic.fill")
                                             .font(.system(size: 32))
-                                            .foregroundColor(.white)
+                                            .foregroundColor(LinenTheme.onAccent)
                                     }
                                     Text("Tap to record")
-                                        .font(.subheadline.weight(.semibold))
+                                        .font(LinenTheme.body(15, weight: .semibold))
                                         .foregroundColor(headerColor)
                                 }
                             }
@@ -108,7 +108,7 @@ struct ReRecordAudioView: View {
 
                         if realTimeTranscription.isTranscribing && !realTimeTranscription.currentTranscript.isEmpty {
                             Text(realTimeTranscription.currentTranscript)
-                                .font(.body)
+                                .font(LinenTheme.body(16))
                                 .foregroundColor(headerColor)
                                 .padding(14)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -120,10 +120,10 @@ struct ReRecordAudioView: View {
                         if isRecording || isPaused {
                             VStack(spacing: 6) {
                                 Text(formatTime(recordingTime))
-                                    .font(.system(size: 22, weight: .medium, design: .monospaced))
+                                    .font(LinenTheme.body(22, weight: .medium).monospacedDigit())
                                     .foregroundColor(headerColor)
                                 Text(isPaused ? "Paused" : "Recording…")
-                                    .font(.caption)
+                                    .font(LinenTheme.body(12, weight: .medium))
                                     .foregroundColor(terracotta)
                             }
                         }
@@ -156,6 +156,7 @@ struct ReRecordAudioView: View {
 
                         if isSaving {
                             ProgressView("Saving…")
+                                .font(LinenTheme.body(14, weight: .medium))
                                 .tint(terracotta)
                         }
                     }
@@ -164,14 +165,21 @@ struct ReRecordAudioView: View {
                 }
             }
             .background(backgroundColor.ignoresSafeArea())
-            .navigationTitle("New recording")
+            .tint(LinenTheme.accent)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("New recording")
+                        .font(LinenTheme.heading(20))
+                        .foregroundStyle(LinenTheme.ink)
+                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
                         clearRecording()
                         dismiss()
                     }
+                    .font(LinenTheme.body(16, weight: .medium))
+                    .foregroundStyle(LinenTheme.ink)
                     .disabled(isSaving)
                 }
             }
@@ -220,14 +228,14 @@ struct ReRecordAudioView: View {
             Button(action: action) {
                 Image(systemName: icon)
                     .font(.system(size: 20, weight: .bold))
-                    .foregroundColor(.white)
+                    .foregroundColor(LinenTheme.onAccent)
                     .padding(18)
                     .background(terracotta)
                     .clipShape(Circle())
             }
             Text(label)
-                .foregroundColor(headerColor.opacity(0.8))
-                .font(.caption)
+                .foregroundColor(LinenTheme.secondary)
+                .font(LinenTheme.body(12, weight: .medium))
         }
         .disabled(isSaving)
     }

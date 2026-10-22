@@ -4,6 +4,21 @@ import UIKit
 @testable import MemoirAI
 
 struct RuntimeFlowPolicyTests {
+    @Test func generatedMemoirQuestionsFollowTheRevisedQuestionStandards() {
+        let request = MemoirQuestionGenerationPolicy.request(
+            chapterTitle: "Growing Up",
+            memoirMode: .normal
+        )
+
+        #expect(request.systemPrompt.contains("Ask for one specific memory"))
+        #expect(request.systemPrompt.contains("asking only one main thing"))
+        #expect(request.systemPrompt.contains("never more than 24 words"))
+        #expect(request.systemPrompt.contains("perfect, first, best, biggest, or most important"))
+        #expect(request.systemPrompt.contains(allChapters[1].prompts[0].text))
+        #expect(!request.fallbackQuestion.lowercased().contains("favorite"))
+        #expect(request.fallbackQuestion.hasSuffix("?"))
+    }
+
     @Test func blankMemoryDraftsAreNotSaveable() {
         #expect(!MemoryDraftPolicy.hasContent(text: " \n ", audioURL: nil))
         #expect(MemoryDraftPolicy.normalizedText("  A memory. \n") == "A memory.")

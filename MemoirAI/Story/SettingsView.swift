@@ -1072,9 +1072,6 @@ struct SettingsViewWithGenerate: View {
     @EnvironmentObject var subscriptionManager: RCSubscriptionManager
     @EnvironmentObject var profileVM: ProfileViewModel
     
-    let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
-    let softCream = Color(red: 0.98, green: 0.96, blue: 0.89)
-    
     var body: some View {
         ZStack {
             SettingsView()
@@ -1087,10 +1084,10 @@ struct SettingsViewWithGenerate: View {
                 Button(action: onGenerate) {
                     Text("Save & Generate")
                         .font(LinenTheme.body(16, weight: .semibold))
-                        .foregroundColor(.white)
+                        .foregroundStyle(LinenTheme.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
-                        .background(terracotta)
+                        .background(LinenTheme.accent)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
                 .accessibilityIdentifier("saveAndGenerateButton")
@@ -1098,7 +1095,7 @@ struct SettingsViewWithGenerate: View {
                 .padding(.bottom, 40)
                 .background(
                     LinearGradient(
-                        colors: [Color.clear, softCream.opacity(0.9), softCream],
+                        colors: [Color.clear, LinenTheme.paper.opacity(0.9), LinenTheme.paper],
                         startPoint: .top,
                         endPoint: .bottom
                     )

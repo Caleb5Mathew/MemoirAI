@@ -65,27 +65,29 @@ struct EmailAuthSheet: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Email")
-                            .font(.caption)
-                            .foregroundColor(LinenTheme.ink.opacity(0.7))
+                            .font(LinenTheme.body(13, weight: .medium))
+                            .foregroundColor(LinenTheme.secondary)
                         TextField("you@example.com", text: $email)
                             .textContentType(.emailAddress)
                             .keyboardType(.emailAddress)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .padding(12)
-                            .background(Color.white)
+                            .background(LinenTheme.surface)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(LinenTheme.line))
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Password")
-                            .font(.caption)
-                            .foregroundColor(LinenTheme.ink.opacity(0.7))
+                            .font(LinenTheme.body(13, weight: .medium))
+                            .foregroundColor(LinenTheme.secondary)
                         SecureField(mode == .createAccount ? "At least 8 characters" : "Password", text: $password)
                             .textContentType(mode == .createAccount ? .newPassword : .password)
                             .padding(12)
-                            .background(Color.white)
+                            .background(LinenTheme.surface)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(LinenTheme.line))
                     }
 
                     if mode == .signIn {
@@ -93,7 +95,7 @@ struct EmailAuthSheet: View {
                             Task { await sendReset() }
                         } label: {
                             Text("Forgot password?")
-                                .font(.footnote.weight(.semibold))
+                                .font(LinenTheme.body(13, weight: .semibold))
                                 .foregroundColor(LinenTheme.accent)
                         }
                         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -101,14 +103,14 @@ struct EmailAuthSheet: View {
 
                     if let resetConfirmation {
                         Text(resetConfirmation)
-                            .font(.footnote)
+                            .font(LinenTheme.body(13))
                             .foregroundColor(LinenTheme.ink)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
                     if let displayedError {
                         Text(displayedError)
-                            .font(.footnote)
+                            .font(LinenTheme.body(13))
                             .foregroundColor(.red)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -117,7 +119,7 @@ struct EmailAuthSheet: View {
                         HStack(spacing: 8) {
                             if isSubmitting {
                                 ProgressView()
-                                    .tint(.white)
+                                    .tint(LinenTheme.onAccent)
                             }
                             Text(mode == .createAccount ? "Create Account" : "Sign In")
                                 .font(LinenTheme.body(16, weight: .semibold))
@@ -125,7 +127,7 @@ struct EmailAuthSheet: View {
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: submitButtonHeight)
                         .background(canSubmit ? LinenTheme.accent : LinenTheme.surface)
-                        .foregroundColor(.white)
+                        .foregroundColor(canSubmit ? LinenTheme.onAccent : LinenTheme.secondary)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .buttonStyle(.plain)

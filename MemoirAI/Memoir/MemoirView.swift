@@ -379,9 +379,9 @@ struct MemoirView: View {
                         .padding(.vertical, 16)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .overlay(alignment: .bottom) { LinenTheme.line.frame(height: 1) }
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(PlainButtonStyle())
-                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .accessibilityIdentifier("chapterTile\(chapterNumber)")
                     .overlay(
                         Group {

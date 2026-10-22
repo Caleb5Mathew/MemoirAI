@@ -1740,11 +1740,10 @@ struct CharacterDetailsQuestionView: View {
     @State private var existingCharacters: [CharacterDetails.Character] = []
     @State private var showExistingCharactersPicker = false
     
-    // Use design tokens for consistency
-    private var backgroundColor: Color { Tokens.bgPrimary }
-    private var accentColor: Color { Color(red: 0.88, green: 0.52, blue: 0.28) } // Terracotta
-    private var headerColor: Color { Color(red: 0.07, green: 0.21, blue: 0.13) } // Deep green
-    private var softGreen: Color { Color(red: 0.15, green: 0.35, blue: 0.25) }
+    private var backgroundColor: Color { LinenTheme.paper }
+    private var accentColor: Color { LinenTheme.accent }
+    private var headerColor: Color { LinenTheme.ink }
+    private var softGreen: Color { LinenTheme.forest }
     
     init(
         memory: MemoryEntry,
@@ -1832,7 +1831,7 @@ struct CharacterDetailsQuestionView: View {
             } label: {
                 Image(systemName: "chevron.left")
                     .font(LinenTheme.body(18, weight: .semibold))
-                    .foregroundColor(Tokens.ink)
+                    .foregroundColor(LinenTheme.ink)
                     .frame(width: 36, height: 36)
             }
             
@@ -1840,7 +1839,7 @@ struct CharacterDetailsQuestionView: View {
             
             Text("Characters")
                 .font(LinenTheme.body(17, weight: .semibold))
-                .foregroundColor(Tokens.ink)
+                .foregroundColor(LinenTheme.ink)
             
             Spacer()
             
@@ -1858,13 +1857,13 @@ struct CharacterDetailsQuestionView: View {
     private var simplifiedHeaderSection: some View {
         VStack(spacing: 8) {
             Text("Add Characters")
-                .font(Tokens.Typography.title)
-                .foregroundColor(Tokens.ink)
+                .font(LinenTheme.heading(25))
+                .foregroundColor(LinenTheme.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
             
             Text("Describe the people in this memory")
-                .font(Tokens.Typography.subtitle)
-                .foregroundColor(Tokens.ink.opacity(0.6))
+                .font(LinenTheme.body(15))
+                .foregroundColor(LinenTheme.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -1877,10 +1876,10 @@ struct CharacterDetailsQuestionView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Quick Add")
                         .font(LinenTheme.heading(18))
-                        .foregroundColor(Tokens.ink)
+                        .foregroundColor(LinenTheme.ink)
                     Text("People from your other memories")
-                        .font(Tokens.Typography.caption)
-                        .foregroundColor(Tokens.ink.opacity(0.6))
+                        .font(LinenTheme.body(12))
+                        .foregroundColor(LinenTheme.secondary)
                 }
                 Spacer()
                 
@@ -1958,11 +1957,11 @@ struct CharacterDetailsQuestionView: View {
             VStack(spacing: 8) {
                 Text("Add people from this memory")
                     .font(LinenTheme.heading(20))
-                    .foregroundColor(Tokens.ink)
+                    .foregroundColor(LinenTheme.ink)
                 
                 Text("Help us create better images by describing who was there")
-                    .font(Tokens.Typography.subtitle)
-                    .foregroundColor(Tokens.ink.opacity(0.6))
+                    .font(LinenTheme.body(15))
+                    .foregroundColor(LinenTheme.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
             }
@@ -1982,27 +1981,16 @@ struct CharacterDetailsQuestionView: View {
                 Image(systemName: "plus.circle.fill")
                     .font(LinenTheme.body(18, weight: .semibold))
                 Text("Add Character")
-                    .font(Tokens.Typography.button)
+                    .font(LinenTheme.body(16, weight: .semibold))
             }
-            .foregroundColor(Tokens.ink)
+            .foregroundColor(LinenTheme.ink)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
-            .background(Tokens.bgPrimary)
+            .background(LinenTheme.surface)
             .clipShape(Capsule())
             .overlay(
                 Capsule()
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 1.0, green: 0.78, blue: 0.31),
-                                Color(red: 0.95, green: 0.55, blue: 0.23),
-                                Color(red: 0.88, green: 0.29, blue: 0.23)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ),
-                        lineWidth: 2.5
-                    )
+                    .stroke(LinenTheme.accent, lineWidth: 1.5)
             )
             .shadow(color: Color.black.opacity(0.08), radius: 6, x: 0, y: 3)
         }
@@ -2024,9 +2012,9 @@ struct CharacterDetailsQuestionView: View {
                     .font(LinenTheme.body(18, weight: .semibold))
             }
             Text(saveSuccess ? "Saved!" : "Save")
-                .font(Tokens.Typography.button)
+                .font(LinenTheme.body(16, weight: .semibold))
         }
-        .foregroundColor(.white)
+        .foregroundColor(LinenTheme.onAccent)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 16)
         .background(saveButtonBackground)
@@ -2037,7 +2025,7 @@ struct CharacterDetailsQuestionView: View {
     private var saveButtonBackground: some View {
         Group {
             if saveSuccess {
-                Color.green
+                LinenTheme.forest
             } else {
                 LinearGradient(
                     colors: [softGreen, softGreen.opacity(0.8)],
@@ -2049,14 +2037,14 @@ struct CharacterDetailsQuestionView: View {
     }
     
     private var saveButtonShadowColor: Color {
-        saveSuccess ? Color.green.opacity(0.3) : softGreen.opacity(0.3)
+        LinenTheme.forest.opacity(0.24)
     }
     
     // MARK: - Save Button Section
     private var saveButtonSection: some View {
         VStack(spacing: 0) {
             Divider()
-                .background(Tokens.ink.opacity(0.1))
+                .background(LinenTheme.line)
             
             VStack(spacing: 12) {
                 addCharacterButton
@@ -2067,7 +2055,7 @@ struct CharacterDetailsQuestionView: View {
             .padding(.vertical, 16)
         }
         .background(backgroundColor)
-        .shadow(color: Tokens.shadow, radius: 8, x: 0, y: -2)
+        .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: -2)
     }
     
     // MARK: - Actions
@@ -2232,9 +2220,9 @@ struct QuickAddCharacterButton: View {
     let isAdded: Bool
     let onTap: () -> Void
     
-    private let accentColor = Color(red: 0.88, green: 0.52, blue: 0.28)
+    private let accentColor = LinenTheme.accent
     private let headerColor = LinenTheme.ink
-    private let softGreen = Color(red: 0.15, green: 0.35, blue: 0.25)
+    private let softGreen = LinenTheme.forest
     
     private var quickInfo: String {
         [character.age, character.gender].filter { !$0.isEmpty }.joined(separator: ", ")
@@ -2287,7 +2275,7 @@ struct QuickAddCharacterButton: View {
                 } else if !quickInfo.isEmpty {
                     Text(quickInfo)
                         .font(LinenTheme.body(11))
-                        .foregroundColor(.gray)
+                        .foregroundColor(LinenTheme.secondary)
                         .lineLimit(1)
                 }
             }
@@ -2295,7 +2283,7 @@ struct QuickAddCharacterButton: View {
             .padding(.horizontal, 8)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(isAdded ? softGreen.opacity(0.06) : Color.white.opacity(0.9))
+                    .fill(isAdded ? softGreen.opacity(0.06) : LinenTheme.surface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
@@ -2318,8 +2306,8 @@ struct ExistingCharactersPickerView: View {
     @State private var searchText = ""
     
     private let backgroundColor = LinenTheme.paper
-    private let cardColor = Color(red: 1.0, green: 0.97, blue: 0.92)
-    private let accentColor = Color(red: 0.88, green: 0.52, blue: 0.28)
+    private let cardColor = LinenTheme.surface
+    private let accentColor = LinenTheme.accent
     private let headerColor = LinenTheme.ink
     
     private func isAdded(_ character: CharacterDetails.Character) -> Bool {
@@ -2351,13 +2339,14 @@ struct ExistingCharactersPickerView: View {
                     // Search Bar
                     HStack {
                         Image(systemName: "magnifyingglass")
-                            .foregroundColor(.gray)
+                            .foregroundColor(LinenTheme.secondary)
                         TextField("Search characters...", text: $searchText)
                             .font(LinenTheme.body(16))
                     }
                     .padding(12)
-                    .background(Color.white.opacity(0.8))
+                    .background(LinenTheme.surface)
                     .cornerRadius(12)
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(LinenTheme.line))
                     .padding(.horizontal, 24)
                     .padding(.vertical, 12)
                     
@@ -2403,8 +2392,8 @@ struct ExistingCharacterRow: View {
     let isAdded: Bool
     let onTap: () -> Void
     
-    private let cardColor = Color(red: 1.0, green: 0.97, blue: 0.92)
-    private let accentColor = Color(red: 0.88, green: 0.52, blue: 0.28)
+    private let cardColor = LinenTheme.surface
+    private let accentColor = LinenTheme.accent
     private let headerColor = LinenTheme.ink
     
     private var detailsText: String {
@@ -2431,13 +2420,13 @@ struct ExistingCharacterRow: View {
                 // Avatar
                 ZStack {
                     Circle()
-                        .fill(isAdded ? Color.gray.opacity(0.2) : accentColor.opacity(0.15))
+                        .fill(isAdded ? LinenTheme.line.opacity(0.7) : accentColor.opacity(0.15))
                         .frame(width: 50, height: 50)
                     
                     if isAdded {
                         Image(systemName: "checkmark")
                             .font(LinenTheme.body(20, weight: .bold))
-                            .foregroundColor(.white)
+                            .foregroundColor(LinenTheme.forest)
                     } else if !character.name.isEmpty {
                         Text(String(character.name.prefix(1).uppercased()))
                             .font(LinenTheme.heading(20))
@@ -2453,12 +2442,12 @@ struct ExistingCharacterRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(character.name.isEmpty ? "Unknown" : character.name)
                         .font(LinenTheme.heading(16))
-                        .foregroundColor(isAdded ? .gray : headerColor)
+                        .foregroundColor(isAdded ? LinenTheme.secondary : headerColor)
                     
                     if !detailsText.isEmpty {
                         Text(detailsText)
                             .font(LinenTheme.body(13))
-                            .foregroundColor(.gray)
+                            .foregroundColor(LinenTheme.secondary)
                             .lineLimit(2)
                     }
                 }
@@ -2468,7 +2457,7 @@ struct ExistingCharacterRow: View {
                 if isAdded {
                     Text("Added")
                         .font(LinenTheme.body(13, weight: .medium))
-                        .foregroundColor(.gray)
+                        .foregroundColor(LinenTheme.secondary)
                 } else {
                     Image(systemName: "plus.circle.fill")
                         .font(LinenTheme.body(24))
@@ -2483,7 +2472,7 @@ struct ExistingCharacterRow: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14)
-                    .stroke(isAdded ? Color.gray.opacity(0.2) : Color.clear, lineWidth: 1)
+                    .stroke(isAdded ? LinenTheme.line : Color.clear, lineWidth: 1)
             )
         }
         .buttonStyle(PlainButtonStyle())
@@ -2499,12 +2488,12 @@ struct AgeSlider: View {
     @State private var ageValue: Double = 25
     
     private let terracotta = LinenTheme.accent
-    private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
+    private let ink = LinenTheme.ink
     
     var body: some View {
         HStack(spacing: 10) {
             Text("\(Int(ageValue))")
-                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .font(LinenTheme.body(16, weight: .bold))
                 .foregroundColor(terracotta)
                 .frame(width: 36, alignment: .center)
                 .contentTransition(.numericText())
@@ -2518,7 +2507,7 @@ struct AgeSlider: View {
             
             Text("100")
                 .font(LinenTheme.body(13))
-                .foregroundColor(.gray)
+                .foregroundColor(LinenTheme.secondary)
         }
         .onAppear {
             // Initialize slider value from string
@@ -2550,7 +2539,7 @@ struct GenderSegmentedPicker: View {
     
     private let genderOptions = ["Male", "Female", "Other"]
     private let terracotta = LinenTheme.accent
-    private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
+    private let ink = LinenTheme.ink
     
     var body: some View {
         HStack(spacing: 8) {
@@ -2561,17 +2550,17 @@ struct GenderSegmentedPicker: View {
                     }
                 }) {
                     Text(option)
-                        .font(.system(size: 14, weight: .medium, design: .default))
-                        .foregroundColor(selectedGender == option ? .white : ink.opacity(0.7))
+                        .font(LinenTheme.body(14, weight: .medium))
+                        .foregroundColor(selectedGender == option ? LinenTheme.onAccent : LinenTheme.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                         .background(
                             RoundedRectangle(cornerRadius: 10)
-                                .fill(selectedGender == option ? terracotta : Color.white)
+                                .fill(selectedGender == option ? terracotta : LinenTheme.surface)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 10)
-                                .stroke(selectedGender == option ? terracotta : Color.gray.opacity(0.2), lineWidth: selectedGender == option ? 0 : 1)
+                                .stroke(selectedGender == option ? terracotta : LinenTheme.line, lineWidth: selectedGender == option ? 0 : 1)
                         )
                         .shadow(
                             color: selectedGender == option ? terracotta.opacity(0.25) : Color.clear,
@@ -2593,7 +2582,7 @@ struct AppearanceTextArea: View {
     @FocusState private var isFocused: Bool
     
     private let terracotta = LinenTheme.accent
-    private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
+    private let ink = LinenTheme.ink
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2612,7 +2601,7 @@ struct AppearanceTextArea: View {
                         .fill(LinenTheme.card)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
-                                .stroke(isFocused ? terracotta.opacity(0.6) : Color.gray.opacity(0.2), lineWidth: isFocused ? 2 : 1)
+                                .stroke(isFocused ? terracotta.opacity(0.6) : LinenTheme.line, lineWidth: isFocused ? 2 : 1)
                         )
                         .shadow(color: isFocused ? terracotta.opacity(0.15) : Color.black.opacity(0.04), radius: isFocused ? 8 : 4, x: 0, y: isFocused ? 4 : 2)
                 )
@@ -2632,7 +2621,7 @@ struct CharacterTextField: View {
     @FocusState private var isFocused: Bool
     
     private let terracotta = LinenTheme.accent
-    private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
+    private let ink = LinenTheme.ink
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2656,7 +2645,7 @@ struct CharacterTextField: View {
                         .fill(LinenTheme.card)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
-                                .stroke(isFocused ? terracotta.opacity(0.6) : Color.gray.opacity(0.2), lineWidth: isFocused ? 2 : 1)
+                                .stroke(isFocused ? terracotta.opacity(0.6) : LinenTheme.line, lineWidth: isFocused ? 2 : 1)
                         )
                         .shadow(color: isFocused ? terracotta.opacity(0.15) : Color.black.opacity(0.04), radius: isFocused ? 8 : 4, x: 0, y: isFocused ? 4 : 2)
                 )
@@ -2676,7 +2665,7 @@ struct CharacterTextArea: View {
     @FocusState private var isFocused: Bool
     
     private let terracotta = LinenTheme.accent
-    private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
+    private let ink = LinenTheme.ink
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2700,7 +2689,7 @@ struct CharacterTextArea: View {
                         .fill(LinenTheme.card)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
-                                .stroke(isFocused ? terracotta.opacity(0.6) : Color.gray.opacity(0.2), lineWidth: isFocused ? 2 : 1)
+                                .stroke(isFocused ? terracotta.opacity(0.6) : LinenTheme.line, lineWidth: isFocused ? 2 : 1)
                         )
                         .shadow(color: isFocused ? terracotta.opacity(0.15) : Color.black.opacity(0.04), radius: isFocused ? 8 : 4, x: 0, y: isFocused ? 4 : 2)
                 )
@@ -2720,12 +2709,12 @@ struct StreamlinedCharacterCard: View {
     @State private var nameText: String = ""
     
     private let terracotta = LinenTheme.accent
-    private let ink = Color(red: 0.18, green: 0.16, blue: 0.15)
+    private let ink = LinenTheme.ink
     private let deepGreen = LinenTheme.ink
     
     // Name text field broken into separate computed property
     private var nameTextField: some View {
-        let borderColor = isNameFocused ? terracotta.opacity(0.6) : Color.gray.opacity(0.15)
+        let borderColor = isNameFocused ? terracotta.opacity(0.6) : LinenTheme.line
         let borderWidth: CGFloat = isNameFocused ? 2 : 1
         let shadowColor = isNameFocused ? terracotta.opacity(0.15) : Color.black.opacity(0.04)
         let shadowRadius: CGFloat = isNameFocused ? 8 : 4

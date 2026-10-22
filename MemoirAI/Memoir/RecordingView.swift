@@ -537,12 +537,15 @@ struct RecordingView: View {
                 Text(saveErrorMessage ?? "Please try again.")
             }
             .sheet(isPresented: $showCustomQuestionSheet) {
-                QuestionGeneratorSheet(chapterTitle: chapterTitle) { newQuestion in
+                QuestionGeneratorSheet(
+                    chapterTitle: chapterTitle,
+                    memoirMode: memoirMode ?? MemoirModeClassifier.mode(forCurrentChapterTitle: chapterTitle) ?? currentMemoirMode()
+                ) { newQuestion in
                     activePromptText = newQuestion
                     isUsingCustomQuestion = newQuestion.caseInsensitiveCompare(prompt.text.trimmingCharacters(in: .whitespacesAndNewlines)) != .orderedSame
                 }
                 .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.hidden)
+                .presentationDragIndicator(.visible)
             }
             .analyticsScreen("memory_recording")
             .onAppear {

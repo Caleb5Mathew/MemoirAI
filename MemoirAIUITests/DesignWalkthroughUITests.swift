@@ -290,6 +290,31 @@ final class DesignWalkthroughUITests: XCTestCase {
     }
 
     @MainActor
+    func testChapterRowsOpenFromTheirFullVisibleWidth() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITest", "-linen-preview", "-analytics-internal"]
+        app.launch()
+
+        let continueMemories = app.buttons["tutorialContinueYourMemoir"]
+        XCTAssertTrue(continueMemories.waitForExistence(timeout: 10))
+        continueMemories.tap()
+        selectDefaultMemoirIfNeeded(in: app)
+
+        let secondTile = app.buttons["chapterTile2"]
+        for _ in 0..<4 where !secondTile.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(secondTile.waitForExistence(timeout: 5))
+        XCTAssertTrue(secondTile.isHittable)
+
+        secondTile.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.5)).tap()
+        XCTAssertTrue(
+            app.staticTexts["Chapter 2: Growing Up"].waitForExistence(timeout: 5),
+            "The blank area inside a visible chapter row must open that chapter"
+        )
+    }
+
+    @MainActor
     func testChapterJourneyScreenshot() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-UITest"]
