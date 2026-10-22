@@ -3,10 +3,21 @@ import Foundation
 import FirebaseAuth
 
 enum OnboardingMemoryValidation {
+    static let maximumCharacterCount = 12_000
+
     static func normalizedTranscript(_ value: String) -> String? {
         let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.split(whereSeparator: \.isWhitespace).count >= 6 else { return nil }
+        guard text.split(whereSeparator: \.isWhitespace).count >= 6,
+              text.utf16.count <= maximumCharacterCount else { return nil }
         return text
+    }
+
+    static func exceedsMaximumLength(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).utf16.count > maximumCharacterCount
+    }
+
+    static func excessCharacterCount(_ value: String) -> Int {
+        max(0, value.trimmingCharacters(in: .whitespacesAndNewlines).utf16.count - maximumCharacterCount)
     }
 }
 
@@ -23,6 +34,9 @@ struct MemoryCreationService {
         firebaseUserID: String,
         queueCloudSync: Bool = true
     ) throws -> UUID {
+        guard !OnboardingMemoryValidation.exceedsMaximumLength(transcript) else {
+            throw MemoryCreationError.storyTooLong
+        }
         guard let normalized = OnboardingMemoryValidation.normalizedTranscript(transcript) else {
             throw MemoryCreationError.storyTooShort
         }
@@ -147,6 +161,7 @@ struct MemoryCreationService {
 
 enum MemoryCreationError: LocalizedError {
     case storyTooShort
+    case storyTooLong
     case emptyAudio
     case changedStory
     case cloudSyncFailed
@@ -154,6 +169,7 @@ enum MemoryCreationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .storyTooShort: return "Tell us a little more so the page has a story to hold onto."
+        case .storyTooLong: return "Shorten this memory to 12,000 characters before creating its page."
         case .changedStory: return "This saved memory differs from your current story. Start a new page to keep both versions."
         case .cloudSyncFailed: return "Your memory is saved on this device. Reconnect and retry so its recording can be heard from the book."
         case .emptyAudio: return "The recording was empty. Please record it again."

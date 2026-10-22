@@ -2,7 +2,7 @@
 //  WelcomeAuthView.swift
 //  MemoirAI
 //
-//  Shown exactly once, on the very first app launch, before onboarding. Offers to attach
+//  Shown exactly once after onboarding and its paywall. Offers to attach
 //  an account (Apple / Google / Email) to the auto-created anonymous session so the
 //  person's stories survive reinstalls — or skip and continue as a guest.
 //
@@ -33,9 +33,12 @@ struct WelcomeAuthView: View {
                     Spacer(minLength: 48)
 
                 VStack(spacing: 14) {
-                    Image(systemName: "book.closed.fill")
-                        .font(.system(size: 44))
-                        .foregroundColor(LinenTheme.accent)
+                    Image("MemoirBrandIcon")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 64, height: 64)
+                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .accessibilityHidden(true)
 
                     Text("Welcome to Memoir")
                         .font(LinenTheme.heading(25))
@@ -77,24 +80,21 @@ struct WelcomeAuthView: View {
                         }
                     }
                     .signInWithAppleButtonStyle(.black)
-                    .frame(minHeight: authButtonHeight)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: authButtonHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                     Button(action: handleGoogle) {
                         HStack(spacing: 10) {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.white)
-                                    .frame(width: 22, height: 22)
-                                Text("G")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundColor(.blue)
-                            }
+                            Image("GoogleLogo")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 20, height: 20)
                             Text("Continue with Google")
                                 .font(LinenTheme.body(16, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
-                        .frame(minHeight: authButtonHeight)
+                        .frame(height: authButtonHeight)
                         .background(Color.white)
                         .foregroundColor(.black.opacity(0.75))
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -115,7 +115,7 @@ struct WelcomeAuthView: View {
                                 .font(LinenTheme.body(16, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
-                        .frame(minHeight: authButtonHeight)
+                        .frame(height: authButtonHeight)
                         .background(LinenTheme.accent)
                         .foregroundColor(LinenTheme.onAccent)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

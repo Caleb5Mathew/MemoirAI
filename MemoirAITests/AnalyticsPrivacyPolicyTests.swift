@@ -62,6 +62,10 @@ struct AnalyticsPrivacyPolicyTests {
         ]).isEmpty)
     }
 
+    @Test func rejectsRemovedOnboardingSampleAction() {
+        #expect(AnalyticsPrivacyPolicy.sanitized(["action": "sample_answer"]).isEmpty)
+    }
+
     @Test func rejectsNegativeMetrics() {
         #expect(AnalyticsPrivacyPolicy.sanitized([
             "duration_ms": -1, "characters_saved": -2, "recording_duration": -0.5

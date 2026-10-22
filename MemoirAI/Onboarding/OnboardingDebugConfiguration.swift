@@ -13,18 +13,14 @@ enum OnboardingDebugConfiguration {
 
     static var replayOnLaunch: Bool {
         #if DEBUG
-        return true
+        return replayRequested()
         #else
         return false
         #endif
     }
 
-    static var simulatorHeadshot: UIImage? {
-        #if DEBUG && targetEnvironment(simulator)
-        return UIImage(named: "AlexOnboardingPortrait")
-        #else
-        return nil
-        #endif
+    static func replayRequested(arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
+        arguments.contains("-onboarding-replay")
     }
 
     #if DEBUG && targetEnvironment(simulator)

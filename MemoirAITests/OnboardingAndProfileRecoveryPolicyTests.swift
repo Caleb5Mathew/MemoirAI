@@ -42,6 +42,13 @@ struct OnboardingAndProfileRecoveryPolicyTests {
         #expect(OnboardingCompletionPolicy.shouldComplete(after: .paywallDismissed))
     }
 
+    @Test func accountBackupAppearsOnlyAfterOnboarding() {
+        #expect(AppEntryRoute.resolve(hasCompletedOnboarding: false, hasSeenWelcomeAuth: false) == .onboarding)
+        #expect(AppEntryRoute.resolve(hasCompletedOnboarding: false, hasSeenWelcomeAuth: true) == .onboarding)
+        #expect(AppEntryRoute.resolve(hasCompletedOnboarding: true, hasSeenWelcomeAuth: false) == .account)
+        #expect(AppEntryRoute.resolve(hasCompletedOnboarding: true, hasSeenWelcomeAuth: true) == .main)
+    }
+
     @Test func completedOnboardingCannotBeDowngradedByCloud() {
         #expect(OnboardingCompletionState.resolved(local: true, cloud: false))
         #expect(OnboardingCompletionState.resolved(local: true, cloud: true))

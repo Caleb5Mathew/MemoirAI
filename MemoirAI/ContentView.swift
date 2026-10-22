@@ -4,6 +4,17 @@ import FirebaseAuth
 import CoreData
 import Combine
 
+enum AppEntryRoute: Equatable {
+    case onboarding
+    case account
+    case main
+
+    static func resolve(hasCompletedOnboarding: Bool, hasSeenWelcomeAuth: Bool) -> Self {
+        guard hasCompletedOnboarding else { return .onboarding }
+        return hasSeenWelcomeAuth ? .main : .account
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var iCloudManager: iCloudManager
     @EnvironmentObject var profileVM: ProfileViewModel
@@ -22,12 +33,9 @@ struct ContentView: View {
     @AppStorage("hasCompletedOnboarding_local") private var localCompleted: Bool = false
     @AppStorage(CheckoutReturnPolicy.confirmedSessionDefaultsKey) private var confirmedCheckoutSessionID = ""
 
-    // Shown exactly once, on first launch, before onboarding. UserDefaults-only (not mirrored
-    // to iCloud KV): iCloudManager's KV sync semantics are onboarding-specific (see its
-    // "never flip false→true mid-session" guard) and reusing that same key/logic for an
-    // unrelated flag would risk subtly changing onboarding's own sync behavior. A fresh
-    // install on a second device will see this screen again, which is an acceptable tradeoff
-    // for a one-time welcome screen.
+    // Shown exactly once after onboarding and its paywall. UserDefaults-only (not mirrored
+    // to iCloud KV): a fresh install on a second device may see this account-backup screen
+    // again, which is an acceptable tradeoff for protecting stories created on that device.
     @AppStorage("hasSeenWelcomeAuth") private var hasSeenWelcomeAuth: Bool = false
 
     // Store pending deep link if user scans QR code before completing onboarding
@@ -45,11 +53,14 @@ struct ContentView: View {
             ? finishedDebugOnboarding
             : (localCompleted || iCloudManager.hasCompletedOnboarding))
         let seenWelcomeAuth = OnboardingDebugConfiguration.previewApp || OnboardingDebugConfiguration.replayOnLaunch || hasSeenWelcomeAuth
+        let entryRoute = AppEntryRoute.resolve(
+            hasCompletedOnboarding: done,
+            hasSeenWelcomeAuth: seenWelcomeAuth
+        )
 
         return Group {
-            if !seenWelcomeAuth {
-                WelcomeAuthView(onFinished: { hasSeenWelcomeAuth = true })
-            } else if done {
+            switch entryRoute {
+            case .main:
                 NavigationStack(path: $path) {
                     MainTabView(path: $path)
                     .toolbar(.hidden, for: .navigationBar)
@@ -161,7 +172,9 @@ struct ContentView: View {
                         }
                     }
                 }
-            } else {
+            case .account:
+                WelcomeAuthView(onFinished: { hasSeenWelcomeAuth = true })
+            case .onboarding:
                 OnboardingFlow(onFinished: { finishedDebugOnboarding = true })
             }
         }

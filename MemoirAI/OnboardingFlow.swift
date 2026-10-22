@@ -243,7 +243,7 @@ struct OnboardingFlow: View {
     }
 
     private var meetAlex: some View {
-        OnboardingMeetAlexView(onBack: goBack, onSkip: {
+        OnboardingMeetAlexView(showsBackButton: !hasSubmittedMemory, onBack: goBack, onSkip: {
             track("Onboarding Action", ["action": "skip_tour"])
             finishTour()
         }) {
@@ -450,16 +450,12 @@ struct OnboardingFlow: View {
                                 .foregroundStyle(colors.muted.opacity(0.75)).padding(18).allowsHitTesting(false)
                         }
                     }
-                    Button("Use a sample answer") {
-                        track("Onboarding Action", ["action": "sample_answer"])
-                        recorder.discard()
-                        restoredAudioURL = nil
-                        restoredRawTranscript = nil
-                        storyDraft = "Every summer, my cousins and I built a fort under the big tree in our backyard. We dragged out old blankets and ate peach slices with sticky fingers. One afternoon it started raining, and we stayed under our leaky roof, laughing until my mum called us inside."
+                    if OnboardingMemoryValidation.exceedsMaximumLength(storyDraft) {
+                        Text("Shorten this memory by \(OnboardingMemoryValidation.excessCharacterCount(storyDraft).formatted()) characters to continue.")
+                            .font(.custom("AvenirNext-Medium", size: 12, relativeTo: .footnote))
+                            .foregroundStyle(colors.rust)
+                            .accessibilityIdentifier("onboardingStoryLengthError")
                     }
-                    .font(.custom("AvenirNext-DemiBold", size: 12, relativeTo: .body))
-                    .underline().foregroundStyle(colors.moss).frame(minHeight: 44)
-                    .disabled(recorder.isRecording || recorder.isFinalizing)
                 }
                 .padding(.horizontal, 25).padding(.top, 16).padding(.bottom, 12)
             }
@@ -503,7 +499,9 @@ struct OnboardingFlow: View {
                     }
             }
             HStack(spacing: 12) {
-                secondaryButton("Camera", icon: "camera.fill") { track("Onboarding Action", ["action": "photo_camera"]); showCamera = true }
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    secondaryButton("Camera", icon: "camera.fill") { track("Onboarding Action", ["action": "photo_camera"]); showCamera = true }
+                }
                 secondaryButton("Library", icon: "photo.fill") { track("Onboarding Action", ["action": "photo_library"]); showLibrary = true }
             }
 
@@ -782,7 +780,6 @@ struct OnboardingFlow: View {
             }
         }
         #endif
-        if selectedPhoto == nil { selectedPhoto = OnboardingDebugConfiguration.simulatorHeadshot }
         isPreparingAccount = false
         persistSession()
         stepEnteredAt = Date()
@@ -795,8 +792,12 @@ struct OnboardingFlow: View {
     }
 
     private func acceptPhoto(_ image: UIImage, source: String) {
+        guard let photoData = OnboardingPhotoPreparation.jpeg(from: image) else {
+            errorMessage = "That photo could not be prepared. Choose a different image and try again."
+            return
+        }
         selectedPhoto = image
-        submittedPhotoData = nil
+        submittedPhotoData = photoData
         track("Onboarding Photo Added", ["source": source])
     }
 
@@ -952,7 +953,14 @@ struct OnboardingFlow: View {
     private func finishAfterPaywall() {
         guard !didTrackCompletion, OnboardingCompletionPolicy.shouldComplete(after: .paywallDismissed) else { return }
         didTrackCompletion = true
-        if !OnboardingDebugConfiguration.replayOnLaunch, let uid = Auth.auth().currentUser?.uid { sessionStore.clear(userID: uid) }
+        if !OnboardingDebugConfiguration.replayOnLaunch, let uid = Auth.auth().currentUser?.uid {
+            sessionStore.clear(userID: uid)
+            do {
+                try draftStore.clear(userID: uid)
+            } catch {
+                print("Onboarding draft cleanup failed: \(error.localizedDescription)")
+            }
+        }
         iCloudManager.completeOnboarding()
         UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding_local")
         FacebookAnalytics.logOnboardingCompleted()

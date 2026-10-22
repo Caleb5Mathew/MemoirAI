@@ -34,6 +34,22 @@ final class OnboardingV5Tests: XCTestCase {
         )
     }
 
+    func testMemoryValidationRejectsStoriesBeyondPreviewLimit() {
+        let words = "one two three four five six "
+        let accepted = words + String(
+            repeating: "a",
+            count: OnboardingMemoryValidation.maximumCharacterCount - words.utf16.count
+        )
+        let rejected = accepted + "x"
+
+        XCTAssertNotNil(OnboardingMemoryValidation.normalizedTranscript(accepted))
+        XCTAssertNil(OnboardingMemoryValidation.normalizedTranscript(rejected))
+        XCTAssertFalse(OnboardingMemoryValidation.exceedsMaximumLength(accepted))
+        XCTAssertTrue(OnboardingMemoryValidation.exceedsMaximumLength(rejected))
+        XCTAssertEqual(OnboardingMemoryValidation.excessCharacterCount(rejected), 1)
+        XCTAssertTrue(MemoryCreationError.storyTooLong.localizedDescription.contains("12,000"))
+    }
+
     func testPreviewStatusRejectsUnknownServerState() {
         XCTAssertEqual(OnboardingPreviewResponsePolicy.status(from: "imageReady"), .imageReady)
         XCTAssertNil(OnboardingPreviewResponsePolicy.status(from: "complete"))

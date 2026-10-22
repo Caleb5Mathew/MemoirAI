@@ -89,7 +89,8 @@ enum AccountLocalDataCleaner {
     static func clearUserFiles(
         firebaseUserID: String,
         localFileURLs: [URL],
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        onboardingDraftStore: OnboardingDraftStore = OnboardingDraftStore()
     ) throws {
         for url in localFileURLs where url.isFileURL && fileManager.fileExists(atPath: url.path) {
             try fileManager.removeItem(at: url)
@@ -104,6 +105,8 @@ enum AccountLocalDataCleaner {
                 try fileManager.removeItem(at: storybookURL)
             }
         }
+
+        try onboardingDraftStore.clear(userID: firebaseUserID)
 
         if let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
             let profileURL = documents.appendingPathComponent(

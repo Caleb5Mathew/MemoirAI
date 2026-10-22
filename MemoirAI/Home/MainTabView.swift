@@ -186,25 +186,26 @@ struct MainTabView: View {
 
     private var notificationPermissionBanner: some View {
         let action = NotificationPermissionPolicy.action(for: notificationManager.authorizationStatus)
-        let terracotta = Color(red: 0.82, green: 0.45, blue: 0.32)
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "bell.badge.fill")
-                    .foregroundColor(terracotta)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(LinenTheme.accent)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Don’t miss family requests")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(LinenTheme.body(14, weight: .semibold))
+                        .foregroundStyle(LinenTheme.ink)
                     Text("Get notified when someone asks to hear a memory you shared.")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
+                        .font(LinenTheme.body(12))
+                        .foregroundStyle(LinenTheme.secondary)
                 }
                 Spacer(minLength: 8)
                 Button {
                     notificationPromptDismissed = true
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary.opacity(0.7))
+                        .foregroundStyle(LinenTheme.secondary.opacity(0.7))
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
@@ -223,12 +224,15 @@ struct MainTabView: View {
                     break
                 }
             }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundColor(terracotta)
+            .font(LinenTheme.body(13, weight: .semibold))
+            .foregroundStyle(LinenTheme.accent)
         }
         .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.black.opacity(0.06), lineWidth: 1))
+        .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(LinenTheme.line, lineWidth: 1)
+        )
     }
 
     private var accessRequestsBanner: some View {

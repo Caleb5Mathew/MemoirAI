@@ -1,9 +1,22 @@
 import SwiftUI
 
 struct OnboardingMeetAlexView: View {
+    let showsBackButton: Bool
     let onBack: () -> Void
     let onSkip: () -> Void
     let onContinue: () -> Void
+
+    init(
+        showsBackButton: Bool = true,
+        onBack: @escaping () -> Void,
+        onSkip: @escaping () -> Void,
+        onContinue: @escaping () -> Void
+    ) {
+        self.showsBackButton = showsBackButton
+        self.onBack = onBack
+        self.onSkip = onSkip
+        self.onContinue = onContinue
+    }
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private let colors = OnboardingColorTheme()
 
@@ -84,6 +97,9 @@ struct OnboardingMeetAlexView: View {
                     .background(colors.ink.opacity(0.58), in: Circle())
             }
             .accessibilityLabel("Back")
+            .accessibilityHidden(!showsBackButton)
+            .opacity(showsBackButton ? 1 : 0)
+            .disabled(!showsBackButton)
             Spacer()
             Text("ALEX’S BOOK")
                 .font(.custom("AvenirNext-DemiBold", size: 10, relativeTo: .caption))

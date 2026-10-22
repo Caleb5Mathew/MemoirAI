@@ -267,6 +267,28 @@ struct AccountDeletionTests {
         #expect(AccountLocalDataCleaner.profileIDs(fromProfileData: data) == [first.id, second.id])
         #expect(AccountLocalDataCleaner.profileIDs(fromProfileData: Data([0xFF])).isEmpty)
     }
+
+    @Test func localFileCleanupRemovesTheDeletedUsersOnboardingDraft() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let draftStore = OnboardingDraftStore(directory: root)
+        let draft = OnboardingDraft(
+            session: OnboardingSession(),
+            story: "We spent a summer afternoon beside the river.",
+            rawTranscript: nil,
+            audioURL: nil,
+            photoData: Data([1, 2, 3])
+        )
+        try draftStore.save(draft, userID: "deleted-user")
+
+        try AccountLocalDataCleaner.clearUserFiles(
+            firebaseUserID: "deleted-user",
+            localFileURLs: [],
+            onboardingDraftStore: draftStore
+        )
+
+        #expect(try draftStore.load(userID: "deleted-user") == nil)
+    }
 }
 
 struct LinkedAccountPolicyTests {

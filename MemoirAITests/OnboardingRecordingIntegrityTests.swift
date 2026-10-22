@@ -33,6 +33,12 @@ final class OnboardingRecordingIntegrityTests: XCTestCase {
         XCTAssertTrue(MemoryCreationError.changedStory.localizedDescription.contains("keep both versions"))
     }
 
+    func testOnboardingReplayRequiresExactExplicitLaunchArgument() {
+        XCTAssertFalse(OnboardingDebugConfiguration.replayRequested(arguments: []))
+        XCTAssertFalse(OnboardingDebugConfiguration.replayRequested(arguments: ["-onboarding-replay-disabled"]))
+        XCTAssertTrue(OnboardingDebugConfiguration.replayRequested(arguments: ["MemoirAI", "-onboarding-replay"]))
+    }
+
     #if DEBUG && targetEnvironment(simulator)
     func testAudioFixtureRequiresExactExplicitLaunchArgument() {
         XCTAssertFalse(OnboardingDebugConfiguration.audioFixtureRequested(arguments: []))
