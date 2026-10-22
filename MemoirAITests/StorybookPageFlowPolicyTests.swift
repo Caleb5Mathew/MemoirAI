@@ -237,6 +237,14 @@ struct StorybookPageFlowPolicyTests {
         #expect(BookRevisionSavePolicy.reusesExistingCover(for: "interiorDesignUpdate"))
     }
 
+    @Test func defaultMemoirPrintSpecMatchesLandscapeLuluTrim() {
+        let spec = BookPrintSpec.forArtStyle(ArtStyle.kidsBook.rawValue)
+        #expect(spec.orientation == "landscape")
+        #expect(spec.trimSizeInches == "11x8.5")
+        #expect(spec.widthPt == 792)
+        #expect(spec.heightPt == 612)
+    }
+
     @Test func catalogUsesTheHumanPrintTitleBeforeTheInternalBookKey() {
         #expect(BookCatalogTitlePolicy.displayTitle(
             printTitle: "Evelyn Hart's Memoir",

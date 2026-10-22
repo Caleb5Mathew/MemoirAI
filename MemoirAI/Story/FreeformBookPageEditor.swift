@@ -1170,9 +1170,9 @@ private struct BookPageElementView: View {
                             Text(semanticTemplate == .interiorTitle
                                  ? BookInteriorStyle.openingTitle(content.text) : content.text)
                                 .font(
-                                    semanticTemplate == .interiorTitle || semanticTemplate == .interiorClosing
-                                        ? .custom("GillSans", size: fontSize)
-                                        : .custom("Georgia-Bold", size: fontSize)
+                                    semanticTemplate == .interiorClosing
+                                        ? .custom("Georgia-Bold", size: fontSize)
+                                        : .custom("GillSans", size: fontSize)
                                 )
                                 .lineLimit(3)
                                 .minimumScaleFactor(semanticTemplate == .interiorTitle ? 0.55 : 0.65)
@@ -1191,7 +1191,7 @@ private struct BookPageElementView: View {
                     case .body:
                         if semanticTemplate == .interiorClosing {
                             Text(content.text)
-                                .font(.custom("GillSans", size: fontSize))
+                                .font(.system(size: fontSize, weight: .semibold))
                                 .lineLimit(2)
                                 .minimumScaleFactor(0.72)
                         } else if semanticTemplate == .interiorTitle {

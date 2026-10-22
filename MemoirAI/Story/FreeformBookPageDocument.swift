@@ -163,11 +163,11 @@ enum BookPageCanonicalLayout {
                 BookPageCanonicalTextLayout(
                     titleFrame: trimmedTitle.isEmpty
                         ? nil
-                        : NormalizedPageRect(x: 0.10, y: 0.15, width: 0.80, height: 0.08),
+                        : NormalizedPageRect(x: 0.09, y: 0.115, width: 0.82, height: 0.075),
                     subtitleFrame: nil,
-                    bodyFrame: NormalizedPageRect(x: 0.10, y: 0.31, width: 0.80, height: 0.57)
+                    bodyFrame: NormalizedPageRect(x: 0.09, y: 0.265, width: 0.82, height: 0.66)
                 ),
-                0.0265
+                0.023
             )
         ]
 
@@ -229,7 +229,7 @@ enum BookPageTextSizing {
 }
 
 enum BookInteriorPageDocumentFactory {
-    static let semanticTemplateVersion = 5
+    static let semanticTemplateVersion = 6
 
     struct Layout: Equatable, Sendable {
         let titleFrame: NormalizedPageRect
@@ -245,6 +245,33 @@ enum BookInteriorPageDocumentFactory {
     }
 
     static func layout(pageAspectRatio: Double, isKidsBook: Bool) -> Layout {
+        let isLandscape = pageAspectRatio > 1
+        return Layout(
+            titleFrame: NormalizedPageRect(x: 0.11, y: 0.24, width: 0.78, height: 0.27),
+            titleBodyFrame: NormalizedPageRect(x: 0.11, y: 0.53, width: 0.74, height: 0.09),
+            titleFontSize: isLandscape ? 0.099 : 0.070,
+            titleBodyFontSize: isLandscape ? 0.031 : 0.026,
+            closingIconFrame: isLandscape
+                ? NormalizedPageRect(x: 0.455, y: 0.235, width: 0.09, height: 0.12)
+                : NormalizedPageRect(x: 0.43, y: 0.235, width: 0.14, height: 0.11),
+            closingHeadingFrame: isLandscape
+                ? NormalizedPageRect(x: 0.20, y: 0.39, width: 0.60, height: 0.09)
+                : NormalizedPageRect(x: 0.15, y: 0.38, width: 0.70, height: 0.08),
+            closingBadgeFrame: isLandscape
+                ? NormalizedPageRect(x: 0.335, y: 0.515, width: 0.33, height: 0.105)
+                : NormalizedPageRect(x: 0.255, y: 0.495, width: 0.49, height: 0.085),
+            closingStoreTextFrame: isLandscape
+                ? NormalizedPageRect(x: 0.39, y: 0.535, width: 0.25, height: 0.065)
+                : NormalizedPageRect(x: 0.34, y: 0.507, width: 0.36, height: 0.06),
+            closingHeadingFontSize: isLandscape ? 0.052 : 0.044,
+            closingStoreFontSize: isLandscape ? 0.024 : 0.021
+        )
+    }
+
+    private static func legacyVersionFiveLayout(
+        pageAspectRatio: Double,
+        isKidsBook: Bool
+    ) -> Layout {
         let isLandscape = pageAspectRatio > 1
         return Layout(
             titleFrame: NormalizedPageRect(x: 0.11, y: 0.24, width: 0.78, height: 0.27),
@@ -429,7 +456,7 @@ enum BookInteriorPageDocumentFactory {
                     typographyPreset: typographyPreset
                 )
                 document.updateFontSize(id: headingID, fontSize: layout.closingHeadingFontSize)
-                document.updateTextAlignment(id: headingID, alignment: .leading)
+                document.updateTextAlignment(id: headingID, alignment: .center)
             }
 
             if let preservedStoreText = canonicalElementToPreserve(
@@ -447,10 +474,10 @@ enum BookInteriorPageDocumentFactory {
                     frame: layout.closingStoreTextFrame,
                     role: .body,
                     typographyPreset: typographyPreset,
-                    color: .ink
+                    color: .white
                 )
                 document.updateFontSize(id: storeID, fontSize: layout.closingStoreFontSize)
-                document.updateTextAlignment(id: storeID, alignment: .leading)
+                document.updateTextAlignment(id: storeID, alignment: .center)
             }
 
         }
@@ -507,7 +534,7 @@ enum BookInteriorPageDocumentFactory {
               case .text(let text) = element.content else {
             return nil
         }
-        guard [2, 3, 4].contains(document.semanticTemplateVersion) else { return element }
+        guard [2, 3, 4, 5].contains(document.semanticTemplateVersion) else { return element }
 
         let oldLayout: Layout
         switch document.semanticTemplateVersion {
@@ -515,6 +542,8 @@ enum BookInteriorPageDocumentFactory {
             oldLayout = legacyVersionTwoLayout(pageAspectRatio: pageAspectRatio, isKidsBook: isKidsBook)
         case 3:
             oldLayout = legacyVersionThreeLayout(pageAspectRatio: pageAspectRatio, isKidsBook: isKidsBook)
+        case 5:
+            oldLayout = legacyVersionFiveLayout(pageAspectRatio: pageAspectRatio, isKidsBook: isKidsBook)
         default:
             oldLayout = legacyVersionFourLayout(pageAspectRatio: pageAspectRatio, isKidsBook: isKidsBook)
         }
@@ -527,22 +556,22 @@ enum BookInteriorPageDocumentFactory {
             expectedFrame = oldLayout.titleFrame
             expectedFontSize = oldLayout.titleFontSize
             expectedColor = nil
-            expectedAlignment = document.semanticTemplateVersion == 4 ? .leading : .center
+            expectedAlignment = [4, 5].contains(document.semanticTemplateVersion) ? .leading : .center
         case (.interiorTitle, .body):
             expectedFrame = oldLayout.titleBodyFrame
             expectedFontSize = oldLayout.titleBodyFontSize
             expectedColor = nil
-            expectedAlignment = document.semanticTemplateVersion == 4 ? .leading : .center
+            expectedAlignment = [4, 5].contains(document.semanticTemplateVersion) ? .leading : .center
         case (.interiorClosing, .title):
             expectedFrame = oldLayout.closingHeadingFrame
             expectedFontSize = oldLayout.closingHeadingFontSize
             expectedColor = nil
-            expectedAlignment = .center
+            expectedAlignment = document.semanticTemplateVersion == 5 ? .leading : .center
         case (.interiorClosing, .body):
             expectedFrame = oldLayout.closingStoreTextFrame
             expectedFontSize = oldLayout.closingStoreFontSize
-            expectedColor = .white
-            expectedAlignment = .center
+            expectedColor = document.semanticTemplateVersion == 5 ? .ink : .white
+            expectedAlignment = document.semanticTemplateVersion == 5 ? .leading : .center
         default:
             return element
         }

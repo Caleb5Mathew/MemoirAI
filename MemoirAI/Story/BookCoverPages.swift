@@ -22,16 +22,16 @@ enum BookInteriorStyle {
         return String(title.dropLast(7)) + "\nMemoir"
     }
 
-    static let bodySize: CGFloat = 0.023
+    static let bodySize: CGFloat = 0.0265
     static let lineSpacing: CGFloat = 0.0025
-    static let memoryHorizontalInset: CGFloat = 0.09
-    static let memoryContentWidth: CGFloat = 0.82
+    static let memoryHorizontalInset: CGFloat = 0.10
+    static let memoryContentWidth: CGFloat = 0.80
     static let memoryKickerY: CGFloat = 0.075
-    static let memoryTitleY: CGFloat = 0.115
-    static let memoryTitleHeight: CGFloat = 0.075
-    static let memoryRuleY: CGFloat = 0.225
-    static let memoryBodyY: CGFloat = 0.265
-    static let memoryBodyHeight: CGFloat = 0.66
+    static let memoryTitleY: CGFloat = 0.15
+    static let memoryTitleHeight: CGFloat = 0.08
+    static let memoryRuleY: CGFloat = 0.27
+    static let memoryBodyY: CGFloat = 0.31
+    static let memoryBodyHeight: CGFloat = 0.57
     static let memoryPageNumberY: CGFloat = 0.965
 }
 
@@ -108,6 +108,8 @@ struct MemoirCoverBackPage: View {
     let frameWidth: CGFloat
     let frameHeight: CGFloat
 
+    private let headingColor = Color(red: 0.20, green: 0.18, blue: 0.15)
+
     var body: some View {
         let layout = BookInteriorPageDocumentFactory.layout(
             pageAspectRatio: Double(frameWidth / max(frameHeight, 1)),
@@ -117,13 +119,13 @@ struct MemoirCoverBackPage: View {
             MemoirCoverBackBackgroundPage(frameWidth: frameWidth, frameHeight: frameHeight)
 
             Text("Made with Memoir")
-                .font(.custom("GillSans", size: frameHeight * layout.closingHeadingFontSize))
-                .foregroundStyle(BookInteriorStyle.ink)
-                .multilineTextAlignment(.leading)
+                .font(.custom("Georgia-Bold", size: frameHeight * layout.closingHeadingFontSize))
+                .foregroundStyle(headingColor)
+                .multilineTextAlignment(.center)
                 .frame(
                     width: frameWidth * layout.closingHeadingFrame.width,
                     height: frameHeight * layout.closingHeadingFrame.height,
-                    alignment: .leading
+                    alignment: .center
                 )
                 .position(
                     x: frameWidth * (layout.closingHeadingFrame.x + layout.closingHeadingFrame.width / 2),
@@ -131,13 +133,13 @@ struct MemoirCoverBackPage: View {
                 )
 
             Text("Download on the App Store")
-                .font(.custom("GillSans", size: frameHeight * layout.closingStoreFontSize))
-                .foregroundStyle(BookInteriorStyle.ink)
-                .multilineTextAlignment(.leading)
+                .font(.system(size: frameHeight * layout.closingStoreFontSize, weight: .semibold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
                 .frame(
                     width: frameWidth * layout.closingStoreTextFrame.width,
                     height: frameHeight * layout.closingStoreTextFrame.height,
-                    alignment: .leading
+                    alignment: .center
                 )
                 .position(
                     x: frameWidth * (layout.closingStoreTextFrame.x + layout.closingStoreTextFrame.width / 2),
@@ -155,6 +157,9 @@ struct MemoirCoverBackBackgroundPage: View {
     let frameWidth: CGFloat
     let frameHeight: CGFloat
 
+    private let background = Color(red: 0.955, green: 0.925, blue: 0.875)
+    private let panel = Color(red: 0.99, green: 0.98, blue: 0.955)
+
     var body: some View {
         let layout = BookInteriorPageDocumentFactory.layout(
             pageAspectRatio: Double(frameWidth / max(frameHeight, 1)),
@@ -162,8 +167,18 @@ struct MemoirCoverBackBackgroundPage: View {
         )
         let iconWidth = frameWidth * layout.closingIconFrame.width
         let iconHeight = frameHeight * layout.closingIconFrame.height
+        let badgeWidth = frameWidth * layout.closingBadgeFrame.width
+        let badgeHeight = frameHeight * layout.closingBadgeFrame.height
         ZStack {
-            BookInteriorStyle.paper
+            background
+
+            RoundedRectangle(cornerRadius: frameHeight * 0.028, style: .continuous)
+                .fill(panel)
+                .overlay(
+                    RoundedRectangle(cornerRadius: frameHeight * 0.028, style: .continuous)
+                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                )
+                .padding(frameWidth * 0.065)
 
             MemoirAppIcon(side: min(iconWidth, iconHeight))
                 .position(
@@ -171,10 +186,21 @@ struct MemoirCoverBackBackgroundPage: View {
                     y: frameHeight * (layout.closingIconFrame.y + layout.closingIconFrame.height / 2)
                 )
 
-            Rectangle()
-                .fill(BookInteriorStyle.rule)
-                .frame(width: frameWidth * 0.78, height: max(0.5, frameHeight * 0.001))
-                .position(x: frameWidth * 0.50, y: frameHeight * 0.37)
+            Capsule()
+                .fill(Color.black)
+                .frame(width: badgeWidth, height: badgeHeight)
+                .position(
+                    x: frameWidth * (layout.closingBadgeFrame.x + layout.closingBadgeFrame.width / 2),
+                    y: frameHeight * (layout.closingBadgeFrame.y + layout.closingBadgeFrame.height / 2)
+                )
+
+            Image(systemName: "apple.logo")
+                .font(.system(size: badgeHeight * 0.42, weight: .medium))
+                .foregroundStyle(.white)
+                .position(
+                    x: frameWidth * (layout.closingBadgeFrame.x + layout.closingBadgeFrame.width * 0.12),
+                    y: frameHeight * (layout.closingBadgeFrame.y + layout.closingBadgeFrame.height / 2)
+                )
         }
         .frame(width: frameWidth, height: frameHeight)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))

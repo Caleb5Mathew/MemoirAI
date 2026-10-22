@@ -149,6 +149,29 @@ struct FreeformBookPageDocumentTests {
             isLandscape: true
         ))
 
+        var tighterDocument = BookPageDocument(pageAspectRatio: 11.0 / 8.5)
+        let tighterTitleID = try tighterDocument.addText(
+            title,
+            frame: NormalizedPageRect(x: 0.09, y: 0.115, width: 0.82, height: 0.075),
+            role: .title,
+            typographyPreset: .kidsBook
+        )
+        tighterDocument.updateFontSize(id: tighterTitleID, fontSize: 0.054)
+        let tighterBodyID = try tighterDocument.addText(
+            body,
+            frame: NormalizedPageRect(x: 0.09, y: 0.265, width: 0.82, height: 0.66),
+            role: .body,
+            typographyPreset: .kidsBook
+        )
+        tighterDocument.updateFontSize(id: tighterBodyID, fontSize: 0.023)
+        #expect(BookPageCanonicalLayout.isUntouchedGeneratedTextDocument(
+            tighterDocument,
+            body: body,
+            title: title,
+            typographyPreset: .kidsBook,
+            isLandscape: true
+        ))
+
         document.updateText(id: bodyID, text: body + " I added this myself.")
         #expect(!BookPageCanonicalLayout.isUntouchedGeneratedTextDocument(
             document,
@@ -874,8 +897,8 @@ struct FreeformBookPageDocumentTests {
         #expect(landscape.closingHeadingFrame.y + landscape.closingHeadingFrame.height < landscape.closingStoreTextFrame.y)
         #expect(portrait.closingIconFrame.y + portrait.closingIconFrame.height < portrait.closingHeadingFrame.y)
         #expect(portrait.closingHeadingFrame.y + portrait.closingHeadingFrame.height < portrait.closingStoreTextFrame.y)
-        #expect(landscape.closingBadgeFrame.width == 0)
-        #expect(portrait.closingBadgeFrame.width == 0)
+        #expect(landscape.closingBadgeFrame.width == 0.33)
+        #expect(portrait.closingBadgeFrame.width == 0.49)
     }
 
     @Test func semanticTitleTypographyMatchesTheBookStyle() {
@@ -1072,7 +1095,7 @@ struct FreeformBookPageDocumentTests {
 
         #expect(text.contains { $0.text == "Made with Memoir" })
         #expect(text.contains {
-            $0.text == "Download on the App Store" && $0.color == .ink && $0.alignment == .leading
+            $0.text == "Download on the App Store" && $0.color == .white && $0.alignment == .center
         })
         #expect(!text.contains { $0.text == "Grandparent" })
         #expect(document.semanticTemplate == .interiorClosing)
@@ -1206,10 +1229,10 @@ struct FreeformBookPageDocumentTests {
             return content
         }
         #expect(text.contains {
-            $0.role == .title && $0.alignment == .leading && $0.fontSize == layout.closingHeadingFontSize
+            $0.role == .title && $0.alignment == .center && $0.fontSize == layout.closingHeadingFontSize
         })
         #expect(text.contains {
-            $0.role == .body && $0.alignment == .leading && $0.color == .ink
+            $0.role == .body && $0.alignment == .center && $0.color == .white
                 && $0.fontSize == layout.closingStoreFontSize
         })
 
@@ -1229,6 +1252,120 @@ struct FreeformBookPageDocumentTests {
         #expect(customMigrated.elements.contains { element in
             guard case .text(let content) = element.content else { return false }
             return content.role == .title && content.text == "A hand-edited farewell"
+        })
+    }
+
+    @Test func versionFiveClosingMigrationRestoresFirebaseBookStyling() throws {
+        let aspectRatio = 11.0 / 8.5
+        var old = BookPageDocument(
+            pageAspectRatio: aspectRatio,
+            semanticTemplate: .interiorClosing,
+            semanticTemplateVersion: 5
+        )
+        let headingID = try old.addText(
+            "Made with Memoir",
+            frame: NormalizedPageRect(x: 0.11, y: 0.42, width: 0.78, height: 0.16),
+            role: .title,
+            typographyPreset: .kidsBook
+        )
+        old.updateFontSize(id: headingID, fontSize: 0.075)
+        old.updateTextAlignment(id: headingID, alignment: .leading)
+        let storeID = try old.addText(
+            "Download on the App Store",
+            frame: NormalizedPageRect(x: 0.11, y: 0.63, width: 0.54, height: 0.07),
+            role: .body,
+            typographyPreset: .kidsBook,
+            color: .ink
+        )
+        old.updateFontSize(id: storeID, fontSize: 0.028)
+        old.updateTextAlignment(id: storeID, alignment: .leading)
+
+        let migrated = try BookInteriorPageDocumentFactory.make(
+            memoryID: BookInteriorAnchor.closingPageMemoryId,
+            title: "Made with Memoir",
+            body: "",
+            subtitle: nil,
+            pageAspectRatio: aspectRatio,
+            typographyPreset: .kidsBook,
+            isKidsBook: true,
+            background: nil,
+            preservingEditableElementsFrom: old
+        )
+        let layout = BookInteriorPageDocumentFactory.layout(
+            pageAspectRatio: aspectRatio,
+            isKidsBook: true
+        )
+        let text = migrated.elements.compactMap { element -> (BookPageElement, BookPageTextContent)? in
+            guard case .text(let content) = element.content else { return nil }
+            return (element, content)
+        }
+
+        #expect(migrated.semanticTemplateVersion == 6)
+        #expect(text.contains {
+            $0.1.role == .title && $0.1.alignment == .center
+                && $0.1.fontSize == layout.closingHeadingFontSize
+                && $0.0.frame == layout.closingHeadingFrame
+        })
+        #expect(text.contains {
+            $0.1.role == .body && $0.1.alignment == .center && $0.1.color == .white
+                && $0.1.fontSize == layout.closingStoreFontSize
+                && $0.0.frame == layout.closingStoreTextFrame
+        })
+    }
+
+    @Test func versionFivePortraitClosingMigrationRestoresFirebaseBookStyling() throws {
+        let aspectRatio = 8.5 / 11.0
+        var old = BookPageDocument(
+            pageAspectRatio: aspectRatio,
+            semanticTemplate: .interiorClosing,
+            semanticTemplateVersion: 5
+        )
+        let headingID = try old.addText(
+            "Made with Memoir",
+            frame: NormalizedPageRect(x: 0.11, y: 0.41, width: 0.78, height: 0.15),
+            role: .title,
+            typographyPreset: .kidsBook
+        )
+        old.updateFontSize(id: headingID, fontSize: 0.060)
+        old.updateTextAlignment(id: headingID, alignment: .leading)
+        let storeID = try old.addText(
+            "Download on the App Store",
+            frame: NormalizedPageRect(x: 0.11, y: 0.62, width: 0.68, height: 0.06),
+            role: .body,
+            typographyPreset: .kidsBook,
+            color: .ink
+        )
+        old.updateFontSize(id: storeID, fontSize: 0.025)
+        old.updateTextAlignment(id: storeID, alignment: .leading)
+
+        let migrated = try BookInteriorPageDocumentFactory.make(
+            memoryID: BookInteriorAnchor.closingPageMemoryId,
+            title: "Made with Memoir",
+            body: "",
+            subtitle: nil,
+            pageAspectRatio: aspectRatio,
+            typographyPreset: .kidsBook,
+            isKidsBook: true,
+            background: nil,
+            preservingEditableElementsFrom: old
+        )
+        let layout = BookInteriorPageDocumentFactory.layout(
+            pageAspectRatio: aspectRatio,
+            isKidsBook: true
+        )
+
+        #expect(migrated.semanticTemplateVersion == 6)
+        #expect(migrated.elements.contains { element in
+            guard case .text(let content) = element.content else { return false }
+            return content.role == .title && content.alignment == .center
+                && content.fontSize == layout.closingHeadingFontSize
+                && element.frame == layout.closingHeadingFrame
+        })
+        #expect(migrated.elements.contains { element in
+            guard case .text(let content) = element.content else { return false }
+            return content.role == .body && content.alignment == .center
+                && content.color == .white && content.fontSize == layout.closingStoreFontSize
+                && element.frame == layout.closingStoreTextFrame
         })
     }
 
@@ -1290,7 +1427,7 @@ struct FreeformBookPageDocumentTests {
         }
     }
 
-    @MainActor @Test func productionLengthMemoryUsesOnePageWhenItFits() {
+    @MainActor @Test func productionLengthMemoryPaginatesWithoutLosingText() {
         let original = """
         Chapter One. My earliest memory: the fall in sand. The world is very small when you are three years old, bounded by the edges of a mattress and the warm, heavy presence of your parents. It was 1972, and we were camping on the west coast of Cape Town at a place called Silvestrom. Home for those few days wasn't a tent, but a rondavel, a sturdy round house with thick walls and a high conical roof made of thatch grass. Inside, the night carried the trapped heat of the coastal summer day. It was thick, heavy, and restless. I lay trapped in that heat, sandwiched tightly between my mother and my father, while their breathing was slow and rhythmic, matching the distant dull roar of the Atlantic surf outside. Sleep wouldn't come to me. I tossed and turned, my small body sticky against the sheets, shifting in the narrow space between them. Looking up into the dark cone of the ceiling, I noticed something moving. From the gaps in the dried thatch overhead, fine grains of sand began to fall. They didn't drop all at once. They trickled down in quiet, delicate streams, like time slipping through an hourglass. And then the strange part happened. Even though the rondavel was dark, shrouded in the shadows of the night, the falling sand seemed to catch a light that shouldn't have been there. Each tiny grain shimmered as it cascaded towards us. Surrounded by a faint coastal glow, I watched it, mesmerized by the beautiful silent shower. But the wonder didn't last. As the glowing sand drifted down, a weight settled onto my ribs. The hot air in the room suddenly felt too thick to swallow. I tried to take a deep breath, but my chest locked up, tightening until it felt as though an invisible band was being cinched around my lungs. The comforting warmth of my parents' bodies suddenly felt suffocating. I couldn't draw enough air to call out. There, under the shimmering sand of the Silvestrom ceiling, my three-year-old self was experiencing the world narrowing down to a single, terrifying struggle to breathe. It was my first asthma attack.
         """
@@ -1304,17 +1441,22 @@ struct FreeformBookPageDocumentTests {
             memoryID: UUID()
         )
 
-        #expect(pages.count == 1)
-        guard case .textPage(_, _, let body, _, _, _) = pages[0] else {
-            Issue.record("Expected a text page")
-            return
+        let bodies = pages.compactMap { page -> String? in
+            guard case .textPage(_, _, let body, _, _, _) = page else { return nil }
+            return body
         }
-        #expect(body == original)
-        #expect(BookInteriorTextLayout.height(
-            of: body,
-            width: 792 * BookInteriorStyle.memoryContentWidth,
-            fontSize: 612 * BookInteriorStyle.bodySize
-        ) <= 612 * BookInteriorStyle.memoryBodyHeight - 1)
+        #expect(bodies.count == pages.count)
+        #expect(
+            bodies.joined(separator: " ").split(whereSeparator: { $0.isWhitespace })
+                == original.split(whereSeparator: { $0.isWhitespace })
+        )
+        for body in bodies {
+            #expect(BookInteriorTextLayout.height(
+                of: body,
+                width: 792 * BookInteriorStyle.memoryContentWidth,
+                fontSize: 612 * BookInteriorStyle.bodySize
+            ) <= 612 * BookInteriorStyle.memoryBodyHeight - 1)
+        }
     }
 
     @MainActor @Test func legacyOverflowingTextPagesRepaginateWithoutLosingWords() {
