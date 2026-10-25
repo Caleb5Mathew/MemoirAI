@@ -348,20 +348,13 @@ struct OnboardingFlow: View {
                     .background(.white.opacity(0.82), in: RoundedRectangle(cornerRadius: 12))
                     .submitLabel(.continue)
                     .onSubmit { if validIdentity { advance(to: .record) } }
-                if session.audience == .someoneElse || session.audience == .parentOrGrandparent {
-                    Text("Who will tell this memory?").font(.custom("AvenirNext-DemiBold", size: 12, relativeTo: .body))
-                    HStack {
-                        choiceButton("I will", compact: true, selected: session.storyteller == .helper) { session.storyteller = .helper; persistSession() }
-                        choiceButton("\(displayName) will", compact: true, selected: session.storyteller == .subject) { session.storyteller = .subject; persistSession() }
-                    }
-                }
                 primaryButton("Continue", disabled: !validIdentity, horizontalInset: 0) { advance(to: .record) }
             }
         }
     }
 
     private var validIdentity: Bool {
-        validName && (!(session.audience == .someoneElse || session.audience == .parentOrGrandparent) || session.storyteller != nil)
+        validName
     }
 
     private var validName: Bool {
@@ -379,10 +372,22 @@ struct OnboardingFlow: View {
                     Text(adaptivePrompt)
                         .font(.custom("IowanOldStyle-Roman", size: layout.headingSize, relativeTo: .largeTitle))
                         .tracking(-1.3).fixedSize(horizontal: false, vertical: true)
-                    Text("Tap the microphone below and answer the question to get started.")
+                    Text(adaptiveRecordingGuidance)
                         .font(.custom("AvenirNext-Regular", size: 14, relativeTo: .body))
                         .foregroundStyle(colors.muted).lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
+                    if needsStorytellerChoice {
+                        HStack {
+                            choiceButton("I’ll tell it", compact: true, selected: session.storyteller == .helper) {
+                                session.storyteller = .helper
+                                persistSession()
+                            }
+                            choiceButton(OnboardingRecordingCopy.subjectChoiceTitle(name: displayName), compact: true, selected: session.storyteller == .subject) {
+                                session.storyteller = .subject
+                                persistSession()
+                            }
+                        }
+                    }
                     Button {
                         track("Onboarding Action", ["action": recorder.isRecording ? "record_stop" : "record_start"])
                         if recorder.isRecording {
@@ -428,7 +433,8 @@ struct OnboardingFlow: View {
                     }
                     .accessibilityLabel(recorder.isRecording ? "Stop recording" : "Start recording")
                     .accessibilityValue(recorder.isRecording ? "\(OnboardingRecordingCountdown(elapsed: recorder.elapsed).remainingLabel) remaining" : "Up to 60 seconds")
-                    .disabled(recorder.isFinalizing)
+                    .disabled(recorder.isFinalizing || (needsStorytellerChoice && session.storyteller == nil))
+                    .opacity(needsStorytellerChoice && session.storyteller == nil ? 0.52 : 1)
                     if recorder.liveCaptionEnded && recorder.isRecording {
                         Text("Still recording. Your full story will be transcribed when you finish.")
                             .font(.custom("AvenirNext-Regular", size: 12, relativeTo: .footnote)).foregroundStyle(colors.muted)
@@ -463,7 +469,7 @@ struct OnboardingFlow: View {
                 }
                 .padding(.horizontal, 25).padding(.top, 16).padding(.bottom, 12)
             }
-            primaryButton("Use this memory", disabled: normalizedStory == nil || recorder.isRecording || recorder.isFinalizing) {
+            primaryButton("Use this memory", disabled: normalizedStory == nil || recorder.isRecording || recorder.isFinalizing || (needsStorytellerChoice && session.storyteller == nil)) {
                 do {
                     _ = try startMemoryPreflight()
                     hasSubmittedMemory = false
@@ -535,9 +541,15 @@ struct OnboardingFlow: View {
     }
 
     private var adaptivePrompt: String {
-        (session.audience == .myself || session.audience == .myChildren || session.storyteller == .subject)
-            ? "What’s a favorite childhood memory?"
-            : "What is one of \(displayName)’s favorite childhood memories?"
+        OnboardingRecordingCopy.prompt(for: session.audience, name: displayName)
+    }
+
+    private var adaptiveRecordingGuidance: String {
+        OnboardingRecordingCopy.guidance(for: session.audience, name: displayName)
+    }
+
+    private var needsStorytellerChoice: Bool {
+        OnboardingRecordingCopy.needsStorytellerChoice(for: session.audience)
     }
 
     private var displayName: String {

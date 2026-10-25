@@ -32,6 +32,36 @@ enum OnboardingStoryteller: String, Codable, CaseIterable {
     case subject, helper
 }
 
+enum OnboardingRecordingCopy {
+    static func needsStorytellerChoice(for audience: OnboardingAudience?) -> Bool {
+        audience == .someoneElse || audience == .parentOrGrandparent
+    }
+
+    static func prompt(for audience: OnboardingAudience?, name: String) -> String {
+        guard needsStorytellerChoice(for: audience) else {
+            return "What’s one of your favorite childhood memories?"
+        }
+        return "Share one of \(normalizedName(name))’s favorite childhood memories."
+    }
+
+    static func guidance(for audience: OnboardingAudience?, name: String) -> String {
+        guard needsStorytellerChoice(for: audience) else {
+            return "Tap the microphone below and answer the question to get started."
+        }
+        let subjectName = normalizedName(name)
+        return "You can tell it for \(subjectName), or have \(subjectName) tell it in their own words."
+    }
+
+    static func subjectChoiceTitle(name: String) -> String {
+        "Let \(normalizedName(name)) tell it"
+    }
+
+    private static func normalizedName(_ name: String) -> String {
+        let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? "them" : value
+    }
+}
+
 struct OnboardingSession: Codable, Equatable {
     var stage = 0
     var audience: OnboardingAudience?

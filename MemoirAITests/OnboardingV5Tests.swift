@@ -26,6 +26,30 @@ final class OnboardingV5Tests: XCTestCase {
         XCTAssertEqual(store.load(userID: "user-b").stage, 0)
     }
 
+    func testRecordingCopyKeepsStorytellerChoiceOffTheNameStepForPersonalMemoirs() {
+        XCTAssertFalse(OnboardingRecordingCopy.needsStorytellerChoice(for: .myself))
+        XCTAssertFalse(OnboardingRecordingCopy.needsStorytellerChoice(for: .myChildren))
+        XCTAssertEqual(
+            OnboardingRecordingCopy.prompt(for: .myself, name: "Caleb"),
+            "What’s one of your favorite childhood memories?"
+        )
+    }
+
+    func testRecordingCopyOffersEitherSpeakerForSomeoneElsesMemoir() {
+        for audience in [OnboardingAudience.someoneElse, .parentOrGrandparent] {
+            XCTAssertTrue(OnboardingRecordingCopy.needsStorytellerChoice(for: audience))
+            XCTAssertEqual(
+                OnboardingRecordingCopy.prompt(for: audience, name: "  Alex  "),
+                "Share one of Alex’s favorite childhood memories."
+            )
+            XCTAssertEqual(
+                OnboardingRecordingCopy.guidance(for: audience, name: "  Alex  "),
+                "You can tell it for Alex, or have Alex tell it in their own words."
+            )
+            XCTAssertEqual(OnboardingRecordingCopy.subjectChoiceTitle(name: "  Alex  "), "Let Alex tell it")
+        }
+    }
+
     func testMemoryValidationRequiresAUsableStory() {
         XCTAssertNil(OnboardingMemoryValidation.normalizedTranscript("I remember it"))
         XCTAssertEqual(
