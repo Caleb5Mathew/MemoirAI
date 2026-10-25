@@ -81,7 +81,11 @@ final class ProductAnalytics {
         self.trafficContext = trafficContext
         self.registerContext = registerContext
         self.now = now
-        userID = defaults.string(forKey: Self.identityKey)
+        // A cached account ID can belong to a different person on the next launch.
+        // Let Mixpanel keep its anonymous device identity until Firebase resolves the
+        // current account, then identify with that verified UID.
+        defaults.removeObject(forKey: Self.identityKey)
+        userID = nil
     }
 
     static var buildEnvironment: String {
@@ -101,8 +105,14 @@ final class ProductAnalytics {
         let token = configuredToken.flatMap { $0.isEmpty ? nil : $0 }
             ?? "ca3f4918c79c2dee9957d0b18a1e0027"
         Mixpanel.initialize(token: token, trackAutomaticEvents: false)
-        Mixpanel.mainInstance().useIPAddressForGeoLocation = false
-        Mixpanel.mainInstance().registerSuperProperties(shared.trustedContext)
+        let mixpanel = Mixpanel.mainInstance()
+        // The SDK persists its own identity independently of ProductAnalytics. Start
+        // each process with a fresh device identity so startup events can never be
+        // attributed to a different account left on this installation. Firebase then
+        // identifies the verified account and Simplified ID Merge joins these events.
+        mixpanel.reset()
+        mixpanel.useIPAddressForGeoLocation = false
+        mixpanel.registerSuperProperties(shared.trustedContext)
     }
 
     private var trustedContext: Properties {
@@ -124,18 +134,32 @@ final class ProductAnalytics {
     func updateIdentity(userID nextID: String?, isGuest: Bool) {
         if userID != nextID {
             recordScreenTime(reason: "identity_changed")
+            let previousSessionStartedAt = activeSince
+            if let previousSessionStartedAt {
+                track("Session Ended", [
+                    "duration_ms": max(0, Int(now().timeIntervalSince(previousSessionStartedAt) * 1000))
+                ])
+                activeSince = nil
+            }
             if userID != nil {
                 reset()
-                sessionID = UUID().uuidString
             }
             inputs.removeAll()
             userID = nextID
-            if let nextID { defaults.set(nextID, forKey: Self.identityKey) }
-            else { defaults.removeObject(forKey: Self.identityKey) }
+            defaults.removeObject(forKey: Self.identityKey)
+            sessionID = UUID().uuidString
+            self.isGuest = isGuest
+            if let nextID { identify(nextID) }
+            registerContext(trustedContext)
+            if previousSessionStartedAt != nil {
+                activeSince = now()
+                track("Session Started")
+            }
+        } else {
+            self.isGuest = isGuest
+            if let nextID { identify(nextID) }
+            registerContext(trustedContext)
         }
-        self.isGuest = isGuest
-        if let nextID { identify(nextID) }
-        registerContext(trustedContext)
         if screenTrackingActive && !visibleScreens.isEmpty && screenActiveSince == nil {
             screenActiveSince = now()
         }

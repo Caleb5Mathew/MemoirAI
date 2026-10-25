@@ -2,9 +2,19 @@ import SwiftUI
 import RevenueCat
 import RevenueCatUI
 import FirebaseAuth
+import Mixpanel
+
+enum PaywallSource: String, CaseIterable {
+    case onboarding
+    case settings
+    case storyGeneration = "story_generation"
+    case profileLimit = "profile_limit"
+    case memoir
+}
 
 /// Keeps every purchase surface tied to the account that owns its memories.
 struct SubscriptionPaywallView: View {
+    let source: PaywallSource
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var manager = RCSubscriptionManager.shared
     @ObservedObject private var auth = AuthenticationService.shared
@@ -28,27 +38,27 @@ struct SubscriptionPaywallView: View {
                     .onAppear {
                         guard !recordedImpression else { return }
                         recordedImpression = true
-                        ProductAnalytics.shared.track("Paywall Viewed", ["presentation_id": analyticsPresentationID])
+                        ProductAnalytics.shared.track("Paywall Viewed", analyticsProperties)
                     }
                     .onPurchaseStarted { _ in
                         isPurchasing = true
-                        ProductAnalytics.shared.track("Subscription Purchase Started", ["presentation_id": analyticsPresentationID])
+                        ProductAnalytics.shared.track("Subscription Purchase Started", analyticsProperties)
                     }
                     .onPurchaseCancelled {
                         isPurchasing = false
-                        ProductAnalytics.shared.track("Subscription Purchase Cancelled", ["presentation_id": analyticsPresentationID])
+                        ProductAnalytics.shared.track("Subscription Purchase Cancelled", analyticsProperties)
                     }
                     .onPurchaseFailure { _ in
                         isPurchasing = false
-                        ProductAnalytics.shared.track("Subscription Purchase Failed", ["presentation_id": analyticsPresentationID, "failure_stage": "purchase"])
+                        ProductAnalytics.shared.track("Subscription Purchase Failed", analyticsProperties.merging(["failure_stage": "purchase"]) { current, _ in current })
                     }
                     .onRestoreStarted {
                         isPurchasing = true
-                        ProductAnalytics.shared.track("Subscription Restore Started", ["presentation_id": analyticsPresentationID])
+                        ProductAnalytics.shared.track("Subscription Restore Started", analyticsProperties)
                     }
                     .onRestoreFailure { _ in
                         isPurchasing = false
-                        ProductAnalytics.shared.track("Subscription Restore Failed", ["presentation_id": analyticsPresentationID, "failure_stage": "restore"])
+                        ProductAnalytics.shared.track("Subscription Restore Failed", analyticsProperties.merging(["failure_stage": "restore"]) { current, _ in current })
                     }
                     .onPurchaseCompleted { info in
                         activate(info, accountID: accountID, origin: "purchase")
@@ -110,15 +120,15 @@ struct SubscriptionPaywallView: View {
         .task { await prepare() }
         .onDisappear {
             guard recordedImpression else { return }
-            ProductAnalytics.shared.track("Paywall Dismissed", ["presentation_id": analyticsPresentationID, "dismissal_reason": dismissalReason])
+            ProductAnalytics.shared.track("Paywall Dismissed", analyticsProperties.merging(["dismissal_reason": dismissalReason]) { current, _ in current })
         }
         .onChange(of: preparationError) { _, error in
             guard error != nil else { return }
-            ProductAnalytics.shared.track("Paywall Preparation Failed", ["presentation_id": analyticsPresentationID, "failure_stage": "preparation"])
+            ProductAnalytics.shared.track("Paywall Preparation Failed", analyticsProperties.merging(["failure_stage": "preparation"]) { current, _ in current })
         }
         .onChange(of: activationError) { _, error in
             guard error != nil else { return }
-            ProductAnalytics.shared.track("Subscription Activation Failed", ["presentation_id": analyticsPresentationID, "purchase_origin": activationOrigin, "failure_stage": "activation"])
+            ProductAnalytics.shared.track("Subscription Activation Failed", analyticsProperties.merging(["purchase_origin": activationOrigin, "failure_stage": "activation"]) { current, _ in current })
         }
         .onChange(of: auth.user?.uid) { _, newID in
             guard let accountID, newID != accountID else { return }
@@ -135,18 +145,18 @@ struct SubscriptionPaywallView: View {
         }
     }
 
+    private var analyticsProperties: Properties {
+        ["presentation_id": analyticsPresentationID, "paywall_source": source.rawValue]
+    }
+
     @MainActor
     private func prepare() async {
         isPreparing = true
         preparationError = nil
         defer { isPreparing = false }
-        guard Purchases.isConfigured else {
-            preparationError = "Subscriptions could not be loaded. Please contact support."
-            return
-        }
         guard await auth.prepareAuthenticatedSessionForLaunch(),
               let userID = Auth.auth().currentUser?.uid,
-              await manager.identify(firebaseUserID: userID),
+              await manager.prepareIdentity(firebaseUserID: userID),
               Auth.auth().currentUser?.uid == userID else {
             preparationError = manager.identityErrorMessage
                 ?? "We could not verify your account. Check your connection and try again."
@@ -172,7 +182,7 @@ struct SubscriptionPaywallView: View {
     private func activate(_ info: CustomerInfo, accountID: String, origin: String) {
         activationOrigin = origin
         activationError = nil
-        ProductAnalytics.shared.track("Subscription Activation Started", ["presentation_id": analyticsPresentationID, "purchase_origin": origin])
+        ProductAnalytics.shared.track("Subscription Activation Started", analyticsProperties.merging(["purchase_origin": origin]) { current, _ in current })
         isPurchasing = false
         isActivating = true
         Task { @MainActor in
@@ -180,7 +190,7 @@ struct SubscriptionPaywallView: View {
             do {
                 if try manager.applyPurchaseResult(info, for: accountID) {
                     dismissalReason = "entitlement_active"
-                    ProductAnalytics.shared.track("Subscription Activation Succeeded", ["presentation_id": analyticsPresentationID, "purchase_origin": origin])
+                    ProductAnalytics.shared.track("Subscription Activation Succeeded", analyticsProperties.merging(["purchase_origin": origin]) { current, _ in current })
                     dismiss()
                     return
                 }
@@ -192,7 +202,7 @@ struct SubscriptionPaywallView: View {
                 }
                 if manager.hasActiveSubscription {
                     dismissalReason = "entitlement_active"
-                    ProductAnalytics.shared.track("Subscription Activation Succeeded", ["presentation_id": analyticsPresentationID, "purchase_origin": origin])
+                    ProductAnalytics.shared.track("Subscription Activation Succeeded", analyticsProperties.merging(["purchase_origin": origin]) { current, _ in current })
                     dismiss()
                 } else {
                     activationError = manager.activationErrorMessage

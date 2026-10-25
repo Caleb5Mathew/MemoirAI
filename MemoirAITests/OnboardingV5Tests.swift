@@ -34,6 +34,23 @@ final class OnboardingV5Tests: XCTestCase {
         )
     }
 
+    func testOnboardingRecordingCountdownUsesSixtySecondLimit() {
+        XCTAssertEqual(OnboardingRecordingCountdown.maximumDuration, 60)
+        XCTAssertEqual(OnboardingRecordingCountdown(elapsed: 0).remainingLabel, "1:00")
+        XCTAssertEqual(OnboardingRecordingCountdown(elapsed: 30).remainingLabel, "0:30")
+        XCTAssertEqual(OnboardingRecordingCountdown(elapsed: 59.2).remainingLabel, "0:01")
+        XCTAssertEqual(OnboardingRecordingCountdown(elapsed: 60).remainingLabel, "0:00")
+    }
+
+    func testOnboardingRecordingCountdownClampsProgressAndUrgency() {
+        XCTAssertEqual(OnboardingRecordingCountdown(elapsed: -4).remainingFraction, 1)
+        XCTAssertEqual(OnboardingRecordingCountdown(elapsed: 15).remainingFraction, 0.75, accuracy: 0.0001)
+        XCTAssertEqual(OnboardingRecordingCountdown(elapsed: 90).remainingFraction, 0)
+        XCTAssertEqual(OnboardingRecordingCountdown(elapsed: .nan).remainingFraction, 1)
+        XCTAssertFalse(OnboardingRecordingCountdown(elapsed: 49).isUrgent)
+        XCTAssertTrue(OnboardingRecordingCountdown(elapsed: 50).isUrgent)
+    }
+
     func testMemoryValidationRejectsStoriesBeyondPreviewLimit() {
         let words = "one two three four five six "
         let accepted = words + String(

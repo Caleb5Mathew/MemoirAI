@@ -48,16 +48,6 @@ actor OnboardingPreviewService {
         }
     }
 
-    func uploadPhoto(_ jpeg: Data?, requestID: String, userID: String) async throws -> String? {
-        guard let jpeg else { return nil }
-        guard jpeg.count <= 5 * 1024 * 1024 else { throw OnboardingPreviewServiceError.photoTooLarge }
-        let path = "users/\(userID)/onboardingPreviews/\(requestID)/subjectPhoto.jpg"
-        let metadata = StorageMetadata()
-        metadata.contentType = "image/jpeg"
-        _ = try await Storage.storage().reference(withPath: path).putDataAsync(jpeg, metadata: metadata)
-        return path
-    }
-
     func create(
         requestID: String,
         profileID: UUID,
@@ -150,13 +140,11 @@ actor OnboardingPreviewService {
 
 enum OnboardingPreviewServiceError: LocalizedError {
     case invalidResponse
-    case photoTooLarge
     case stillProcessing
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse: return "Your preview arrived incomplete. Please try again."
-        case .photoTooLarge: return "Choose a smaller photo to create your page."
         case .stillProcessing: return "Your page is still being prepared. Try again to pick up the same preview."
         }
     }

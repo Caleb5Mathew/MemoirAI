@@ -17,10 +17,23 @@ import FirebaseFunctions
 import RevenueCat
 import CoreData
 
+enum AuthStateRevisionPolicy {
+    static func isCurrent(
+        callbackUserID: String?,
+        currentUserID: String?,
+        callbackRevision: Int,
+        currentRevision: Int
+    ) -> Bool {
+        callbackUserID == currentUserID && callbackRevision == currentRevision
+    }
+}
+
 enum AccountLocalDataPolicy {
     private static let exactKeys: Set<String> = [
         "hasCompletedOnboarding",
         "hasCompletedOnboarding_local",
+        "hasSeenWelcomeAuth",
+        "memoirai_welcome_auth_post_onboarding_launch_count",
         "profiles",
         "selectedProfileIndex",
         "ordersLastViewedAt",
@@ -233,6 +246,7 @@ final class AuthenticationService: ObservableObject {
     // For Apple Sign In nonce
     private var currentNonce: String?
     private var sessionPreparationTask: Task<Bool, Never>?
+    private var authStateRevision = 0
     
     private init() {
         if UserDefaults.standard.bool(forKey: AccountLocalCleanupCoordinator.pendingKey) {
@@ -277,31 +291,50 @@ final class AuthenticationService: ObservableObject {
         // Listen for auth state changes
         Auth.auth().addStateDidChangeListener { [weak self] _, user in
             Task { @MainActor in
-                let previousUserID = self?.user?.uid
-                if previousUserID != user?.uid, self?.sessionPreparationTask == nil {
-                    self?.isSessionPrepared = false
+                guard let self, Auth.auth().currentUser?.uid == user?.uid else { return }
+                self.authStateRevision += 1
+                let revision = self.authStateRevision
+                let previousUserID = self.user?.uid
+                if previousUserID != user?.uid, self.sessionPreparationTask == nil {
+                    self.isSessionPrepared = false
                 }
-                ProductAnalytics.shared.updateIdentity(userID: user?.uid, isGuest: user?.isAnonymous ?? true)
-                self?.user = user
-                self?.isSignedIn = user != nil
+                self.user = user
+                self.isSignedIn = user != nil
                 
                 if let user = user {
+                    if self.sessionPreparationTask != nil { return }
+                    guard self.isSessionPrepared else {
+                        _ = await self.prepareAuthenticatedSessionForLaunch()
+                        return
+                    }
                     let tokenResult = try? await user.getIDTokenResult()
+                    guard AuthStateRevisionPolicy.isCurrent(
+                        callbackUserID: user.uid,
+                        currentUserID: Auth.auth().currentUser?.uid,
+                        callbackRevision: revision,
+                        currentRevision: self.authStateRevision
+                    ) else { return }
                     let hasMemoirGuestClaim = tokenResult?.claims["memoirGuest"] as? Bool == true
-                    self?.recoveredGuestUserID = hasMemoirGuestClaim ? user.uid : nil
-                    guard Auth.auth().currentUser?.uid == user.uid else { return }
+                    self.recoveredGuestUserID = hasMemoirGuestClaim ? user.uid : nil
                     ProductAnalytics.shared.updateIdentity(
                         userID: user.uid, isGuest: user.isAnonymous || hasMemoirGuestClaim
                     )
                     print("Auth state changed: signed in")
-                    if self?.isGuestUser(user) == false {
+                    if self.isGuestUser(user) == false {
                         UserDefaults.standard.removeObject(forKey: MemoirPersistenceUserDefaults.suggestAccountLinkAfterBook)
                     }
-                    await RCSubscriptionManager.shared.identify(firebaseUserID: user.uid)
+                    _ = await RCSubscriptionManager.shared.prepareIdentity(firebaseUserID: user.uid)
+                    guard AuthStateRevisionPolicy.isCurrent(
+                        callbackUserID: user.uid,
+                        currentUserID: Auth.auth().currentUser?.uid,
+                        callbackRevision: revision,
+                        currentRevision: self.authStateRevision
+                    ) else { return }
                     // Ensure user document exists in Firestore
-                    await self?.createOrUpdateUserDocument()
+                    await self.createOrUpdateUserDocument()
                 } else {
-                    self?.recoveredGuestUserID = nil
+                    self.recoveredGuestUserID = nil
+                    ProductAnalytics.shared.updateIdentity(userID: nil, isGuest: true)
                     RCSubscriptionManager.shared.clearIdentityState()
                     print("ℹ️ Auth state changed: signed out")
                 }
@@ -414,19 +447,31 @@ final class AuthenticationService: ObservableObject {
                     do {
                         try GuestRecoveryCoordinator.shared.discardLocalSecret()
                         try await GuestRecoveryCoordinator.shared.enrollCurrentGuest()
-                        isSessionPrepared = true
-                        return true
                     } catch {
                         print("Guest recovery key replacement failed: \(error.localizedDescription)")
+                        errorMessage = "Memoir could not restore your private guest account. Your cloud data is unchanged; check your connection and reopen the app."
+                        return false
                     }
+                } else {
+                    errorMessage = "Memoir could not restore your private guest account. Your cloud data is unchanged; check your connection and reopen the app."
+                    print("Guest account preparation failed: \(error.localizedDescription)")
+                    return false
                 }
-                errorMessage = "Memoir could not restore your private guest account. Your cloud data is unchanged; check your connection and reopen the app."
-                print("Guest account preparation failed: \(error.localizedDescription)")
-                return false
             }
         }
 
+        guard let stableUser = Auth.auth().currentUser else { return false }
         isSessionPrepared = true
+        ProductAnalytics.shared.updateIdentity(
+            userID: stableUser.uid,
+            isGuest: isGuestUser(stableUser)
+        )
+        _ = await RCSubscriptionManager.shared.prepareIdentity(firebaseUserID: stableUser.uid)
+        guard Auth.auth().currentUser?.uid == stableUser.uid else {
+            isSessionPrepared = false
+            return false
+        }
+        await createOrUpdateUserDocument()
         return true
     }
 
@@ -932,9 +977,10 @@ final class AuthenticationService: ObservableObject {
             PushTokenService.shared.unregisterCurrentUser()
             await MainActor.run {
                 RCSubscriptionManager.shared.clearDeveloperSessionForAccountChange()
+                RCSubscriptionManager.shared.clearIdentityState()
             }
-            try Auth.auth().signOut()
             ProductAnalytics.shared.track("Signed Out")
+            try Auth.auth().signOut()
             ProductAnalytics.shared.updateIdentity(userID: nil, isGuest: true)
             GIDSignIn.sharedInstance.signOut()
             clearLocalCaches()
@@ -991,8 +1037,7 @@ final class AuthenticationService: ObservableObject {
             "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
             "buildNumber": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "",
             "deviceModel": UIDevice.current.model,
-            "osVersion": UIDevice.current.systemVersion,
-            "rcUserId": UserDefaults.standard.string(forKey: "memoirai_rc_user_id") ?? ""
+            "osVersion": UIDevice.current.systemVersion
         ]
 
         do {

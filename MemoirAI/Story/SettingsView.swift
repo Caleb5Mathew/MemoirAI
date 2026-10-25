@@ -268,7 +268,7 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showDevSheet) { devUnlockSheet }
         .fullScreenCover(isPresented: $showPaywall) {
-            SubscriptionPaywallView()
+            SubscriptionPaywallView(source: .settings)
         }
         .sheet(isPresented: $showMemoryEnhancement) {
             RecentMemoriesView(

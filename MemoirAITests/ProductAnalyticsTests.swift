@@ -9,6 +9,25 @@ struct ProductAnalyticsTests {
         #expect(ProductAnalytics.buildEnvironment == "test")
     }
 
+    @Test func ignoresCachedIdentityUntilFirebaseVerifiesCurrentAccount() throws {
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        defaults.set("previous-account", forKey: "memoirai.analytics.identity")
+        var identities: [String] = []
+        var properties: Properties = [:]
+        let analytics = ProductAnalytics(
+            send: { _, received in properties = received },
+            identify: { identities.append($0) },
+            reset: {},
+            defaults: defaults
+        )
+
+        analytics.track("App Launched")
+
+        #expect(identities.isEmpty)
+        #expect(properties["account_type"] as? String == "unidentified")
+        #expect(defaults.string(forKey: "memoirai.analytics.identity") == nil)
+    }
+
     @Test func protectsContentAndAddsTrustedContext() throws {
         let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
         var received: Properties = [:]
@@ -48,6 +67,36 @@ struct ProductAnalyticsTests {
         analytics.setSessionActive(false)
         #expect(events.map(\.0) == ["Session Started", "Session Ended"])
         #expect(events.last?.1["duration_ms"] as? Int == 2000)
+    }
+
+    @Test func identityChangeClosesOldSessionAndStartsANewOne() throws {
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        var events: [(String, Properties)] = []
+        var date = Date(timeIntervalSince1970: 0)
+        let analytics = ProductAnalytics(
+            send: { events.append(($0, $1)) },
+            identify: { _ in },
+            reset: {},
+            defaults: defaults,
+            now: { date }
+        )
+        analytics.updateIdentity(userID: "account-a", isGuest: false)
+        analytics.setSessionActive(true)
+        date = date.addingTimeInterval(3)
+
+        analytics.updateIdentity(userID: "account-b", isGuest: false)
+        date = date.addingTimeInterval(2)
+        analytics.setSessionActive(false)
+
+        #expect(events.map(\.0) == [
+            "Session Started", "Session Ended", "Session Started", "Session Ended"
+        ])
+        #expect(events[1].1["duration_ms"] as? Int == 3000)
+        #expect(events[1].1["account_type"] as? String == "registered")
+        #expect(events[1].1["session_id"] as? String == events[0].1["session_id"] as? String)
+        #expect(events[3].1["duration_ms"] as? Int == 2000)
+        #expect(events[3].1["session_id"] as? String == events[2].1["session_id"] as? String)
+        #expect(events[2].1["session_id"] as? String != events[0].1["session_id"] as? String)
     }
 
     @Test func aggregatesInputAndAuditsScreenActions() throws {

@@ -24,7 +24,7 @@ struct OnboardingColorTheme {
 }
 
 private enum OnboardingStep: Int, CaseIterable {
-    case audience, name, record, photo, meetAlex, cover, spread, illustration, voice, story, building, reveal
+    case audience, name, record, meetAlex, cover, spread, illustration, voice, story, building, reveal
 }
 
 struct OnboardingFlow: View {
@@ -52,9 +52,7 @@ struct OnboardingFlow: View {
     @State private var step: OnboardingStep = .audience
     @State private var session = OnboardingSession()
     @State private var storyDraft = ""
-    @State private var selectedPhoto: UIImage?
     @State private var previewImage: UIImage?
-    @State private var submittedPhotoData: Data?
     @State private var restoredAudioURL: URL?
     @State private var restoredRawTranscript: String?
     @State private var readingCopy: String?
@@ -64,8 +62,6 @@ struct OnboardingFlow: View {
     @State private var hasSubmittedMemory = false
     @State private var previewTitle = "A memory I carry"
     @State private var showPaywall = false
-    @State private var showCamera = false
-    @State private var showLibrary = false
     @State private var showCloudDisclosure = false
     @State private var didWarmPreviewService = false
     @State private var isPreparingAccount = true
@@ -97,7 +93,6 @@ struct OnboardingFlow: View {
                         case .audience: audienceQuestion
                         case .name: nameQuestion
                         case .record: recordMemory
-                        case .photo: photoCapture
                         case .building, .reveal: personalizedReveal
                         }
                     }
@@ -158,16 +153,8 @@ struct OnboardingFlow: View {
                 track("Onboarding Recording Failed", ["failure_stage": "recording"])
             }
         }
-        .sheet(isPresented: $showCamera) {
-            CameraPickerView { acceptPhoto($0, source: "camera") }
-                .ignoresSafeArea()
-        }
-        .sheet(isPresented: $showLibrary) {
-            LibraryPickerView { acceptPhoto($0, source: "library") }
-                .ignoresSafeArea()
-        }
         .fullScreenCover(isPresented: $showPaywall, onDismiss: finishAfterPaywall) {
-            SubscriptionPaywallView()
+            SubscriptionPaywallView(source: .onboarding)
                 .onAppear {
                     track("Onboarding Paywall Viewed")
                     FacebookAnalytics.logPaywallViewed()
@@ -406,16 +393,32 @@ struct OnboardingFlow: View {
                     } label: {
                         HStack(spacing: 16) {
                             ZStack {
-                                Circle().fill(recorder.isRecording ? colors.rust : colors.moss).frame(width: 46, height: 46)
+                                let countdown = OnboardingRecordingCountdown(elapsed: recorder.elapsed)
+                                Circle()
+                                    .stroke(colors.moss.opacity(0.15), lineWidth: 4)
+                                Circle()
+                                    .trim(from: 0, to: countdown.remainingFraction)
+                                    .stroke(
+                                        recorder.isRecording && countdown.isUrgent ? colors.rust : colors.moss,
+                                        style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                                    )
+                                    .rotationEffect(.degrees(-90))
+                                    .animation(.linear(duration: 0.2), value: countdown.remainingFraction)
+                                Circle()
+                                    .fill(recorder.isRecording ? colors.rust : colors.moss)
+                                    .padding(6)
                                 Image(systemName: recorder.isRecording ? "stop.fill" : "mic.fill")
                                     .font(.system(size: 22)).foregroundStyle(.white)
                             }
+                            .frame(width: 52, height: 52)
+                            .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(recorder.isRecording ? "Recording your story" : "Tap to tell your story")
                                     .font(.custom("AvenirNext-DemiBold", size: 13, relativeTo: .body))
-                                Text(recorder.isRecording ? timeString(recorder.elapsed) : "Usually 30–90 seconds")
+                                Text(recordingTimeDescription)
                                     .font(.custom("AvenirNext-Regular", size: 10, relativeTo: .caption))
-                                    .foregroundStyle(colors.muted).monospacedDigit()
+                                    .foregroundStyle(recorder.isRecording && OnboardingRecordingCountdown(elapsed: recorder.elapsed).isUrgent ? colors.rust : colors.muted)
+                                    .monospacedDigit()
                             }
                             Spacer(minLength: 0)
                         }
@@ -424,6 +427,7 @@ struct OnboardingFlow: View {
                         .overlay(RoundedRectangle(cornerRadius: 15).stroke(colors.moss.opacity(0.16)))
                     }
                     .accessibilityLabel(recorder.isRecording ? "Stop recording" : "Start recording")
+                    .accessibilityValue(recorder.isRecording ? "\(OnboardingRecordingCountdown(elapsed: recorder.elapsed).remainingLabel) remaining" : "Up to 60 seconds")
                     .disabled(recorder.isFinalizing)
                     if recorder.liveCaptionEnded && recorder.isRecording {
                         Text("Still recording. Your full story will be transcribed when you finish.")
@@ -463,63 +467,10 @@ struct OnboardingFlow: View {
                 do {
                     _ = try startMemoryPreflight()
                     hasSubmittedMemory = false
-                    advance(to: .photo)
+                    Task { await createPersonalizedPage() }
                 } catch { errorMessage = error.localizedDescription }
             }
         }.padding(.bottom, 20)
-    }
-
-    private var photoCapture: some View {
-        VStack(spacing: 16) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-            Text("MAKE IT LOOK LIKE YOU")
-                .font(.custom("AvenirNext-Bold", size: 9, relativeTo: .caption)).tracking(1.5)
-                .foregroundStyle(colors.rust)
-            Text(adaptivePhotoTitle)
-                .font(.custom("IowanOldStyle-Roman", size: layout.headingSize, relativeTo: .largeTitle))
-                .tracking(-1.3).fixedSize(horizontal: false, vertical: true)
-            Text(adaptivePhotoBody)
-                .font(.custom("AvenirNext-Regular", size: 14, relativeTo: .body)).foregroundStyle(colors.muted)
-                .fixedSize(horizontal: false, vertical: true).lineSpacing(3)
-            if let selectedPhoto {
-                Image(uiImage: selectedPhoto).resizable().scaledToFill()
-                    .frame(maxWidth: .infinity).frame(height: layout.photoHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
-                    .clipped()
-            } else {
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(.white.opacity(0.72))
-                    .frame(maxWidth: .infinity).frame(height: layout.photoHeight)
-                    .overlay {
-                        VStack(spacing: 12) {
-                            Image(systemName: "person.crop.rectangle").font(.system(size: 48)).foregroundStyle(colors.moss)
-                            Text("Face the camera in good light").font(.custom("AvenirNext-Medium", size: 14, relativeTo: .body))
-                        }
-                    }
-            }
-            HStack(spacing: 12) {
-                if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    secondaryButton("Camera", icon: "camera.fill") { track("Onboarding Action", ["action": "photo_camera"]); showCamera = true }
-                }
-                secondaryButton("Library", icon: "photo.fill") { track("Onboarding Action", ["action": "photo_library"]); showLibrary = true }
-            }
-
-                }.padding(.horizontal, 25).padding(.top, 24).padding(.bottom, 20)
-            }
-            if selectedPhoto == nil {
-                Button("Continue without a photo") {
-                    track("Onboarding Action", ["action": "photo_skip"])
-                    Task { await createPersonalizedPage() }
-                }
-                    .font(.custom("AvenirNext-Medium", size: 12, relativeTo: .body))
-                    .foregroundStyle(colors.muted)
-            }
-            primaryButton("Next", disabled: selectedPhoto == nil || isPreparingAccount) {
-                Task { await createPersonalizedPage() }
-            }
-        }
-        .padding(.bottom, 24)
     }
 
     private var buildingPage: some View {
@@ -589,18 +540,6 @@ struct OnboardingFlow: View {
             : "What is one of \(displayName)’s favorite childhood memories?"
     }
 
-    private var adaptivePhotoTitle: String {
-        switch session.audience {
-        case .myself, .myChildren: return "Add a photo of yourself"
-        case .parentOrGrandparent: return "Add a photo of \(displayName)"
-        default: return "Add a photo of \(displayName)"
-        }
-    }
-
-    private var adaptivePhotoBody: String {
-        "Choose a clear, front-facing photo in natural light. It stays private to your account."
-    }
-
     private var displayName: String {
         let value = session.narratorName.trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? "Your" : value
@@ -657,15 +596,6 @@ struct OnboardingFlow: View {
         }
         .disabled(disabled)
         .padding(.horizontal, horizontalInset)
-    }
-
-    private func secondaryButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: icon).font(.custom("AvenirNext-DemiBold", size: 13, relativeTo: .body))
-                .frame(maxWidth: .infinity).frame(minHeight: 44)
-                .foregroundStyle(colors.ink)
-                .background(.white.opacity(0.78), in: RoundedRectangle(cornerRadius: 12))
-        }
     }
 
     private func advance(to next: OnboardingStep) {
@@ -748,8 +678,8 @@ struct OnboardingFlow: View {
         }
         session = sessionStore.load(userID: uid)
         session.profileID = profileVM.selectedProfile.id
-        // Draft audio and photos are not restored by the session store. Start at
-        // the questionnaire rather than showing a later screen with missing inputs.
+        // Draft audio is not restored by the session store. Start at the
+        // questionnaire rather than showing a later screen with missing inputs.
         step = .audience
         do {
             if let draft = try draftStore.load(userID: uid) {
@@ -757,8 +687,6 @@ struct OnboardingFlow: View {
                 storyDraft = draft.story
                 restoredRawTranscript = draft.rawTranscript
                 restoredAudioURL = draft.audioURL
-                selectedPhoto = draft.photoData.flatMap(UIImage.init(data:))
-                submittedPhotoData = draft.photoData
             } else {
                 session.resetGeneratedIdentifiers()
             }
@@ -774,7 +702,6 @@ struct OnboardingFlow: View {
                 storyDraft = fixture.draftTranscript
                 restoredRawTranscript = fixture.draftTranscript
                 restoredAudioURL = fixture.url
-                submittedPhotoData = nil
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -789,16 +716,6 @@ struct OnboardingFlow: View {
     private func persistSession() {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         sessionStore.save(session, userID: uid)
-    }
-
-    private func acceptPhoto(_ image: UIImage, source: String) {
-        guard let photoData = OnboardingPhotoPreparation.jpeg(from: image) else {
-            errorMessage = "That photo could not be prepared. Choose a different image and try again."
-            return
-        }
-        selectedPhoto = image
-        submittedPhotoData = photoData
-        track("Onboarding Photo Added", ["source": source])
     }
 
     @MainActor
@@ -825,7 +742,8 @@ struct OnboardingFlow: View {
             $0.story == story && $0.audioURL == currentAudioURL && $0.audioDigest == key.audioDigest &&
             $0.rawTranscript == raw && $0.session.profileID == profile.id &&
             $0.session.narratorName == session.narratorName &&
-            $0.session.audience == session.audience && $0.session.storyteller == session.storyteller
+            $0.session.audience == session.audience && $0.session.storyteller == session.storyteller &&
+            $0.photoData == nil
         } ?? false
         if memoryPreflight.key != nil || (previous != nil && !sameMemory) {
             session.resetGeneratedIdentifiers()
@@ -833,7 +751,7 @@ struct OnboardingFlow: View {
         session.profileID = profile.id
         persistSession()
         let draft = OnboardingDraft(session: session, story: story, rawTranscript: raw,
-                                    audioURL: currentAudioURL, photoData: sameMemory ? previous?.photoData : nil,
+                                    audioURL: currentAudioURL, photoData: nil,
                                     previewStory: sameMemory ? previous?.previewStory : nil, audioDigest: key.audioDigest)
         try draftStore.save(draft, userID: uid)
         let creation = MemoryCreationService()
@@ -869,41 +787,35 @@ struct OnboardingFlow: View {
         generationStartedAt = Date()
         generationAttempt += 1
         didTrackReveal = false
-        track("Onboarding Generation Started", ["has_audio": currentAudioURL != nil, "has_headshot": selectedPhoto != nil])
+        track("Onboarding Generation Started", ["has_audio": currentAudioURL != nil, "has_headshot": false])
         if !hasSubmittedMemory { advance(to: .meetAlex) }
         hasSubmittedMemory = true
         do {
             var profile = profileVM.selectedProfile
             if !OnboardingDebugConfiguration.replayOnLaunch {
                 profile.name = displayName
-                profile.photoData = selectedPhoto?.jpegData(compressionQuality: 0.82)
                 profileVM.updateSelectedProfile(with: profile)
             }
             session.profileID = profile.id
             persistSession()
 
             let preflightKey = try startMemoryPreflight()
-            let submittedPhoto = submittedPhotoData ?? selectedPhoto.flatMap(OnboardingPhotoPreparation.jpeg(from:))
             let previousDraft = try draftStore.load(userID: uid)
             let unchanged = previousDraft.map {
                 $0.story == story && $0.session.narratorName == session.narratorName &&
                 $0.session.audience == session.audience && $0.session.storyteller == session.storyteller && $0.audioURL == currentAudioURL &&
-                $0.photoData == submittedPhoto
+                $0.photoData == nil
             } ?? false
             if previousDraft != nil && !unchanged {
                 session.requestID = UUID().uuidString
                 persistSession()
             }
-            submittedPhotoData = submittedPhoto
             let rawTranscript = recorder.audioURL != nil ? recorder.liveTranscript : restoredRawTranscript
             var submittedDraft = OnboardingDraft(
                 session: session, story: story, rawTranscript: rawTranscript,
-                audioURL: currentAudioURL, photoData: submittedPhoto, audioDigest: preflightKey.audioDigest
+                audioURL: currentAudioURL, photoData: nil, audioDigest: preflightKey.audioDigest
             )
             try draftStore.save(submittedDraft, userID: uid)
-            async let uploadedPhoto = OnboardingPreviewService.shared.uploadPhoto(
-                submittedPhoto, requestID: session.requestID, userID: uid
-            )
             generationStage = "Preparing your story"
             let completeStory = try await memoryPreflight.value(for: preflightKey)
             guard Auth.auth().currentUser?.uid == uid else { throw MemoryCreationError.cloudSyncFailed }
@@ -911,7 +823,6 @@ struct OnboardingFlow: View {
             track("Onboarding Memory Synced", ["has_audio": currentAudioURL != nil])
             submittedDraft.previewStory = completeStory
             try draftStore.save(submittedDraft, userID: uid)
-            let photoPath = try await uploadedPhoto
             generationStage = "Illustrating your memory"
             let result = try await OnboardingPreviewService.shared.create(
                 requestID: session.requestID,
@@ -920,7 +831,7 @@ struct OnboardingFlow: View {
                 profileName: displayName,
                 storyText: completeStory,
                 storytellerRole: session.storyteller == .helper ? "helper" : "subject",
-                subjectPhotoStoragePath: photoPath
+                subjectPhotoStoragePath: nil
             )
             guard result.status == .imageReady, let image = result.illustration else {
                 throw OnboardingPreviewServiceError.invalidResponse
@@ -938,7 +849,7 @@ struct OnboardingFlow: View {
             #endif
             track("Onboarding Preview Image Ready", [
                 "duration_ms": Int(Date().timeIntervalSince(generationStartedAt ?? Date()) * 1000),
-                "has_headshot": selectedPhoto != nil,
+                "has_headshot": false,
                 "cached": result.cached
             ])
             isGenerating = false
@@ -970,7 +881,7 @@ struct OnboardingFlow: View {
 
     private func track(_ event: String, _ properties: [String: MixpanelType] = [:]) {
         var context: Properties = [
-            "screen": String(describing: step), "onboarding_version": "native_v5",
+            "screen": String(describing: step), "onboarding_version": "native_v6",
             "flow_id": analyticsFlowID, "generation_attempt": generationAttempt
         ]
         context.merge(properties) { _, new in new }
@@ -979,6 +890,16 @@ struct OnboardingFlow: View {
 
     private func timeString(_ duration: TimeInterval) -> String {
         String(format: "%d:%02d", Int(duration) / 60, Int(duration) % 60)
+    }
+
+    private var recordingTimeDescription: String {
+        if recorder.isRecording {
+            return "\(OnboardingRecordingCountdown(elapsed: recorder.elapsed).remainingLabel) remaining"
+        }
+        if recorder.audioURL != nil {
+            return "\(timeString(recorder.elapsed)) recorded"
+        }
+        return "Up to 60 seconds"
     }
 }
 

@@ -187,6 +187,8 @@ struct AccountDeletionTests {
 
         defaults.set("profile", forKey: "characterDetails_123")
         defaults.set(true, forKey: "hasCompletedOnboarding_local")
+        defaults.set(true, forKey: WelcomeAuthLaunchPolicy.hasSeenWelcomeAuthKey)
+        defaults.set(3, forKey: WelcomeAuthLaunchPolicy.launchCountKey)
         defaults.set("revenue-cat-id", forKey: "memoirai_rc_user_id")
         defaults.set(4, forKey: "memoirai_free_preview_count")
         defaults.set("private address", forKey: "order_last_shipping_user-1")
@@ -209,6 +211,8 @@ struct AccountDeletionTests {
 
         #expect(defaults.string(forKey: "characterDetails_123") == "profile")
         #expect(defaults.object(forKey: "hasCompletedOnboarding_local") == nil)
+        #expect(defaults.object(forKey: WelcomeAuthLaunchPolicy.hasSeenWelcomeAuthKey) == nil)
+        #expect(defaults.object(forKey: WelcomeAuthLaunchPolicy.launchCountKey) == nil)
         #expect(defaults.string(forKey: "memoirai_rc_user_id") == "revenue-cat-id")
         #expect(defaults.integer(forKey: "memoirai_free_preview_count") == 4)
         #expect(defaults.object(forKey: "order_last_shipping_user-1") == nil)

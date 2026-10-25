@@ -189,34 +189,6 @@ struct MemoirAIApp: App {
         }
         #endif
 
-        let rcUserDefaultsKey = "memoirai_rc_user_id"
-        let uuid = UserDefaults.standard.string(forKey: rcUserDefaultsKey) ?? {
-            let newID = UUID().uuidString
-            UserDefaults.standard.set(newID, forKey: rcUserDefaultsKey)
-            return newID
-        }()
-
-        #if DEBUG
-        Purchases.logLevel = .debug
-        #else
-        Purchases.logLevel = .warn
-        #endif
-        if let apiKey = Bundle.main.object(forInfoDictionaryKey: "RevenueCatAPIKey") as? String,
-           !apiKey.isEmpty {
-            Purchases.configure(withAPIKey: apiKey, appUserID: uuid)
-            // Standard Apple Ads attribution does not require ATT authorization.
-            Purchases.shared.attribution.enableAdServicesAttributionTokenCollection()
-            print("RevenueCat configured")
-
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                guard Purchases.isConfigured else { return }
-                await RCSubscriptionManager.shared.refreshCustomerInfo()
-            }
-        } else {
-            print("❌ RevenueCat API key not found in Info.plist")
-        }
-
         // ─ Mixpanel ───────────────────────────────────────────────
         ProductAnalytics.configure()
         ProductAnalytics.shared.track("App Launched")
@@ -224,6 +196,16 @@ struct MemoirAIApp: App {
         if !UserDefaults.standard.bool(forKey: "hasLaunchedBefore") {
             ProductAnalytics.shared.track("First Launch")
             UserDefaults.standard.set(true, forKey: "hasLaunchedBefore")
+        }
+
+        if !OnboardingDebugConfiguration.previewApp, !OnboardingDebugConfiguration.replayOnLaunch {
+            let defaults = UserDefaults.standard
+            let updatedLaunchCount = WelcomeAuthLaunchPolicy.countAfterLaunch(
+                hasCompletedOnboarding: defaults.bool(forKey: "hasCompletedOnboarding_local"),
+                hasSeenWelcomeAuth: defaults.bool(forKey: WelcomeAuthLaunchPolicy.hasSeenWelcomeAuthKey),
+                currentCount: defaults.integer(forKey: WelcomeAuthLaunchPolicy.launchCountKey)
+            )
+            defaults.set(updatedLaunchCount, forKey: WelcomeAuthLaunchPolicy.launchCountKey)
         }
     }
 

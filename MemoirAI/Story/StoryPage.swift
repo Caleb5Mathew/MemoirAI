@@ -2990,7 +2990,7 @@ extension View {
                 }
             }
             .fullScreenCover(isPresented: showPaywall) {
-                SubscriptionPaywallView()
+                SubscriptionPaywallView(source: .storyGeneration)
             }
             .fullScreenCover(isPresented: showCoverEditor) {
                 StorybookCoverEditorSheet(vm: vm)

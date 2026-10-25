@@ -3,6 +3,27 @@ import Testing
 @testable import MemoirAI
 
 struct OnboardingAndProfileRecoveryPolicyTests {
+    @Test func staleAuthCallbacksCannotOverwriteTheCurrentAccount() {
+        #expect(AuthStateRevisionPolicy.isCurrent(
+            callbackUserID: "recovered-user",
+            currentUserID: "recovered-user",
+            callbackRevision: 2,
+            currentRevision: 2
+        ))
+        #expect(!AuthStateRevisionPolicy.isCurrent(
+            callbackUserID: "temporary-user",
+            currentUserID: "recovered-user",
+            callbackRevision: 1,
+            currentRevision: 2
+        ))
+        #expect(!AuthStateRevisionPolicy.isCurrent(
+            callbackUserID: "recovered-user",
+            currentUserID: "recovered-user",
+            callbackRevision: 1,
+            currentRevision: 2
+        ))
+    }
+
     @Test func legacyOwnerResolutionPrefersLocalAnchor() {
         #expect(MemoryOwnershipPolicy.resolvedLegacyOwnerID(
             localOwnerID: "local-user",
@@ -42,11 +63,65 @@ struct OnboardingAndProfileRecoveryPolicyTests {
         #expect(OnboardingCompletionPolicy.shouldComplete(after: .paywallDismissed))
     }
 
-    @Test func accountBackupAppearsOnlyAfterOnboarding() {
-        #expect(AppEntryRoute.resolve(hasCompletedOnboarding: false, hasSeenWelcomeAuth: false) == .onboarding)
-        #expect(AppEntryRoute.resolve(hasCompletedOnboarding: false, hasSeenWelcomeAuth: true) == .onboarding)
-        #expect(AppEntryRoute.resolve(hasCompletedOnboarding: true, hasSeenWelcomeAuth: false) == .account)
-        #expect(AppEntryRoute.resolve(hasCompletedOnboarding: true, hasSeenWelcomeAuth: true) == .main)
+    @Test func accountBackupAppearsOnThirdLaunchAfterOnboarding() {
+        #expect(AppEntryRoute.resolve(
+            hasCompletedOnboarding: false,
+            hasSeenWelcomeAuth: false,
+            postOnboardingLaunchCount: 3
+        ) == .onboarding)
+        #expect(AppEntryRoute.resolve(
+            hasCompletedOnboarding: true,
+            hasSeenWelcomeAuth: false,
+            postOnboardingLaunchCount: 1
+        ) == .main)
+        #expect(AppEntryRoute.resolve(
+            hasCompletedOnboarding: true,
+            hasSeenWelcomeAuth: false,
+            postOnboardingLaunchCount: 2
+        ) == .main)
+        #expect(AppEntryRoute.resolve(
+            hasCompletedOnboarding: true,
+            hasSeenWelcomeAuth: false,
+            postOnboardingLaunchCount: 3
+        ) == .account)
+        #expect(AppEntryRoute.resolve(
+            hasCompletedOnboarding: true,
+            hasSeenWelcomeAuth: true,
+            postOnboardingLaunchCount: 3
+        ) == .main)
+    }
+
+    @Test func postOnboardingLaunchCounterOnlyAdvancesForEligibleLaunches() {
+        #expect(WelcomeAuthLaunchPolicy.countAfterLaunch(
+            hasCompletedOnboarding: false,
+            hasSeenWelcomeAuth: false,
+            currentCount: 0
+        ) == 0)
+        #expect(WelcomeAuthLaunchPolicy.countAfterLaunch(
+            hasCompletedOnboarding: true,
+            hasSeenWelcomeAuth: false,
+            currentCount: 0
+        ) == 1)
+        #expect(WelcomeAuthLaunchPolicy.countAfterLaunch(
+            hasCompletedOnboarding: true,
+            hasSeenWelcomeAuth: false,
+            currentCount: 1
+        ) == 2)
+        #expect(WelcomeAuthLaunchPolicy.countAfterLaunch(
+            hasCompletedOnboarding: true,
+            hasSeenWelcomeAuth: false,
+            currentCount: 2
+        ) == 3)
+        #expect(WelcomeAuthLaunchPolicy.countAfterLaunch(
+            hasCompletedOnboarding: true,
+            hasSeenWelcomeAuth: false,
+            currentCount: 3
+        ) == 3)
+        #expect(WelcomeAuthLaunchPolicy.countAfterLaunch(
+            hasCompletedOnboarding: true,
+            hasSeenWelcomeAuth: true,
+            currentCount: 2
+        ) == 2)
     }
 
     @Test func completedOnboardingCannotBeDowngradedByCloud() {

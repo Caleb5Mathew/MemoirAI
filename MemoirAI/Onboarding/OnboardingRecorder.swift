@@ -2,6 +2,34 @@ import AVFoundation
 import Foundation
 import Speech
 
+struct OnboardingRecordingCountdown: Equatable {
+    static let maximumDuration: TimeInterval = 60
+
+    let elapsed: TimeInterval
+
+    private var clampedElapsed: TimeInterval {
+        guard elapsed.isFinite else { return 0 }
+        return min(max(0, elapsed), Self.maximumDuration)
+    }
+
+    var remainingDuration: TimeInterval {
+        Self.maximumDuration - clampedElapsed
+    }
+
+    var remainingFraction: CGFloat {
+        CGFloat(remainingDuration / Self.maximumDuration)
+    }
+
+    var remainingLabel: String {
+        let seconds = Int(ceil(remainingDuration))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    var isUrgent: Bool {
+        remainingDuration <= 10
+    }
+}
+
 @MainActor
 final class OnboardingRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     @Published private(set) var isRecording = false
@@ -97,7 +125,7 @@ final class OnboardingRecorder: NSObject, ObservableObject, AVAudioRecorderDeleg
             }
             hasInputTap = true
             try engine.start()
-            guard recorder.record(forDuration: RecordingDurationPolicy.maximumRecordingDuration) else {
+            guard recorder.record(forDuration: OnboardingRecordingCountdown.maximumDuration) else {
                 throw OnboardingRecorderError.couldNotStart
             }
             audioURL = url

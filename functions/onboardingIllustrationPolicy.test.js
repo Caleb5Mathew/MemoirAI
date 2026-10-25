@@ -28,6 +28,9 @@ test('keeps helper perspective and reference numbering correct',()=>{
 test('supports missing photo and never introduces a reference attachment',()=>{
  const prompt=build({...base,hasHeadshot:false,hasStyleReference:false});
  assert.match(prompt,/No identity portrait is attached/);
+ assert.match(prompt,/Make a place, meaningful object, or atmosphere/);
+ assert.match(prompt,/Do not invent a face, race, skin tone/);
+ assert.match(prompt,/small, distant, back-facing/);
  assert.ok(!prompt.includes('Reference 1'));
 });
 test('rejects missing subject, missing memory and unknown role',()=>{
@@ -40,10 +43,10 @@ test('requires simple cartoon styling and a single scene',()=>{
  assert.match(prompt,/tiny dot eyes/);
  assert.match(prompt,/No fine hatching/);
 });
-test('descriptor mode binds broad appearance only to named subject',()=>{
+test('no-photo mode ignores appearance guidance rather than inventing identity',()=>{
  const prompt=build({...base,hasHeadshot:false,subjectAppearance:'warm brown skin and a round face'});
- assert.match(prompt,/guidance for Alex alone: warm brown skin and a round face/);
- assert.match(prompt,/never detailed anatomical rendering/);
+ assert.match(prompt,/Ignore unused appearance guidance in no-portrait onboarding/);
+ assert.match(prompt,/Do not invent a face, race, skin tone/);
 });
 
 const { onboardingObjectClarification } = require('./onboardingIllustrationPolicy');

@@ -1,6 +1,18 @@
 # Memoir product measurement plan
 
-Updated October 20, 2026. Engineering handoff for the current working tree; event availability in source does not establish released-build coverage or validated dashboard counts.
+Updated October 25, 2026. Engineering handoff for the current working tree; event availability in source does not establish released-build coverage or validated dashboard counts.
+
+## RevenueCat and Mixpanel reconciliation — October 24
+
+The discrepancy was caused by definitions and an identity join bug, not one missing revenue total:
+
+- RevenueCat **New Customers** counts identities that contact RevenueCat. It is not a count of people who rendered a paywall. The SDK initializes before the paywall, so this population is expected to be larger.
+- Mixpanel `Paywall Viewed` is the valid rendered-paywall denominator. `Onboarding Paywall Viewed` is a context event and must not be added to it.
+- Live inspection found RevenueCat lifecycle-only Mixpanel profiles whose distinct IDs were not joined to their app-side profiles. The app now waits for guest recovery, configures RevenueCat directly with the stable Firebase UID, and sends that same UID as the Mixpanel distinct ID before any purchase. Mixpanel resets its persisted SDK identity before startup events so a previous account cannot receive the next person's launch activity.
+- Paywall events now include `paywall_source` with one of `onboarding`, `settings`, `story_generation`, `profile_limit`, or `memoir`.
+- The RevenueCat Mixpanel API secret was added on October 24, enabling delivery of delayed events such as refunds and chargebacks older than five days. The sandbox token remains intentionally blank, so sandbox purchase events remain excluded from production Mixpanel data.
+
+These fixes are prospective. Historical split profiles and pre-fix paywall events are not silently rewritten. Use the release timestamp of the first build containing this change as the clean identity-joined cohort boundary.
 
 ## Live dashboard and event dictionary status — October 20
 
@@ -17,8 +29,9 @@ Live import and saved-report configuration were verified by the main session. An
 ## Configuration and ownership
 
 - Mixpanel project **3768856** is the intended destination. The previous app token targeted the wrong destination; the current analytics configuration was corrected during this work. Compare old and new populations before interpreting a discontinuity.
-- RevenueCat project **25cadd3a** now has an ACTIVE Mixpanel integration, default `rc_*` event names, and gross revenue reporting. Its sandbox token is blank, so sandbox purchase events are not forwarded. Its secret is blank; delayed refunds older than five days are not covered yet. These are configuration observations supplied by the root implementation session, not a demonstrated production transaction test.
-- `ProductAnalytics` supplies `environment`, `schema_version`, `session_id`, and `account_type`; Firebase identity is used for the product stream. Verify that RevenueCat lifecycle events resolve to the same Mixpanel person after anonymous login, account linking, logout, restore, and account switching.
+- RevenueCat project **25cadd3a** has an ACTIVE Mixpanel integration, default `rc_*` event names, gross revenue reporting, and a Mixpanel API secret for delayed lifecycle delivery. Its sandbox token is blank, so sandbox purchase events are not forwarded. These are configuration observations, not a demonstrated production transaction test.
+- `ProductAnalytics` supplies `environment`, `schema_version`, `session_id`, and `account_type`; Firebase identity is used for both the product stream and RevenueCat's Mixpanel subscriber attribute. Verify the join with a purchase or renewal from the first released build containing the fix.
+- RevenueCat lifecycle events do not inherit app-side `environment`, `is_simulator`, or `traffic_type`. Filter the app steps of a funnel with those fields, and filter lifecycle steps using RevenueCat's delivered store/environment fields after confirming their exact live property names.
 - App-side changes require a new released binary. Do not treat existing installations as instrumented until their build is known. No backend deployment or app release is authorized by this plan.
 
 ## Acquisition
@@ -61,7 +74,7 @@ Review step-to-next-step unique-person conversion, time distributions, error cou
 
 ## Payments
 
-The primary paywall exposure denominator is `Paywall Viewed` after preparation, once per `presentation_id`. `Onboarding Paywall Viewed` is the onboarding sheet context; do not sum it with `Paywall Viewed` as two impressions.
+The primary paywall exposure denominator is `Paywall Viewed` after preparation, once per `presentation_id`. Segment it by `paywall_source`. `Onboarding Paywall Viewed` is the onboarding sheet context; do not sum it with `Paywall Viewed` as two impressions.
 
 - Purchase UX: `Subscription Purchase Started`, `Subscription Purchase Cancelled`, `Subscription Purchase Failed`.
 - Restore UX: `Subscription Restore Started`, `Subscription Restore Failed`.
@@ -70,7 +83,7 @@ The primary paywall exposure denominator is `Paywall Viewed` after preparation, 
 
 Activation succeeded means usable entitlement, including possible trial or restored entitlement. It is not a paid conversion. Use the ACTIVE RevenueCat integration's verified `rc_*` events for trial, initial paid charge, renewal, expiration and refund reporting. Inventory exact delivered provider event names and payloads in Mixpanel before constructing saved lifecycle reports; do not invent client replacements or infer charges from callbacks. Gross revenue excludes neither store commission nor all operating costs and is not profit.
 
-Measure unique people who start a trial or make a first paid charge after a paywall impression, and mature trial-to-paid cohorts. Deduplicate provider lifecycle events by their stable provider identity/transaction. Define first paid once per customer for subscription acquisition; retain renewal transaction counts separately. Resolve the delayed-refund secret/configuration gap before trusting net revenue or refund-adjusted conversion.
+Measure unique people who start a trial or make a first paid charge after a paywall impression, and mature trial-to-paid cohorts. Deduplicate provider lifecycle events by their stable provider identity/transaction. Define first paid once per customer for subscription acquisition; retain renewal transaction counts separately. Use RevenueCat as the source of truth for money; Mixpanel is the behavioral join and funnel layer.
 
 ## Creation and retention
 

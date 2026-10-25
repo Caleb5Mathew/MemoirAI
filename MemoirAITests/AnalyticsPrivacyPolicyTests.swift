@@ -75,7 +75,7 @@ struct AnalyticsPrivacyPolicyTests {
         let properties: Properties = [
             "screen": "reveal", "action": "continue", "field": "story",
             "flow_id": UUID().uuidString, "presentation_id": UUID().uuidString,
-            "onboarding_version": "native_v5", "purchase_origin": "restore",
+            "onboarding_version": "native_v6", "purchase_origin": "restore",
             "failure_stage": "activation", "dismissal_reason": "close_button",
             "generation_attempt": 1, "step_duration_ms": 500,
             "provider": "apple", "auth_operation": "link_account"
@@ -86,5 +86,12 @@ struct AnalyticsPrivacyPolicyTests {
             "flow_id": "private identifier", "presentation_id": "private identifier",
             "provider": "private email", "failure_stage": "private error"
         ]).isEmpty)
+    }
+
+    @Test func permitsOnlyKnownPaywallSources() {
+        for source in PaywallSource.allCases {
+            #expect(AnalyticsPrivacyPolicy.sanitized(["paywall_source": source.rawValue]).count == 1)
+        }
+        #expect(AnalyticsPrivacyPolicy.sanitized(["paywall_source": "private label"]).isEmpty)
     }
 }

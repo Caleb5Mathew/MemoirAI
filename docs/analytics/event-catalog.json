@@ -678,11 +678,11 @@
     {
       "event": "Paywall Viewed",
       "category": "Subscriptions",
-      "description": "The prepared subscription paywall appeared once for a presentation_id. Exposure does not mean purchase intent or payment.",
+      "description": "The prepared subscription paywall appeared once for a presentation_id. Segment by paywall_source; exposure does not mean purchase intent or payment.",
       "meaning": "The prepared subscription paywall appeared once for a presentation_id.",
-      "interpretation": "Exposure does not mean purchase intent or payment.",
+      "interpretation": "Segment by paywall_source; exposure does not mean purchase intent or payment.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:31"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:41"
       ]
     },
     {

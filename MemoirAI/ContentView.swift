@@ -9,9 +9,42 @@ enum AppEntryRoute: Equatable {
     case account
     case main
 
-    static func resolve(hasCompletedOnboarding: Bool, hasSeenWelcomeAuth: Bool) -> Self {
+    static func resolve(
+        hasCompletedOnboarding: Bool,
+        hasSeenWelcomeAuth: Bool,
+        postOnboardingLaunchCount: Int
+    ) -> Self {
         guard hasCompletedOnboarding else { return .onboarding }
-        return hasSeenWelcomeAuth ? .main : .account
+        return WelcomeAuthLaunchPolicy.shouldPresent(
+            hasCompletedOnboarding: hasCompletedOnboarding,
+            hasSeenWelcomeAuth: hasSeenWelcomeAuth,
+            postOnboardingLaunchCount: postOnboardingLaunchCount
+        ) ? .account : .main
+    }
+}
+
+enum WelcomeAuthLaunchPolicy {
+    static let requiredPostOnboardingLaunches = 3
+    static let launchCountKey = "memoirai_welcome_auth_post_onboarding_launch_count"
+    static let hasSeenWelcomeAuthKey = "hasSeenWelcomeAuth"
+
+    static func countAfterLaunch(
+        hasCompletedOnboarding: Bool,
+        hasSeenWelcomeAuth: Bool,
+        currentCount: Int
+    ) -> Int {
+        guard hasCompletedOnboarding, !hasSeenWelcomeAuth else { return max(0, currentCount) }
+        return min(max(0, currentCount) + 1, requiredPostOnboardingLaunches)
+    }
+
+    static func shouldPresent(
+        hasCompletedOnboarding: Bool,
+        hasSeenWelcomeAuth: Bool,
+        postOnboardingLaunchCount: Int
+    ) -> Bool {
+        hasCompletedOnboarding
+            && !hasSeenWelcomeAuth
+            && postOnboardingLaunchCount >= requiredPostOnboardingLaunches
     }
 }
 
@@ -33,10 +66,10 @@ struct ContentView: View {
     @AppStorage("hasCompletedOnboarding_local") private var localCompleted: Bool = false
     @AppStorage(CheckoutReturnPolicy.confirmedSessionDefaultsKey) private var confirmedCheckoutSessionID = ""
 
-    // Shown exactly once after onboarding and its paywall. UserDefaults-only (not mirrored
-    // to iCloud KV): a fresh install on a second device may see this account-backup screen
-    // again, which is an acceptable tradeoff for protecting stories created on that device.
-    @AppStorage("hasSeenWelcomeAuth") private var hasSeenWelcomeAuth: Bool = false
+    // Shown once on the third cold launch after onboarding. UserDefaults-only (not mirrored
+    // to iCloud KV): each device gets its own grace period before the account-backup screen.
+    @AppStorage(WelcomeAuthLaunchPolicy.hasSeenWelcomeAuthKey) private var hasSeenWelcomeAuth: Bool = false
+    @AppStorage(WelcomeAuthLaunchPolicy.launchCountKey) private var postOnboardingLaunchCount: Int = 0
 
     // Store pending deep link if user scans QR code before completing onboarding
     @State private var pendingDeepLinkID: UUID? = nil
@@ -55,7 +88,8 @@ struct ContentView: View {
         let seenWelcomeAuth = OnboardingDebugConfiguration.previewApp || OnboardingDebugConfiguration.replayOnLaunch || hasSeenWelcomeAuth
         let entryRoute = AppEntryRoute.resolve(
             hasCompletedOnboarding: done,
-            hasSeenWelcomeAuth: seenWelcomeAuth
+            hasSeenWelcomeAuth: seenWelcomeAuth,
+            postOnboardingLaunchCount: postOnboardingLaunchCount
         )
 
         return Group {
@@ -183,7 +217,7 @@ struct ContentView: View {
             ProductAnalytics.shared.setScreenTrackingActive(phase == .active)
             if phase == .active {
                 ProductAnalytics.shared.setSessionActive(true)
-            } else if phase == .background {
+            } else {
                 ProductAnalytics.shared.setSessionActive(false)
             }
         }

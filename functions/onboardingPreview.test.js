@@ -363,4 +363,9 @@ function fakeDatabase() {
   assert(!firePrompt.includes('OBJECT CASTING FOR THIS ILLUSTRATION ONLY'));
   const noPhoto = buildOnboardingIllustrationPrompt({ ...options, hasHeadshot: false });
   assert(!noPhoto.includes('CAST THE SUBJECT BEFORE DRAWING:'));
+  assert(noPhoto.includes('Make a place, meaningful object, or atmosphere'));
+  assert(noPhoto.includes('Do not invent a face, race, skin tone'));
+  assert(noPhoto.includes('Lead with a story-grounded setting, keepsake, tool'));
+  assert(noPhoto.includes('distant, back-facing, cropped, silhouetted'));
+  assert(!noPhoto.includes('school-age child, approximately 6–12'));
 }

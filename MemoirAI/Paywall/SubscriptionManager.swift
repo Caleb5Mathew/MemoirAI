@@ -121,6 +121,20 @@ enum RevenueCatIdentityPolicy {
     }
 }
 
+enum RevenueCatMixpanelIdentityPolicy {
+    static func distinctID(firebaseUserID: String, currentFirebaseUserID: String?) -> String? {
+        guard !firebaseUserID.isEmpty, firebaseUserID == currentFirebaseUserID else { return nil }
+        return firebaseUserID
+    }
+}
+
+enum RevenueCatConfigurationPolicy {
+    static func appUserID(firebaseUserID: String, currentFirebaseUserID: String?) -> String? {
+        guard !firebaseUserID.isEmpty, firebaseUserID == currentFirebaseUserID else { return nil }
+        return firebaseUserID
+    }
+}
+
 enum SubscriptionRefreshFailurePolicy {
     static func shouldPreserveLastVerifiedAccess(hasActiveTier: Bool) -> Bool {
         hasActiveTier
@@ -168,16 +182,21 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     private var revenueCatUserIDProvider: () -> String = {
         Purchases.isConfigured ? Purchases.shared.appUserID : ""
     }
+    private var mixpanelDistinctIDSetter: (String?) -> Void = { distinctID in
+        Purchases.shared.attribution.setMixpanelDistinctID(distinctID)
+    }
     private var syncsToFirestore = true
     private var latestCustomerInfoDate: Date?
     private var customerInfoUserID: String?
 
     /// Isolated storage and identities allow purchase state transitions to be tested without network services.
     init(storage: UserDefaults, firebaseUserID: @escaping () -> String?,
-         revenueCatUserID: @escaping () -> String, identifiedUserID: String) {
+         revenueCatUserID: @escaping () -> String, identifiedUserID: String,
+         mixpanelDistinctIDSetter: @escaping (String?) -> Void = { _ in }) {
         self.storage = storage
         self.firebaseUserIDProvider = firebaseUserID
         self.revenueCatUserIDProvider = revenueCatUserID
+        self.mixpanelDistinctIDSetter = mixpanelDistinctIDSetter
         self.syncsToFirestore = false
         super.init()
         identifiedFirebaseUserID = identifiedUserID
@@ -208,33 +227,35 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             }
         }
 
-        // Add a small delay to ensure RevenueCat is fully configured
-        Task {
-            // Wait a brief moment for RevenueCat to be ready
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+    }
 
-            if Purchases.isConfigured {
-                await MainActor.run {
-                    Purchases.shared.delegate = self
-                }
-                await loadOfferings()
-                await refreshCustomerInfo()
-            } else {
-                await MainActor.run {
-                    print("RCManager: RevenueCat not configured - using development mode")
-                    guard !isDeveloperUnlockedSession else { return }
-                    activeTier = nil
-                    remainingAllowance = 0
-                    nextRenewalDate = nil
-                }
-            }
+    @discardableResult
+    func prepareIdentity(firebaseUserID: String) async -> Bool {
+        guard let appUserID = RevenueCatConfigurationPolicy.appUserID(
+            firebaseUserID: firebaseUserID,
+            currentFirebaseUserID: firebaseUserIDProvider()
+        ) else { return false }
 
-            await MainActor.run {
-                if let userID = firebaseUserIDProvider() {
-                    restoreDeveloperMode(for: userID)
-                }
+        if !Purchases.isConfigured {
+            guard let apiKey = Bundle.main.object(forInfoDictionaryKey: "RevenueCatAPIKey") as? String,
+                  !apiKey.isEmpty else {
+                identityErrorMessage = "Subscriptions are temporarily unavailable."
+                print("RevenueCat API key not found in Info.plist")
+                return false
             }
+            #if DEBUG
+            Purchases.logLevel = .debug
+            #else
+            Purchases.logLevel = .warn
+            #endif
+            Purchases.configure(withAPIKey: apiKey, appUserID: appUserID)
+            Purchases.shared.delegate = self
+            Purchases.shared.attribution.enableAdServicesAttributionTokenCollection()
+            await loadOfferings()
+            print("RevenueCat configured for verified Firebase identity")
         }
+
+        return await identify(firebaseUserID: appUserID)
     }
 
     /// Enables developer unlock and persists it across app restarts until `disablePersistentDevMode()`.
@@ -325,6 +346,9 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     }
 
     func clearIdentityState() {
+        if Purchases.isConfigured {
+            mixpanelDistinctIDSetter(nil)
+        }
         identifiedFirebaseUserID = nil
         latestCustomerInfoDate = nil
         customerInfoUserID = nil
@@ -370,6 +394,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
                     identifiedFirebaseUserID: identifiedFirebaseUserID
                 ) else { return false }
                 _ = try applyPurchaseResult(info, for: firebaseUserID)
+                linkRevenueCatEventsToMixpanel(firebaseUserID: firebaseUserID)
                 Purchases.shared.attribution.enableAdServicesAttributionTokenCollection()
                 return true
             } catch {
@@ -379,11 +404,13 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
                 return false
             }
         }
-        if identifyingFirebaseUserID == firebaseUserID {
-            for _ in 0..<200 where identifyingFirebaseUserID == firebaseUserID {
+        if identifyingFirebaseUserID != nil {
+            for _ in 0..<200 where identifyingFirebaseUserID != nil {
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
-            return isIdentityReady(for: firebaseUserID)
+            guard firebaseUserIDProvider() == firebaseUserID else { return false }
+            if isIdentityReady(for: firebaseUserID) { return true }
+            return await identify(firebaseUserID: firebaseUserID)
         }
 
         identifyingFirebaseUserID = firebaseUserID
@@ -401,6 +428,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
                 identifiedFirebaseUserID: identifiedFirebaseUserID
             ) else { return false }
             _ = try applyPurchaseResult(result.customerInfo, for: firebaseUserID)
+            linkRevenueCatEventsToMixpanel(firebaseUserID: firebaseUserID)
             // The SDK caches tokens per identity; attach attribution to the subscription owner.
             Purchases.shared.attribution.enableAdServicesAttributionTokenCollection()
             print("RCManager: RevenueCat identity linked to Firebase user.")
@@ -412,6 +440,14 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             print("RCManager: RevenueCat identity link failed: \(error.localizedDescription)")
             return false
         }
+    }
+
+    private func linkRevenueCatEventsToMixpanel(firebaseUserID: String) {
+        guard let distinctID = RevenueCatMixpanelIdentityPolicy.distinctID(
+            firebaseUserID: firebaseUserID,
+            currentFirebaseUserID: firebaseUserIDProvider()
+        ) else { return }
+        mixpanelDistinctIDSetter(distinctID)
     }
 
     func refreshCustomerInfo(forceRefresh: Bool = false) async {

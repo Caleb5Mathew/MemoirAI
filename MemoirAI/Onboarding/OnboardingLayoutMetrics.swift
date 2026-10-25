@@ -16,7 +16,6 @@ struct OnboardingLayoutMetrics: Equatable {
     let revealHeadingSize: CGFloat
     let tourHeadingSize: CGFloat
     let bookStageHeight: CGFloat
-    let photoHeight: CGFloat
     let textEditorHeight: CGFloat
     let minimumHitTarget: CGFloat = 44
     let primaryButtonHeight: CGFloat = 56
@@ -41,7 +40,6 @@ struct OnboardingLayoutMetrics: Equatable {
         let reservedHeight: CGFloat = accessibility ? 460 : 390
         let preferredStage = min(maximumStage, height * 0.40, height - reservedHeight)
         bookStageHeight = max(120, preferredStage)
-        photoHeight = min(300, max(220, height * 0.36))
         textEditorHeight = compactHeight ? 132 : 160
     }
 }

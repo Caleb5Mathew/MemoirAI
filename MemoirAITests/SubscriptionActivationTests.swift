@@ -8,6 +8,30 @@ struct SubscriptionActivationTests {
     private let monthly = "com.Buildr.MemoirAI.ProMonthly"
     private let yearly = "com.Buildr.MemoirAI.ProYearly"
 
+    @Test func revenueCatUsesOnlyTheCurrentlyVerifiedFirebaseIDForMixpanel() {
+        #expect(RevenueCatMixpanelIdentityPolicy.distinctID(
+            firebaseUserID: "user-a", currentFirebaseUserID: "user-a"
+        ) == "user-a")
+        #expect(RevenueCatMixpanelIdentityPolicy.distinctID(
+            firebaseUserID: "user-a", currentFirebaseUserID: "user-b"
+        ) == nil)
+        #expect(RevenueCatMixpanelIdentityPolicy.distinctID(
+            firebaseUserID: "", currentFirebaseUserID: ""
+        ) == nil)
+    }
+
+    @Test func revenueCatConfiguresOnlyForTheCurrentlyVerifiedFirebaseID() {
+        #expect(RevenueCatConfigurationPolicy.appUserID(
+            firebaseUserID: "stable-user", currentFirebaseUserID: "stable-user"
+        ) == "stable-user")
+        #expect(RevenueCatConfigurationPolicy.appUserID(
+            firebaseUserID: "temporary-user", currentFirebaseUserID: "recovered-user"
+        ) == nil)
+        #expect(RevenueCatConfigurationPolicy.appUserID(
+            firebaseUserID: "", currentFirebaseUserID: nil
+        ) == nil)
+    }
+
     private func customerInfo(
         product: String? = nil,
         mappedEntitlement: Bool = true,

@@ -53,7 +53,7 @@ struct AddProfileView: View {
             loadPhotoData(from: item)
         }
         .fullScreenCover(isPresented: $showPaywall) {
-            SubscriptionPaywallView()
+            SubscriptionPaywallView(source: .profileLimit)
         }
         .sheet(isPresented: $showDevSheet) {
             devUnlockSheet

@@ -143,7 +143,7 @@ struct MemoirView: View {
             }
         }
         .fullScreenCover(isPresented: $showPaywall) {
-            SubscriptionPaywallView()
+            SubscriptionPaywallView(source: .memoir)
         }
     }
 
