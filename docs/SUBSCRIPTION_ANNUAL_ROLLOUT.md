@@ -38,4 +38,4 @@ After App Store Connect finishes propagating the change:
 5. Confirm both purchases activate `Basic`, restore correctly, survive relaunch, and keep historical content available after expiry.
 6. Confirm Mixpanel app events contain `subscription_plan` and RevenueCat lifecycle events retain their provider-defined product identifier and environment fields.
 
-The current App Store version 3.44 is already Waiting for Review. The custom selector requires a later binary; changing only the App Store price does not add this UI to 3.44.
+App Store version 3.44 build `2026.10.27` contains the custom annual-first selector and was uploaded successfully on October 25, 2026. It replaced build `2026.10.26` in the version submitted to App Review, and the version was verified as **Waiting for Review** after the replacement.
