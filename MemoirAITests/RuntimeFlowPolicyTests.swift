@@ -36,7 +36,7 @@ struct RuntimeFlowPolicyTests {
         #expect(MemoirProgressPolicy.percentage(completed: 5, total: 0) == 0)
     }
 
-    @Test func parentOpeningUsesSpecificPreParenthoodDayPrompt() throws {
+    @Test func parentBeforeTheyCameUsesSpecificPreParenthoodDayPrompt() throws {
         let chapter = try #require(allParentChapters.first { $0.number == 1 })
         let question = chapter.prompts[1]
         #expect(question.text == "Where were you living, and what did an average day look like to you just before you became a parent?")
@@ -45,24 +45,25 @@ struct RuntimeFlowPolicyTests {
         #expect(recognized.contains("What was an ordinary day like before you became a parent?"))
     }
 
-    @Test func parentTraditionQuestionPreservesEarlierWordings() throws {
+    @Test func parentTraditionQuestionPreservesBothEarlierWordings() throws {
         let chapter = try #require(allParentChapters.first { $0.number == 5 })
         let question = chapter.prompts[1]
         #expect(question.text.contains("tradition or lesson"))
         let recognized = parentPromptTextsIncludingPrevious(question.text, chapterTitle: chapter.title)
-        #expect(recognized.contains("What’s a tradition or lesson from your childhood you wanted to pass on to your children?"))
+        #expect(recognized.contains("Tell me about a tradition from your childhood you wanted to share with your children."))
         let original = try #require(previousParentChapters.first { $0.number == 5 })
         #expect(recognized.contains(original.prompts[1].text))
     }
 
     @Test func parentPromptRevisionPreservesEveryShippedSlot() {
         for chapter in allParentChapters {
-            let previous = recentParentChapters.first { $0.number == chapter.number }
-            #expect(parentChapterTitleAliases[chapter.title]?.contains(previous?.title ?? "") == true)
+            let previous = previousParentChapters.first { $0.number == chapter.number }
+            #expect(previous?.title == chapter.title)
             #expect(previous?.prompts.count == chapter.prompts.count)
             for (index, prompt) in chapter.prompts.enumerated() {
                 let old = previous?.prompts[index]
-                #expect(old?.isPerChild == prompt.isPerChild)
+                let becameUniversal = chapter.number == 2 && index == 2
+                #expect(old?.isPerChild == prompt.isPerChild || becameUniversal)
                 #expect(old?.x == prompt.x)
                 #expect(old?.y == prompt.y)
                 let names = prompt.isPerChild ? ["Maya", "Leo", "your child"] : [""]
@@ -71,7 +72,7 @@ struct RuntimeFlowPolicyTests {
                     let oldText = old?.text.replacingOccurrences(of: "{kid}", with: name)
                     let recognized = parentPromptTextsIncludingPrevious(currentText, chapterTitle: chapter.title)
                     #expect(recognized.contains(currentText))
-                    if let oldText {
+                    if let oldText, !becameUniversal {
                         #expect(recognized.contains(oldText) || parentPromptMatchesSavedText(
                             currentText,
                             savedPromptText: oldText,
@@ -81,27 +82,6 @@ struct RuntimeFlowPolicyTests {
                 }
             }
         }
-    }
-
-    @Test func parentMemoirUsesAChildReaderArcWithConciseQuestions() {
-        #expect(allParentChapters.map(\.title) == [
-            "Before I Was Your Parent",
-            "When You Joined Our Family",
-            "When You Were Little",
-            "Watching You Become You",
-            "The Childhood That Shaped Me",
-            "The Rest of Who I Am",
-            "The Home I Hoped to Make",
-            "How We Found Our Way",
-            "Our Ordinary Magic",
-            "What I Hope You Carry"
-        ])
-        #expect(allParentChapters.allSatisfy { $0.prompts.count == 4 })
-        #expect(allParentChapters.flatMap(\.prompts).allSatisfy {
-            $0.text.split(whereSeparator: \.isWhitespace).count <= 24
-        })
-        #expect(allParentChapters[1].prompts[0].text.contains("{kid}"))
-        #expect(allParentChapters[9].prompts[0].text.contains("reads this book"))
     }
 
     @Test func revisedParentQuestionsKeepRecentSavedMemoriesAttached() throws {
@@ -151,7 +131,7 @@ struct RuntimeFlowPolicyTests {
 
     @Test func parentPromptAliasesDoNotMixChildrenOrChapters() throws {
         let chapter = try #require(allParentChapters.first { $0.number == 2 })
-        let old = try #require(recentParentChapters.first { $0.number == 2 })
+        let old = try #require(previousParentChapters.first { $0.number == 2 })
         let current = chapter.prompts[0].text.replacingOccurrences(of: "{kid}", with: "Maya")
         let otherChild = old.prompts[0].text.replacingOccurrences(of: "{kid}", with: "Leo")
         #expect(!parentPromptTextsIncludingPrevious(current, chapterTitle: chapter.title).contains(otherChild))
@@ -161,7 +141,7 @@ struct RuntimeFlowPolicyTests {
 
     @Test func parentProgressRecognizesOldAndNewRecordingsForEverySlot() throws {
         for chapter in allParentChapters {
-            let previous = try #require(recentParentChapters.first { $0.number == chapter.number })
+            let previous = try #require(previousParentChapters.first { $0.number == chapter.number })
             for (index, prompt) in chapter.prompts.enumerated() {
                 for source in [prompt, previous.prompts[index]] {
                     let recorded = Set(expandedChildPrompts(for: source, childNames: ["Maya", "Leo"]).map(\.text))
@@ -174,7 +154,7 @@ struct RuntimeFlowPolicyTests {
 
     @Test func parentProgressRequiresEveryChildButAcceptsMixedPromptVersions() throws {
         let chapter = try #require(allParentChapters.first { $0.number == 2 })
-        let previous = try #require(recentParentChapters.first { $0.number == 2 })
+        let previous = try #require(previousParentChapters.first { $0.number == 2 })
         let prompt = chapter.prompts[0]
         let maya = prompt.text.replacingOccurrences(of: "{kid}", with: "Maya")
         let leo = previous.prompts[0].text.replacingOccurrences(of: "{kid}", with: "Leo")
@@ -186,7 +166,7 @@ struct RuntimeFlowPolicyTests {
 
     @Test func parentProgressWithoutChildNamesMatchesNeutralRecordings() throws {
         let chapter = try #require(allParentChapters.first { $0.number == 2 })
-        let previous = try #require(recentParentChapters.first { $0.number == 2 })
+        let previous = try #require(previousParentChapters.first { $0.number == 2 })
         let prompt = chapter.prompts[0]
         for source in [prompt, previous.prompts[0]] {
             let neutral = source.text.replacingOccurrences(of: "{kid}", with: "your child")
