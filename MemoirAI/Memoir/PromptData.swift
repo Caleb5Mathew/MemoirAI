@@ -98,7 +98,9 @@ enum MemoirModeClassifier {
         case .normal:
             legacy = allChaptersLegacyKnownPrompts.filter { (1...10).contains($0.number) }
         case .parent:
-            legacy = allChaptersLegacyKnownPrompts.filter { (101...110).contains($0.number) } + previousParentChapters
+            legacy = allChaptersLegacyKnownPrompts.filter { (101...110).contains($0.number) }
+                + recentParentChapters
+                + previousParentChapters
         case .relationships:
             legacy = allChaptersLegacyKnownPrompts.filter { (201...299).contains($0.number) }
         }
@@ -187,16 +189,16 @@ let normalChapterTitleAliases: [String: [String]] = [
 
 /// Parent-mode title rewrite: new title → the old titles it replaces (by chapter index).
 let parentChapterTitleAliases: [String: [String]] = [
-    "Before They Came": ["Childhood"],
-    "The Day They Arrived": ["First Job"],
-    "The Little Years": ["Love"],
-    "What They've Taught": ["What They've Taught You", "Parenthood"],
-    "Where You Come From": ["Life Lessons"],
-    "What You Love": ["Faith"],
-    "What You Believe": ["Career"],
-    "When Life Was Hard": ["Hard Times"],
-    "Your Little World": ["Your Little World Together", "Triumphs"],
-    "When They're Older": ["For When They're Older", "Legacy"]
+    "Before I Was Your Parent": ["Before They Came", "Childhood"],
+    "When You Joined Our Family": ["The Day They Arrived", "First Job"],
+    "When You Were Little": ["The Little Years", "Love"],
+    "Watching You Become You": ["What They've Taught", "What They've Taught You", "Parenthood"],
+    "The Childhood That Shaped Me": ["Where You Come From", "Life Lessons"],
+    "The Rest of Who I Am": ["What You Love", "Faith"],
+    "The Home I Hoped to Make": ["What You Believe", "Career"],
+    "How We Found Our Way": ["When Life Was Hard", "Hard Times"],
+    "Our Ordinary Magic": ["Your Little World", "Your Little World Together", "Triumphs"],
+    "What I Hope You Carry": ["When They're Older", "For When They're Older", "Legacy"]
 ]
 
 /// Love-mode title rewrite: new title → the old titles it replaces.
@@ -334,7 +336,17 @@ func chapterImageAssetName(for title: String) -> String {
         "your little world": "change",
         "your little world together": "change",
         "when they're older": "legacy",
-        "for when they're older": "legacy"
+        "for when they're older": "legacy",
+        "before i was your parent": "beginnings",
+        "when you joined our family": "growing up",
+        "when you were little": "belonging",
+        "watching you become you": "becoming",
+        "the childhood that shaped me": "love",
+        "the rest of who i am": "care",
+        "the home i hoped to make": "work & purpose",
+        "how we found our way": "hard seasons",
+        "our ordinary magic": "change",
+        "what i hope you carry": "legacy"
     ]
     return mapping[key] ?? key
 }
@@ -593,7 +605,7 @@ let allChaptersLegacyKnownPrompts: [Chapter] = [
 func isKnownMemoirPrompt(chapterTitle: String, promptText: String) -> Bool {
     let trimmedChapter = chapterTitle.trimmingCharacters(in: .whitespacesAndNewlines)
     let trimmedPrompt = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
-    for chapters in [allChapters, allParentChapters, previousParentChapters, allRelationshipChapters, allChaptersLegacyKnownPrompts] {
+    for chapters in [allChapters, allParentChapters, recentParentChapters, previousParentChapters, allRelationshipChapters, allChaptersLegacyKnownPrompts] {
         for ch in chapters where ch.title.caseInsensitiveCompare(trimmedChapter) == .orderedSame {
             if ch.prompts.contains(where: { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(trimmedPrompt) == .orderedSame }) {
                 return true
@@ -931,6 +943,79 @@ let allChapters: [Chapter] = [
 // using `Profile.childNames`. Universal prompts are the same for all children.
 
 let allParentChapters: [Chapter] = [
+    Chapter(number: 1, title: "Before I Was Your Parent", prompts: [
+        MemoryPrompt(text: "What did a perfect free day look like for you before you became a parent?", x: 0.25, y: 0.78),
+        MemoryPrompt(text: "Where were you living, and what did an average day look like to you just before you became a parent?", x: 0.40, y: 0.62),
+        MemoryPrompt(text: "What did you imagine your grown-up life would be like, and what turned out differently?", x: 0.35, y: 0.44),
+        MemoryPrompt(text: "Tell me about a choice before parenthood that shaped the person you became.", x: 0.50, y: 0.28)
+    ]),
+
+    Chapter(number: 2, title: "When You Joined Our Family", prompts: [
+        MemoryPrompt(text: "Tell me the story of how {kid} joined your family. Where were you, and who was there?", x: 0.20, y: 0.80, isPerChild: true),
+        MemoryPrompt(text: "What is the first small detail about {kid} that you remember clearly?", x: 0.45, y: 0.60, isPerChild: true),
+        MemoryPrompt(text: "What surprised you as you began becoming a parent?", x: 0.70, y: 0.45),
+        MemoryPrompt(text: "In those early days with {kid}, what moment made your family feel changed forever?", x: 0.60, y: 0.30, isPerChild: true)
+    ]),
+
+    Chapter(number: 3, title: "When You Were Little", prompts: [
+        MemoryPrompt(text: "What funny word, question, or habit of {kid} still makes you smile?", x: 0.22, y: 0.76, isPerChild: true),
+        MemoryPrompt(text: "Describe an ordinary morning, mealtime, or bedtime with {kid} that you would gladly experience again.", x: 0.44, y: 0.60, isPerChild: true),
+        MemoryPrompt(text: "Tell me about a time little {kid} came to you for comfort. What helped you understand what they needed?", x: 0.65, y: 0.44, isPerChild: true),
+        MemoryPrompt(text: "What early moment showed you a part of {kid}'s personality that is still recognizable today?", x: 0.48, y: 0.28, isPerChild: true)
+    ]),
+
+    Chapter(number: 4, title: "Watching You Become You", prompts: [
+        MemoryPrompt(text: "Tell me about a time {kid}'s way of seeing something made you stop and look again.", x: 0.30, y: 0.80, isPerChild: true),
+        MemoryPrompt(text: "What small thing did {kid} do that made a difficult day feel brighter?", x: 0.55, y: 0.63, isPerChild: true),
+        MemoryPrompt(text: "Tell me about a time {kid} handled something difficult in their own way. What did you admire?", x: 0.75, y: 0.44, isPerChild: true),
+        MemoryPrompt(text: "Tell me about a moment with {kid} that taught you something new about love.", x: 0.60, y: 0.28, isPerChild: true)
+    ]),
+
+    Chapter(number: 5, title: "The Childhood That Shaped Me", prompts: [
+        MemoryPrompt(text: "Tell me about a childhood memory that shows what you were like as a kid.", x: 0.26, y: 0.78),
+        MemoryPrompt(text: "What tradition or lesson from your childhood did you want to share with your children?", x: 0.42, y: 0.63),
+        MemoryPrompt(text: "Tell me about a place where you loved spending time as a child.", x: 0.66, y: 0.45),
+        MemoryPrompt(text: "Who helped raise you, and what did they teach you about love or care?", x: 0.52, y: 0.28)
+    ]),
+
+    Chapter(number: 6, title: "The Rest of Who I Am", prompts: [
+        MemoryPrompt(text: "Where do you go, or what do you do, when you need time to feel like yourself again?", x: 0.25, y: 0.80),
+        MemoryPrompt(text: "What meal takes you back to when you were young, and what memory comes with it?", x: 0.46, y: 0.60),
+        MemoryPrompt(text: "What song or movie takes you back to when you were young, and why?", x: 0.70, y: 0.43),
+        MemoryPrompt(text: "Tell me about a close friend from your younger years. What did that friendship teach you?", x: 0.56, y: 0.28)
+    ]),
+
+    Chapter(number: 7, title: "The Home I Hoped to Make", prompts: [
+        MemoryPrompt(text: "What is one lesson from how you were raised that you kept, and one you chose to rethink?", x: 0.24, y: 0.80),
+        MemoryPrompt(text: "Tell me about a time you stood up for something you believed was right.", x: 0.45, y: 0.63),
+        MemoryPrompt(text: "What is one quiet way you care for your children that they may not always notice?", x: 0.70, y: 0.46),
+        MemoryPrompt(text: "What is one thing you hope your children learn at home, and why does it matter to you?", x: 0.56, y: 0.30)
+    ]),
+
+    Chapter(number: 8, title: "How We Found Our Way", prompts: [
+        MemoryPrompt(text: "Tell me about a hard season your family faced. What helped you stay close?", x: 0.30, y: 0.80),
+        MemoryPrompt(text: "Who helped your family when you needed support, and what kindness do you still remember?", x: 0.48, y: 0.63),
+        MemoryPrompt(text: "Tell me about a time your family misunderstood one another and found a way back.", x: 0.70, y: 0.44),
+        MemoryPrompt(text: "What small routine helped you keep going during a difficult day or week?", x: 0.55, y: 0.30)
+    ]),
+
+    Chapter(number: 9, title: "Our Ordinary Magic", prompts: [
+        MemoryPrompt(text: "Where is a place you and {kid} enjoy being together, and what do you do there?", x: 0.26, y: 0.78, isPerChild: true),
+        MemoryPrompt(text: "Tell me about an ordinary moment with {kid} when you felt completely content. Why has it stayed with you?", x: 0.45, y: 0.61, isPerChild: true),
+        MemoryPrompt(text: "What repeated joke or funny memory belongs especially to you and {kid}?", x: 0.66, y: 0.45, isPerChild: true),
+        MemoryPrompt(text: "What is something meaningful about {kid} that other people might miss, but you have learned to notice?", x: 0.50, y: 0.29, isPerChild: true)
+    ]),
+
+    Chapter(number: 10, title: "What I Hope You Carry", prompts: [
+        MemoryPrompt(text: "If {kid} reads this book years from now, what do you most want them to know about your love?", x: 0.25, y: 0.78, isPerChild: true),
+        MemoryPrompt(text: "What lesson from your life would you pass to {kid}, and what memory taught it to you?", x: 0.44, y: 0.60, isPerChild: true),
+        MemoryPrompt(text: "What family story do you hope {kid} is still telling and laughing about years from now?", x: 0.68, y: 0.45, isPerChild: true),
+        MemoryPrompt(text: "If you could preserve one ordinary scene from life with {kid}, what would it be?", x: 0.52, y: 0.30, isPerChild: true)
+    ])
+]
+
+// The immediately preceding question set remains available for matching saved recordings.
+let recentParentChapters: [Chapter] = [
     Chapter(number: 1, title: "Before They Came", prompts: [
         MemoryPrompt(text: "What is one of your happiest memories from before you became a parent?", x: 0.25, y: 0.78),
         MemoryPrompt(text: "Where were you living, and what did an average day look like to you just before you became a parent?", x: 0.40, y: 0.62),
@@ -1106,15 +1191,19 @@ private let recentParentPromptAliases: [String: [String]] = [
 /// Resolves a displayed parent question to its current and previously shipped wording.
 /// Child names are extracted from the concrete prompt so one child's memory never fills another's slot.
 func parentPromptTextsIncludingPrevious(_ promptText: String, chapterTitle: String) -> [String] {
-    guard let chapter = allParentChapters.first(where: { $0.title == chapterTitle }),
-          let previous = previousParentChapters.first(where: { $0.number == chapter.number }) else {
+    guard let chapter = allParentChapters.first(where: { $0.title == chapterTitle }) else {
         return [promptText]
     }
+    let previousChapters = [recentParentChapters, previousParentChapters].compactMap { chapters in
+        chapters.first { $0.number == chapter.number }
+    }
     for (index, prompt) in chapter.prompts.enumerated() {
-        guard previous.prompts.indices.contains(index) else { continue }
         if !prompt.isPerChild {
             if prompt.text == promptText {
-                return [promptText, previous.prompts[index].text]
+                let previousTexts = previousChapters.compactMap { previous in
+                    previous.prompts.indices.contains(index) ? previous.prompts[index].text : nil
+                }
+                return [promptText] + previousTexts
                     + recentParentPromptAliases["\(chapter.number)-\(index)", default: []]
             }
             continue
@@ -1125,7 +1214,11 @@ func parentPromptTextsIncludingPrevious(_ promptText: String, chapterTitle: Stri
         let childName = String(promptText.dropFirst(parts[0].count).dropLast(parts[1].count))
         let recent = recentParentPromptAliases["\(chapter.number)-\(index)", default: []]
             .map { $0.replacingOccurrences(of: "{kid}", with: childName) }
-        return [promptText, previous.prompts[index].text.replacingOccurrences(of: "{kid}", with: childName)] + recent
+        let previousTexts = previousChapters.compactMap { previous -> String? in
+            guard previous.prompts.indices.contains(index) else { return nil }
+            return previous.prompts[index].text.replacingOccurrences(of: "{kid}", with: childName)
+        }
+        return [promptText] + previousTexts + recent
     }
     return [promptText]
 }
@@ -1135,10 +1228,11 @@ func parentPromptMatchesSavedText(_ promptText: String, savedPromptText: String,
     if parentPromptTextsIncludingPrevious(promptText, chapterTitle: chapterTitle).contains(savedPromptText) {
         return true
     }
-    guard chapterTitle == "The Day They Arrived",
-          promptText == "What surprised you about becoming a parent?" else { return false }
+    guard chapterTitle == "When You Joined Our Family",
+          promptText == "What surprised you as you began becoming a parent?" else { return false }
     let legacyTemplates = [
         "What surprised you about becoming {kid}'s parent?",
+        recentParentChapters[1].prompts[2].text,
         previousParentChapters[1].prompts[2].text
     ]
     return legacyTemplates.contains { template in
