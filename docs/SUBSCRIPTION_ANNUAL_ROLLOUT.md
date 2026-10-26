@@ -1,6 +1,6 @@
 # Memoir annual subscription rollout
 
-Verified October 25, 2026. This records the source and live configuration needed for the requested $59.99 yearly plan. It does not claim an unperformed production price change or purchase.
+Verified October 25, 2026. This records the source and live configuration for the requested $59.99 yearly plan. It does not claim an unperformed purchase.
 
 ## Implemented in the app
 
@@ -21,12 +21,13 @@ Verified October 25, 2026. This records the source and live configuration needed
 - Both products grant the existing `Basic` entitlement; no new entitlement or backend product identifier is needed.
 - App Store Connect subscription group: `21688646`, currently named `Monthly`.
 - The approved yearly product has a one-week free introductory offer in the United States and most configured territories.
-- The current United States yearly price is `$34.99`, not the requested `$59.99`.
-- The approved monthly and yearly products are currently different subscription levels even though the app grants the same service. Their upgrade, downgrade, and crossgrade behavior must be reviewed before changing the live price.
+- The United States yearly price is currently `$34.99`. A `$59.99` new-subscriber price is scheduled for October 27, 2026 across all 175 storefronts using Apple's equivalents.
+- Existing yearly subscribers keep their current storefront price.
+- Approved monthly and yearly products are both at subscription level 2, correctly making them equal-service crossgrades.
 
-## External change still required
+## External configuration completed
 
-In App Store Connect, schedule `com.Buildr.MemoirAI.ProYearly` at **$59.99 USD per year** for new subscribers and allow Apple's territory-equivalent prices to populate. Preserve the current price for existing yearly subscribers unless a later business decision explicitly changes it. Review the subscription levels so monthly and yearly accurately represent the same access before saving.
+App Store Connect now schedules `com.Buildr.MemoirAI.ProYearly` at **$59.99 USD per year** for new subscribers effective October 27, 2026, with Apple's territory-equivalent prices across 175 storefronts. Current prices are preserved for existing subscribers. The approved monthly and yearly products remain together at level 2.
 
 After App Store Connect finishes propagating the change:
 
