@@ -26,6 +26,14 @@ final class OnboardingV5Tests: XCTestCase {
         XCTAssertEqual(store.load(userID: "user-b").stage, 0)
     }
 
+    func testAudienceChoicesUseShortStandaloneLabels() {
+        XCTAssertEqual(OnboardingAudience.myself.title, "My life story")
+        XCTAssertEqual(OnboardingAudience.someoneElse.title, "Someone I care about")
+        XCTAssertEqual(OnboardingAudience.myChildren.title, "Stories for my children")
+        XCTAssertEqual(OnboardingAudience.parentOrGrandparent.title, "My parent or grandparent")
+        XCTAssertEqual(OnboardingAudience.notSure.title, "I’m just exploring")
+    }
+
     func testRecordingCopyKeepsStorytellerChoiceOffTheNameStepForPersonalMemoirs() {
         XCTAssertFalse(OnboardingRecordingCopy.needsStorytellerChoice(for: .myself))
         XCTAssertFalse(OnboardingRecordingCopy.needsStorytellerChoice(for: .myChildren))

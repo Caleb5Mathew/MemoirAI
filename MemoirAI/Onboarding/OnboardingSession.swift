@@ -7,22 +7,12 @@ enum OnboardingAudience: String, Codable, CaseIterable {
     case parentOrGrandparent
     case notSure
 
-    var subtitle: String {
-        switch self {
-        case .myself: return "A book about your life"
-        case .someoneElse: return "A book about someone you care about"
-        case .myChildren: return "A keepsake they can grow up with"
-        case .parentOrGrandparent: return "Help preserve their stories"
-        case .notSure: return "See how Memoir works"
-        }
-    }
-
     var title: String {
         switch self {
         case .myself: return "My life story"
-        case .someoneElse: return "Someone else"
+        case .someoneElse: return "Someone I care about"
         case .myChildren: return "Stories for my children"
-        case .parentOrGrandparent: return "A parent or grandparent"
+        case .parentOrGrandparent: return "My parent or grandparent"
         case .notSure: return "I’m just exploring"
         }
     }

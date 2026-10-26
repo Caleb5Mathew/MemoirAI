@@ -98,6 +98,7 @@ struct SettingsView: View {
     @State private var hasUnseenOrders = false
     @State private var orderBadgeListener: ListenerRegistration?
     @State private var showOrderHistory = false
+    @State private var showAccountBackup = false
     @State private var showSupportCopiedAlert = false
     @State private var showAudioPrivacyAlert = false
     @State private var showDeleteAccountConfirmation = false
@@ -289,6 +290,16 @@ struct SettingsView: View {
         }
         .fullScreenCover(isPresented: $showOrderHistory) {
             OrderHistoryView()
+        }
+        .sheet(isPresented: $showAccountBackup) {
+            NavigationStack {
+                AccountBackupView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showAccountBackup = false }
+                        }
+                    }
+            }
         }
         .alert("Email Copied", isPresented: $showSupportCopiedAlert) {
             Button("OK", role: .cancel) { }
@@ -518,7 +529,7 @@ struct SettingsView: View {
             }
             .opacity(canGenerate ? 1.0 : 0.5)
 
-            Text("Up to \(StorybookGenerationBatchPolicy.maximumPagesPerBook) memories per book")
+            Text("Up to \(StorybookGenerationBatchPolicy.maximumPagesPerBook) pages")
                 .font(.system(size: 12))
                 .foregroundColor(.gray)
             
@@ -560,7 +571,6 @@ struct SettingsView: View {
         .padding(20)
         .background(LinenTheme.card)
         .cornerRadius(16)
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(LinenTheme.line, lineWidth: 1))
     }
     
     // MARK: - Developer Model Section
@@ -604,13 +614,10 @@ struct SettingsView: View {
                 }
                 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Enhance Memories")
+                    Text("Improve storybook images")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundColor(darkText)
                     
-                    Text("Add details for better storybook images")
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray)
                 }
                 
                 Spacer()
@@ -622,7 +629,6 @@ struct SettingsView: View {
             .padding(16)
             .background(LinenTheme.card)
             .cornerRadius(16)
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(LinenTheme.line, lineWidth: 1))
         }
         .buttonStyle(PlainButtonStyle())
     }
@@ -695,12 +701,8 @@ struct SettingsView: View {
                 }
             }
 
-            Text("MemoirAI keeps your memories private and gives you control over saved recordings.")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary.opacity(0.8))
-                .padding(.top, 2)
         }
-        .font(.system(size: 13, weight: .medium))
+        .font(LinenTheme.body(15, weight: .medium))
         .foregroundColor(.secondary)
         .padding(.horizontal, 6)
         .buttonStyle(.plain)
@@ -708,117 +710,77 @@ struct SettingsView: View {
 
     // MARK: - Account Section
     private var accountSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Account")
                 .font(LinenTheme.body(16, weight: .semibold))
                 .foregroundColor(darkText)
+                .padding(.bottom, 12)
             
             if let user = authService.user {
-                if AuthenticationService.shared.isGuestUser(user) {
-                    // Anonymous user - show link option
-                    HStack(spacing: 12) {
-                        Circle()
-                            .fill(terracotta.opacity(0.2))
-                            .frame(width: 44, height: 44)
-                            .overlay(
+                HStack(spacing: 12) {
+                    Circle()
+                        .fill(terracotta.opacity(0.14))
+                        .frame(width: 40, height: 40)
+                        .overlay {
+                            if AuthenticationService.shared.isGuestUser(user) {
                                 Image(systemName: "person.fill")
-                                    .font(.system(size: 18))
+                                    .font(.system(size: 16))
                                     .foregroundColor(terracotta)
-                            )
-                        
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Syncing Anonymously")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundColor(darkText)
-                            
-                            Text("Link Apple or Google to access on other devices")
-                                .font(.system(size: 12))
-                                .foregroundColor(.gray)
-                        }
-                        
-                        Spacer()
-                        
-                        // Sync indicator
-                        Image(systemName: "checkmark.icloud.fill")
-                            .font(.system(size: 16))
-                            .foregroundColor(.green.opacity(0.7))
-                    }
-                    
-                    Divider()
-                        .padding(.vertical, 8)
-                    
-                    printOrdersLibraryRow
-
-                    if DeveloperAccessDistributionPolicy.permitsCurrentBuild {
-                        developerModeRow
-                    }
-                } else {
-                    HStack(spacing: 12) {
-                        Circle()
-                            .fill(terracotta.opacity(0.2))
-                            .frame(width: 44, height: 44)
-                            .overlay(
+                            } else {
                                 Text(String((user.displayName ?? user.email ?? "U").prefix(1)).uppercased())
-                                    .font(.system(size: 18, weight: .semibold))
+                                    .font(LinenTheme.body(16, weight: .semibold))
                                     .foregroundColor(terracotta)
-                            )
-                        
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(user.displayName ?? "User")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundColor(darkText)
-                            
-                            Text(user.email ?? "")
-                                .font(.system(size: 13))
-                                .foregroundColor(.gray)
+                            }
                         }
-                        
-                        Spacer()
-                        
-                        Image(systemName: "checkmark.icloud.fill")
-                            .font(.system(size: 16))
-                            .foregroundColor(.green.opacity(0.7))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(AuthenticationService.shared.isGuestUser(user) ? "Guest account" : (user.displayName ?? "Your account"))
+                            .font(LinenTheme.body(15, weight: .medium))
+                        Text(AuthenticationService.shared.isGuestUser(user) ? "Add a sign in for backup" : (user.email ?? "Signed in"))
+                            .font(LinenTheme.body(13))
+                            .foregroundColor(LinenTheme.secondary)
+                            .lineLimit(1)
                     }
-                    
+                    Spacer(minLength: 8)
+                }
+                .frame(minHeight: 52)
+
+                Divider()
+
+                Button { showAccountBackup = true } label: {
+                    settingsAccountRow(title: "Account & backup", symbol: "icloud", trailingChevron: true)
+                        .foregroundStyle(LinenTheme.ink)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("settingsAccountBackup")
+
+                Divider()
+
+                printOrdersLibraryRow
+                    .frame(minHeight: 52)
+
+                if !AuthenticationService.shared.isGuestUser(user) {
                     Divider()
-                        .padding(.vertical, 8)
-                    
-                    printOrdersLibraryRow
-                    
+
                     Button(action: signOut) {
-                        HStack {
-                            Image(systemName: "rectangle.portrait.and.arrow.right")
-                                .font(.system(size: 14))
-                            Text("Sign Out")
-                                .font(.system(size: 14, weight: .medium))
-                        }
-                        .foregroundColor(.red.opacity(0.8))
+                        settingsAccountRow(title: "Sign out", symbol: "rectangle.portrait.and.arrow.right")
+                            .foregroundStyle(LinenTheme.ink)
                     }
-                    
-                    if DeveloperAccessDistributionPolicy.permitsCurrentBuild {
-                        developerModeRow
-                    }
+                    .buttonStyle(.plain)
+                }
+
+                if DeveloperAccessDistributionPolicy.permitsCurrentBuild {
+                    Divider()
+                    developerModeRow.frame(minHeight: 52)
                 }
 
                 Divider()
-                    .padding(.vertical, 8)
-
-                LinkedAccountsView()
-
-                Divider().padding(.vertical, 8)
 
                 Button(role: .destructive) {
                     showDeleteAccountConfirmation = true
                 } label: {
-                    HStack {
-                        Image(systemName: "trash")
-                            .font(.system(size: 14))
-                        Text("Delete Account")
-                            .font(.system(size: 14, weight: .semibold))
-                        Spacer()
-                    }
-                    .foregroundColor(.red)
-                    .contentShape(Rectangle())
+                    settingsAccountRow(title: "Delete account", symbol: "trash")
+                        .foregroundStyle(.red)
                 }
                 .buttonStyle(.plain)
                 .disabled(isDeletingAccount)
@@ -839,7 +801,24 @@ struct SettingsView: View {
         .padding(20)
         .background(LinenTheme.card)
         .cornerRadius(16)
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(LinenTheme.line, lineWidth: 1))
+    }
+
+    private func settingsAccountRow(title: String, symbol: String, trailingChevron: Bool = false) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 15))
+                .frame(width: 22)
+            Text(title)
+                .font(LinenTheme.body(15, weight: .medium))
+            Spacer()
+            if trailingChevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LinenTheme.secondary)
+            }
+        }
+        .frame(minHeight: 52)
+        .contentShape(Rectangle())
     }
 
     private var developerModeRow: some View {

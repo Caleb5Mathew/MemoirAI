@@ -178,11 +178,6 @@ struct ProfileEditView: View {
                 transcriptionCard
                     .staggerIn(appeared: appeared, delay: 0.10)
 
-                LinkedAccountsView()
-                    .padding(16)
-                    .background(DS.card, in: RoundedRectangle(cornerRadius: 16))
-                    .staggerIn(appeared: appeared, delay: 0.12)
-
                 if DeveloperAccessDistributionPolicy.permitsCurrentBuild {
                     developerOptionsEntry
                         .staggerIn(appeared: appeared, delay: 0.12)
@@ -200,7 +195,7 @@ struct ProfileEditView: View {
                 .font(LinenTheme.body(15, weight: .semibold))
                 .foregroundColor(DS.textPrimary)
 
-            Text("Add uncommon names or places, separated by commas, to improve voice transcripts.")
+            Text("Help transcription recognize uncommon names and places.")
                 .font(LinenTheme.body(13))
                 .foregroundColor(DS.textSecondary)
 
@@ -282,10 +277,9 @@ struct ProfileEditView: View {
                 }
             }
             .buttonStyle(ProfileScaleButtonStyle())
+            .accessibilityLabel("Change profile photo")
+            .accessibilityHint("Opens your photo library")
 
-            Text("Tap to change photo")
-                .font(LinenTheme.body(13, weight: .medium))
-                .foregroundColor(DS.textTertiary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 4)

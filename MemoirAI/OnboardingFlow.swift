@@ -309,11 +309,11 @@ struct OnboardingFlow: View {
         questionShell(
             eyebrow: "YOUR MEMOIR",
             title: "What are you hoping to make?",
-            subtitle: "We’ll shape the experience around you."
+            subtitle: ""
         ) {
             VStack(spacing: 9) {
                 ForEach(OnboardingAudience.allCases, id: \.self) { audience in
-                    choiceButton(audience.title, subtitle: audience.subtitle, selected: session.audience == audience) {
+                    choiceButton(audience.title, selected: session.audience == audience) {
                         if session.audience != audience { session.storyteller = nil }
                         session.audience = audience
                         track("Onboarding Audience Selected", ["audience": audience.rawValue])
@@ -564,7 +564,9 @@ struct OnboardingFlow: View {
                 Spacer(minLength: 16)
                 Text(eyebrow).font(.custom("AvenirNext-Bold", size: 9, relativeTo: .caption)).tracking(1.5).foregroundStyle(colors.rust)
                 Text(title).font(.custom("IowanOldStyle-Roman", size: layout.headingSize, relativeTo: .largeTitle)).tracking(-1.3).fixedSize(horizontal: false, vertical: true).foregroundStyle(colors.ink)
-                Text(subtitle).font(.custom("AvenirNext-Regular", size: 14, relativeTo: .body)).foregroundStyle(colors.muted).lineSpacing(3)
+                if !subtitle.isEmpty {
+                    Text(subtitle).font(.custom("AvenirNext-Regular", size: 14, relativeTo: .body)).foregroundStyle(colors.muted).lineSpacing(3)
+                }
                 content().padding(.top, 8)
             }
             .padding(.horizontal, 24).padding(.bottom, 30)
@@ -572,6 +574,7 @@ struct OnboardingFlow: View {
     }
 
     private func choiceButton(_ title: String, subtitle: String? = nil, compact: Bool = false, selected: Bool, action: @escaping () -> Void) -> some View {
+        let hasSubtitle = subtitle?.isEmpty == false
         Button(action: action) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -585,8 +588,8 @@ struct OnboardingFlow: View {
                 Image(systemName: selected ? "largecircle.fill.circle" : "circle").font(.system(size: 18, weight: .light))
             }
             .foregroundStyle(colors.ink)
-            .padding(.horizontal, 16).padding(.vertical, compact ? 10 : 11)
-            .frame(minHeight: compact ? 44 : 67)
+            .padding(.horizontal, 16).padding(.vertical, compact ? 10 : (hasSubtitle ? 11 : 14))
+            .frame(minHeight: compact ? 44 : (hasSubtitle ? 67 : 54))
             .background(selected ? Color(red: 229/255, green: 236/255, blue: 225/255) : Color(red: 251/255, green: 247/255, blue: 238/255), in: RoundedRectangle(cornerRadius: compact ? 22 : 13))
             .overlay(RoundedRectangle(cornerRadius: compact ? 22 : 13).stroke(colors.moss.opacity(selected ? 0.35 : 0.16)))
         }

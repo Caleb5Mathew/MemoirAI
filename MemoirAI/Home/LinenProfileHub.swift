@@ -7,7 +7,6 @@ struct LinenProfileHub: View {
     @State private var showSwitcher = false
     @State private var showOrders = false
     @State private var showSettings = false
-    @State private var showEmail = false
 
     var body: some View {
         NavigationStack {
@@ -40,20 +39,7 @@ struct LinenProfileHub: View {
                     Button { showSettings = true } label: { LinenHubRow(title: "Settings", symbol: "slider.horizontal.3") }
                         .accessibilityIdentifier("profileHubSettings")
                     NavigationLink {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 24) {
-                                Text("Keep your memories backed up and access them on another device.")
-                                    .font(LinenTheme.body(14)).foregroundStyle(LinenTheme.secondary)
-                                LinkedAccountsView()
-                                Button("Use email") { showEmail = true }
-                                    .font(LinenTheme.body(16, weight: .semibold)).frame(minHeight: 48)
-                            }
-                            .padding(24)
-                            .adaptiveContentWidth(AdaptiveLayoutPolicy.formMaxWidth)
-                        }
-                        .linenScreen()
-                        .analyticsScreen("account_backup")
-                        .navigationTitle("Account & backup")
+                        AccountBackupView()
                     } label: { LinenHubRow(title: "Account & backup", symbol: "icloud") }
                 }
                 .padding(24)
@@ -75,7 +61,6 @@ struct LinenProfileHub: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView().environmentObject(profileVM).environmentObject(RCSubscriptionManager.shared)
             }
-            .sheet(isPresented: $showEmail) { EmailAuthSheet() }
         }
     }
 }

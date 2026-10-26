@@ -296,6 +296,13 @@ struct AccountDeletionTests {
 }
 
 struct LinkedAccountPolicyTests {
+    @Test func providerNamesAreClear() {
+        #expect(AccountProviderPresentation.name(for: "apple.com") == "Apple")
+        #expect(AccountProviderPresentation.name(for: "google.com") == "Google")
+        #expect(AccountProviderPresentation.name(for: "password") == "Email")
+        #expect(AccountProviderPresentation.name(for: nil) == "account")
+    }
+
     @Test func managementAlwaysLinksTheCurrentAccount() {
         #expect(LinkedAccountPolicy.shouldLinkCurrentUser(isGuest: false, preserveCurrentAccount: true))
         #expect(LinkedAccountPolicy.shouldLinkCurrentUser(isGuest: true, preserveCurrentAccount: true))
