@@ -131,6 +131,7 @@ struct ProductAnalyticsTests {
         #expect(AnalyticsEventCategory.category(for: "Memory Playback Completed") == "Memory reading and listening")
         #expect(AnalyticsEventCategory.category(for: "Book Generation Completed") == "Book creation")
         #expect(AnalyticsEventCategory.category(for: "Saved Memory") == "Memory creation")
+        #expect(AnalyticsEventCategory.category(for: "Subscription Plan Selected") == "Subscriptions")
         #expect(AnalyticsEventCategory.category(for: "Unknown Event") == "Uncategorized")
         #expect(AnalyticsEventCategory.categories.values.allSatisfy { !$0.isEmpty })
     }

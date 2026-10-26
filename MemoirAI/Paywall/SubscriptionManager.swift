@@ -711,7 +711,7 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         }
     }
 
-    func purchase(package: Package) async throws {
+    func purchase(package: Package) async throws -> PurchaseResultData {
         guard let firebaseUserID = firebaseUserIDProvider(),
               isIdentityReady(for: firebaseUserID) else {
             throw NSError(
@@ -720,34 +720,19 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "Your subscription account is still connecting. Please try again."]
             )
         }
-        let appUserID = Purchases.shared.appUserID
         // 🎯 Track checkout initiation for Facebook
         FacebookAnalytics.logCheckoutInitiated()
         
         let result = try await Purchases.shared.purchase(package: package)
         if result.userCancelled {
             print("RCManager: Purchase cancelled by user.")
-            return
+            return result
         }
         
-        print("RCManager: Purchase successful. Refreshing customer info.")
-        guard RevenueCatIdentityPolicy.canApplyCustomerInfo(
-            capturedFirebaseUserID: firebaseUserID,
-            capturedAppUserID: appUserID,
-            currentFirebaseUserID: firebaseUserIDProvider(),
-            currentAppUserID: Purchases.shared.appUserID,
-            identifiedFirebaseUserID: identifiedFirebaseUserID
-        ) else {
-            throw NSError(
-                domain: "MemoirAI.Subscription",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Your account changed during purchase. Sign in again to refresh your subscription."]
-            )
-        }
-        _ = try applyPurchaseResult(result.customerInfo, for: firebaseUserID)
-        
+        print("RCManager: Purchase completed. Returning customer info for account-bound verification.")
         // ✅ RevenueCat handles purchase events server-side via Conversions API
         // No client-side purchase logging needed to avoid duplicates
+        return result
     }
 
     // 🔥 ENHANCED: Better consumption tracking

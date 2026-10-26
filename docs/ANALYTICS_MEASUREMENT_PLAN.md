@@ -74,7 +74,7 @@ Review step-to-next-step unique-person conversion, time distributions, error cou
 
 ## Payments
 
-The primary paywall exposure denominator is `Paywall Viewed` after preparation, once per `presentation_id`. Segment it by `paywall_source`. `Onboarding Paywall Viewed` is the onboarding sheet context; do not sum it with `Paywall Viewed` as two impressions.
+The primary paywall exposure denominator is `Paywall Viewed` after preparation, once per `presentation_id`. Segment it by `paywall_source` and the bounded `subscription_plan` (`yearly` or `monthly`). `Subscription Plan Selected` records an explicit plan-card choice; the initial `Paywall Viewed` records the annual default when it is available. `Onboarding Paywall Viewed` is the onboarding sheet context; do not sum it with `Paywall Viewed` as two impressions.
 
 - Purchase UX: `Subscription Purchase Started`, `Subscription Purchase Cancelled`, `Subscription Purchase Failed`.
 - Restore UX: `Subscription Restore Started`, `Subscription Restore Failed`.

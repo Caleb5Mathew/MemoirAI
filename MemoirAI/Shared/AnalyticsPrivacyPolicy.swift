@@ -22,6 +22,7 @@ enum AnalyticsPrivacyPolicy {
         "audience": ["myself", "someoneElse", "myChildren", "parentOrGrandparent", "notSure"],
         "storyteller": ["helper", "subject"],
         "purchase_origin": ["purchase", "restore"],
+        "subscription_plan": ["yearly", "monthly"],
         "paywall_source": ["onboarding", "settings", "story_generation", "profile_limit", "memoir"],
         "failure_stage": ["auth", "recording", "preflight", "generation", "preparation", "purchase", "restore", "activation", "account_changed", "audio_file", "local_save", "playback", "share", "cloud_job", "finalization", "kickoff"],
         "dismissal_reason": ["external", "close_button", "entitlement_active"],

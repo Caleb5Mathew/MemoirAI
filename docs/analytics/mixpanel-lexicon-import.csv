@@ -65,6 +65,7 @@ event,Subscription Activation Succeeded,,The app confirmed a usable subscription
 event,Subscription Purchase Cancelled,,The purchase flow reported user cancellation. Not a refund or subscription expiration.,,,Subscriptions,FALSE,FALSE,,,,,,,,,,,
 event,Subscription Purchase Failed,,The purchase flow reported an error. Not a confirmed charge; use failure_stage.,,,Subscriptions,FALSE,FALSE,,,,,,,,,,,
 event,Subscription Purchase Started,,The paywall purchase flow started. Not a confirmed charge or entitlement.,,,Subscriptions,FALSE,FALSE,,,,,,,,,,,
+event,Subscription Plan Selected,,The person explicitly selected the yearly or monthly plan card. Use subscription_plan; this is not a purchase or trial start.,,,Subscriptions,FALSE,FALSE,,,,,,,,,,,
 event,Subscription Restore Failed,,The restore flow reported an error. Does not prove the customer has no existing entitlement.,,,Subscriptions,FALSE,FALSE,,,,,,,,,,,
 event,Subscription Restore Started,,The person started restoring purchases. Not a new purchase.,,,Subscriptions,FALSE,FALSE,,,,,,,,,,,
 event,Memory Enhancement Save Failed,,Guided enhancement could not encode or locally persist the extracted character details. No successful-save event is sent for this attempt. Final saves offer retry; partial saves report an error and remain eligible for another attempt.,,,Memory enhancement,FALSE,FALSE,,,,,,,,,,,

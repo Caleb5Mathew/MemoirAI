@@ -1,6 +1,5 @@
 import SwiftUI
 import RevenueCat
-import RevenueCatUI
 import FirebaseAuth
 import Mixpanel
 
@@ -10,6 +9,72 @@ enum PaywallSource: String, CaseIterable {
     case storyGeneration = "story_generation"
     case profileLimit = "profile_limit"
     case memoir
+}
+
+enum SubscriptionPlan: String, CaseIterable, Sendable {
+    case yearly
+    case monthly
+
+    var title: String {
+        switch self {
+        case .yearly: return "Yearly"
+        case .monthly: return "Monthly"
+        }
+    }
+
+    var billingPeriod: String {
+        switch self {
+        case .yearly: return "year"
+        case .monthly: return "month"
+        }
+    }
+}
+
+enum SubscriptionPaywallPolicy {
+    static func defaultPlan(availablePlans: Set<SubscriptionPlan>) -> SubscriptionPlan? {
+        if availablePlans.contains(.yearly) { return .yearly }
+        if availablePlans.contains(.monthly) { return .monthly }
+        return nil
+    }
+
+    static func callToAction(hasEligibleFreeTrial: Bool) -> String {
+        hasEligibleFreeTrial ? "Start Free Trial" : "Continue"
+    }
+
+    static func annualIsBetterValue(annualPrice: Decimal, monthlyPrice: Decimal) -> Bool {
+        annualPrice < monthlyPrice * 12
+    }
+
+    static func selectedValue<Value>(
+        for plan: SubscriptionPlan?,
+        values: [SubscriptionPlan: Value]
+    ) -> Value? {
+        guard let plan else { return nil }
+        return values[plan]
+    }
+
+    static func renewalDisclosure(
+        price: String,
+        billingPeriod: String,
+        freeTrialDuration: String?
+    ) -> String {
+        if let freeTrialDuration {
+            return "\(freeTrialDuration) free, then \(price) per \(billingPeriod). Cancel anytime."
+        }
+        return "\(price) per \(billingPeriod). Cancel anytime."
+    }
+
+    static func trialDuration(value: Int, unit: SubscriptionPeriod.Unit) -> String {
+        let unitName: String
+        switch unit {
+        case .day: unitName = "day"
+        case .week: unitName = "week"
+        case .month: unitName = "month"
+        case .year: unitName = "year"
+        @unknown default: unitName = "day"
+        }
+        return "\(value) \(unitName)\(value == 1 ? "" : "s")"
+    }
 }
 
 /// Keeps every purchase surface tied to the account that owns its memories.
@@ -24,6 +89,10 @@ struct SubscriptionPaywallView: View {
     @State private var isPurchasing = false
     @State private var preparationError: String?
     @State private var activationError: String?
+    @State private var transactionError: String?
+    @State private var transactionErrorOrigin = "purchase"
+    @State private var selectedPlan: SubscriptionPlan?
+    @State private var eligibleTrialProductIDs: Set<String> = []
     @State private var analyticsPresentationID = UUID().uuidString
     @State private var recordedImpression = false
     @State private var dismissalReason = "external"
@@ -34,41 +103,11 @@ struct SubscriptionPaywallView: View {
             if isPreparing {
                 ProgressView("Checking your subscription…")
             } else if let accountID, preparationError == nil {
-                PaywallView(displayCloseButton: false)
+                paywall(accountID: accountID)
                     .onAppear {
                         guard !recordedImpression else { return }
                         recordedImpression = true
                         ProductAnalytics.shared.track("Paywall Viewed", analyticsProperties)
-                    }
-                    .onPurchaseStarted { _ in
-                        isPurchasing = true
-                        ProductAnalytics.shared.track("Subscription Purchase Started", analyticsProperties)
-                    }
-                    .onPurchaseCancelled {
-                        isPurchasing = false
-                        ProductAnalytics.shared.track("Subscription Purchase Cancelled", analyticsProperties)
-                    }
-                    .onPurchaseFailure { _ in
-                        isPurchasing = false
-                        ProductAnalytics.shared.track("Subscription Purchase Failed", analyticsProperties.merging(["failure_stage": "purchase"]) { current, _ in current })
-                    }
-                    .onRestoreStarted {
-                        isPurchasing = true
-                        ProductAnalytics.shared.track("Subscription Restore Started", analyticsProperties)
-                    }
-                    .onRestoreFailure { _ in
-                        isPurchasing = false
-                        ProductAnalytics.shared.track("Subscription Restore Failed", analyticsProperties.merging(["failure_stage": "restore"]) { current, _ in current })
-                    }
-                    .onPurchaseCompleted { info in
-                        activate(info, accountID: accountID, origin: "purchase")
-                    }
-                    .onRestoreCompleted { info in
-                        activate(info, accountID: accountID, origin: "restore")
-                    }
-                    .onRequestedDismissal {
-                        // RevenueCat requests dismissal before our activation finishes.
-                        // The explicit Close button and verified activation own dismissal.
                     }
                     .overlay(alignment: .topTrailing) {
                         Button { dismissalReason = "close_button"; dismiss() } label: {
@@ -88,7 +127,7 @@ struct SubscriptionPaywallView: View {
                                 .padding(.top, 56)
                         }
                     }
-                    .disabled(isActivating)
+                    .disabled(isActivating || isPurchasing)
                     .overlay {
                         if isActivating {
                             ProgressView("Activating your subscription…")
@@ -112,9 +151,8 @@ struct SubscriptionPaywallView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
-        // The illustrated header needs white system icons; the paywall itself stays light.
         .environment(\.colorScheme, .light)
-        .preferredColorScheme(!isPreparing && accountID != nil && preparationError == nil ? .dark : .light)
+        .preferredColorScheme(.light)
         .analyticsScreen("paywall")
         .interactiveDismissDisabled(isActivating || isPurchasing)
         .task { await prepare() }
@@ -128,7 +166,9 @@ struct SubscriptionPaywallView: View {
         }
         .onChange(of: activationError) { _, error in
             guard error != nil else { return }
-            ProductAnalytics.shared.track("Subscription Activation Failed", analyticsProperties.merging(["purchase_origin": activationOrigin, "failure_stage": "activation"]) { current, _ in current })
+            ProductAnalytics.shared.track("Subscription Activation Failed", activationAnalyticsProperties(
+                origin: activationOrigin
+            ).merging(["failure_stage": "activation"]) { current, _ in current })
         }
         .onChange(of: auth.user?.uid) { _, newID in
             guard let accountID, newID != accountID else { return }
@@ -143,10 +183,223 @@ struct SubscriptionPaywallView: View {
         } message: {
             Text(activationError ?? "Please try Restore Purchases. You do not need to buy again.")
         }
+        .alert(transactionErrorOrigin == "restore" ? "Couldn’t restore purchases" : "Couldn’t start purchase",
+               isPresented: Binding(
+                get: { transactionError != nil },
+                set: { if !$0 { transactionError = nil } }
+               )) {
+            Button("OK", role: .cancel) { transactionError = nil }
+        } message: {
+            Text(transactionError ?? "Check your connection and try again.")
+        }
+    }
+
+    private var baseAnalyticsProperties: Properties {
+        [
+            "presentation_id": analyticsPresentationID,
+            "paywall_source": source.rawValue
+        ]
     }
 
     private var analyticsProperties: Properties {
-        ["presentation_id": analyticsPresentationID, "paywall_source": source.rawValue]
+        var properties = baseAnalyticsProperties
+        if let selectedPlan {
+            properties["subscription_plan"] = selectedPlan.rawValue
+        }
+        return properties
+    }
+
+    private func activationAnalyticsProperties(origin: String) -> Properties {
+        var properties = origin == "restore" ? baseAnalyticsProperties : analyticsProperties
+        properties["purchase_origin"] = origin
+        return properties
+    }
+
+    private var offeringPackages: [SubscriptionPlan: Package] {
+        guard let offering = manager.offerings?.current else { return [:] }
+        var packages: [SubscriptionPlan: Package] = [:]
+        if let annual = offering.annual { packages[.yearly] = annual }
+        if let monthly = offering.monthly { packages[.monthly] = monthly }
+        return packages
+    }
+
+    @ViewBuilder
+    private func paywall(accountID: String) -> some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                VStack(spacing: 12) {
+                    Image(systemName: "book.closed.fill")
+                        .font(.system(size: 38, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .accessibilityHidden(true)
+                    Text("Keep every story")
+                        .font(.largeTitle.weight(.bold))
+                    Text("Create memoirs, add family profiles, and make up to 100 illustrations each month.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 44)
+
+                VStack(spacing: 12) {
+                    ForEach(SubscriptionPlan.allCases, id: \.self) { plan in
+                        if let package = offeringPackages[plan] {
+                            planButton(plan: plan, package: package)
+                        }
+                    }
+                }
+
+                if let package = SubscriptionPaywallPolicy.selectedValue(
+                    for: selectedPlan,
+                    values: offeringPackages
+                ),
+                   let selectedPlan {
+                    VStack(spacing: 10) {
+                        Button {
+                            Task { await purchase(package: package, accountID: accountID) }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if isPurchasing {
+                                    ProgressView().tint(.white)
+                                }
+                                Text(SubscriptionPaywallPolicy.callToAction(
+                                    hasEligibleFreeTrial: hasEligibleFreeTrial(package)
+                                ))
+                            }
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 54)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isPurchasing || isActivating)
+                        .accessibilityIdentifier("subscription_continue")
+
+                        Text(disclosure(for: package, plan: selectedPlan))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+
+                Button("Restore Purchases") {
+                    Task { await restore(accountID: accountID) }
+                }
+                .font(.subheadline.weight(.semibold))
+                .disabled(isPurchasing || isActivating)
+
+                Text("Payment is charged to your Apple ID. Subscriptions renew automatically unless canceled at least 24 hours before the current period ends.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+
+                if let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/"),
+                   let privacyURL = URL(string: "https://memoirai-7db06.web.app/privacy/") {
+                    HStack(spacing: 20) {
+                        Link("Terms", destination: termsURL)
+                        Link("Privacy", destination: privacyURL)
+                    }
+                    .font(.caption.weight(.semibold))
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 28)
+        }
+    }
+
+    private func planButton(plan: SubscriptionPlan, package: Package) -> some View {
+        let isSelected = selectedPlan == plan
+        return Button {
+            selectedPlan = plan
+            ProductAnalytics.shared.track("Subscription Plan Selected", analyticsProperties.merging([
+                "subscription_plan": plan.rawValue
+            ]) { _, selected in selected })
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        selectionIndicator(isSelected: isSelected)
+                        Text(plan.title).font(.headline)
+                        Spacer(minLength: 8)
+                        if plan == .yearly, annualIsBetterValue {
+                            bestValueBadge
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            selectionIndicator(isSelected: isSelected)
+                            Text(plan.title).font(.headline)
+                        }
+                        if plan == .yearly, annualIsBetterValue {
+                            bestValueBadge
+                        }
+                    }
+                }
+                Text(plan == .yearly ? "One payment each year" : "Flexible monthly billing")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("\(package.localizedPriceString) / \(plan.billingPeriod)")
+                    .font(.headline)
+            }
+            .foregroundStyle(.primary)
+            .padding(16)
+            .frame(maxWidth: .infinity)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("subscription_plan_\(plan.rawValue)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func selectionIndicator(isSelected: Bool) -> some View {
+        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+            .font(.title3)
+            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+            .accessibilityHidden(true)
+    }
+
+    private var annualIsBetterValue: Bool {
+        guard let annual = offeringPackages[.yearly],
+              let monthly = offeringPackages[.monthly] else { return false }
+        return SubscriptionPaywallPolicy.annualIsBetterValue(
+            annualPrice: annual.storeProduct.price,
+            monthlyPrice: monthly.storeProduct.price
+        )
+    }
+
+    private var bestValueBadge: some View {
+        Text("BEST VALUE")
+            .font(.caption2.weight(.bold))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .foregroundStyle(.black)
+            .background(Color.accentColor, in: Capsule())
+    }
+
+    private func hasEligibleFreeTrial(_ package: Package) -> Bool {
+        package.storeProduct.introductoryDiscount?.paymentMode == .freeTrial
+            && eligibleTrialProductIDs.contains(package.storeProduct.productIdentifier)
+    }
+
+    private func disclosure(for package: Package, plan: SubscriptionPlan) -> String {
+        let freeTrialDuration: String?
+        if hasEligibleFreeTrial(package),
+           let trial = package.storeProduct.introductoryDiscount {
+            freeTrialDuration = SubscriptionPaywallPolicy.trialDuration(
+                value: trial.subscriptionPeriod.value * trial.numberOfPeriods,
+                unit: trial.subscriptionPeriod.unit
+            )
+        } else {
+            freeTrialDuration = nil
+        }
+        return SubscriptionPaywallPolicy.renewalDisclosure(
+            price: package.localizedPriceString,
+            billingPeriod: plan.billingPeriod,
+            freeTrialDuration: freeTrialDuration
+        )
     }
 
     @MainActor
@@ -176,13 +429,79 @@ struct SubscriptionPaywallView: View {
             preparationError = "Subscriptions could not be loaded. Check your connection and try again."
             return
         }
+        let packages = offeringPackages
+        guard !packages.isEmpty else {
+            preparationError = "The available subscriptions are not configured correctly. Please try again later."
+            return
+        }
+        selectedPlan = SubscriptionPaywallPolicy.defaultPlan(availablePlans: Set(packages.keys))
+        isPreparing = false
+        eligibleTrialProductIDs = await eligibleFreeTrialProductIDs(in: Array(packages.values))
+    }
+
+    private func eligibleFreeTrialProductIDs(in packages: [Package]) async -> Set<String> {
+        var productIDs: Set<String> = []
+        for package in packages where package.storeProduct.introductoryDiscount?.paymentMode == .freeTrial {
+            let eligibility = await Purchases.shared.checkTrialOrIntroDiscountEligibility(
+                product: package.storeProduct
+            )
+            if eligibility == .eligible {
+                productIDs.insert(package.storeProduct.productIdentifier)
+            }
+        }
+        return productIDs
+    }
+
+    @MainActor
+    private func purchase(package: Package, accountID: String) async {
+        isPurchasing = true
+        activationError = nil
+        transactionError = nil
+        ProductAnalytics.shared.track("Subscription Purchase Started", analyticsProperties)
+        do {
+            let result = try await manager.purchase(package: package)
+            if result.userCancelled {
+                isPurchasing = false
+                ProductAnalytics.shared.track("Subscription Purchase Cancelled", analyticsProperties)
+                return
+            }
+            isPurchasing = false
+            activate(result.customerInfo, accountID: accountID, origin: "purchase")
+        } catch {
+            isPurchasing = false
+            transactionErrorOrigin = "purchase"
+            transactionError = error.localizedDescription
+            ProductAnalytics.shared.track("Subscription Purchase Failed", analyticsProperties.merging([
+                "failure_stage": "purchase"
+            ]) { current, _ in current })
+        }
+    }
+
+    @MainActor
+    private func restore(accountID: String) async {
+        isPurchasing = true
+        activationError = nil
+        transactionError = nil
+        ProductAnalytics.shared.track("Subscription Restore Started", baseAnalyticsProperties)
+        do {
+            let info = try await Purchases.shared.restorePurchases()
+            isPurchasing = false
+            activate(info, accountID: accountID, origin: "restore")
+        } catch {
+            isPurchasing = false
+            transactionErrorOrigin = "restore"
+            transactionError = error.localizedDescription
+            ProductAnalytics.shared.track("Subscription Restore Failed", baseAnalyticsProperties.merging([
+                "failure_stage": "restore"
+            ]) { current, _ in current })
+        }
     }
 
     @MainActor
     private func activate(_ info: CustomerInfo, accountID: String, origin: String) {
         activationOrigin = origin
         activationError = nil
-        ProductAnalytics.shared.track("Subscription Activation Started", analyticsProperties.merging(["purchase_origin": origin]) { current, _ in current })
+        ProductAnalytics.shared.track("Subscription Activation Started", activationAnalyticsProperties(origin: origin))
         isPurchasing = false
         isActivating = true
         Task { @MainActor in
@@ -190,7 +509,7 @@ struct SubscriptionPaywallView: View {
             do {
                 if try manager.applyPurchaseResult(info, for: accountID) {
                     dismissalReason = "entitlement_active"
-                    ProductAnalytics.shared.track("Subscription Activation Succeeded", analyticsProperties.merging(["purchase_origin": origin]) { current, _ in current })
+                    ProductAnalytics.shared.track("Subscription Activation Succeeded", activationAnalyticsProperties(origin: origin))
                     dismiss()
                     return
                 }
@@ -202,7 +521,7 @@ struct SubscriptionPaywallView: View {
                 }
                 if manager.hasActiveSubscription {
                     dismissalReason = "entitlement_active"
-                    ProductAnalytics.shared.track("Subscription Activation Succeeded", analyticsProperties.merging(["purchase_origin": origin]) { current, _ in current })
+                    ProductAnalytics.shared.track("Subscription Activation Succeeded", activationAnalyticsProperties(origin: origin))
                     dismiss()
                 } else {
                     activationError = manager.activationErrorMessage

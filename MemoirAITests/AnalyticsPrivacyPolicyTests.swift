@@ -94,4 +94,15 @@ struct AnalyticsPrivacyPolicyTests {
         }
         #expect(AnalyticsPrivacyPolicy.sanitized(["paywall_source": "private label"]).isEmpty)
     }
+
+    @Test func permitsOnlyKnownSubscriptionPlans() {
+        for plan in SubscriptionPlan.allCases {
+            #expect(AnalyticsPrivacyPolicy.sanitized([
+                "subscription_plan": plan.rawValue
+            ]).count == 1)
+        }
+        #expect(AnalyticsPrivacyPolicy.sanitized([
+            "subscription_plan": "private product label"
+        ]).isEmpty)
+    }
 }

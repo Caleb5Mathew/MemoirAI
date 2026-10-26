@@ -1,6 +1,6 @@
 # Understanding Memoir events
 
-The catalog describes all **73 app events**, organized into **13 product areas**, using the current source callsites. Event names are unchanged so existing reports keep working.
+The catalog describes all **74 app events**, organized into **13 product areas**, using the current source callsites. Existing event names are unchanged so existing reports keep working.
 
 - `event-catalog.json` contains each event's category, plain-language description, interpretation limits, and source locations.
 - `event-catalog.csv` contains the same descriptions in a spreadsheet-friendly format. It is a handoff format, not a claim that Mixpanel supports a direct CSV import.
@@ -39,7 +39,7 @@ Use production + external + physical-device filters for customer reporting. Inte
 
 ## Foreground dwell and bounded diagnostics
 
-The latest source adds four events beyond the 69 previously imported live: `Screen Time Recorded`, `Recording Start Failed`, `Memory Transcription Retry Queued`, and `Memory Transcription Retry Failed`. Their Lexicon import and updated-binary delivery are separate verification steps; do not assume they are already live.
+The latest source adds five events beyond the 69 previously imported live: `Screen Time Recorded`, `Recording Start Failed`, `Memory Transcription Retry Queued`, `Memory Transcription Retry Failed`, and `Subscription Plan Selected`. Their Lexicon import and updated-binary delivery are separate verification steps; do not assume they are already live.
 
 Screen timing covers the main navigation and onboarding steps, with 20 named native destinations. Instrumented sheets suspend the underlying screen and restore its timer on dismissal. Inactive/background time is excluded, repeated appearances are deduplicated per view instance, and identity changes split timing segments. Sum `duration_ms` by `screen` to measure dwell; segment count is not visits. Longer dwell can mean interest, difficulty, or distraction; it is not automatically positive engagement.
 

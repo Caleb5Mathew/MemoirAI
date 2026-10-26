@@ -327,6 +327,7 @@ enum AnalyticsEventCategory {
         "Subscription Purchase Cancelled": "Subscriptions",
         "Subscription Purchase Failed": "Subscriptions",
         "Subscription Purchase Started": "Subscriptions",
+        "Subscription Plan Selected": "Subscriptions",
         "Subscription Restore Failed": "Subscriptions",
         "Subscription Restore Started": "Subscriptions",
     ]

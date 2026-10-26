@@ -662,7 +662,7 @@
       "meaning": "The paywall presentation was dismissed.",
       "interpretation": "Use dismissal_reason; closing is not necessarily purchase cancellation.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:110"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:161"
       ]
     },
     {
@@ -672,7 +672,7 @@
       "meaning": "The app could not prepare the subscription paywall.",
       "interpretation": "This may prevent a Paywall Viewed impression.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:114"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:165"
       ]
     },
     {
@@ -682,7 +682,7 @@
       "meaning": "The prepared subscription paywall appeared once for a presentation_id.",
       "interpretation": "Segment by paywall_source; exposure does not mean purchase intent or payment.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:41"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:110"
       ]
     },
     {
@@ -692,7 +692,7 @@
       "meaning": "The app could not activate or verify the expected entitlement.",
       "interpretation": "Not necessarily a failed App Store charge; inspect purchase_origin and failure_stage.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:118"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:169"
       ]
     },
     {
@@ -702,7 +702,7 @@
       "meaning": "The app began applying or verifying an entitlement after purchase or restore.",
       "interpretation": "Use purchase_origin to separate purchase and restore.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:172"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:504"
       ]
     },
     {
@@ -712,8 +712,8 @@
       "meaning": "The app confirmed a usable subscription entitlement.",
       "interpretation": "Can include a trial or restored entitlement; use RevenueCat lifecycle events for paid revenue.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:180",
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:192"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:512",
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:524"
       ]
     },
     {
@@ -723,7 +723,7 @@
       "meaning": "The purchase flow reported user cancellation.",
       "interpretation": "Not a refund or subscription expiration.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:39"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:465"
       ]
     },
     {
@@ -733,7 +733,7 @@
       "meaning": "The purchase flow reported an error.",
       "interpretation": "Not a confirmed charge; use failure_stage.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:43"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:474"
       ]
     },
     {
@@ -743,7 +743,17 @@
       "meaning": "The paywall purchase flow started.",
       "interpretation": "Not a confirmed charge or entitlement.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:35"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:460"
+      ]
+    },
+    {
+      "event": "Subscription Plan Selected",
+      "category": "Subscriptions",
+      "description": "The person explicitly selected the yearly or monthly plan card. Use subscription_plan; this is not a purchase or trial start.",
+      "meaning": "The person explicitly selected a subscription plan card.",
+      "interpretation": "Use subscription_plan; this is not a purchase or trial start.",
+      "source_locations": [
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:313"
       ]
     },
     {
@@ -753,7 +763,7 @@
       "meaning": "The restore flow reported an error.",
       "interpretation": "Does not prove the customer has no existing entitlement.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:51"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:494"
       ]
     },
     {
@@ -763,7 +773,7 @@
       "meaning": "The person started restoring purchases.",
       "interpretation": "Not a new purchase.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:47"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:485"
       ]
     }
   ]
