@@ -435,7 +435,6 @@ struct SubscriptionPaywallView: View {
             return
         }
         selectedPlan = SubscriptionPaywallPolicy.defaultPlan(availablePlans: Set(packages.keys))
-        isPreparing = false
         eligibleTrialProductIDs = await eligibleFreeTrialProductIDs(in: Array(packages.values))
     }
 
