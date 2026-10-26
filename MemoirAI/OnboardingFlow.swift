@@ -575,7 +575,7 @@ struct OnboardingFlow: View {
 
     private func choiceButton(_ title: String, subtitle: String? = nil, compact: Bool = false, selected: Bool, action: @escaping () -> Void) -> some View {
         let hasSubtitle = subtitle?.isEmpty == false
-        Button(action: action) {
+        return Button(action: action) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title).font(.custom("AvenirNext-DemiBold", size: compact ? 12 : 14, relativeTo: .body))
