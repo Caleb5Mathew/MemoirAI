@@ -410,7 +410,7 @@ enum TutorialScreen: String, Codable {
     case storyPage
 }
 
-enum TutorialStep: String, Codable, CaseIterable {
+enum TutorialStep: String, Codable, CaseIterable, Hashable {
     case none
     case homeIntro
     case homeContinueMemoir
