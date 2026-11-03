@@ -1,6 +1,8 @@
 # Onboarding reliability and first-story refinement
 
-Status: local release candidate; not uploaded or submitted for review.
+Status: version 3.45/build 2026.11.03 successfully uploaded to App Store Connect on November 3, 2026 at 12:09 CST. Apple reports the package is processing. Not submitted for review and not publicly released.
+
+Source commit: `ea9929a` on `fix/onboarding-release-isolated`.
 
 The previous onboarding path counted closing an unavailable paywall as successful completion. This candidate separates recovery exits from successful completion, removes redundant paywall preparation requests, bounds preparation to 20 seconds, and guards late results against cancellation/account changes. Historical SDK causes remain unidentified because the old events only recorded a generic preparation failure.
 
@@ -26,7 +28,17 @@ This candidate retains committed pricing, product selection, trial copy and allo
 - Expanded original-tree run: 152 unit tests passed; one UI pre-scroll visibility assertion was corrected before candidate verification.
 - Final isolated candidate: 176 unit tests (79 XCTest and 97 Swift Testing) and all four UI tests passed. Result: `/tmp/MemoirOnboardingRecoveryFinalNov03.xcresult`. Checks cover account cleanup, privacy, profile scoping, paywall/preview recovery, Home-row rendering, restored draft navigation, typing guidance and required storyteller selection.
 - UI verification exposed a retained hidden/disabled Back control after restoring a draft. Recovery now removes inactive form content until restoration/reconnection, retaining model state. The regression checks passed without weakening the hit-target assertion.
-- Device archive/signing: running for version 3.45, build 2026.11.03 (command-line overrides; committed pricing and project settings retained).
-- App Store upload/review submission: not performed.
+- Device archive succeeded for version 3.45, build 2026.11.03. Bundle/version assertions and `codesign --verify --deep --strict` passed. App Store distribution signing and upload succeeded with automatic provisioning.
+- Archive: `/Volumes/Memoir Video Workspace/MemoirVerificationNov03/Memoir-3.45-2026.11.03.xcarchive`. Upload log: `/tmp/memoir-appstore-upload-final.log`.
+- App Store Connect upload: succeeded (exit 0, `EXPORT SUCCEEDED`); package processing acknowledged by Apple. Review submission remains blocked because browser control reports `No browser is available`, and no App Store Connect API key is configured.
+- Non-blocking symbol upload warnings: prebuilt FirebaseFirestoreInternal, absl, grpc, grpcpp and openssl_grpc frameworks lack matching dSYMs. Apple accepted the app; diagnostics for frames inside these dependencies may be less informative. Memoir’s own app binary and dSYM were verified to share UUID `7AE0450E-DC9E-30B5-9A37-1813146CFCA9`.
 
 Known limits: browser automation remains unavailable for inspecting the single historical failed-preview profile or saving Mixpanel reports. Simulator tests do not establish a real App Store purchase. No conversion uplift is claimed before rollout.
+
+## App Store text prepared for submission
+
+This update makes it easier to write your first story, return to an unfinished draft, and recover when a preview or subscription screen cannot load.
+
+## Reversible build-cache cleanup
+
+The temporary `/tmp/MemoirDeviceReleaseNov03` build cache was backed up with its parent directory to `/Volumes/Memoir Video Workspace/MemoirVerificationNov03/DeviceBuildCache-3.45.zip`. `unzip -tq` verified all compressed data before removal of the internal temporary copy. The signed `.xcarchive`, source commit and test results are preserved. To restore the optional cache, use `ditto -x -k` with that ZIP and `/tmp` as the destination. No user data or unrelated project cache was removed.
