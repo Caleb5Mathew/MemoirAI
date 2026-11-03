@@ -36,7 +36,7 @@ enum OnboardingRecordingCopy {
 
     static func guidance(for audience: OnboardingAudience?, name: String) -> String {
         guard needsStorytellerChoice(for: audience) else {
-            return "Tap the microphone below and answer the question to get started."
+            return "Record or write a few sentences about one moment you remember."
         }
         let subjectName = normalizedName(name)
         return "You can tell it for \(subjectName), or have \(subjectName) tell it in their own words."
@@ -96,5 +96,12 @@ struct OnboardingSessionStore {
 
     private func key(_ userID: String) -> String {
         "memoir_onboarding_v5_\(userID)"
+    }
+}
+
+/// Tour navigation must wait for both the actual page image and saved story inputs.
+enum OnboardingPreviewNavigationPolicy {
+    static func canOpenPreview(hasImage: Bool, inputReady: Bool) -> Bool {
+        hasImage && inputReady
     }
 }

@@ -3,16 +3,26 @@
   "scope": "App-side ProductAnalytics events only; RevenueCat provider events require a separate live inventory.",
   "events": [
     {
+      "event": "App Launched",
+      "category": "App lifecycle",
+      "description": "The app initialized its analytics service during launch. A launch is not a new install or a login.",
+      "meaning": "The app initialized its analytics service during launch.",
+      "interpretation": "A launch is not a new install or a login.",
+      "source_locations": [
+        "MemoirAI/MemoirAIApp.swift:194"
+      ]
+    },
+    {
       "event": "Authentication Failed",
       "category": "Account access",
       "description": "An instrumented authentication operation ended without success. Use provider and auth_operation; do not infer the person's reason.",
       "meaning": "An instrumented authentication operation ended without success.",
       "interpretation": "Use provider and auth_operation; do not infer the person's reason.",
       "source_locations": [
-        "MemoirAI/Firebase/AuthenticationService.swift:539",
-        "MemoirAI/Firebase/AuthenticationService.swift:596",
-        "MemoirAI/Firebase/AuthenticationService.swift:694",
-        "MemoirAI/Firebase/AuthenticationService.swift:738"
+        "MemoirAI/Firebase/AuthenticationService.swift:600",
+        "MemoirAI/Firebase/AuthenticationService.swift:657",
+        "MemoirAI/Firebase/AuthenticationService.swift:755",
+        "MemoirAI/Firebase/AuthenticationService.swift:799"
       ]
     },
     {
@@ -22,10 +32,10 @@
       "meaning": "An instrumented Apple, Google, or email authentication operation began.",
       "interpretation": "Use provider and auth_operation; anonymous launch is not counted as a login here.",
       "source_locations": [
-        "MemoirAI/Firebase/AuthenticationService.swift:533",
-        "MemoirAI/Firebase/AuthenticationService.swift:590",
-        "MemoirAI/Firebase/AuthenticationService.swift:688",
-        "MemoirAI/Firebase/AuthenticationService.swift:732"
+        "MemoirAI/Firebase/AuthenticationService.swift:594",
+        "MemoirAI/Firebase/AuthenticationService.swift:651",
+        "MemoirAI/Firebase/AuthenticationService.swift:749",
+        "MemoirAI/Firebase/AuthenticationService.swift:793"
       ]
     },
     {
@@ -35,60 +45,10 @@
       "meaning": "An instrumented authentication operation completed successfully.",
       "interpretation": "Can mean account linking or account creation, not just sign-in.",
       "source_locations": [
-        "MemoirAI/Firebase/AuthenticationService.swift:539",
-        "MemoirAI/Firebase/AuthenticationService.swift:596",
-        "MemoirAI/Firebase/AuthenticationService.swift:694",
-        "MemoirAI/Firebase/AuthenticationService.swift:738"
-      ]
-    },
-    {
-      "event": "Signed Out",
-      "category": "Account access",
-      "description": "The current account was signed out before analytics identity was reset. A subsequent guest identity is a separate state.",
-      "meaning": "The current account was signed out before analytics identity was reset.",
-      "interpretation": "A subsequent guest identity is a separate state.",
-      "source_locations": [
-        "MemoirAI/Firebase/AuthenticationService.swift:931"
-      ]
-    },
-    {
-      "event": "App Launched",
-      "category": "App lifecycle",
-      "description": "The app initialized its analytics service during launch. A launch is not a new install or a login.",
-      "meaning": "The app initialized its analytics service during launch.",
-      "interpretation": "A launch is not a new install or a login.",
-      "source_locations": [
-        "MemoirAI/MemoirAIApp.swift:201"
-      ]
-    },
-    {
-      "event": "First Launch",
-      "category": "App lifecycle",
-      "description": "The installation recorded its first launch using local defaults. Can repeat after reinstall or on another device; not first-ever customer.",
-      "meaning": "The installation recorded its first launch using local defaults.",
-      "interpretation": "Can repeat after reinstall or on another device; not first-ever customer.",
-      "source_locations": [
-        "MemoirAI/MemoirAIApp.swift:204"
-      ]
-    },
-    {
-      "event": "Session Ended",
-      "category": "App lifecycle",
-      "description": "The active session ended; duration_ms measures foreground session time. Process termination may prevent delivery; not total lifetime usage.",
-      "meaning": "The active session ended; duration_ms measures foreground session time.",
-      "interpretation": "Process termination may prevent delivery; not total lifetime usage.",
-      "source_locations": [
-        "MemoirAI/Shared/ProductAnalytics.swift:152"
-      ]
-    },
-    {
-      "event": "Session Started",
-      "category": "App lifecycle",
-      "description": "The app entered an active foreground session. Repeated active notifications are deduplicated until the session ends.",
-      "meaning": "The app entered an active foreground session.",
-      "interpretation": "Repeated active notifications are deduplicated until the session ends.",
-      "source_locations": [
-        "MemoirAI/Shared/ProductAnalytics.swift:149"
+        "MemoirAI/Firebase/AuthenticationService.swift:600",
+        "MemoirAI/Firebase/AuthenticationService.swift:657",
+        "MemoirAI/Firebase/AuthenticationService.swift:755",
+        "MemoirAI/Firebase/AuthenticationService.swift:799"
       ]
     },
     {
@@ -145,78 +105,35 @@
       ]
     },
     {
-      "event": "Memory Save Failed",
-      "category": "Memory creation",
-      "description": "The regular capture flow failed at authentication, audio-file validation, or local persistence. Use failure_stage to identify the failing part.",
-      "meaning": "The regular capture flow failed at authentication, audio-file validation, or local persistence.",
-      "interpretation": "Use failure_stage to identify the failing part.",
+      "event": "First Launch",
+      "category": "App lifecycle",
+      "description": "The installation recorded its first launch using local defaults. Can repeat after reinstall or on another device; not first-ever customer.",
+      "meaning": "The installation recorded its first launch using local defaults.",
+      "interpretation": "Can repeat after reinstall or on another device; not first-ever customer.",
       "source_locations": [
-        "MemoirAI/Memoir/RecordingView.swift:862",
-        "MemoirAI/Memoir/RecordingView.swift:888",
-        "MemoirAI/Memoir/RecordingView.swift:930"
+        "MemoirAI/MemoirAIApp.swift:197"
       ]
     },
     {
-      "event": "Memory Transcription Retry Failed",
-      "category": "Memory creation",
-      "meaning": "The app could not persist the local state needed to queue a transcription retry.",
-      "interpretation": "failure_stage=local_save; no backend transcription completion is implied.",
-      "description": "The app could not persist the local state needed to queue a transcription retry. failure_stage=local_save; no backend transcription completion is implied.",
+      "event": "Input Completed",
+      "category": "Navigation and input",
+      "description": "A tracked field edit ended with character_count and duration_ms. Count and duration only; no field contents. Abandoned edits may lack completion.",
+      "meaning": "A tracked field edit ended with character_count and duration_ms.",
+      "interpretation": "Count and duration only; no field contents. Abandoned edits may lack completion.",
       "source_locations": [
-        "MemoirAI/Recent/MemoryDetailView.swift:769"
+        "MemoirAI/Shared/ProductAnalytics.swift:248",
+        "MemoirAI/Shared/ProductAnalytics.swift:292"
       ]
     },
     {
-      "event": "Memory Transcription Retry Queued",
-      "category": "Memory creation",
-      "meaning": "A requested transcription retry was saved locally with queued status before cloud synchronization was scheduled.",
-      "interpretation": "Not backend acceptance or successful transcription. save_scope=local.",
-      "description": "A requested transcription retry was saved locally with queued status before cloud synchronization was scheduled. Not backend acceptance or successful transcription. save_scope=local.",
+      "event": "Input Started",
+      "category": "Navigation and input",
+      "description": "The first edit began for a named field in the current input session. No typed text or individual keystrokes are collected.",
+      "meaning": "The first edit began for a named field in the current input session.",
+      "interpretation": "No typed text or individual keystrokes are collected.",
       "source_locations": [
-        "MemoirAI/Recent/MemoryDetailView.swift:762"
-      ]
-    },
-    {
-      "event": "Opened Prompt",
-      "category": "Memory creation",
-      "description": "A chapter prompt was opened for a recording or prompt-choice flow. Use chapter_number and is_completed; no prompt text is sent.",
-      "meaning": "A chapter prompt was opened for a recording or prompt-choice flow.",
-      "interpretation": "Use chapter_number and is_completed; no prompt text is sent.",
-      "source_locations": [
-        "MemoirAI/Memoir/ChapterJourneyView.swift:409",
-        "MemoirAI/Memoir/ChapterJourneyView.swift:452"
-      ]
-    },
-    {
-      "event": "Recording Start Failed",
-      "category": "Memory creation",
-      "meaning": "Regular memory recording could not start because authentication was unavailable, recorder creation failed, or the recorder refused to begin.",
-      "interpretation": "Use bounded diagnostic_reason. This does not include every permission refusal or recording failure; no raw error message or file path is sent.",
-      "description": "Regular memory recording could not start because authentication was unavailable, recorder creation failed, or the recorder refused to begin. Use bounded diagnostic_reason. This does not include every permission refusal or recording failure; no raw error message or file path is sent.",
-      "source_locations": [
-        "MemoirAI/Memoir/RecordingView.swift:726",
-        "MemoirAI/Memoir/RecordingView.swift:764",
-        "MemoirAI/Memoir/RecordingView.swift:791"
-      ]
-    },
-    {
-      "event": "Saved Memory",
-      "category": "Memory creation",
-      "description": "The regular recording flow successfully saved a memory locally. save_scope=local; not a cloud-sync guarantee or all capture routes.",
-      "meaning": "The regular recording flow successfully saved a memory locally.",
-      "interpretation": "save_scope=local; not a cloud-sync guarantee or all capture routes.",
-      "source_locations": [
-        "MemoirAI/Memoir/RecordingView.swift:917"
-      ]
-    },
-    {
-      "event": "Started Recording",
-      "category": "Memory creation",
-      "description": "The regular memory recorder successfully began audio capture. Separate from onboarding recording; no audio is sent to analytics.",
-      "meaning": "The regular memory recorder successfully began audio capture.",
-      "interpretation": "Separate from onboarding recording; no audio is sent to analytics.",
-      "source_locations": [
-        "MemoirAI/Memoir/RecordingView.swift:775"
+        "MemoirAI/Shared/ProductAnalytics.swift:243",
+        "MemoirAI/Shared/ProductAnalytics.swift:293"
       ]
     },
     {
@@ -268,8 +185,8 @@
       "meaning": "A memory audio player reported playback completion.",
       "interpretation": "Use playback_source to distinguish local and remote.",
       "source_locations": [
-        "MemoirAI/Recent/MemoryDetailView.swift:1233",
-        "MemoirAI/Recent/MemoryDetailView.swift:1261"
+        "MemoirAI/Recent/MemoryDetailView.swift:1236",
+        "MemoirAI/Recent/MemoryDetailView.swift:1264"
       ]
     },
     {
@@ -279,7 +196,7 @@
       "meaning": "Memory audio playback encountered an error.",
       "interpretation": "No private audio or raw error message is sent.",
       "source_locations": [
-        "MemoirAI/Recent/MemoryDetailView.swift:1307"
+        "MemoirAI/Recent/MemoryDetailView.swift:1310"
       ]
     },
     {
@@ -289,7 +206,7 @@
       "meaning": "Remote memory playback was requested.",
       "interpretation": "Request only; does not prove audio actually began.",
       "source_locations": [
-        "MemoirAI/Recent/MemoryDetailView.swift:1278"
+        "MemoirAI/Recent/MemoryDetailView.swift:1281"
       ]
     },
     {
@@ -299,17 +216,20 @@
       "meaning": "Local memory playback started.",
       "interpretation": "Current started instrumentation is local; remote playback has a separate request event.",
       "source_locations": [
-        "MemoirAI/Recent/MemoryDetailView.swift:1237"
+        "MemoirAI/Recent/MemoryDetailView.swift:1240"
       ]
     },
     {
-      "event": "Viewed Memory",
-      "category": "Memory reading and listening",
-      "description": "A saved memory detail view appeared. Can repeat on revisits; not proof the memory was fully read.",
-      "meaning": "A saved memory detail view appeared.",
-      "interpretation": "Can repeat on revisits; not proof the memory was fully read.",
+      "event": "Memory Save Failed",
+      "category": "Memory creation",
+      "description": "The regular capture flow failed at authentication, audio-file validation, or local persistence. Use failure_stage to identify the failing part.",
+      "meaning": "The regular capture flow failed at authentication, audio-file validation, or local persistence.",
+      "interpretation": "Use failure_stage to identify the failing part.",
       "source_locations": [
-        "MemoirAI/Recent/MemoryDetailView.swift:1069"
+        "MemoirAI/Memoir/RecordingView.swift:879",
+        "MemoirAI/Memoir/RecordingView.swift:906",
+        "MemoirAI/Memoir/RecordingView.swift:921",
+        "MemoirAI/Memoir/RecordingView.swift:965"
       ]
     },
     {
@@ -319,7 +239,7 @@
       "meaning": "The system share callback ended without completion or error.",
       "interpretation": "Not proof of dissatisfaction.",
       "source_locations": [
-        "MemoirAI/Recent/MemoryDetailView.swift:1433"
+        "MemoirAI/Recent/MemoryDetailView.swift:1436"
       ]
     },
     {
@@ -329,8 +249,8 @@
       "meaning": "Share preparation or the system share callback reported an error.",
       "interpretation": "Use failure_stage when present.",
       "source_locations": [
-        "MemoirAI/Recent/MemoryDetailView.swift:1433",
-        "MemoirAI/Recent/MemoryDetailView.swift:1478"
+        "MemoirAI/Recent/MemoryDetailView.swift:1436",
+        "MemoirAI/Recent/MemoryDetailView.swift:1481"
       ]
     },
     {
@@ -340,7 +260,7 @@
       "meaning": "The prepared memory share sheet was presented.",
       "interpretation": "Not a completed share.",
       "source_locations": [
-        "MemoirAI/Recent/MemoryDetailView.swift:1459"
+        "MemoirAI/Recent/MemoryDetailView.swift:1462"
       ]
     },
     {
@@ -350,177 +270,27 @@
       "meaning": "The system share callback reported a completed activity.",
       "interpretation": "Not proof of delivery or recipient readership.",
       "source_locations": [
-        "MemoirAI/Recent/MemoryDetailView.swift:1433"
+        "MemoirAI/Recent/MemoryDetailView.swift:1436"
       ]
     },
     {
-      "event": "Input Completed",
-      "category": "Navigation and input",
-      "description": "A tracked field edit ended with character_count and duration_ms. Count and duration only; no field contents. Abandoned edits may lack completion.",
-      "meaning": "A tracked field edit ended with character_count and duration_ms.",
-      "interpretation": "Count and duration only; no field contents. Abandoned edits may lack completion.",
+      "event": "Memory Transcription Retry Failed",
+      "category": "Memory creation",
+      "meaning": "The app could not persist the local state needed to queue a transcription retry.",
+      "interpretation": "failure_stage=local_save; no backend transcription completion is implied.",
+      "description": "The app could not persist the local state needed to queue a transcription retry. failure_stage=local_save; no backend transcription completion is implied.",
       "source_locations": [
-        "MemoirAI/Shared/ProductAnalytics.swift:224"
+        "MemoirAI/Recent/MemoryDetailView.swift:769"
       ]
     },
     {
-      "event": "Input Started",
-      "category": "Navigation and input",
-      "description": "The first edit began for a named field in the current input session. No typed text or individual keystrokes are collected.",
-      "meaning": "The first edit began for a named field in the current input session.",
-      "interpretation": "No typed text or individual keystrokes are collected.",
+      "event": "Memory Transcription Retry Queued",
+      "category": "Memory creation",
+      "meaning": "A requested transcription retry was saved locally with queued status before cloud synchronization was scheduled.",
+      "interpretation": "Not backend acceptance or successful transcription. save_scope=local.",
+      "description": "A requested transcription retry was saved locally with queued status before cloud synchronization was scheduled. Not backend acceptance or successful transcription. save_scope=local.",
       "source_locations": [
-        "MemoirAI/Shared/ProductAnalytics.swift:219"
-      ]
-    },
-    {
-      "event": "Screen Time Recorded",
-      "category": "Navigation and input",
-      "meaning": "A foreground-active timing segment ended for the topmost instrumented screen.",
-      "interpretation": "duration_ms excludes inactive/background time and covered instrumented screens. Sum segments for dwell; event count is not visits. A crash or force quit can lose the final segment. System pickers and other uninstrumented overlays can still count toward the parent.",
-      "description": "A foreground-active timing segment ended for the topmost instrumented screen. duration_ms excludes inactive/background time and covered instrumented screens. Sum segments for dwell; event count is not visits. A crash or force quit can lose the final segment. System pickers and other uninstrumented overlays can still count toward the parent.",
-      "source_locations": [
-        "MemoirAI/Shared/ProductAnalytics.swift:200"
-      ]
-    },
-    {
-      "event": "Screen Viewed",
-      "category": "Navigation and input",
-      "description": "An instrumented screen view instance appeared, or its bounded screen name changed. Revisits can repeat; inactive-to-active resume does not create another view event. Underlying screens resumed after a sheet do not create a new view. Appearance is not proof of reading.",
-      "meaning": "An instrumented screen view instance appeared, or its bounded screen name changed.",
-      "interpretation": "Revisits can repeat; inactive-to-active resume does not create another view event. Underlying screens resumed after a sheet do not create a new view. Appearance is not proof of reading.",
-      "source_locations": [
-        "MemoirAI/Shared/ProductAnalytics.swift:208"
-      ]
-    },
-    {
-      "event": "Tab Viewed",
-      "category": "Navigation and input",
-      "description": "The selected home or saved-memories tab changed. Not every tab appearance or initial app landing.",
-      "meaning": "The selected home or saved-memories tab changed.",
-      "interpretation": "Not every tab appearance or initial app landing.",
-      "source_locations": [
-        "MemoirAI/Home/MainTabView.swift:90"
-      ]
-    },
-    {
-      "event": "UI Action",
-      "category": "Navigation and input",
-      "description": "An audited named control action was explicitly reported. Use action and screen; does not capture every tap automatically.",
-      "meaning": "An audited named control action was explicitly reported.",
-      "interpretation": "Use action and screen; does not capture every tap automatically.",
-      "source_locations": [
-        "MemoirAI/Shared/ProductAnalytics.swift:212"
-      ]
-    },
-    {
-      "event": "Onboarding Photo Added",
-      "category": "Onboarding capture",
-      "description": "A narrator photo was accepted from the camera or photo library. Only source is tracked; no photo or photo URL is sent.",
-      "meaning": "A narrator photo was accepted from the camera or photo library.",
-      "interpretation": "Only source is tracked; no photo or photo URL is sent.",
-      "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:800"
-      ]
-    },
-    {
-      "event": "Onboarding Preparation Failed",
-      "category": "Onboarding capture",
-      "description": "Onboarding could not establish the authenticated session required for preparation. Currently failure_stage=auth; not every possible preparation failure is instrumented.",
-      "meaning": "Onboarding could not establish the authenticated session required for preparation.",
-      "interpretation": "Currently failure_stage=auth; not every possible preparation failure is instrumented.",
-      "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:721"
-      ]
-    },
-    {
-      "event": "Onboarding Recording Failed",
-      "category": "Onboarding capture",
-      "description": "The onboarding recorder reported a recording error. Use failure_stage; raw error text is not sent.",
-      "meaning": "The onboarding recorder reported a recording error.",
-      "interpretation": "Use failure_stage; raw error text is not sent.",
-      "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:158"
-      ]
-    },
-    {
-      "event": "Onboarding Recording Started",
-      "category": "Onboarding capture",
-      "description": "The onboarding recorder changed to recording. Different from tapping the record button; recording_duration is seconds.",
-      "meaning": "The onboarding recorder changed to recording.",
-      "interpretation": "Different from tapping the record button; recording_duration is seconds.",
-      "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:139"
-      ]
-    },
-    {
-      "event": "Onboarding Recording Stopped",
-      "category": "Onboarding capture",
-      "description": "The onboarding recorder stopped recording. Not confirmation of transcription, saving, or upload.",
-      "meaning": "The onboarding recorder stopped recording.",
-      "interpretation": "Not confirmation of transcription, saving, or upload.",
-      "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:139"
-      ]
-    },
-    {
-      "event": "Onboarding Generation Started",
-      "category": "Onboarding generation",
-      "description": "A client attempt to generate the personalized preview began. Use generation_attempt; not authoritative backend admission.",
-      "meaning": "A client attempt to generate the personalized preview began.",
-      "interpretation": "Use generation_attempt; not authoritative backend admission.",
-      "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:871"
-      ]
-    },
-    {
-      "event": "Onboarding Memory Saved Locally",
-      "category": "Onboarding generation",
-      "description": "The onboarding memory was saved locally before cloud generation. Local persistence does not prove cloud sync or generation success.",
-      "meaning": "The onboarding memory was saved locally before cloud generation.",
-      "interpretation": "Local persistence does not prove cloud sync or generation success.",
-      "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:846"
-      ]
-    },
-    {
-      "event": "Onboarding Memory Synced",
-      "category": "Onboarding generation",
-      "description": "The onboarding memory synchronization step completed. Does not mean the generated illustration is ready.",
-      "meaning": "The onboarding memory synchronization step completed.",
-      "interpretation": "Does not mean the generated illustration is ready.",
-      "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:910"
-      ]
-    },
-    {
-      "event": "Onboarding Personalized Reveal Viewed",
-      "category": "Onboarding generation",
-      "description": "The person navigated to the personalized reveal with image and audio readiness satisfied. Primary activation milestone; not proof the entire page was read or audio heard.",
-      "meaning": "The person navigated to the personalized reveal with image and audio readiness satisfied.",
-      "interpretation": "Primary activation milestone; not proof the entire page was read or audio heard.",
-      "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:690"
-      ]
-    },
-    {
-      "event": "Onboarding Preview Failed",
-      "category": "Onboarding generation",
-      "description": "The client preview-generation attempt ended with an error. Use failure_kind when allowed; no private error message is sent.",
-      "meaning": "The client preview-generation attempt ended with an error.",
-      "interpretation": "Use failure_kind when allowed; no private error message is sent.",
-      "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:948"
-      ]
-    },
-    {
-      "event": "Onboarding Preview Image Ready",
-      "category": "Onboarding generation",
-      "description": "The client received the personalized preview image result. duration_ms is client elapsed time; separate cached from fresh results.",
-      "meaning": "The client received the personalized preview image result.",
-      "interpretation": "duration_ms is client elapsed time; separate cached from fresh results.",
-      "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:938"
+        "MemoirAI/Recent/MemoryDetailView.swift:762"
       ]
     },
     {
@@ -530,18 +300,16 @@
       "meaning": "A named onboarding control was tapped.",
       "interpretation": "Use action and screen to distinguish continue, back, skip, reveal, and recording controls.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:215",
-        "MemoirAI/OnboardingFlow.swift:247",
-        "MemoirAI/OnboardingFlow.swift:250",
-        "MemoirAI/OnboardingFlow.swift:273",
-        "MemoirAI/OnboardingFlow.swift:400",
-        "MemoirAI/OnboardingFlow.swift:454",
-        "MemoirAI/OnboardingFlow.swift:506",
-        "MemoirAI/OnboardingFlow.swift:507",
-        "MemoirAI/OnboardingFlow.swift:514",
-        "MemoirAI/OnboardingFlow.swift:551",
-        "MemoirAI/OnboardingFlow.swift:648",
-        "MemoirAI/OnboardingFlow.swift:704"
+        "MemoirAI/OnboardingFlow.swift:306",
+        "MemoirAI/OnboardingFlow.swift:339",
+        "MemoirAI/OnboardingFlow.swift:342",
+        "MemoirAI/OnboardingFlow.swift:365",
+        "MemoirAI/OnboardingFlow.swift:513",
+        "MemoirAI/OnboardingFlow.swift:662",
+        "MemoirAI/OnboardingFlow.swift:672",
+        "MemoirAI/OnboardingFlow.swift:677",
+        "MemoirAI/OnboardingFlow.swift:771",
+        "MemoirAI/OnboardingFlow.swift:818"
       ]
     },
     {
@@ -551,7 +319,7 @@
       "meaning": "The person selected who the memoir is for.",
       "interpretation": "audience is a bounded choice, never a name.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:332"
+        "MemoirAI/OnboardingFlow.swift:424"
       ]
     },
     {
@@ -561,17 +329,57 @@
       "meaning": "The onboarding flow moved to the background.",
       "interpretation": "Not proof of churn; the person may return.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:131"
+        "MemoirAI/OnboardingFlow.swift:189"
       ]
     },
     {
       "event": "Onboarding Completed",
       "category": "Onboarding navigation",
-      "description": "Onboarding marked itself complete after the paywall was dismissed. Not a subscription purchase or payment.",
-      "meaning": "Onboarding marked itself complete after the paywall was dismissed.",
-      "interpretation": "Not a subscription purchase or payment.",
+      "description": "For analytics_version 2, onboarding exited with a real personalized preview ready and either a rendered subscription offer or an active entitlement. Use onboarding_outcome to separate offer_presented from entitled. Earlier versions completed on paywall-sheet dismissal, even if the offer failed. Neither definition proves a new purchase; compare versions separately.",
+      "meaning": "For analytics_version 2, onboarding exited with a real personalized preview ready and either a rendered subscription offer or an active entitlement.",
+      "interpretation": "Use onboarding_outcome to separate offer_presented from entitled. Earlier versions completed on paywall-sheet dismissal, even if the offer failed. Neither definition proves a new purchase; compare versions separately.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:959"
+        "MemoirAI/OnboardingFlow.swift:1192"
+      ]
+    },
+    {
+      "event": "Onboarding Draft Discarded",
+      "category": "Onboarding navigation",
+      "description": "The person explicitly discarded their local editing draft and deletion succeeded. Does not delete their saved memories.",
+      "meaning": "The person explicitly discarded their local editing draft and deletion succeeded. Does not delete their saved memories.",
+      "interpretation": "Available from native_v7; do not infer historical causes from missing new events.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:990"
+      ]
+    },
+    {
+      "event": "Onboarding Draft Recovery Offered",
+      "category": "Onboarding navigation",
+      "description": "A recoverable local editing draft was found and its recovery prompt requested. Does not establish that the person saw or accepted the prompt.",
+      "meaning": "A recoverable local editing draft was found and its recovery prompt requested. Does not establish that the person saw or accepted the prompt.",
+      "interpretation": "Available from native_v7; do not infer historical causes from missing new events.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:938"
+      ]
+    },
+    {
+      "event": "Onboarding Draft Restored",
+      "category": "Onboarding navigation",
+      "description": "The person chose to restore their editing draft. Inputs are restored without starting generation or charging; a missing audio file may still require recovery.",
+      "meaning": "The person chose to restore their editing draft. Inputs are restored without starting generation or charging; a missing audio file may still require recovery.",
+      "interpretation": "Available from native_v7; do not infer historical causes from missing new events.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:974"
+      ]
+    },
+    {
+      "event": "Onboarding Exited",
+      "category": "Onboarding navigation",
+      "description": "The person left onboarding for the app, including recovery exits without a preview or subscription offer. analytics_version 2 separates exiting from successful completion. Use onboarding_outcome: preview_unavailable, offer_unavailable, offer_presented, or entitled. Do not sum Exited and Completed as distinct people.",
+      "meaning": "The person left onboarding for the app, including recovery exits without a preview or subscription offer.",
+      "interpretation": "analytics_version 2 separates exiting from successful completion. Use onboarding_outcome: preview_unavailable, offer_unavailable, offer_presented, or entitled. Do not sum Exited and Completed as distinct people.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:1189"
       ]
     },
     {
@@ -581,48 +389,237 @@
       "meaning": "The onboarding flow returned to the foreground.",
       "interpretation": "Pair with background events for interruption analysis.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:135"
+        "MemoirAI/OnboardingFlow.swift:193"
       ]
     },
     {
-      "event": "Onboarding Started",
-      "category": "Onboarding navigation",
-      "description": "Authenticated onboarding preparation reached its start milestone. May repeat in debug replay; flow_id is view-instance scoped.",
-      "meaning": "Authenticated onboarding preparation reached its start milestone.",
-      "interpretation": "May repeat in debug replay; flow_id is view-instance scoped.",
+      "event": "Onboarding Generation Started",
+      "category": "Onboarding generation",
+      "description": "A client attempt to generate the personalized preview began. Use generation_attempt; not authoritative backend admission.",
+      "meaning": "A client attempt to generate the personalized preview began.",
+      "interpretation": "Use generation_attempt; not authoritative backend admission.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:739"
+        "MemoirAI/OnboardingFlow.swift:1071"
       ]
     },
     {
-      "event": "Onboarding Step Exited",
-      "category": "Onboarding navigation",
-      "description": "The flow left a step and measured step_duration_ms. This is a navigation exit, not guaranteed app abandonment tracking.",
-      "meaning": "The flow left a step and measured step_duration_ms.",
-      "interpretation": "This is a navigation exit, not guaranteed app abandonment tracking.",
+      "event": "Onboarding Input Method Selected",
+      "category": "Onboarding capture",
+      "description": "The person explicitly chose the recording or writing control. Permission and consent can still prevent recording; input_method on later events reflects the most recent interaction, not exclusive attribution.",
+      "meaning": "The person explicitly chose the recording or writing control. Permission and consent can still prevent recording; input_method on later events reflects the most recent interaction, not exclusive attribution.",
+      "interpretation": "Available from native_v7; do not infer historical causes from missing new events.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:675"
+        "MemoirAI/OnboardingFlow.swift:272",
+        "MemoirAI/OnboardingFlow.swift:511",
+        "MemoirAI/OnboardingFlow.swift:572"
       ]
     },
     {
-      "event": "Onboarding Step Viewed",
-      "category": "Onboarding navigation",
-      "description": "The onboarding flow displayed a step. Use screen and step; repeated visits are expected.",
-      "meaning": "The onboarding flow displayed a step.",
-      "interpretation": "Use screen and step; repeated visits are expected.",
+      "event": "Onboarding Input Readiness Changed",
+      "category": "Onboarding capture",
+      "description": "The capture form changed between empty, too_short, too_long, needs_storyteller, recording, finalizing or ready. Repeated equal states are suppressed; readiness is not a save or generation.",
+      "meaning": "The capture form changed between empty, too_short, too_long, needs_storyteller, recording, finalizing or ready. Repeated equal states are suppressed; readiness is not a save or generation.",
+      "interpretation": "Available from native_v7; do not infer historical causes from missing new events.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:687",
-        "MemoirAI/OnboardingFlow.swift:789"
+        "MemoirAI/OnboardingFlow.swift:198"
       ]
     },
     {
-      "event": "Onboarding Tour Finished",
-      "category": "Onboarding navigation",
-      "description": "The sample-book tour finished and the flow advanced. Does not mean a personalized page was generated or onboarding completed.",
-      "meaning": "The sample-book tour finished and the flow advanced.",
-      "interpretation": "Does not mean a personalized page was generated or onboarding completed.",
+      "event": "Onboarding Input Started",
+      "category": "Onboarding capture",
+      "description": "First edit of name or story during this flow. Carries field and flow_id; resumed prefilled text does not count as a fresh edit. No text or name is captured.",
+      "meaning": "First edit of name or story during this flow. Carries field and flow_id; resumed prefilled text does not count as a fresh edit. No text or name is captured.",
+      "interpretation": "Available from native_v7; do not infer historical causes from missing new events.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:695"
+        "MemoirAI/OnboardingFlow.swift:448",
+        "MemoirAI/OnboardingFlow.swift:587"
+      ]
+    },
+    {
+      "event": "Onboarding Memory Saved Locally",
+      "category": "Onboarding generation",
+      "description": "The onboarding memory was saved locally before cloud generation. Local persistence does not prove cloud sync or generation success.",
+      "meaning": "The onboarding memory was saved locally before cloud generation.",
+      "interpretation": "Local persistence does not prove cloud sync or generation success.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:1045"
+      ]
+    },
+    {
+      "event": "Onboarding Memory Synced",
+      "category": "Onboarding generation",
+      "description": "The onboarding memory synchronization step completed. Does not mean the generated illustration is ready.",
+      "meaning": "The onboarding memory synchronization step completed.",
+      "interpretation": "Does not mean the generated illustration is ready.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:1111"
+      ]
+    },
+    {
+      "event": "Onboarding Offer Ready",
+      "category": "Subscriptions",
+      "description": "The onboarding paywall reported a rendered subscription offer. Context event for the onboarding flow. Use Paywall Viewed for the main impression denominator; do not add the two counts. Does not mean purchase or payment.",
+      "meaning": "The onboarding paywall reported a rendered subscription offer.",
+      "interpretation": "Context event for the onboarding flow. Use Paywall Viewed for the main impression denominator; do not add the two counts. Does not mean purchase or payment.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:236"
+      ]
+    },
+    {
+      "event": "Onboarding Paywall Requested",
+      "category": "Subscriptions",
+      "description": "The onboarding subscription sheet appeared and requested preparation. The offer may still be loading or unavailable. This is not a rendered offer impression; use Paywall Viewed with paywall_source=onboarding.",
+      "meaning": "The onboarding subscription sheet appeared and requested preparation.",
+      "interpretation": "The offer may still be loading or unavailable. This is not a rendered offer impression; use Paywall Viewed with paywall_source=onboarding.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:245"
+      ]
+    },
+    {
+      "event": "Onboarding Paywall Viewed",
+      "category": "Subscriptions",
+      "description": "Legacy event emitted when the onboarding subscription sheet appeared. Retained for historical analysis. analytics_version 2 uses Onboarding Paywall Requested for sheet presentation and Onboarding Offer Ready for a rendered offer. Use Paywall Viewed for the main impression denominator.",
+      "meaning": "Legacy event emitted when the onboarding subscription sheet appeared.",
+      "interpretation": "Retained for historical analysis. analytics_version 2 uses Onboarding Paywall Requested for sheet presentation and Onboarding Offer Ready for a rendered offer. Use Paywall Viewed for the main impression denominator.",
+      "source_locations": []
+    },
+    {
+      "event": "Onboarding Personalized Reveal Viewed",
+      "category": "Onboarding generation",
+      "description": "The person navigated to the personalized reveal with image and audio readiness satisfied. Primary activation milestone; not proof the entire page was read or audio heard.",
+      "meaning": "The person navigated to the personalized reveal with image and audio readiness satisfied.",
+      "interpretation": "Primary activation milestone; not proof the entire page was read or audio heard.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:804"
+      ]
+    },
+    {
+      "event": "Onboarding Photo Added",
+      "category": "Onboarding capture",
+      "description": "A narrator photo was accepted from the camera or photo library. Only source is tracked; no photo or photo URL is sent.",
+      "meaning": "A narrator photo was accepted from the camera or photo library.",
+      "interpretation": "Only source is tracked; no photo or photo URL is sent.",
+      "source_locations": []
+    },
+    {
+      "event": "Onboarding Preparation Failed",
+      "category": "Onboarding capture",
+      "description": "Onboarding could not establish the authenticated session required for preparation. Currently failure_stage=auth; not every possible preparation failure is instrumented.",
+      "meaning": "Onboarding could not establish the authenticated session required for preparation.",
+      "interpretation": "Currently failure_stage=auth; not every possible preparation failure is instrumented.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:859"
+      ]
+    },
+    {
+      "event": "Onboarding Preparation Ready",
+      "category": "Onboarding navigation",
+      "description": "Account and profile preparation finished. duration_ms measures this attempt; compare with Presented to locate pre-start failures, reconciling identities. Does not prove that a draft-restoration or other error alert was dismissed.",
+      "meaning": "Account and profile preparation finished.",
+      "interpretation": "Available from native_v7; do not infer historical causes from missing new events.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:936"
+      ]
+    },
+    {
+      "event": "Onboarding Presented",
+      "category": "Onboarding navigation",
+      "description": "The onboarding interface appeared before anonymous authentication or session preparation completed. Use as a pre-authentication exposure event. Onboarding Started is emitted later after account preparation; reconcile identities before comparing unique-user counts. This does not prove usable capture controls or a saved story.",
+      "meaning": "The onboarding interface appeared before anonymous authentication or session preparation completed.",
+      "interpretation": "Use as a pre-authentication exposure event. Onboarding Started is emitted later after account preparation; reconcile identities before comparing unique-user counts. This does not prove usable capture controls or a saved story.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:848"
+      ]
+    },
+    {
+      "event": "Onboarding Preview Cancelled",
+      "category": "Onboarding generation",
+      "description": "A preview operation was cancelled before a usable result was accepted. Cancellation is separate from a generation failure or successful image. It may follow invalidated inputs, task cancellation, or a server cancellation; it does not prove user abandonment.",
+      "meaning": "A preview operation was cancelled before a usable result was accepted.",
+      "interpretation": "Cancellation is separate from a generation failure or successful image. It may follow invalidated inputs, task cancellation, or a server cancellation; it does not prove user abandonment.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:1149"
+      ]
+    },
+    {
+      "event": "Onboarding Preview Failed",
+      "category": "Onboarding generation",
+      "description": "A client preview attempt ended with a noncancellation error. analytics_version 2 includes allowlisted failure_reason and failure_stage plus client duration_ms. Earlier versions may contain only failure_kind. Repeated attempts are not distinct affected people; no private error message or story is sent.",
+      "meaning": "A client preview attempt ended with a noncancellation error.",
+      "interpretation": "analytics_version 2 includes allowlisted failure_reason and failure_stage plus client duration_ms. Earlier versions may contain only failure_kind. Repeated attempts are not distinct affected people; no private error message or story is sent.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:1156"
+      ]
+    },
+    {
+      "event": "Onboarding Preview Image Ready",
+      "category": "Onboarding generation",
+      "description": "The client received the personalized preview image result. duration_ms is client elapsed time; separate cached from fresh results.",
+      "meaning": "The client received the personalized preview image result.",
+      "interpretation": "duration_ms is client elapsed time; separate cached from fresh results.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:1139"
+      ]
+    },
+    {
+      "event": "Onboarding Recording Consent",
+      "category": "Onboarding capture",
+      "description": "The person accepted or declined the cloud-transcription disclosure. Use consent_outcome. Accepting this disclosure is not microphone permission, speech-recognition permission, recording success, or story save.",
+      "meaning": "The person accepted or declined the cloud-transcription disclosure.",
+      "interpretation": "Use consent_outcome. Accepting this disclosure is not microphone permission, speech-recognition permission, recording success, or story save.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:256",
+        "MemoirAI/OnboardingFlow.swift:260"
+      ]
+    },
+    {
+      "event": "Onboarding Recording Consent Viewed",
+      "category": "Onboarding capture",
+      "description": "The cloud-transcription disclosure was requested after the person chose recording. A disclosure opportunity, not consent or a recording. Pair with Onboarding Recording Consent; do not interpret repeated presentations as distinct people.",
+      "meaning": "The cloud-transcription disclosure was requested after the person chose recording.",
+      "interpretation": "A disclosure opportunity, not consent or a recording. Pair with Onboarding Recording Consent; do not interpret repeated presentations as distinct people.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:519"
+      ]
+    },
+    {
+      "event": "Onboarding Recording Failed",
+      "category": "Onboarding capture",
+      "description": "The onboarding recorder reported a recording error. Use failure_stage; raw error text is not sent.",
+      "meaning": "The onboarding recorder reported a recording error.",
+      "interpretation": "Use failure_stage; raw error text is not sent.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:224"
+      ]
+    },
+    {
+      "event": "Onboarding Recording Permission",
+      "category": "Onboarding capture",
+      "description": "The onboarding recorder reported the result of its permission request sequence. Use permission_outcome: microphone_denied, speech_denied, or granted. Granted means both required permissions were authorized, not that recording started, transcription succeeded, or a story was saved. Separate from cloud-transcription disclosure consent.",
+      "meaning": "The onboarding recorder reported the result of its permission request sequence.",
+      "interpretation": "Use permission_outcome: microphone_denied, speech_denied, or granted. Granted means both required permissions were authorized, not that recording started, transcription succeeded, or a story was saved. Separate from cloud-transcription disclosure consent.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:219"
+      ]
+    },
+    {
+      "event": "Onboarding Recording Started",
+      "category": "Onboarding capture",
+      "description": "The onboarding recorder changed to recording. Different from tapping the record button; recording_duration is seconds.",
+      "meaning": "The onboarding recorder changed to recording.",
+      "interpretation": "Different from tapping the record button; recording_duration is seconds.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:202"
+      ]
+    },
+    {
+      "event": "Onboarding Recording Stopped",
+      "category": "Onboarding capture",
+      "description": "The onboarding recorder stopped recording. Not confirmation of transcription, saving, or upload.",
+      "meaning": "The onboarding recorder stopped recording.",
+      "interpretation": "Not confirmation of transcription, saving, or upload.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:202"
       ]
     },
     {
@@ -632,7 +629,7 @@
       "meaning": "Alex's sample audio player changed to playing.",
       "interpretation": "Demo playback is not the customer's own memory or personalized activation.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:142"
+        "MemoirAI/OnboardingFlow.swift:205"
       ]
     },
     {
@@ -642,17 +639,70 @@
       "meaning": "Alex's sample audio player stopped playing.",
       "interpretation": "Includes stopping or reaching the end; not a dedicated completion event.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:142"
+        "MemoirAI/OnboardingFlow.swift:205"
       ]
     },
     {
-      "event": "Onboarding Paywall Viewed",
-      "category": "Subscriptions",
-      "description": "The onboarding paywall sheet appeared. Context event; use Paywall Viewed for the main impression denominator, do not sum both.",
-      "meaning": "The onboarding paywall sheet appeared.",
-      "interpretation": "Context event; use Paywall Viewed for the main impression denominator, do not sum both.",
+      "event": "Onboarding Started",
+      "category": "Onboarding navigation",
+      "description": "Authenticated onboarding preparation reached its start milestone. May repeat in debug replay; flow_id is view-instance scoped.",
+      "meaning": "Authenticated onboarding preparation reached its start milestone.",
+      "interpretation": "May repeat in debug replay; flow_id is view-instance scoped.",
       "source_locations": [
-        "MemoirAI/OnboardingFlow.swift:172"
+        "MemoirAI/OnboardingFlow.swift:878"
+      ]
+    },
+    {
+      "event": "Onboarding Step Exited",
+      "category": "Onboarding navigation",
+      "description": "The flow left a step and measured step_duration_ms. This is a navigation exit, not guaranteed app abandonment tracking.",
+      "meaning": "The flow left a step and measured step_duration_ms.",
+      "interpretation": "This is a navigation exit, not guaranteed app abandonment tracking.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:789"
+      ]
+    },
+    {
+      "event": "Onboarding Step Viewed",
+      "category": "Onboarding navigation",
+      "description": "The onboarding flow displayed a step. Use screen and step; repeated visits are expected.",
+      "meaning": "The onboarding flow displayed a step.",
+      "interpretation": "Use screen and step; repeated visits are expected.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:801",
+        "MemoirAI/OnboardingFlow.swift:943"
+      ]
+    },
+    {
+      "event": "Onboarding Storyteller Selected",
+      "category": "Onboarding capture",
+      "description": "The person selected whether they or the memoir subject will tell the story. Use storyteller and audience to inspect this choice. It does not establish recording or saved-story completion.",
+      "meaning": "The person selected whether they or the memoir subject will tell the story.",
+      "interpretation": "Use storyteller and audience to inspect this choice. It does not establish recording or saved-story completion.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:498",
+        "MemoirAI/OnboardingFlow.swift:503"
+      ]
+    },
+    {
+      "event": "Onboarding Tour Finished",
+      "category": "Onboarding navigation",
+      "description": "The sample-book tour finished and the flow advanced. Does not mean a personalized page was generated or onboarding completed.",
+      "meaning": "The sample-book tour finished and the flow advanced.",
+      "interpretation": "Does not mean a personalized page was generated or onboarding completed.",
+      "source_locations": [
+        "MemoirAI/OnboardingFlow.swift:809"
+      ]
+    },
+    {
+      "event": "Opened Prompt",
+      "category": "Memory creation",
+      "description": "A chapter prompt was opened for a recording or prompt-choice flow. Use chapter_number and is_completed; no prompt text is sent.",
+      "meaning": "A chapter prompt was opened for a recording or prompt-choice flow.",
+      "interpretation": "Use chapter_number and is_completed; no prompt text is sent.",
+      "source_locations": [
+        "MemoirAI/Memoir/ChapterJourneyView.swift:409",
+        "MemoirAI/Memoir/ChapterJourneyView.swift:452"
       ]
     },
     {
@@ -662,17 +712,27 @@
       "meaning": "The paywall presentation was dismissed.",
       "interpretation": "Use dismissal_reason; closing is not necessarily purchase cancellation.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:161"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:170"
       ]
     },
     {
       "event": "Paywall Preparation Failed",
       "category": "Subscriptions",
-      "description": "The app could not prepare the subscription paywall. This may prevent a Paywall Viewed impression.",
-      "meaning": "The app could not prepare the subscription paywall.",
-      "interpretation": "This may prevent a Paywall Viewed impression.",
+      "description": "Subscription-offer preparation failed or exceeded its allowed duration before a usable offer became available. Use failure_stage and allowlisted failure_kind with paywall_source and presentation_id. This is separate from purchase cancellation, payment failure, or billing problems.",
+      "meaning": "Subscription-offer preparation failed or exceeded its allowed duration before a usable offer became available.",
+      "interpretation": "Use failure_stage and allowlisted failure_kind with paywall_source and presentation_id. This is separate from purchase cancellation, payment failure, or billing problems.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:165"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:515"
+      ]
+    },
+    {
+      "event": "Paywall Preparation Succeeded",
+      "category": "Subscriptions",
+      "description": "The paywall preparation operation finished successfully. Use duration_ms, preparation_attempt, and paywall_source for preparation latency. The operation can detect an existing entitlement and dismiss without showing an offer; use Paywall Viewed for rendered impressions. This is not a purchase or payment.",
+      "meaning": "The paywall preparation operation finished successfully.",
+      "interpretation": "Use duration_ms, preparation_attempt, and paywall_source for preparation latency. The operation can detect an existing entitlement and dismiss without showing an offer; use Paywall Viewed for rendered impressions. This is not a purchase or payment.",
+      "source_locations": [
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:419"
       ]
     },
     {
@@ -682,7 +742,95 @@
       "meaning": "The prepared subscription paywall appeared once for a presentation_id.",
       "interpretation": "Segment by paywall_source; exposure does not mean purchase intent or payment.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:110"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:117"
+      ]
+    },
+    {
+      "event": "Recording Start Failed",
+      "category": "Memory creation",
+      "meaning": "Regular memory recording could not start because authentication was unavailable, recorder creation failed, or the recorder refused to begin.",
+      "interpretation": "Use bounded diagnostic_reason. This does not include every permission refusal or recording failure; no raw error message or file path is sent.",
+      "description": "Regular memory recording could not start because authentication was unavailable, recorder creation failed, or the recorder refused to begin. Use bounded diagnostic_reason. This does not include every permission refusal or recording failure; no raw error message or file path is sent.",
+      "source_locations": [
+        "MemoirAI/Memoir/RecordingView.swift:735",
+        "MemoirAI/Memoir/RecordingView.swift:773",
+        "MemoirAI/Memoir/RecordingView.swift:806"
+      ]
+    },
+    {
+      "event": "Saved Memory",
+      "category": "Memory creation",
+      "description": "The regular recording flow successfully saved a memory locally. save_scope=local; not a cloud-sync guarantee or all capture routes.",
+      "meaning": "The regular recording flow successfully saved a memory locally.",
+      "interpretation": "save_scope=local; not a cloud-sync guarantee or all capture routes.",
+      "source_locations": [
+        "MemoirAI/Memoir/RecordingView.swift:951"
+      ]
+    },
+    {
+      "event": "Screen Time Recorded",
+      "category": "Navigation and input",
+      "meaning": "A foreground-active timing segment ended for the topmost instrumented screen.",
+      "interpretation": "duration_ms excludes inactive/background time and covered instrumented screens. Sum segments for dwell; event count is not visits. A crash or force quit can lose the final segment. System pickers and other uninstrumented overlays can still count toward the parent.",
+      "description": "A foreground-active timing segment ended for the topmost instrumented screen. duration_ms excludes inactive/background time and covered instrumented screens. Sum segments for dwell; event count is not visits. A crash or force quit can lose the final segment. System pickers and other uninstrumented overlays can still count toward the parent.",
+      "source_locations": [
+        "MemoirAI/Shared/ProductAnalytics.swift:224",
+        "MemoirAI/Shared/ProductAnalytics.swift:295"
+      ]
+    },
+    {
+      "event": "Screen Viewed",
+      "category": "Navigation and input",
+      "description": "An instrumented screen view instance appeared, or its bounded screen name changed. Revisits can repeat; inactive-to-active resume does not create another view event. Underlying screens resumed after a sheet do not create a new view. Appearance is not proof of reading.",
+      "meaning": "An instrumented screen view instance appeared, or its bounded screen name changed.",
+      "interpretation": "Revisits can repeat; inactive-to-active resume does not create another view event. Underlying screens resumed after a sheet do not create a new view. Appearance is not proof of reading.",
+      "source_locations": [
+        "MemoirAI/Shared/ProductAnalytics.swift:232",
+        "MemoirAI/Shared/ProductAnalytics.swift:294"
+      ]
+    },
+    {
+      "event": "Session Ended",
+      "category": "App lifecycle",
+      "description": "The active session ended; duration_ms measures foreground session time. Process termination may prevent delivery; not total lifetime usage.",
+      "meaning": "The active session ended; duration_ms measures foreground session time.",
+      "interpretation": "Process termination may prevent delivery; not total lifetime usage.",
+      "source_locations": [
+        "MemoirAI/Shared/ProductAnalytics.swift:139",
+        "MemoirAI/Shared/ProductAnalytics.swift:176",
+        "MemoirAI/Shared/ProductAnalytics.swift:265"
+      ]
+    },
+    {
+      "event": "Session Started",
+      "category": "App lifecycle",
+      "description": "The app entered an active foreground session. Repeated active notifications are deduplicated until the session ends.",
+      "meaning": "The app entered an active foreground session.",
+      "interpretation": "Repeated active notifications are deduplicated until the session ends.",
+      "source_locations": [
+        "MemoirAI/Shared/ProductAnalytics.swift:156",
+        "MemoirAI/Shared/ProductAnalytics.swift:173",
+        "MemoirAI/Shared/ProductAnalytics.swift:266"
+      ]
+    },
+    {
+      "event": "Signed Out",
+      "category": "Account access",
+      "description": "The current account was signed out before analytics identity was reset. A subsequent guest identity is a separate state.",
+      "meaning": "The current account was signed out before analytics identity was reset.",
+      "interpretation": "A subsequent guest identity is a separate state.",
+      "source_locations": [
+        "MemoirAI/Firebase/AuthenticationService.swift:995"
+      ]
+    },
+    {
+      "event": "Started Recording",
+      "category": "Memory creation",
+      "description": "The regular memory recorder successfully began audio capture. Separate from onboarding recording; no audio is sent to analytics.",
+      "meaning": "The regular memory recorder successfully began audio capture.",
+      "interpretation": "Separate from onboarding recording; no audio is sent to analytics.",
+      "source_locations": [
+        "MemoirAI/Memoir/RecordingView.swift:789"
       ]
     },
     {
@@ -692,7 +840,7 @@
       "meaning": "The app could not activate or verify the expected entitlement.",
       "interpretation": "Not necessarily a failed App Store charge; inspect purchase_origin and failure_stage.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:169"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:174"
       ]
     },
     {
@@ -702,7 +850,7 @@
       "meaning": "The app began applying or verifying an entitlement after purchase or restore.",
       "interpretation": "Use purchase_origin to separate purchase and restore.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:504"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:585"
       ]
     },
     {
@@ -712,38 +860,8 @@
       "meaning": "The app confirmed a usable subscription entitlement.",
       "interpretation": "Can include a trial or restored entitlement; use RevenueCat lifecycle events for paid revenue.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:512",
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:524"
-      ]
-    },
-    {
-      "event": "Subscription Purchase Cancelled",
-      "category": "Subscriptions",
-      "description": "The purchase flow reported user cancellation. Not a refund or subscription expiration.",
-      "meaning": "The purchase flow reported user cancellation.",
-      "interpretation": "Not a refund or subscription expiration.",
-      "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:465"
-      ]
-    },
-    {
-      "event": "Subscription Purchase Failed",
-      "category": "Subscriptions",
-      "description": "The purchase flow reported an error. Not a confirmed charge; use failure_stage.",
-      "meaning": "The purchase flow reported an error.",
-      "interpretation": "Not a confirmed charge; use failure_stage.",
-      "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:474"
-      ]
-    },
-    {
-      "event": "Subscription Purchase Started",
-      "category": "Subscriptions",
-      "description": "The paywall purchase flow started. Not a confirmed charge or entitlement.",
-      "meaning": "The paywall purchase flow started.",
-      "interpretation": "Not a confirmed charge or entitlement.",
-      "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:460"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:599",
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:617"
       ]
     },
     {
@@ -753,7 +871,37 @@
       "meaning": "The person explicitly selected a subscription plan card.",
       "interpretation": "Use subscription_plan; this is not a purchase or trial start.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:313"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:320"
+      ]
+    },
+    {
+      "event": "Subscription Purchase Cancelled",
+      "category": "Subscriptions",
+      "description": "The purchase flow reported user cancellation. Not a refund or subscription expiration.",
+      "meaning": "The purchase flow reported user cancellation.",
+      "interpretation": "Not a refund or subscription expiration.",
+      "source_locations": [
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:546"
+      ]
+    },
+    {
+      "event": "Subscription Purchase Failed",
+      "category": "Subscriptions",
+      "description": "The purchase flow reported an error. Not a confirmed charge; use failure_stage.",
+      "meaning": "The purchase flow reported an error.",
+      "interpretation": "Not a confirmed charge; use failure_stage.",
+      "source_locations": [
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:555"
+      ]
+    },
+    {
+      "event": "Subscription Purchase Started",
+      "category": "Subscriptions",
+      "description": "The paywall purchase flow started. Not a confirmed charge or entitlement.",
+      "meaning": "The paywall purchase flow started.",
+      "interpretation": "Not a confirmed charge or entitlement.",
+      "source_locations": [
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:541"
       ]
     },
     {
@@ -763,7 +911,7 @@
       "meaning": "The restore flow reported an error.",
       "interpretation": "Does not prove the customer has no existing entitlement.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:494"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:575"
       ]
     },
     {
@@ -773,7 +921,38 @@
       "meaning": "The person started restoring purchases.",
       "interpretation": "Not a new purchase.",
       "source_locations": [
-        "MemoirAI/Paywall/SubscriptionPaywallView.swift:485"
+        "MemoirAI/Paywall/SubscriptionPaywallView.swift:566"
+      ]
+    },
+    {
+      "event": "Tab Viewed",
+      "category": "Navigation and input",
+      "description": "The selected home or saved-memories tab changed. Not every tab appearance or initial app landing.",
+      "meaning": "The selected home or saved-memories tab changed.",
+      "interpretation": "Not every tab appearance or initial app landing.",
+      "source_locations": [
+        "MemoirAI/Home/MainTabView.swift:91"
+      ]
+    },
+    {
+      "event": "UI Action",
+      "category": "Navigation and input",
+      "description": "An audited named control action was explicitly reported. Use action and screen; does not capture every tap automatically.",
+      "meaning": "An audited named control action was explicitly reported.",
+      "interpretation": "Use action and screen; does not capture every tap automatically.",
+      "source_locations": [
+        "MemoirAI/Shared/ProductAnalytics.swift:236",
+        "MemoirAI/Shared/ProductAnalytics.swift:297"
+      ]
+    },
+    {
+      "event": "Viewed Memory",
+      "category": "Memory reading and listening",
+      "description": "A saved memory detail view appeared. Can repeat on revisits; not proof the memory was fully read.",
+      "meaning": "A saved memory detail view appeared.",
+      "interpretation": "Can repeat on revisits; not proof the memory was fully read.",
+      "source_locations": [
+        "MemoirAI/Recent/MemoryDetailView.swift:1072"
       ]
     }
   ]

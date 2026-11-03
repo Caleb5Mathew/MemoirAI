@@ -5,10 +5,25 @@ import OSLog
 import SwiftUI
 import UIKit
 
-// Completion remains tied to seeing and dismissing the paywall.
+// Entering the app and successfully completing onboarding are separate outcomes.
 enum OnboardingCompletionPolicy {
     enum Event { case finalContinueTapped, paywallDismissed }
     static func shouldComplete(after event: Event) -> Bool { event == .paywallDismissed }
+
+    static func outcome(previewReady: Bool, offerPresented: Bool, entitlementActive: Bool) -> String {
+        guard previewReady else { return "preview_unavailable" }
+        if entitlementActive { return "entitled" }
+        return offerPresented ? "offer_presented" : "offer_unavailable"
+    }
+
+    static func isSuccessful(_ outcome: String) -> Bool {
+        outcome == "offer_presented" || outcome == "entitled"
+    }
+
+    static func replayStory(savedRequestID: String?, requestID: String, savedStory: String?, preparedStory: String) -> String {
+        guard savedRequestID == requestID, let savedStory, !savedStory.isEmpty else { return preparedStory }
+        return savedStory
+    }
 }
 
 struct OnboardingColorTheme {
@@ -46,7 +61,10 @@ struct OnboardingFlow: View {
     @State private var wasBackgrounded = false
     @State private var analyticsFlowID = UUID().uuidString
     @State private var stepEnteredAt = Date()
+    @State private var inputFieldsStarted: Set<String> = []
+    @State private var inputMethod = "none"
     @State private var didTrackStart = false
+    @State private var didTrackPresentation = false
     @State private var generationAttempt = 0
     @State private var didTrackReveal = false
     @State private var step: OnboardingStep = .audience
@@ -57,6 +75,9 @@ struct OnboardingFlow: View {
     @State private var restoredRawTranscript: String?
     @State private var readingCopy: String?
     @State private var generationFailure: String?
+    @State private var previewRecovery: OnboardingPreviewRecovery = .retry
+    @State private var offerPresented = false
+    @State private var entitlementActive = false
     @State private var audioReady = false
     @State private var generationStage = "Preparing your first page"
     @State private var hasSubmittedMemory = false
@@ -65,6 +86,8 @@ struct OnboardingFlow: View {
     @State private var showCloudDisclosure = false
     @State private var didWarmPreviewService = false
     @State private var isPreparingAccount = true
+    @FocusState private var storyEditorFocused: Bool
+    @State private var accountPreparationFailed = false
     @State private var isGenerating = false
     @State private var errorMessage: String?
     @State private var generationStartedAt: Date?
@@ -74,52 +97,92 @@ struct OnboardingFlow: View {
     private let colors = OnboardingColorTheme()
     private let sessionStore = OnboardingSessionStore()
     private let draftStore = OnboardingDraftStore()
+    private let editingDraftStore = StoryEditingDraftStore()
+    @State private var editingOwner: String?
+    @State private var editingProfileID: UUID?
+    @State private var pendingEditingDraft: StoryEditingDraft?
+    @State private var showEditingDraftRecovery = false
+    @State private var editingDraftLoadFailed = false
     private var currentAudioURL: URL? { recorder.audioURL ?? restoredAudioURL }
 
-    var body: some View {
+    private var mainContent: some View {
         ZStack {
             colors.paper.ignoresSafeArea()
-            if step == .meetAlex {
-                meetAlex
-                    .transition(.opacity)
-                    .zIndex(1)
-            } else {
-                VStack(spacing: 0) {
-                    topBar
-                    Group {
-                        switch step {
-                        case .meetAlex: EmptyView()
-                        case .cover, .spread, .illustration, .voice, .story: alexBook(focus: alexFocus)
-                        case .audience: audienceQuestion
-                        case .name: nameQuestion
-                        case .record: recordMemory
-                        case .building, .reveal: personalizedReveal
+            if pendingEditingDraft == nil && !accountPreparationFailed {
+                if step == .meetAlex {
+                    meetAlex
+                        .transition(.opacity)
+                        .zIndex(1)
+                } else {
+                    VStack(spacing: 0) {
+                        topBar
+                        Group {
+                            switch step {
+                            case .meetAlex: EmptyView()
+                            case .cover, .spread, .illustration, .voice, .story: alexBook(focus: alexFocus)
+                            case .audience: audienceQuestion
+                            case .name: nameQuestion
+                            case .record: recordMemory
+                            case .building, .reveal: personalizedReveal
+                            }
                         }
+                        .id(isBookTour ? "book-tour" : ([.building, .reveal].contains(step) ? "personal-page" : String(step.rawValue)))
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .scale(scale: 0.985)),
+                            removal: .opacity
+                        ))
                     }
-                    .id(isBookTour ? "book-tour" : ([.building, .reveal].contains(step) ? "personal-page" : String(step.rawValue)))
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.985)),
-                        removal: .opacity
-                    ))
+                    .frame(maxWidth: isBookTour || step == .building || step == .reveal ? layout.bookContentWidth : layout.contentWidth)
+                    .blur(radius: step == .building && !revealUnlocked ? 4 : 0)
+                    .transition(.opacity)
                 }
-                .frame(maxWidth: isBookTour || step == .building || step == .reveal ? layout.bookContentWidth : layout.contentWidth)
-                .blur(radius: step == .building && !revealUnlocked ? 4 : 0)
-                .transition(.opacity)
+            }
+            if pendingEditingDraft != nil && !showEditingDraftRecovery {
+                colors.paper.ignoresSafeArea().zIndex(2)
+                VStack(spacing: 20) {
+                    Text("Your unfinished story is saved")
+                        .font(.title2).fontWeight(.semibold)
+                    Text("Continue it, or choose to discard it before starting another story.")
+                        .font(.body).foregroundStyle(colors.muted)
+                        .multilineTextAlignment(.center)
+                    primaryButton("Continue saved story") { restoreEditingDraft() }
+                    Button("Choose another story") { showEditingDraftRecovery = true }
+                        .frame(minHeight: 44)
+                }
+                .padding(28)
+                .zIndex(3)
             }
             if isPreparingAccount {
                 colors.paper.opacity(0.8).ignoresSafeArea()
-                ProgressView("Opening your private workspace")
+                ProgressView("Getting Memoir ready")
             }
             if step == .building && !revealUnlocked { buildingPage.transition(.opacity) }
+            if accountPreparationFailed {
+                colors.paper.ignoresSafeArea()
+                VStack(spacing: 20) {
+                    Text("Memoir couldn’t connect")
+                        .font(.title2).fontWeight(.semibold)
+                    Text(errorMessage ?? "Check your connection and try again.")
+                        .font(.body).foregroundStyle(colors.muted)
+                        .multilineTextAlignment(.center)
+                    primaryButton("Reconnect") { Task { await prepareSession() } }
+                }
+                .padding(28)
+            }
         }
+    }
+
+    private var observedContent: some View {
+        mainContent
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { availableSize = $0 }
         .foregroundStyle(colors.ink)
         .animation(reduceMotion ? nil : (step == .meetAlex ? .easeInOut(duration: 0.45) : .spring(response: 0.55, dampingFraction: 0.88)), value: step)
         .analyticsScreen(String(describing: step))
         .task { await prepareSession() }
-        .onDisappear { _ = recorder.stop(); sampleAudio.stop(); memoryPreflight.invalidate() }
+        .onDisappear { _ = recorder.stop(); persistEditingDraft(); sampleAudio.stop(); memoryPreflight.invalidate() }
         .onChange(of: scenePhase) { _, phase in
+            if phase != .active { persistEditingDraft() }
             guard didTrackStart, !didTrackCompletion else { return }
             if phase == .background {
                 wasBackgrounded = true
@@ -130,22 +193,30 @@ struct OnboardingFlow: View {
                 track("Onboarding Foregrounded")
             }
         }
+        .onChange(of: inputReadiness) { _, readiness in
+            if step == .record && !isPreparingAccount {
+                track("Onboarding Input Readiness Changed", ["input_readiness": readiness.rawValue])
+            }
+        }
         .onChange(of: recorder.isRecording) { _, recording in
             track(recording ? "Onboarding Recording Started" : "Onboarding Recording Stopped", ["recording_duration": recorder.elapsed])
         }
         .onChange(of: sampleAudio.isPlaying) { _, playing in
             track(playing ? "Onboarding Sample Playback Started" : "Onboarding Sample Playback Stopped")
         }
-        .onChange(of: storyDraft) { _, _ in memoryPreflight.invalidate() }
-        .onChange(of: session.narratorName) { _, _ in memoryPreflight.invalidate() }
-        .onChange(of: session.audience) { _, _ in memoryPreflight.invalidate() }
-        .onChange(of: session.storyteller) { _, _ in memoryPreflight.invalidate() }
-        .onChange(of: currentAudioURL) { _, _ in memoryPreflight.invalidate() }
+        .onChange(of: storyDraft) { _, _ in memoryPreflight.invalidate(); persistEditingDraft() }
+        .onChange(of: session.narratorName) { _, _ in memoryPreflight.invalidate(); persistEditingDraft() }
+        .onChange(of: session.audience) { _, _ in memoryPreflight.invalidate(); persistEditingDraft() }
+        .onChange(of: session.storyteller) { _, _ in memoryPreflight.invalidate(); persistEditingDraft() }
+        .onChange(of: currentAudioURL) { _, _ in memoryPreflight.invalidate(); persistEditingDraft() }
         .onChange(of: recorder.liveTranscript) { _, value in
             if step == .record && recorder.audioURL != nil { storyDraft = value }
         }
         .onChange(of: recorder.isFinalizing) { _, finalizing in
             if !finalizing && recorder.audioURL != nil { storyDraft = recorder.liveTranscript }
+        }
+        .onChange(of: recorder.permissionOutcome) { _, outcome in
+            if let outcome { track("Onboarding Recording Permission", ["permission_outcome": outcome]) }
         }
         .onChange(of: recorder.errorMessage) { _, value in
             if let value {
@@ -153,26 +224,54 @@ struct OnboardingFlow: View {
                 track("Onboarding Recording Failed", ["failure_stage": "recording"])
             }
         }
+    }
+
+    var body: some View {
+        observedContent
         .fullScreenCover(isPresented: $showPaywall, onDismiss: finishAfterPaywall) {
-            SubscriptionPaywallView(source: .onboarding)
-                .onAppear {
-                    track("Onboarding Paywall Viewed")
+            SubscriptionPaywallView(source: .onboarding, onOutcome: { outcome in
+                switch outcome {
+                case .presented:
+                    offerPresented = true
+                    track("Onboarding Offer Ready")
                     FacebookAnalytics.logPaywallViewed()
+                case .entitlementActive:
+                    entitlementActive = true
+                case .dismissedWithoutOffer:
+                    break
                 }
+            })
+                .onAppear {
+                    track("Onboarding Paywall Requested")
+                }
+        }
+        .alert("Continue your first story?", isPresented: $showEditingDraftRecovery) {
+            Button("Continue story") { restoreEditingDraft() }
+            Button("Discard draft", role: .destructive) { discardEditingDraft() }
+        } message: {
+            Text("Your unsaved words and recording were kept on this device.")
         }
         .alert(CloudTranscriptionDisclosure.title, isPresented: $showCloudDisclosure) {
             Button("Continue") {
+                track("Onboarding Recording Consent", ["consent_outcome": "accepted"])
                 CloudTranscriptionDisclosure.accept()
                 recorder.requestPermissionsAndStart()
             }
-            Button("Not now", role: .cancel) { }
+            Button("Not now", role: .cancel) { track("Onboarding Recording Consent", ["consent_outcome": "declined"]) }
         } message: { Text(CloudTranscriptionDisclosure.message) }
-        .alert("Memoir needs a moment", isPresented: Binding(
-            get: { errorMessage != nil },
+        .alert("Memoir needs a moment", isPresented: Binding<Bool>(
+            get: { errorMessage != nil && !accountPreparationFailed },
             set: { if !$0 { errorMessage = nil } }
         )) {
-            if Auth.auth().currentUser == nil {
+            if accountPreparationFailed || Auth.auth().currentUser == nil {
                 Button("Reconnect") { Task { await prepareSession() } }
+            }
+            if step == .record && !recorder.isRecording && !recorder.isFinalizing {
+                Button("Write instead") {
+                    inputMethod = "typing"
+                    track("Onboarding Input Method Selected", ["input_method": "typing"])
+                    storyEditorFocused = true
+                }
             }
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: { Text(errorMessage ?? "Please try again.") }
@@ -181,7 +280,12 @@ struct OnboardingFlow: View {
     private var topBar: some View {
         VStack(spacing: 12) {
             HStack {
-                Button { goBack() } label: { Image(systemName: "arrow.left").frame(width: 46, height: 44) }
+                Button { goBack() } label: {
+                    Image(systemName: "arrow.left")
+                        .frame(width: 46, height: 44)
+                        .contentShape(Rectangle())
+                }
+                    .accessibilityIdentifier("onboardingBack")
                     .opacity(step == .audience || step == .building ? 0 : 1)
                     .disabled(step == .audience || step == .building)
                     .accessibilityLabel("Back")
@@ -198,9 +302,15 @@ struct OnboardingFlow: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Memoir")
                 Spacer()
-                Button("Skip\ntour") {
-                    track("Onboarding Action", ["action": "skip_tour"])
-                    finishTour()
+                Button(OnboardingPreviewNavigationPolicy.canOpenPreview(hasImage: previewImage != nil, inputReady: audioReady) ? "See my\npage" : "Skip\ntour") {
+                    if OnboardingPreviewNavigationPolicy.canOpenPreview(hasImage: previewImage != nil, inputReady: audioReady) {
+                        sampleAudio.stop()
+                        revealUnlocked = true
+                        advance(to: .reveal)
+                    } else {
+                        track("Onboarding Action", ["action": "skip_tour"])
+                        finishTour()
+                    }
                 }
                     .font(.custom("AvenirNext-Regular", size: 12, relativeTo: .body)).foregroundStyle(colors.muted)
                     .frame(width: 46, height: 44)
@@ -339,6 +449,9 @@ struct OnboardingFlow: View {
                     get: { session.narratorName },
                     set: {
                         ProductAnalytics.shared.inputStarted(field: "narrator_name", screen: "name")
+                        if inputFieldsStarted.insert("narrator_name").inserted {
+                            track("Onboarding Input Started", ["field": "narrator_name"])
+                        }
                         session.narratorName = $0
                     }
                 ))
@@ -362,8 +475,15 @@ struct OnboardingFlow: View {
         return (1...100).contains(count)
     }
 
+    private var inputReadiness: OnboardingInputReadiness {
+        .evaluate(story: storyDraft, isRecording: recorder.isRecording,
+                  isFinalizing: recorder.isFinalizing, audience: session.audience,
+                  storyteller: session.storyteller)
+    }
+
     private var recordMemory: some View {
         VStack(spacing: 12) {
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("YOUR FIRST MEMORY")
@@ -380,21 +500,30 @@ struct OnboardingFlow: View {
                         HStack {
                             choiceButton("I’ll tell it", compact: true, selected: session.storyteller == .helper) {
                                 session.storyteller = .helper
+                                track("Onboarding Storyteller Selected", ["storyteller": "helper"])
                                 persistSession()
                             }
                             choiceButton(OnboardingRecordingCopy.subjectChoiceTitle(name: displayName), compact: true, selected: session.storyteller == .subject) {
                                 session.storyteller = .subject
+                                track("Onboarding Storyteller Selected", ["storyteller": "subject"])
                                 persistSession()
                             }
                         }
                     }
                     Button {
+                        if !recorder.isRecording {
+                            inputMethod = "recording"
+                            track("Onboarding Input Method Selected", ["input_method": "recording"])
+                        }
                         track("Onboarding Action", ["action": recorder.isRecording ? "record_stop" : "record_start"])
                         if recorder.isRecording {
                             Task { storyDraft = await recorder.finish() }
                         } else if CloudTranscriptionDisclosure.isAccepted() {
                             recorder.requestPermissionsAndStart()
-                        } else { showCloudDisclosure = true }
+                        } else {
+                            track("Onboarding Recording Consent Viewed")
+                            showCloudDisclosure = true
+                        }
                     } label: {
                         HStack(spacing: 16) {
                             ZStack {
@@ -439,15 +568,34 @@ struct OnboardingFlow: View {
                         Text("Still recording. Your full story will be transcribed when you finish.")
                             .font(.custom("AvenirNext-Regular", size: 12, relativeTo: .footnote)).foregroundStyle(colors.muted)
                     }
-                    Text("Your words").font(.custom("AvenirNext-DemiBold", size: 12, relativeTo: .body)).padding(.top, 6)
+                    HStack {
+                        Text("Record or write your memory")
+                            .font(.custom("AvenirNext-DemiBold", size: 12, relativeTo: .body))
+                        Spacer(minLength: 8)
+                        Button("Write instead") {
+                            inputMethod = "typing"
+                            track("Onboarding Input Method Selected", ["input_method": "typing"])
+                            storyEditorFocused = true
+                        }
+                        .font(.custom("AvenirNext-DemiBold", size: 13, relativeTo: .body))
+                        .frame(minHeight: 44)
+                        .disabled(recorder.isRecording || recorder.isFinalizing)
+                        .accessibilityIdentifier("onboardingWriteInstead")
+                    }
+                    .padding(.top, 6)
                     TextEditor(text: Binding(
                         get: { recorder.isRecording ? recorder.liveTranscript : storyDraft },
                         set: { if !recorder.isRecording {
                             ProductAnalytics.shared.inputStarted(field: "story", screen: "record")
+                            inputMethod = "typing"
+                            if inputFieldsStarted.insert("story").inserted {
+                                track("Onboarding Input Started", ["field": "story"])
+                            }
                             storyDraft = $0
                         } }
                     ))
                     .font(.custom("IowanOldStyle-Roman", size: 17, relativeTo: .body)).lineSpacing(4)
+                    .focused($storyEditorFocused)
                     .scrollContentBackground(.hidden)
                     .disabled(recorder.isRecording || recorder.isFinalizing)
                     .padding(10).frame(height: layout.editorHeight)
@@ -460,15 +608,37 @@ struct OnboardingFlow: View {
                                 .foregroundStyle(colors.muted.opacity(0.75)).padding(18).allowsHitTesting(false)
                         }
                     }
-                    if OnboardingMemoryValidation.exceedsMaximumLength(storyDraft) {
-                        Text("Shorten this memory by \(OnboardingMemoryValidation.excessCharacterCount(storyDraft).formatted()) characters to continue.")
-                            .font(.custom("AvenirNext-Medium", size: 12, relativeTo: .footnote))
-                            .foregroundStyle(colors.rust)
-                            .accessibilityIdentifier("onboardingStoryLengthError")
-                    }
+                    .id("onboarding-story-editor")
                 }
                 .padding(.horizontal, 25).padding(.top, 16).padding(.bottom, 12)
             }
+            .scrollDismissesKeyboard(.interactively)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { _ in
+                if storyEditorFocused { proxy.scrollTo("onboarding-story-editor", anchor: .bottom) }
+            }
+            .onChange(of: storyEditorFocused) { _, focused in
+                if focused { proxy.scrollTo("onboarding-story-editor", anchor: .bottom) }
+            }
+            }
+            VStack(spacing: 4) {
+                if inputReadiness == .needsStoryteller {
+                    Text("Choose who is telling this story to continue.")
+                        .font(.custom("AvenirNext-Medium", size: 12, relativeTo: .footnote))
+                        .foregroundStyle(colors.muted)
+                }
+                if !storyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && normalizedStory == nil && !OnboardingMemoryValidation.exceedsMaximumLength(storyDraft) && !recorder.isRecording {
+                    Text("Add a little more detail — at least six words — to make your first page.")
+                        .font(.custom("AvenirNext-Regular", size: 12, relativeTo: .footnote))
+                        .foregroundStyle(colors.muted)
+                }
+                if OnboardingMemoryValidation.exceedsMaximumLength(storyDraft) {
+                    Text("Shorten this memory by \(OnboardingMemoryValidation.excessCharacterCount(storyDraft).formatted()) characters to continue.")
+                        .font(.custom("AvenirNext-Medium", size: 12, relativeTo: .footnote))
+                        .foregroundStyle(colors.rust)
+                        .accessibilityIdentifier("onboardingStoryLengthError")
+                }
+            }
+            .padding(.horizontal, 25).padding(.bottom, 8)
             primaryButton("Use this memory", disabled: normalizedStory == nil || recorder.isRecording || recorder.isFinalizing || (needsStorytellerChoice && session.storyteller == nil)) {
                 do {
                     _ = try startMemoryPreflight()
@@ -481,25 +651,31 @@ struct OnboardingFlow: View {
 
     private var buildingPage: some View {
         ZStack {
-            Rectangle().fill(colors.paper.opacity(0.38)).ignoresSafeArea()
+            Rectangle().fill(colors.paper.opacity(generationFailure == nil ? 0.38 : 1)).ignoresSafeArea()
             ScrollView {
             VStack(spacing: 14) {
-                TimelineView(.animation(minimumInterval: 1 / 30)) { context in
-                    let elapsed = max(0, context.date.timeIntervalSince(generationStartedAt ?? context.date))
-                    let value = previewImage != nil && audioReady ? 1.0 : min(0.94, 1 - exp(-elapsed / 25))
-                    ZStack {
-                        Circle().stroke(colors.moss.opacity(0.12), lineWidth: 6)
-                        Circle().trim(from: 0, to: value).stroke(colors.moss, style: StrokeStyle(lineWidth: 6, lineCap: .round)).rotationEffect(.degrees(-90))
-                        Text("\(Int(value * 100))% ").font(.custom("IowanOldStyle-Roman", size: 22, relativeTo: .title2)).monospacedDigit()
-                    }.frame(width: 116, height: 116)
+                if generationFailure == nil && isGenerating {
+                    ProgressView().controlSize(.large).tint(colors.moss)
+                        .accessibilityLabel(generationStage)
                 }
-                Text(generationFailure != nil ? "Your memory is safe" : (isGenerating ? generationStage : "Your first page is ready"))
+                Text(generationFailure != nil ? "Your preview isn’t ready" : (isGenerating ? generationStage : "Your first page is ready"))
                     .font(.custom("IowanOldStyle-Roman", size: 20, relativeTo: .title3)).multilineTextAlignment(.center)
                 if let generationFailure {
                     Text(generationFailure).font(.custom("AvenirNext-Regular", size: 13, relativeTo: .footnote)).multilineTextAlignment(.center)
-                    primaryButton("Try again") {
-                        ProductAnalytics.shared.action("retry_generation", screen: "building")
-                        Task { await createPersonalizedPage() }
+                    if previewRecovery == .retry || previewRecovery == .reconnect {
+                        primaryButton(previewRecovery == .reconnect ? "Reconnect and try again" : "Try again") {
+                            track("Onboarding Action", ["action": "retry_generation"])
+                            Task {
+                                if previewRecovery == .reconnect {
+                                    _ = await AuthenticationService.shared.prepareAuthenticatedSessionForLaunch()
+                                }
+                                await createPersonalizedPage()
+                            }
+                        }
+                    }
+                    primaryButton("Continue to my memories") {
+                        track("Onboarding Action", ["action": "continue_without_preview"])
+                        finishAfterPaywall()
                     }
                 } else if !isGenerating && previewImage != nil && audioReady {
                     Button {
@@ -656,10 +832,34 @@ struct OnboardingFlow: View {
     }
 
     private func prepareSession() async {
+        #if DEBUG && targetEnvironment(simulator)
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-UITest"), arguments.contains("-UITestOnboardingAccountError") {
+            isPreparingAccount = false
+            accountPreparationFailed = true
+            errorMessage = "Memoir couldn’t connect to your private account. Check your connection and try again."
+            return
+        }
+        if arguments.contains("-UITest"), arguments.contains("-UITestOnboardingPreviewError") {
+            isPreparingAccount = false
+            step = .building
+            generationFailure = "The preview image couldn’t be opened. You can continue to your saved memory."
+            previewRecovery = .continueWithoutPreview
+            return
+        }
+        #endif
+        if !didTrackPresentation {
+            didTrackPresentation = true
+            track("Onboarding Presented")
+        }
+        let preparationStartedAt = Date()
         isPreparingAccount = true
+        errorMessage = nil
+        accountPreparationFailed = false
         guard await AuthenticationService.shared.prepareAuthenticatedSessionForLaunch(),
               let uid = Auth.auth().currentUser?.uid else {
             isPreparingAccount = false
+            accountPreparationFailed = true
             errorMessage = "Memoir couldn’t connect to your private account. Check your connection and try again."
             track("Onboarding Preparation Failed", ["failure_stage": "auth"])
             return
@@ -672,6 +872,7 @@ struct OnboardingFlow: View {
             _ = try await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
         } catch {
             isPreparingAccount = false
+            accountPreparationFailed = true
             errorMessage = "Memoir couldn’t refresh this testing session. Check your connection and reconnect."
             return
         }
@@ -691,21 +892,26 @@ struct OnboardingFlow: View {
                 #endif
             }
         }
-        session = sessionStore.load(userID: uid)
-        session.profileID = profileVM.selectedProfile.id
-        // Draft audio is not restored by the session store. Start at the
-        // questionnaire rather than showing a later screen with missing inputs.
+        editingOwner = uid
+        editingProfileID = profileVM.selectedProfile.id
+        session = OnboardingResumePolicy.scopedSession(
+            sessionStore.load(userID: uid), profileID: profileVM.selectedProfile.id
+        )
         step = .audience
         do {
-            if let draft = try draftStore.load(userID: uid) {
+            if let draft = try draftStore.load(userID: uid), draft.session.profileID == profileVM.selectedProfile.id {
                 session = draft.session
                 storyDraft = draft.story
                 restoredRawTranscript = draft.rawTranscript
                 restoredAudioURL = draft.audioURL
             } else {
                 session.resetGeneratedIdentifiers()
+                session.profileID = profileVM.selectedProfile.id
             }
+            pendingEditingDraft = try editingDraftStore.load(userID: uid, profileID: profileVM.selectedProfile.id, flow: .onboarding)
+            showEditingDraftRecovery = pendingEditingDraft?.hasContent == true
         } catch {
+            editingDraftLoadFailed = true
             errorMessage = "The saved preview could not be restored. Your saved memories are still available in your account."
         }
         #if DEBUG && targetEnvironment(simulator)
@@ -722,20 +928,84 @@ struct OnboardingFlow: View {
             }
         }
         #endif
+        if !OnboardingDebugConfiguration.replayOnLaunch {
+            let destination = OnboardingResumePolicy.destination(for: session)
+            switch destination {
+            case .audience: step = .audience
+            case .name: step = .name
+            case .record: step = .record
+            case .meetAlex: step = .meetAlex
+            }
+        }
         isPreparingAccount = false
+        track("Onboarding Preparation Ready", ["duration_ms": max(0, Int(Date().timeIntervalSince(preparationStartedAt) * 1000))])
+        if showEditingDraftRecovery {
+            track("Onboarding Draft Recovery Offered")
+        }
+        session.stage = step.rawValue
         persistSession()
         stepEnteredAt = Date()
         track("Onboarding Step Viewed", ["step": step.rawValue])
     }
 
+    private func persistEditingDraft() {
+        guard !isPreparingAccount, !didTrackCompletion, !editingDraftLoadFailed, pendingEditingDraft == nil,
+              let uid = editingOwner, let profileID = editingProfileID,
+              uid == Auth.auth().currentUser?.uid else { return }
+        let draft = StoryEditingDraft(text: storyDraft, audioURL: currentAudioURL,
+                                      rawTranscript: recorder.audioURL != nil ? recorder.liveTranscript : restoredRawTranscript,
+                                      narratorName: session.narratorName, audience: session.audience,
+                                      storyteller: session.storyteller)
+        do {
+            if draft.hasContent {
+                try editingDraftStore.save(draft, userID: uid, profileID: profileID, flow: .onboarding)
+            } else {
+                try editingDraftStore.clear(userID: uid, profileID: profileID, flow: .onboarding)
+            }
+        } catch {
+            errorMessage = "Your draft could not be kept on this device. Keep Memoir open and try again after freeing some storage."
+        }
+    }
+
+    private func restoreEditingDraft() {
+        guard let draft = pendingEditingDraft else { return }
+        storyDraft = draft.text
+        restoredAudioURL = draft.audioURL
+        restoredRawTranscript = draft.rawTranscript
+        session.narratorName = draft.narratorName ?? session.narratorName
+        session.audience = draft.audience
+        session.storyteller = draft.storyteller
+        pendingEditingDraft = nil
+        track("Onboarding Draft Restored")
+        advance(to: .record)
+        persistSession()
+        if let url = draft.audioURL, !FileManager.default.fileExists(atPath: url.path) {
+            errorMessage = "Your written draft was restored, but its recording is missing. Its saved information has been kept."
+        }
+    }
+
+    private func discardEditingDraft() {
+        guard let uid = editingOwner, let profileID = editingProfileID else { return }
+        do {
+            try editingDraftStore.clear(userID: uid, profileID: profileID, flow: .onboarding)
+            storyDraft = ""
+            restoredAudioURL = nil
+            restoredRawTranscript = nil
+            pendingEditingDraft = nil
+            track("Onboarding Draft Discarded")
+        } catch {
+            errorMessage = "Your draft could not be removed. Its files have been kept on this device."
+        }
+    }
+
     private func persistSession() {
-        guard let uid = Auth.auth().currentUser?.uid else { return }
+        guard let uid = Auth.auth().currentUser?.uid, uid == editingOwner else { return }
         sessionStore.save(session, userID: uid)
     }
 
     @MainActor
     private func startMemoryPreflight() throws -> OnboardingMemoryPreflightKey {
-        guard let story = normalizedStory, let uid = Auth.auth().currentUser?.uid else {
+        guard let story = normalizedStory, let uid = Auth.auth().currentUser?.uid, uid == editingOwner else {
             throw MemoryCreationError.cloudSyncFailed
         }
         var profile = profileVM.selectedProfile
@@ -792,12 +1062,13 @@ struct OnboardingFlow: View {
     @MainActor
     private func createPersonalizedPage() async {
         guard !isGenerating, let story = normalizedStory else { return }
-        guard let uid = Auth.auth().currentUser?.uid else {
-            errorMessage = "Reconnect to your private account before creating the page."
+        guard let uid = Auth.auth().currentUser?.uid, uid == editingOwner else {
+            errorMessage = "Reconnect to the account where you started this story before creating the page."
             return
         }
         isGenerating = true
         generationFailure = nil
+        previewRecovery = .retry
         revealUnlocked = false
         generationStartedAt = Date()
         generationAttempt += 1
@@ -828,11 +1099,18 @@ struct OnboardingFlow: View {
             let rawTranscript = recorder.audioURL != nil ? recorder.liveTranscript : restoredRawTranscript
             var submittedDraft = OnboardingDraft(
                 session: session, story: story, rawTranscript: rawTranscript,
-                audioURL: currentAudioURL, photoData: nil, audioDigest: preflightKey.audioDigest
+                audioURL: currentAudioURL, photoData: nil,
+                previewStory: unchanged ? previousDraft?.previewStory : nil,
+                audioDigest: preflightKey.audioDigest
             )
             try draftStore.save(submittedDraft, userID: uid)
             generationStage = "Preparing your story"
-            let completeStory = try await memoryPreflight.value(for: preflightKey)
+            let preparedStory = try await memoryPreflight.value(for: preflightKey)
+            let completeStory = OnboardingCompletionPolicy.replayStory(
+                savedRequestID: unchanged ? previousDraft?.session.requestID : nil,
+                requestID: session.requestID, savedStory: submittedDraft.previewStory,
+                preparedStory: preparedStory
+            )
             guard Auth.auth().currentUser?.uid == uid else { throw MemoryCreationError.cloudSyncFailed }
             audioReady = true
             track("Onboarding Memory Synced", ["has_audio": currentAudioURL != nil])
@@ -840,6 +1118,7 @@ struct OnboardingFlow: View {
             try draftStore.save(submittedDraft, userID: uid)
             generationStage = "Illustrating your memory"
             let result = try await OnboardingPreviewService.shared.create(
+                expectedUserID: uid,
                 requestID: session.requestID,
                 profileID: profile.id,
                 memoryID: session.memoryID,
@@ -870,35 +1149,71 @@ struct OnboardingFlow: View {
             isGenerating = false
         } catch {
             isGenerating = false
+            previewRecovery = OnboardingPreviewErrorPolicy.recovery(for: error)
+            if previewRecovery == .cancelled {
+                track("Onboarding Preview Cancelled")
+                previewRecovery = .retry
+                generationFailure = "Your preview was paused. Try again to continue with the same story."
+                return
+            }
             generationFailure = OnboardingPreviewErrorPolicy.message(for: error)
             if step == .building { errorMessage = nil }
-            track("Onboarding Preview Failed", ["failure_kind": String(describing: type(of: error))])
+            track("Onboarding Preview Failed", [
+                "failure_kind": String(describing: type(of: error)),
+                "failure_reason": OnboardingPreviewErrorPolicy.reason(for: error),
+                "failure_stage": OnboardingPreviewErrorPolicy.stage(for: error) ?? (audioReady ? "generation" : "preflight"),
+                "duration_ms": max(0, Int(Date().timeIntervalSince(generationStartedAt ?? Date()) * 1000))
+            ])
         }
     }
 
     private func finishAfterPaywall() {
         guard !didTrackCompletion, OnboardingCompletionPolicy.shouldComplete(after: .paywallDismissed) else { return }
+        guard let owner = editingOwner, Auth.auth().currentUser?.uid == owner else {
+            errorMessage = "Your account changed. Reopen Memoir to continue in the right account. Your original draft has been kept."
+            return
+        }
+        let outcome = OnboardingCompletionPolicy.outcome(
+            previewReady: previewImage != nil && audioReady,
+            offerPresented: offerPresented, entitlementActive: entitlementActive
+        )
         didTrackCompletion = true
-        if !OnboardingDebugConfiguration.replayOnLaunch, let uid = Auth.auth().currentUser?.uid {
+        if OnboardingCompletionPolicy.isSuccessful(outcome), !OnboardingDebugConfiguration.replayOnLaunch, let uid = Auth.auth().currentUser?.uid {
             sessionStore.clear(userID: uid)
             do {
                 try draftStore.clear(userID: uid)
+                if let profileID = editingProfileID {
+                    try editingDraftStore.clear(userID: uid, profileID: profileID, flow: .onboarding)
+                }
             } catch {
                 print("Onboarding draft cleanup failed: \(error.localizedDescription)")
             }
         }
         iCloudManager.completeOnboarding()
         UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding_local")
-        FacebookAnalytics.logOnboardingCompleted()
-        track("Onboarding Completed")
+        track("Onboarding Exited", ["onboarding_outcome": outcome])
+        if OnboardingCompletionPolicy.isSuccessful(outcome) {
+            FacebookAnalytics.logOnboardingCompleted()
+            track("Onboarding Completed", ["onboarding_outcome": outcome])
+        }
         onFinished?()
     }
 
     private func track(_ event: String, _ properties: [String: MixpanelType] = [:]) {
+        if let editingOwner, editingOwner != Auth.auth().currentUser?.uid { return }
         var context: Properties = [
-            "screen": String(describing: step), "onboarding_version": "native_v6",
-            "flow_id": analyticsFlowID, "generation_attempt": generationAttempt
+            "screen": String(describing: step), "onboarding_version": "native_v7",
+            "flow_id": analyticsFlowID, "generation_attempt": generationAttempt, "analytics_version": 2,
+            "generation_request_id": session.requestID
         ]
+        if step == .record {
+            context["input_readiness"] = inputReadiness.rawValue
+            context["input_method"] = inputMethod
+            context["has_text"] = !storyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            context["has_audio"] = currentAudioURL != nil
+        }
+        if let audience = session.audience { context["audience"] = audience.rawValue }
+        if let storyteller = session.storyteller { context["storyteller"] = storyteller.rawValue }
         context.merge(properties) { _, new in new }
         ProductAnalytics.shared.track(event, context)
     }

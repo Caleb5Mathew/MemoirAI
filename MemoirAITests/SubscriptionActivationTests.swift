@@ -103,6 +103,83 @@ struct SubscriptionActivationTests {
         try body(manager, defaults)
     }
 
+    @Test func readyIdentityDoesNotDependOnAnotherCustomerInfoRequest() async throws {
+        let suite = "ReadyIdentityTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var requests = 0
+        let manager = RCSubscriptionManager(
+            storage: defaults, firebaseUserID: { "user-a" },
+            revenueCatUserID: { "user-a" }, identifiedUserID: "user-a",
+            revenueCatConfigured: { true }, identityCustomerInfo: {
+                requests += 1
+                throw URLError(.notConnectedToInternet)
+            }
+        )
+        let ready = await manager.identify(firebaseUserID: "user-a")
+        #expect(ready)
+        #expect(requests == 0)
+        #expect(manager.isIdentityReady(for: "user-a"))
+    }
+
+    @Test func readyIdentityCannotBeReusedForADifferentFirebaseAccount() async throws {
+        let suite = "ChangedIdentityTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var requests = 0
+        let manager = RCSubscriptionManager(
+            storage: defaults, firebaseUserID: { "user-b" },
+            revenueCatUserID: { "user-a" }, identifiedUserID: "user-a",
+            revenueCatConfigured: { true }, identityCustomerInfo: {
+                requests += 1
+                throw URLError(.notConnectedToInternet)
+            }
+        )
+        let ready = await manager.identify(firebaseUserID: "user-a")
+        #expect(!ready)
+        #expect(requests == 0)
+    }
+
+    @Test func coldIdentityPreservesBoundedNetworkFailureCategory() async throws {
+        let suite = "IdentityDiagnosticTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let manager = RCSubscriptionManager(
+            storage: defaults, firebaseUserID: { "user-a" },
+            revenueCatUserID: { "user-a" }, identifiedUserID: "",
+            revenueCatConfigured: { true }, identityCustomerInfo: {
+                throw URLError(.notConnectedToInternet)
+            }
+        )
+        let ready = await manager.identify(firebaseUserID: "user-a")
+        #expect(!ready)
+        #expect(manager.identityFailureKind == "network")
+        #expect(manager.identifiedFirebaseUserID == nil)
+        manager.clearIdentityState()
+        #expect(manager.identityFailureKind == nil)
+    }
+
+    @Test func identifyingAnotherAccountClearsPreviousOfferingFailureState() async throws {
+        let suite = "OfferingIdentityTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var userID: String?
+        let manager = RCSubscriptionManager(
+            storage: defaults, firebaseUserID: { userID },
+            revenueCatUserID: { "user-a" }, identifiedUserID: "user-a",
+            revenueCatConfigured: { false }
+        )
+        let loaded = await manager.loadOfferings()
+        #expect(!loaded)
+        #expect(manager.offeringsFailureKind == "account_changed")
+        userID = "user-b"
+        let identified = await manager.identify(firebaseUserID: "user-b")
+        #expect(identified)
+        #expect(manager.identifiedFirebaseUserID == "user-b")
+        #expect(manager.offeringsFailureKind == nil)
+        #expect(manager.offerings == nil)
+    }
+
     @Test func purchaseImmediatelyReplacesExhaustedFreeStateWithPaidAllowance() throws {
         try withManager { manager, _ in
             let freeActive = try manager.applyPurchaseResult(customerInfo(), for: "user-a")

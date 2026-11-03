@@ -2,9 +2,17 @@ import XCTest
 import AVFoundation
 import UIKit
 import FirebaseFunctions
+import FirebaseStorage
 @testable import MemoirAI
 
 final class OnboardingV5Tests: XCTestCase {
+    func testPreviewNavigationRequiresImageAndSavedInputs() {
+        XCTAssertFalse(OnboardingPreviewNavigationPolicy.canOpenPreview(hasImage: false, inputReady: false))
+        XCTAssertFalse(OnboardingPreviewNavigationPolicy.canOpenPreview(hasImage: true, inputReady: false))
+        XCTAssertFalse(OnboardingPreviewNavigationPolicy.canOpenPreview(hasImage: false, inputReady: true))
+        XCTAssertTrue(OnboardingPreviewNavigationPolicy.canOpenPreview(hasImage: true, inputReady: true))
+    }
+
     func testHTMLTypographyFacesExistOnDevice() {
         for name in ["IowanOldStyle-Roman", "AvenirNext-Regular", "AvenirNext-Medium", "AvenirNext-DemiBold", "AvenirNext-Bold"] {
             XCTAssertNotNil(UIFont(name: name, size: 16), "Missing HTML font face: \(name)")
@@ -182,4 +190,296 @@ final class OnboardingV5Tests: XCTestCase {
         XCTAssertTrue(audio.errorMessage?.contains("try again") == true)
     }
 
+}
+
+extension OnboardingV5Tests {
+    func testPreviewRecoveryDistinguishesTerminalQuotaAndIdentityFailures() {
+        for reason in ["preview-quota-used", "preview-attempts-exhausted"] {
+            let error = NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.resourceExhausted.rawValue,
+                                userInfo: [FunctionsErrorDetailsKey: ["reason": reason]])
+            XCTAssertEqual(OnboardingPreviewErrorPolicy.recovery(for: error), .continueWithoutPreview)
+            XCTAssertFalse(OnboardingPreviewErrorPolicy.isTransient(error))
+        }
+        for code in [FunctionsErrorCode.alreadyExists, .permissionDenied, .failedPrecondition] {
+            let error = NSError(domain: FunctionsErrorDomain, code: code.rawValue)
+            XCTAssertEqual(OnboardingPreviewErrorPolicy.recovery(for: error), .continueWithoutPreview)
+            XCTAssertFalse(OnboardingPreviewErrorPolicy.isTransient(error))
+        }
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.recovery(for: NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.unauthenticated.rawValue)), .reconnect)
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.recovery(for: CancellationError()), .cancelled)
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.recovery(for: URLError(.cancelled)), .cancelled)
+    }
+
+    func testPreviewDiagnosticsUseOnlyFixedReasons() {
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: URLError(.timedOut)), "network")
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: CancellationError()), "cancelled")
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: OnboardingPreviewServiceError.invalidResponse), "preview_response")
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: MemoryCreationError.cloudSyncFailed), "memory_preparation")
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: NSError(domain: "private-message", code: 123)), "unknown")
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.alreadyExists.rawValue)), "request_conflict")
+        let error = NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.resourceExhausted.rawValue,
+                            userInfo: [FunctionsErrorDetailsKey: ["reason": "unexpected private value"]])
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: error), "rate_limited")
+    }
+
+    func testPreviewTransientRetryRecoversWithoutChangingRequestAndSharesBudgetAcrossPolls() async throws {
+        var budget = OnboardingPreviewRetryBudget()
+        let requestID = UUID().uuidString
+        var requests: [String] = []
+        var delays: [Double] = []
+        let value = try await budget.perform(sleep: { delays.append($0) }) {
+            requests.append(requestID)
+            if requests.count < 3 { throw URLError(.networkConnectionLost) }
+            return "ready"
+        }
+        XCTAssertEqual(value, "ready")
+        XCTAssertEqual(requests, [requestID, requestID, requestID])
+        XCTAssertEqual(delays, [1, 2])
+        XCTAssertEqual(budget.retriesUsed, 2)
+        var laterCalls = 0
+        do {
+            _ = try await budget.perform(sleep: { _ in XCTFail("Budget must not reset on another poll") }) { () throws -> String in
+                laterCalls += 1
+                throw URLError(.timedOut)
+            }
+            XCTFail("Expected exhausted retry budget")
+        } catch {
+            XCTAssertEqual(laterCalls, 1)
+        }
+    }
+
+    func testPreviewRetryDoesNotSpendAttemptsOnTerminalErrors() async {
+        let errors: [Error] = [
+            CancellationError(), URLError(.cancelled),
+            NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.resourceExhausted.rawValue,
+                    userInfo: [FunctionsErrorDetailsKey: ["reason": "preview-quota-used"]]),
+            NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.alreadyExists.rawValue)
+        ]
+        for error in errors {
+            var budget = OnboardingPreviewRetryBudget()
+            var calls = 0
+            do {
+                _ = try await budget.perform(sleep: { _ in XCTFail("Terminal failures must not sleep or retry") }) { () throws -> String in
+                    calls += 1
+                    throw error
+                }
+                XCTFail("Expected failure")
+            } catch {
+                XCTAssertEqual(calls, 1)
+                XCTAssertEqual(budget.retriesUsed, 0)
+            }
+        }
+    }
+
+    func testPreviewRetryPropagatesCancellationDuringBackoff() async {
+        var budget = OnboardingPreviewRetryBudget()
+        var calls = 0
+        do {
+            _ = try await budget.perform(sleep: { _ in throw CancellationError() }) { () throws -> String in
+                calls += 1
+                throw URLError(.timedOut)
+            }
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            XCTAssertEqual(calls, 1)
+        } catch { XCTFail("Unexpected error: \(error)") }
+    }
+}
+
+extension OnboardingV5Tests {
+    func testFailedOfferDoesNotCountAsSuccessfulOnboarding() {
+        let outcome = OnboardingCompletionPolicy.outcome(previewReady: true, offerPresented: false, entitlementActive: false)
+        XCTAssertEqual(outcome, "offer_unavailable")
+        XCTAssertFalse(OnboardingCompletionPolicy.isSuccessful(outcome))
+    }
+
+    func testMissingPreviewDoesNotCountAsSuccessfulOnboardingEvenWithOffer() {
+        let outcome = OnboardingCompletionPolicy.outcome(previewReady: false, offerPresented: true, entitlementActive: true)
+        XCTAssertEqual(outcome, "preview_unavailable")
+        XCTAssertFalse(OnboardingCompletionPolicy.isSuccessful(outcome))
+    }
+
+    func testActualOfferAndVerifiedEntitlementAreDistinctSuccessfulOutcomes() {
+        let offer = OnboardingCompletionPolicy.outcome(previewReady: true, offerPresented: true, entitlementActive: false)
+        let entitled = OnboardingCompletionPolicy.outcome(previewReady: true, offerPresented: false, entitlementActive: true)
+        XCTAssertEqual(offer, "offer_presented")
+        XCTAssertEqual(entitled, "entitled")
+        XCTAssertTrue(OnboardingCompletionPolicy.isSuccessful(offer))
+        XCTAssertTrue(OnboardingCompletionPolicy.isSuccessful(entitled))
+        XCTAssertTrue(OnboardingCompletionPolicy.shouldComplete(after: .paywallDismissed))
+        XCTAssertFalse(OnboardingCompletionPolicy.shouldComplete(after: .finalContinueTapped))
+    }
+
+    func testPreviewRetryReplaysExactSubmittedTextForSameRequest() {
+        XCTAssertEqual(OnboardingCompletionPolicy.replayStory(savedRequestID: "request-a", requestID: "request-a", savedStory: "Original canonical transcript", preparedStory: "New canonical transcript"), "Original canonical transcript")
+        XCTAssertEqual(OnboardingCompletionPolicy.replayStory(savedRequestID: "request-a", requestID: "request-b", savedStory: "Original canonical transcript", preparedStory: "Edited story"), "Edited story")
+        XCTAssertEqual(OnboardingCompletionPolicy.replayStory(savedRequestID: "request-a", requestID: "request-a", savedStory: nil, preparedStory: "First submission"), "First submission")
+    }
+}
+
+extension OnboardingV5Tests {
+    func testPreviewDeadlinePreventsAnotherRequestAfterSlowFailure() async {
+        var clock: TimeInterval = 100
+        var budget = OnboardingPreviewRetryBudget(deadline: 250, now: { clock })
+        var calls = 0
+        do {
+            _ = try await budget.perform(sleep: { delay in clock += delay }) { () throws -> String in
+                calls += 1
+                clock = 250
+                throw URLError(.timedOut)
+            }
+            XCTFail("Expected total deadline")
+        } catch OnboardingPreviewServiceError.stillProcessing {
+            XCTAssertEqual(calls, 1)
+            XCTAssertEqual(budget.retriesUsed, 0)
+            XCTAssertEqual(budget.remainingTime, 0)
+        } catch { XCTFail("Unexpected error: \(error)") }
+    }
+
+    func testPreviewDeadlineRejectsLateSuccess() async {
+        var clock: TimeInterval = 100
+        var budget = OnboardingPreviewRetryBudget(deadline: 101, now: { clock })
+        do {
+            _ = try await budget.perform {
+                clock = 102
+                return "late"
+            }
+            XCTFail("Expected total deadline")
+        } catch OnboardingPreviewServiceError.stillProcessing {} catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testPreviewDoesNotReplayPreviousAccountPayloadAfterBackoff() async {
+        var currentUser = "account-a"
+        var budget = OnboardingPreviewRetryBudget()
+        var requests = 0
+        do {
+            _ = try await budget.perform(validateOwnership: {
+                guard currentUser == "account-a" else { throw OnboardingPreviewServiceError.accountChanged }
+            }, sleep: { _ in currentUser = "account-b" }) { () throws -> String in
+                requests += 1
+                throw URLError(.networkConnectionLost)
+            }
+            XCTFail("Expected account change")
+        } catch OnboardingPreviewServiceError.accountChanged {
+            XCTAssertEqual(requests, 1)
+            XCTAssertEqual(OnboardingPreviewErrorPolicy.recovery(for: OnboardingPreviewServiceError.accountChanged), .reconnect)
+            XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: OnboardingPreviewServiceError.accountChanged), "account_changed")
+        } catch { XCTFail("Unexpected error: \(error)") }
+    }
+
+    func testPreviewRejectsOldAccountResponseAfterAwait() async {
+        var currentUser = "account-a"
+        var budget = OnboardingPreviewRetryBudget()
+        do {
+            _ = try await budget.perform(validateOwnership: {
+                guard currentUser == "account-a" else { throw OnboardingPreviewServiceError.accountChanged }
+            }) {
+                currentUser = "account-b"
+                return "old account preview"
+            }
+            XCTFail("Expected account change")
+        } catch OnboardingPreviewServiceError.accountChanged {} catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testPreviewDownloadSynchronousCompletionAndLateCallbackResolveOnce() async throws {
+        var cancellations = 0
+        let data = try await OnboardingPreviewDownload.run(timeout: 1) { completion in
+            completion(.success(Data([1, 2, 3])))
+            completion(.failure(URLError(.cancelled)))
+            return { cancellations += 1 }
+        }
+        XCTAssertEqual(data, Data([1, 2, 3]))
+        XCTAssertEqual(cancellations, 1)
+    }
+
+    func testPreviewDownloadDeadlineCancelsSDKAndIgnoresCancellationCallback() async {
+        let cancelled = expectation(description: "Underlying download cancelled")
+        do {
+            _ = try await OnboardingPreviewDownload.run(timeout: 0.01) { completion in
+                return {
+                    cancelled.fulfill()
+                    completion(.failure(URLError(.cancelled)))
+                }
+            }
+            XCTFail("Expected timeout")
+        } catch OnboardingPreviewServiceError.stillProcessing {} catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        await fulfillment(of: [cancelled], timeout: 1)
+    }
+
+    func testPreviewDownloadTaskCancellationStopsUnderlyingDownload() async {
+        let started = expectation(description: "Download started")
+        let cancelled = expectation(description: "Underlying download cancelled")
+        let task = Task {
+            try await OnboardingPreviewDownload.run(timeout: 30) { completion in
+                started.fulfill()
+                return {
+                    cancelled.fulfill()
+                    completion(.success(Data([9])))
+                }
+            }
+        }
+        await fulfillment(of: [started], timeout: 1)
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        await fulfillment(of: [cancelled], timeout: 1)
+    }
+}
+
+extension OnboardingV5Tests {
+    func testPreviewCallableDeadlineReturnsBeforeUncooperativeLateCallback() async {
+        let lateCallback = expectation(description: "Late callable result ignored")
+        do {
+            _ = try await OnboardingPreviewCallbackDeadline<String>.run(timeout: 0.01) { completion in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
+                    completion(.success("server eventually completed"))
+                    lateCallback.fulfill()
+                }
+                return {}
+            }
+            XCTFail("Expected independent callable deadline")
+        } catch OnboardingPreviewServiceError.stillProcessing {} catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        await fulfillment(of: [lateCallback], timeout: 1)
+    }
+}
+
+extension OnboardingV5Tests {
+    func testPreviewStorageFailuresUseSafeRecoveryAndDiagnostics() {
+        let cases: [(StorageErrorCode, OnboardingPreviewRecovery, String)] = [
+            (.objectNotFound, .continueWithoutPreview, "image_missing"),
+            (.unauthenticated, .reconnect, "authentication"),
+            (.unauthorized, .continueWithoutPreview, "permission_denied"),
+            (.cancelled, .cancelled, "cancelled"),
+            (.retryLimitExceeded, .retry, "network"),
+            (.unknown, .retry, "image_download")
+        ]
+        for (code, recovery, reason) in cases {
+            let error = NSError(domain: StorageErrorDomain, code: code.rawValue,
+                                userInfo: [NSLocalizedDescriptionKey: "private storage object path"])
+            XCTAssertEqual(OnboardingPreviewErrorPolicy.recovery(for: error), recovery)
+            XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: error), reason)
+            XCTAssertEqual(OnboardingPreviewErrorPolicy.stage(for: error), "image_download")
+            XCTAssertFalse(OnboardingPreviewErrorPolicy.message(for: error).contains("private storage object path"))
+            XCTAssertFalse(OnboardingPreviewErrorPolicy.isTransient(error))
+        }
+    }
+
+    func testPreviewStageDistinguishesPreflightFromGeneration() {
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.recovery(for: CloudTranscriptionError.notAuthenticated), .reconnect)
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: CloudTranscriptionError.notAuthenticated), "authentication")
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.stage(for: CloudTranscriptionError.invalidResponse), "preflight")
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: CloudTranscriptionError.invalidResponse), "memory_preparation")
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.stage(for: NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.unavailable.rawValue)), "generation")
+        XCTAssertNil(OnboardingPreviewErrorPolicy.stage(for: URLError(.timedOut)))
+    }
 }

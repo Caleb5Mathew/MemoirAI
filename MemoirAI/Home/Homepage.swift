@@ -26,6 +26,52 @@ enum MemoirProgressPolicy {
     }
 }
 
+enum HomeLatestStoryPolicy {
+    static func latest(in entries: [MemoryEntry], userID: String?, profileID: UUID) -> MemoryEntry? {
+        guard let userID, !userID.isEmpty else { return nil }
+        return entries.filter {
+            !$0.isDeleted && $0.id != nil && $0.firebaseUserId == userID && $0.profileID == profileID
+        }.max {
+            let left = $0.createdAt ?? .distantPast
+            let right = $1.createdAt ?? .distantPast
+            if left != right { return left < right }
+            return ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "")
+        }
+    }
+
+    static func title(for entry: MemoryEntry) -> String {
+        let title = entry.prompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return title.isEmpty || ["Untitled", "Untitled Prompt"].contains(title) ? "Your saved story" : title
+    }
+}
+
+struct HomeLatestStoryRow: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 20))
+                .foregroundStyle(LinenTheme.forest)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Latest saved story")
+                    .font(LinenTheme.body(12))
+                    .foregroundStyle(LinenTheme.secondary)
+                Text(title)
+                    .font(LinenTheme.body(16, weight: .semibold))
+                    .foregroundStyle(LinenTheme.ink)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .foregroundStyle(LinenTheme.secondary)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(LinenTheme.card, in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
 struct HomepageView: View {
     // MARK: – Environment & Context
     @EnvironmentObject var profileVM: ProfileViewModel
@@ -45,6 +91,7 @@ struct HomepageView: View {
     @State private var showMemoirPicker = false
     @State private var pendingNavigateToMemoir = false
     @State private var navigateToMemoir = false
+    @State private var showRecorder = false
     @AppStorage("hasChosenMemoirMode") private var hasChosenMemoirMode = false
 
     // MARK: – Computed Properties
@@ -83,6 +130,29 @@ struct HomepageView: View {
                     }
                     .padding(.top, 18)
                     .padding(.bottom, 6)
+
+                    if let latestStory = HomeLatestStoryPolicy.latest(
+                        in: entries, userID: MemoryUserScope.currentFirebaseUserId,
+                        profileID: profileVM.selectedProfile.id
+                    ), let storyID = latestStory.id {
+                        NavigationLink(value: storyID) {
+                            HomeLatestStoryRow(title: HomeLatestStoryPolicy.title(for: latestStory))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("homeLatestSavedStory")
+                    }
+
+                    Button {
+                        showRecorder = true
+                    } label: {
+                        Label("Record a story", systemImage: "mic.fill")
+                            .font(LinenTheme.body(16, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: 52)
+                            .foregroundStyle(LinenTheme.onAccent)
+                            .background(LinenTheme.forest, in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("homeRecordStory")
 
                     Button {
                         if hasChosenMemoirMode { navigateToMemoir = true }
@@ -212,6 +282,11 @@ struct HomepageView: View {
             .onReceive(NotificationCenter.default.publisher(for: .memorySaved)) { _ in
                 fetchEntries()
             }
+            .navigationDestination(isPresented: $showRecorder) {
+                RecordMemoryView()
+                    .environmentObject(profileVM)
+                    .environmentObject(tutorialCoordinator)
+            }
             .navigationDestination(isPresented: $navigateToMemoir) {
                 MemoirView()
                     .environmentObject(profileVM)
@@ -288,6 +363,7 @@ struct HomepageView: View {
             let withChapter = entries.filter { $0.chapter != nil && !($0.chapter?.isEmpty ?? true) }
             print("📊 Entries with chapter: \(withChapter.count)")
         } catch {
+            entries = []
             print("Failed to fetch entries:", error)
         }
     }

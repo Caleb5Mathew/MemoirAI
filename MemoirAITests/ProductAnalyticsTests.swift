@@ -303,3 +303,47 @@ struct AnalyticsTrafficContextTests {
         #expect(registered["environment"] as? String == "production")
     }
 }
+
+extension ProductAnalyticsTests {
+    @Test func onboardingRecoveryDiagnosticsKeepBoundedFieldsAndRejectPrivateText() {
+        let properties = AnalyticsPrivacyPolicy.sanitized([
+            "analytics_version": 2, "preparation_attempt": 1,
+            "onboarding_outcome": "offer_unavailable", "consent_outcome": "declined",
+            "failure_stage": "offerings", "failure_kind": "network",
+            "failure_reason": "request_conflict", "duration_ms": 20000,
+            "story_text": "Private memory", "error_message": "Private server response"
+        ])
+        #expect(properties.count == 8)
+        #expect(AnalyticsPrivacyPolicy.sanitized(["generation_request_id": UUID().uuidString]).count == 1)
+        #expect(AnalyticsPrivacyPolicy.sanitized(["generation_request_id": "private story text"]).isEmpty)
+        for outcome in ["microphone_denied", "speech_denied", "granted"] {
+            #expect(AnalyticsPrivacyPolicy.sanitized(["permission_outcome": outcome]).count == 1)
+        }
+        #expect(AnalyticsPrivacyPolicy.sanitized(["permission_outcome": "private device detail"]).isEmpty)
+        #expect(properties["story_text"] == nil)
+        #expect(properties["error_message"] == nil)
+        #expect(AnalyticsPrivacyPolicy.sanitized(["failure_reason": "private server message"]).isEmpty)
+        #expect(AnalyticsPrivacyPolicy.sanitized(["failure_kind": "CloudTranscriptionError"]).count == 1)
+        for event in ["Onboarding Exited", "Onboarding Offer Ready", "Onboarding Paywall Requested", "Onboarding Preview Cancelled", "Onboarding Recording Consent", "Onboarding Storyteller Selected"] {
+            #expect(AnalyticsEventCategory.category(for: event) != "Uncategorized")
+        }
+    }
+}
+
+
+extension ProductAnalyticsTests {
+    @Test func onboardingCaptureDiagnosticsAreBoundedAndCategorized() {
+        for readiness in OnboardingInputReadiness.allCases {
+            let properties = AnalyticsPrivacyPolicy.sanitized([
+                "input_readiness": readiness.rawValue, "input_method": "typing",
+                "onboarding_version": "native_v7", "story": "Private story", "name": "Private name"
+            ])
+            #expect(properties.count == 3)
+            #expect(properties["input_readiness"] as? String == readiness.rawValue)
+        }
+        #expect(AnalyticsPrivacyPolicy.sanitized(["input_readiness": "Private text", "input_method": "Private name"]).isEmpty)
+        for event in ["Onboarding Preparation Ready", "Onboarding Input Started", "Onboarding Input Readiness Changed", "Onboarding Input Method Selected", "Onboarding Draft Recovery Offered", "Onboarding Draft Restored", "Onboarding Draft Discarded"] {
+            #expect(AnalyticsEventCategory.category(for: event) != "Uncategorized")
+        }
+    }
+}

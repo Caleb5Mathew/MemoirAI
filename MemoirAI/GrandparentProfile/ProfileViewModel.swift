@@ -201,6 +201,9 @@ class ProfileViewModel: ObservableObject {
         guard profiles.count > 1 else { return .lastProfile }
 
         do {
+            if try StoryEditingDraftStore().hasDraft(userID: userID, profileID: profileID) {
+                return .hasContent
+            }
             let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
             request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
                 NSPredicate(format: "firebaseUserId == %@", userID),

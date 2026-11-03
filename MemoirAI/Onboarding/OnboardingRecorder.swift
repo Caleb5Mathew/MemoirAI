@@ -38,6 +38,7 @@ final class OnboardingRecorder: NSObject, ObservableObject, AVAudioRecorderDeleg
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var liveTranscript = ""
     @Published var errorMessage: String?
+    @Published private(set) var permissionOutcome: String?
 
     private var recorder: AVAudioRecorder?
     private var timer: Timer?
@@ -56,12 +57,14 @@ final class OnboardingRecorder: NSObject, ObservableObject, AVAudioRecorderDeleg
             errorMessage = CloudTranscriptionDisclosure.message
             return
         }
+        permissionOutcome = nil
         let permissionID = UUID()
         permissionRequestID = permissionID
         AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
             Task { @MainActor in
                 guard let self, self.permissionRequestID == permissionID else { return }
                 guard granted else {
+                    self.permissionOutcome = "microphone_denied"
                     self.errorMessage = "Allow microphone access in Settings to record a memory. You can also type your story."
                     return
                 }
@@ -69,9 +72,11 @@ final class OnboardingRecorder: NSObject, ObservableObject, AVAudioRecorderDeleg
                     Task { @MainActor in
                         guard self.permissionRequestID == permissionID else { return }
                         guard status == .authorized else {
+                            self.permissionOutcome = "speech_denied"
                             self.errorMessage = "Allow speech recognition in Settings, or type your story instead."
                             return
                         }
+                        self.permissionOutcome = "granted"
                         self.start()
                     }
                 }

@@ -80,9 +80,15 @@ enum SubscriptionPaywallPolicy {
 /// Keeps every purchase surface tied to the account that owns its memories.
 struct SubscriptionPaywallView: View {
     let source: PaywallSource
+    var onOutcome: ((SubscriptionPaywallOutcome) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var manager = RCSubscriptionManager.shared
     @ObservedObject private var auth = AuthenticationService.shared
+    @State private var preparation = PaywallPreparation()
+    @State private var preparationStage = "auth"
+    @State private var preparationAttempt = 0
+    @State private var preparationStartedAt = Date()
+    @State private var outcome: SubscriptionPaywallOutcome?
     @State private var accountID: String?
     @State private var isPreparing = true
     @State private var isActivating = false
@@ -107,6 +113,7 @@ struct SubscriptionPaywallView: View {
                     .onAppear {
                         guard !recordedImpression else { return }
                         recordedImpression = true
+                        reportOutcome(.presented)
                         ProductAnalytics.shared.track("Paywall Viewed", analyticsProperties)
                     }
                     .overlay(alignment: .topTrailing) {
@@ -142,9 +149,9 @@ struct SubscriptionPaywallView: View {
                         .multilineTextAlignment(.center)
                     Button("Try Again") {
                         ProductAnalytics.shared.action("retry_paywall", screen: "paywall")
-                        Task { await prepare() }
+                        prepare(forceOfferingsRefresh: true)
                     }
-                    Button("Close") { dismiss() }
+                    Button(source == .onboarding ? "Continue to my memories" : "Close") { dismiss() }
                 }
                 .padding(24)
             }
@@ -155,14 +162,12 @@ struct SubscriptionPaywallView: View {
         .preferredColorScheme(.light)
         .analyticsScreen("paywall")
         .interactiveDismissDisabled(isActivating || isPurchasing)
-        .task { await prepare() }
+        .onAppear { prepare() }
         .onDisappear {
+            preparation.cancel()
+            if outcome == nil { reportOutcome(.dismissedWithoutOffer) }
             guard recordedImpression else { return }
             ProductAnalytics.shared.track("Paywall Dismissed", analyticsProperties.merging(["dismissal_reason": dismissalReason]) { current, _ in current })
-        }
-        .onChange(of: preparationError) { _, error in
-            guard error != nil else { return }
-            ProductAnalytics.shared.track("Paywall Preparation Failed", analyticsProperties.merging(["failure_stage": "preparation"]) { current, _ in current })
         }
         .onChange(of: activationError) { _, error in
             guard error != nil else { return }
@@ -172,8 +177,10 @@ struct SubscriptionPaywallView: View {
         }
         .onChange(of: auth.user?.uid) { _, newID in
             guard let accountID, newID != accountID else { return }
+            preparation.cancel()
             self.accountID = nil
-            preparationError = "Your account changed. Close this screen and open it again to continue."
+            preparationStage = "account_changed"
+            showPreparationFailure(PaywallPreparationError.accountChanged)
         }
         .alert("Subscription activation", isPresented: Binding(
             get: { activationError != nil },
@@ -403,39 +410,114 @@ struct SubscriptionPaywallView: View {
     }
 
     @MainActor
-    private func prepare() async {
-        isPreparing = true
+    private func prepare(forceOfferingsRefresh: Bool = false) {
+        let accepted = preparation.start(operation: {
+            try await prepareOffer(forceOfferingsRefresh: forceOfferingsRefresh)
+        }, completion: { result in
+            isPreparing = false
+            if case .success = result {
+                ProductAnalytics.shared.track("Paywall Preparation Succeeded", analyticsProperties.merging([
+                    "duration_ms": max(0, Int(Date().timeIntervalSince(preparationStartedAt) * 1000)),
+                    "preparation_attempt": preparationAttempt
+                ]) { current, _ in current })
+            }
+            if case .failure(let error) = result, !(error is CancellationError) {
+                showPreparationFailure(error)
+            }
+        })
+        guard accepted else { return }
+        preparationAttempt += 1
+        preparationStartedAt = Date()
+        preparationStage = "auth"
         preparationError = nil
-        defer { isPreparing = false }
-        guard await auth.prepareAuthenticatedSessionForLaunch(),
-              let userID = Auth.auth().currentUser?.uid,
-              await manager.prepareIdentity(firebaseUserID: userID),
-              Auth.auth().currentUser?.uid == userID else {
-            preparationError = manager.identityErrorMessage
-                ?? "We could not verify your account. Check your connection and try again."
-            return
+        accountID = nil
+        eligibleTrialProductIDs = []
+        isPreparing = true
+    }
+
+    @MainActor
+    private func prepareOffer(forceOfferingsRefresh: Bool) async throws {
+        guard await auth.prepareAuthenticatedSessionForLaunch() else {
+            throw PaywallPreparationError.unavailable(stage: "auth")
         }
-        accountID = userID
-        await manager.refreshCustomerInfo(forceRefresh: true)
-        guard Auth.auth().currentUser?.uid == userID else { return }
+        try Task.checkCancellation()
+        guard let userID = Auth.auth().currentUser?.uid else {
+            throw PaywallPreparationError.accountChanged
+        }
+        preparationStage = "identity"
+        guard await manager.prepareIdentity(firebaseUserID: userID) else {
+            throw PaywallPreparationError.unavailable(stage: "identity")
+        }
+        try checkPreparationAccount(userID)
         if manager.hasActiveSubscription {
+            reportOutcome(.entitlementActive)
             dismiss()
             return
         }
-        if manager.offerings?.current?.availablePackages.isEmpty != false {
-            await manager.loadOfferings()
+        preparationStage = "offerings"
+        if forceOfferingsRefresh || offeringPackages.isEmpty {
+            guard await manager.loadOfferings(forceRefresh: forceOfferingsRefresh) else {
+                throw PaywallPreparationError.unavailable(stage: "offerings")
+            }
         }
+        try checkPreparationAccount(userID)
         guard manager.offerings?.current?.availablePackages.isEmpty == false else {
-            preparationError = "Subscriptions could not be loaded. Check your connection and try again."
-            return
+            throw PaywallPreparationError.unavailable(stage: "offerings")
         }
+        preparationStage = "packages"
         let packages = offeringPackages
         guard !packages.isEmpty else {
-            preparationError = "The available subscriptions are not configured correctly. Please try again later."
-            return
+            throw PaywallPreparationError.unavailable(stage: "packages")
         }
         selectedPlan = SubscriptionPaywallPolicy.defaultPlan(availablePlans: Set(packages.keys))
-        eligibleTrialProductIDs = await eligibleFreeTrialProductIDs(in: Array(packages.values))
+        preparationStage = "trial_eligibility"
+        let eligible = await eligibleFreeTrialProductIDs(in: Array(packages.values))
+        try checkPreparationAccount(userID)
+        eligibleTrialProductIDs = eligible
+        accountID = userID
+    }
+
+    @MainActor
+    private func checkPreparationAccount(_ userID: String) throws {
+        try Task.checkCancellation()
+        guard Auth.auth().currentUser?.uid == userID, manager.isIdentityReady(for: userID) else {
+            throw PaywallPreparationError.accountChanged
+        }
+    }
+
+    private func reportOutcome(_ value: SubscriptionPaywallOutcome) {
+        guard outcome != .entitlementActive, outcome != value else { return }
+        outcome = value
+        onOutcome?(value)
+    }
+
+    private func showPreparationFailure(_ error: Error) {
+        let kind: String
+        if case PaywallPreparationError.timeout = error {
+            kind = "timeout"
+            preparationError = "Subscriptions are taking longer than expected. Check your connection and try again."
+        } else if case PaywallPreparationError.accountChanged = error {
+            preparationStage = "account_changed"
+            kind = "account_changed"
+            preparationError = "Your account changed. Close this screen and open it again to continue."
+        } else {
+            if preparationStage == "identity" {
+                kind = manager.identityFailureKind ?? "unknown"
+            } else if preparationStage == "packages" {
+                kind = "configuration"
+            } else if preparationStage == "offerings" {
+                kind = manager.offeringsFailureKind ?? "configuration"
+            } else {
+                kind = "unknown"
+            }
+            preparationError = "Subscriptions could not be loaded. Check your connection and try again."
+        }
+        ProductAnalytics.shared.track("Paywall Preparation Failed", analyticsProperties.merging([
+            "failure_stage": preparationStage,
+            "failure_kind": kind,
+            "duration_ms": max(0, Int(Date().timeIntervalSince(preparationStartedAt) * 1000)),
+            "preparation_attempt": preparationAttempt
+        ]) { current, _ in current })
     }
 
     private func eligibleFreeTrialProductIDs(in packages: [Package]) async -> Set<String> {
@@ -507,7 +589,13 @@ struct SubscriptionPaywallView: View {
             defer { isActivating = false }
             do {
                 if try manager.applyPurchaseResult(info, for: accountID) {
+                    guard Auth.auth().currentUser?.uid == accountID,
+                          manager.isIdentityReady(for: accountID) else {
+                        activationError = "Your account changed. Sign back in to restore your subscription."
+                        return
+                    }
                     dismissalReason = "entitlement_active"
+                    reportOutcome(.entitlementActive)
                     ProductAnalytics.shared.track("Subscription Activation Succeeded", activationAnalyticsProperties(origin: origin))
                     dismiss()
                     return
@@ -519,7 +607,13 @@ struct SubscriptionPaywallView: View {
                     return
                 }
                 if manager.hasActiveSubscription {
+                    guard Auth.auth().currentUser?.uid == accountID,
+                          manager.isIdentityReady(for: accountID) else {
+                        activationError = "Your account changed. Sign back in to restore your subscription."
+                        return
+                    }
                     dismissalReason = "entitlement_active"
+                    reportOutcome(.entitlementActive)
                     ProductAnalytics.shared.track("Subscription Activation Succeeded", activationAnalyticsProperties(origin: origin))
                     dismiss()
                 } else {

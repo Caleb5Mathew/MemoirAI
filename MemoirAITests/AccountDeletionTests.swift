@@ -272,6 +272,30 @@ struct AccountDeletionTests {
         #expect(AccountLocalDataCleaner.profileIDs(fromProfileData: Data([0xFF])).isEmpty)
     }
 
+    @Test func accountDeletionRemovesExclusiveDraftAudioAndPreservesSubmittedAudio() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let recordings = root.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+        let ownAudio = recordings.appendingPathComponent(UUID().uuidString + ".m4a")
+        let submittedAudio = recordings.appendingPathComponent(UUID().uuidString + ".m4a")
+        try Data([1]).write(to: ownAudio)
+        try Data([2]).write(to: submittedAudio)
+        let submitted = OnboardingDraftStore(directory: root.appendingPathComponent("submitted"))
+        let editing = StoryEditingDraftStore(directory: root.appendingPathComponent("editing"))
+        let profileID = UUID()
+        try submitted.save(OnboardingDraft(session: OnboardingSession(), story: "Submitted", rawTranscript: nil,
+                                           audioURL: submittedAudio, photoData: nil), userID: "deleted-user")
+        try editing.save(StoryEditingDraft(text: "", audioURL: ownAudio), userID: "deleted-user", profileID: profileID, flow: .recording)
+        try editing.save(StoryEditingDraft(text: "", audioURL: submittedAudio), userID: "deleted-user", profileID: profileID, flow: .onboarding)
+        try AccountLocalDataCleaner.clearUserFiles(firebaseUserID: "deleted-user", localFileURLs: [],
+                                                  onboardingDraftStore: submitted, editingDraftStore: editing,
+                                                  recordingsDirectory: recordings)
+        #expect(!FileManager.default.fileExists(atPath: ownAudio.path))
+        #expect(FileManager.default.fileExists(atPath: submittedAudio.path))
+        #expect(try !editing.hasDraft(userID: "deleted-user", profileID: profileID))
+    }
+
     @Test func localFileCleanupRemovesTheDeletedUsersOnboardingDraft() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -284,14 +308,20 @@ struct AccountDeletionTests {
             photoData: Data([1, 2, 3])
         )
         try draftStore.save(draft, userID: "deleted-user")
+        let editingStore = StoryEditingDraftStore(directory: root.appendingPathComponent("editing"))
+        try editingStore.save(StoryEditingDraft(text: "Unsubmitted"), userID: "deleted-user", profileID: draft.session.profileID, flow: .recording)
+        try editingStore.save(StoryEditingDraft(text: "Another account"), userID: "other-user", profileID: draft.session.profileID, flow: .recording)
 
         try AccountLocalDataCleaner.clearUserFiles(
             firebaseUserID: "deleted-user",
             localFileURLs: [],
-            onboardingDraftStore: draftStore
+            onboardingDraftStore: draftStore,
+            editingDraftStore: editingStore
         )
 
         #expect(try draftStore.load(userID: "deleted-user") == nil)
+        #expect(try !editingStore.hasDraft(userID: "deleted-user", profileID: draft.session.profileID))
+        #expect(try editingStore.hasDraft(userID: "other-user", profileID: draft.session.profileID))
     }
 }
 

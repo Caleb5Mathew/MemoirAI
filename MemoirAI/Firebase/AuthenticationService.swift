@@ -103,7 +103,9 @@ enum AccountLocalDataCleaner {
         firebaseUserID: String,
         localFileURLs: [URL],
         fileManager: FileManager = .default,
-        onboardingDraftStore: OnboardingDraftStore = OnboardingDraftStore()
+        onboardingDraftStore: OnboardingDraftStore = OnboardingDraftStore(),
+        editingDraftStore: StoryEditingDraftStore = StoryEditingDraftStore(),
+        recordingsDirectory: URL? = nil
     ) throws {
         for url in localFileURLs where url.isFileURL && fileManager.fileExists(atPath: url.path) {
             try fileManager.removeItem(at: url)
@@ -119,7 +121,18 @@ enum AccountLocalDataCleaner {
             }
         }
 
+        if let recordings = recordingsDirectory ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let submittedAudio = try onboardingDraftStore.load(userID: firebaseUserID)?.audioURL
+            let protectedAudio = Set(submittedAudio.map { [$0] } ?? [])
+            let draftAudio = try editingDraftStore.exclusiveRecordingURLs(
+                userID: firebaseUserID, recordingsDirectory: recordings, preserving: protectedAudio
+            )
+            for url in draftAudio where fileManager.fileExists(atPath: url.path) {
+                try fileManager.removeItem(at: url)
+            }
+        }
         try onboardingDraftStore.clear(userID: firebaseUserID)
+        try editingDraftStore.clearAccount(userID: firebaseUserID)
 
         if let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
             let profileURL = documents.appendingPathComponent(

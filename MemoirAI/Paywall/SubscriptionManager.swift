@@ -174,10 +174,14 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     @Published var nextRenewalDate: Date?
     @Published private(set) var identifiedFirebaseUserID: String?
     @Published private(set) var identityErrorMessage: String?
+    @Published private(set) var identityFailureKind: String?
     @Published private(set) var activationErrorMessage: String?
+    @Published private(set) var offeringsFailureKind: String?
     @Published private(set) var hasBillingIssue = false
 
     private var storage = UserDefaults.standard
+    private var revenueCatConfiguredProvider: () -> Bool = { Purchases.isConfigured }
+    private var identityCustomerInfoFetcher: () async throws -> CustomerInfo = { try await Purchases.shared.customerInfo() }
     private var firebaseUserIDProvider: () -> String? = { Auth.auth().currentUser?.uid }
     private var revenueCatUserIDProvider: () -> String = {
         Purchases.isConfigured ? Purchases.shared.appUserID : ""
@@ -192,7 +196,11 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
     /// Isolated storage and identities allow purchase state transitions to be tested without network services.
     init(storage: UserDefaults, firebaseUserID: @escaping () -> String?,
          revenueCatUserID: @escaping () -> String, identifiedUserID: String,
-         mixpanelDistinctIDSetter: @escaping (String?) -> Void = { _ in }) {
+         mixpanelDistinctIDSetter: @escaping (String?) -> Void = { _ in },
+         revenueCatConfigured: @escaping () -> Bool = { Purchases.isConfigured },
+         identityCustomerInfo: @escaping () async throws -> CustomerInfo = { try await Purchases.shared.customerInfo() }) {
+        self.revenueCatConfiguredProvider = revenueCatConfigured
+        self.identityCustomerInfoFetcher = identityCustomerInfo
         self.storage = storage
         self.firebaseUserIDProvider = firebaseUserID
         self.revenueCatUserIDProvider = revenueCatUserID
@@ -234,11 +242,15 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         guard let appUserID = RevenueCatConfigurationPolicy.appUserID(
             firebaseUserID: firebaseUserID,
             currentFirebaseUserID: firebaseUserIDProvider()
-        ) else { return false }
+        ) else {
+            identityFailureKind = "account_changed"
+            return false
+        }
 
         if !Purchases.isConfigured {
             guard let apiKey = Bundle.main.object(forInfoDictionaryKey: "RevenueCatAPIKey") as? String,
                   !apiKey.isEmpty else {
+                identityFailureKind = "configuration"
                 identityErrorMessage = "Subscriptions are temporarily unavailable."
                 print("RevenueCat API key not found in Info.plist")
                 return false
@@ -251,7 +263,6 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             Purchases.configure(withAPIKey: apiKey, appUserID: appUserID)
             Purchases.shared.delegate = self
             Purchases.shared.attribution.enableAdServicesAttributionTokenCollection()
-            await loadOfferings()
             print("RevenueCat configured for verified Firebase identity")
         }
 
@@ -295,52 +306,45 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         nextRenewalDate = nil
     }
 
-    func loadOfferings() async {
-        guard Purchases.isConfigured else { return }
-
-        do {
-            // Use specific offering instead of default
-            offerings = try await Purchases.shared.offerings()
-            
-            // To use "Def2" offering instead of "default", uncomment this:
-            // offerings = try await Purchases.shared.offerings()
-            // if let def2Offering = offerings?.all["Def2"] {
-            //     offerings?.current = def2Offering
-            // }
-            
-            print("RCManager: Offerings loaded successfully.")
-
-            // 🔎 DEBUG – Enhanced package debugging
-            Task { @MainActor in
-                if let current = offerings?.current {
-                    print("🔍 Current offering: \(current.identifier)")
-                    print("🔍 Packages delivered: \(current.availablePackages.map(\.identifier))")
-                    print("🔍 Package details:")
-                    for package in current.availablePackages {
-                        print("  📦 \(package.identifier) -> \(package.storeProduct.productIdentifier)")
-                    }
-                    if current.availablePackages.isEmpty {
-                        print("⚠️ No packages found in current offering!")
-                    }
-                } else {
-                    print("❌ No current offering found!")
-                }
-                
-                if let allOfferings = offerings?.all {
-                    print("🔍 All offerings: \(allOfferings.keys)")
-                }
-            }
-
-        } catch {
-            print("❌ RCManager: Offerings error: \(error)")
-            offerings = nil
+    @discardableResult
+    func loadOfferings(forceRefresh: Bool = false) async -> Bool {
+        guard Purchases.isConfigured, let owner = firebaseUserIDProvider(),
+              Purchases.shared.appUserID == owner else {
+            offeringsFailureKind = "account_changed"
+            return false
         }
+        do {
+            let loaded: Offerings
+            if forceRefresh, let refreshed = try await Purchases.shared.syncAttributesAndOfferingsIfNeeded() {
+                loaded = refreshed
+            } else {
+                loaded = try await Purchases.shared.offerings()
+            }
+            try Task.checkCancellation()
+            guard firebaseUserIDProvider() == owner, Purchases.shared.appUserID == owner else { return false }
+            offerings = loaded
+            offeringsFailureKind = nil
+            return true
+        } catch {
+            guard !Task.isCancelled, firebaseUserIDProvider() == owner,
+                  Purchases.shared.appUserID == owner else { return false }
+            offeringsFailureKind = Self.preparationFailureKind(error)
+            return false
+        }
+    }
+
+    static func preparationFailureKind(_ error: Error) -> String {
+        let value = error as NSError
+        if value.domain == NSURLErrorDomain { return "network" }
+        if value.domain == "RevenueCat.ErrorCode", value.code == ErrorCode.networkError.rawValue { return "network" }
+        if value.domain == "RevenueCat.ErrorCode", value.code == ErrorCode.configurationError.rawValue { return "configuration" }
+        return "unknown"
     }
 
     func isIdentityReady(for firebaseUserID: String) -> Bool {
         identifiedFirebaseUserID == firebaseUserID && RevenueCatIdentityPolicy.isReady(
-            isConfigured: Purchases.isConfigured,
-            currentAppUserID: Purchases.isConfigured ? Purchases.shared.appUserID : firebaseUserID,
+            isConfigured: revenueCatConfiguredProvider(),
+            currentAppUserID: revenueCatConfiguredProvider() ? revenueCatUserIDProvider() : firebaseUserID,
             firebaseUserID: firebaseUserID
         )
     }
@@ -350,11 +354,14 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             mixpanelDistinctIDSetter(nil)
         }
         identifiedFirebaseUserID = nil
+        offerings = nil
+        offeringsFailureKind = nil
         latestCustomerInfoDate = nil
         customerInfoUserID = nil
         activationErrorMessage = nil
         hasBillingIssue = false
         identityErrorMessage = nil
+        identityFailureKind = nil
         if !isDeveloperUnlockedSession {
             activeTier = nil
             remainingAllowance = 0
@@ -364,9 +371,16 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
 
     @discardableResult
     func identify(firebaseUserID: String) async -> Bool {
-        guard !firebaseUserID.isEmpty, firebaseUserIDProvider() == firebaseUserID else { return false }
+        guard !firebaseUserID.isEmpty, firebaseUserIDProvider() == firebaseUserID else {
+            identityFailureKind = "account_changed"
+            return false
+        }
+        identityFailureKind = nil
         restoreDeveloperMode(for: firebaseUserID)
+        if isIdentityReady(for: firebaseUserID) { return true }
         if let identifiedFirebaseUserID, identifiedFirebaseUserID != firebaseUserID {
+            offerings = nil
+            offeringsFailureKind = nil
             self.identifiedFirebaseUserID = nil
             hasBillingIssue = false
             if !isDeveloperUnlockedSession {
@@ -375,41 +389,53 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
                 nextRenewalDate = nil
             }
         }
-        guard Purchases.isConfigured else {
+        guard revenueCatConfiguredProvider() else {
             identifiedFirebaseUserID = firebaseUserID
             identityErrorMessage = nil
+            identityFailureKind = nil
             return true
         }
-        if Purchases.shared.appUserID == firebaseUserID {
+        if revenueCatUserIDProvider() == firebaseUserID {
             do {
-                let info = try await Purchases.shared.customerInfo()
-                guard firebaseUserIDProvider() == firebaseUserID else { return false }
+                let info = try await identityCustomerInfoFetcher()
+                guard !Task.isCancelled, firebaseUserIDProvider() == firebaseUserID else { return false }
                 identifiedFirebaseUserID = firebaseUserID
                 identityErrorMessage = nil
+                identityFailureKind = nil
                 guard RevenueCatIdentityPolicy.canApplyCustomerInfo(
                     capturedFirebaseUserID: firebaseUserID,
                     capturedAppUserID: firebaseUserID,
                     currentFirebaseUserID: firebaseUserIDProvider(),
-                    currentAppUserID: Purchases.shared.appUserID,
+                    currentAppUserID: revenueCatUserIDProvider(),
                     identifiedFirebaseUserID: identifiedFirebaseUserID
-                ) else { return false }
+                ) else {
+                    identityFailureKind = "account_changed"
+                    return false
+                }
                 _ = try applyPurchaseResult(info, for: firebaseUserID)
                 linkRevenueCatEventsToMixpanel(firebaseUserID: firebaseUserID)
                 Purchases.shared.attribution.enableAdServicesAttributionTokenCollection()
                 return true
             } catch {
-                guard firebaseUserIDProvider() == firebaseUserID else { return false }
+                guard !Task.isCancelled, firebaseUserIDProvider() == firebaseUserID else { return false }
                 identifiedFirebaseUserID = nil
+                identityFailureKind = Self.preparationFailureKind(error)
                 identityErrorMessage = "Subscription verification failed. Check your connection and try again."
                 return false
             }
         }
         if identifyingFirebaseUserID != nil {
             for _ in 0..<200 where identifyingFirebaseUserID != nil {
-                try? await Task.sleep(nanoseconds: 50_000_000)
+                do { try await Task.sleep(nanoseconds: 50_000_000) }
+                catch { return false }
             }
-            guard firebaseUserIDProvider() == firebaseUserID else { return false }
+            guard !Task.isCancelled, firebaseUserIDProvider() == firebaseUserID else { return false }
             if isIdentityReady(for: firebaseUserID) { return true }
+            guard identifyingFirebaseUserID == nil else {
+                identityFailureKind = "timeout"
+                identityErrorMessage = "Your subscription account is still connecting. Please try again."
+                return false
+            }
             return await identify(firebaseUserID: firebaseUserID)
         }
 
@@ -417,16 +443,20 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
         defer { identifyingFirebaseUserID = nil }
         do {
             let result = try await Purchases.shared.logIn(firebaseUserID)
-            guard firebaseUserIDProvider() == firebaseUserID else { return false }
+            guard !Task.isCancelled, firebaseUserIDProvider() == firebaseUserID else { return false }
             identifiedFirebaseUserID = firebaseUserID
             identityErrorMessage = nil
+            identityFailureKind = nil
             guard RevenueCatIdentityPolicy.canApplyCustomerInfo(
                 capturedFirebaseUserID: firebaseUserID,
                 capturedAppUserID: firebaseUserID,
                 currentFirebaseUserID: firebaseUserIDProvider(),
-                currentAppUserID: Purchases.shared.appUserID,
+                currentAppUserID: revenueCatUserIDProvider(),
                 identifiedFirebaseUserID: identifiedFirebaseUserID
-            ) else { return false }
+            ) else {
+                identityFailureKind = "account_changed"
+                return false
+            }
             _ = try applyPurchaseResult(result.customerInfo, for: firebaseUserID)
             linkRevenueCatEventsToMixpanel(firebaseUserID: firebaseUserID)
             // The SDK caches tokens per identity; attach attribution to the subscription owner.
@@ -434,8 +464,9 @@ final class RCSubscriptionManager: NSObject, ObservableObject {
             print("RCManager: RevenueCat identity linked to Firebase user.")
             return true
         } catch {
-            guard firebaseUserIDProvider() == firebaseUserID else { return false }
+            guard !Task.isCancelled, firebaseUserIDProvider() == firebaseUserID else { return false }
             identifiedFirebaseUserID = nil
+            identityFailureKind = Self.preparationFailureKind(error)
             identityErrorMessage = "Subscription verification failed. Check your connection and try again."
             print("RCManager: RevenueCat identity link failed: \(error.localizedDescription)")
             return false
