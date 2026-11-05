@@ -115,6 +115,18 @@ struct ContentView: View {
                     .onReceive(NotificationCenter.default.publisher(for: .navigateToCloudStorybookGeneration)) { _ in
                         Task { await routeToActiveCloudStorybookIfNeeded(force: true) }
                     }
+                    .navigationDestination(for: HomeNavigationRoute.self) { route in
+                        Group {
+                            switch route {
+                            case .memoir:
+                                MemoirView()
+                            case .recordStory:
+                                RecordMemoryView()
+                            }
+                        }
+                        .environmentObject(profileVM)
+                        .environmentObject(tutorialCoordinator)
+                    }
                     .navigationDestination(for: StorybookRootRoute.self) { route in
                         StoryPage()
                             .environmentObject(profileVM)
@@ -149,6 +161,15 @@ struct ContentView: View {
                 .onChange(of: profileVM.selectedProfile.id) { _, _ in
                     syncStorybookJobObserverBinding()
                     Task { await routeToActiveCloudStorybookIfNeeded() }
+                }
+                .onChange(of: profileVM.hasReadyProfile) { _, isReady in
+                    syncStorybookJobObserverBinding()
+                    if isReady {
+                        Task { await routeToActiveCloudStorybookIfNeeded() }
+                    } else {
+                        StorybookSeenTracker.shared.noteUserNavigationIntent()
+                        path = NavigationPath()
+                    }
                 }
                 .onChange(of: authService.isSignedIn) { _, isSignedIn in
                     syncStorybookJobObserverBinding()
@@ -441,7 +462,7 @@ struct ContentView: View {
     /// Seen-gating makes this fire at most once per generation per app-open; `force` (banner tap)
     /// bypasses the gating but still no-ops when `StoryPage` is already on screen.
     private func routeToActiveCloudStorybookIfNeeded(force: Bool = false) async {
-        guard authService.isSignedIn else { return }
+        guard authService.isSignedIn, profileVM.hasReadyProfile else { return }
         let requestedProfileID = profileVM.selectedProfile.id
         let requestedUserID = Auth.auth().currentUser?.uid
         let navigationRevision = StorybookSeenTracker.shared.navigationRevision

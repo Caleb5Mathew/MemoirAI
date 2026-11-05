@@ -30,6 +30,7 @@ enum AccountCloudDataPolicy {
         key.contains(userID) && (
             key.hasPrefix("memoir_profiles_backup_")
                 || key.hasPrefix("memoir_selectedProfileIndex_")
+                || key.hasPrefix("memoir_selectedProfileID_")
                 || key.hasPrefix("memoir_profile_")
                 || key.hasPrefix("memoir_storybook_")
         )

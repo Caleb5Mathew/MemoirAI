@@ -11,8 +11,8 @@ struct StorybookPageFlowPolicyTests {
         #expect(!StorybookPagePresentationPolicy.shouldShowEntryLoading(isOpeningBook: false, resumesPendingGeneration: true, hasLoadedBook: true))
     }
 
-    @Test func maximumStandardBookPadsToPrintableHardcoverMinimum() {
-        let unpaddedPageCount = 3 + (StorybookGenerationBatchPolicy.maximumPagesPerBook * 2)
+    @Test func nineStoryBookStillPadsToPrintableHardcoverMinimum() {
+        let unpaddedPageCount = 3 + (9 * 2)
         #expect(unpaddedPageCount == 21)
         #expect(BookPrintPaddingPolicy.paddingCount(for: unpaddedPageCount) == 3)
         #expect(unpaddedPageCount + BookPrintPaddingPolicy.paddingCount(for: unpaddedPageCount) == 24)
@@ -473,10 +473,10 @@ struct StorybookPageFlowPolicyTests {
     }
 
     @Test func generationBatchCapsOneBookWithoutChangingMonthlyAllowance() {
-        #expect(StorybookGenerationBatchPolicy.maximumSelectablePages(remainingAllowance: 100) == 9)
+        #expect(StorybookGenerationBatchPolicy.maximumSelectablePages(remainingAllowance: 100) == 40)
         #expect(StorybookGenerationBatchPolicy.maximumSelectablePages(remainingAllowance: 4) == 4)
         #expect(StorybookGenerationBatchPolicy.maximumSelectablePages(remainingAllowance: 0) == 1)
-        #expect(StorybookGenerationBatchPolicy.clampedTargetPageCount(100) == 9)
+        #expect(StorybookGenerationBatchPolicy.clampedTargetPageCount(100) == 40)
     }
 
     @Test func generationStyleIgnoresLegacyStoredSelections() {
@@ -680,4 +680,70 @@ struct StorybookPageFlowPolicyTests {
             supportedPageRanges: []
         ) == .unavailable)
     }
+}
+
+extension StorybookPageFlowPolicyTests {
+    @MainActor @Test func allowanceReceiptChargesSuccessfulRetryOnceButNeverOldBooks() throws {
+        let suite = "allowance-receipt-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let profile = UUID()
+        #expect(StorybookAllowanceReceiptStore.take(userID: "user-a", currentUserID: "user-a", profileID: profile, jobID: "legacy", successCount: 4, defaults: defaults) == nil)
+        StorybookAllowanceReceiptStore.register(userID: "user-a", profileID: profile, jobID: "new-job", tutorialBonus: false, defaults: defaults)
+        #expect(StorybookAllowanceReceiptStore.take(userID: "user-a", currentUserID: "user-a", profileID: profile, jobID: "new-job", successCount: 4, defaults: defaults) == nil)
+        StorybookAllowanceReceiptStore.setEntitlementKind(userID: "user-a", jobID: "new-job", kind: "paid", defaults: defaults)
+        #expect(StorybookAllowanceReceiptStore.take(userID: "user-a", currentUserID: "user-a", profileID: profile, jobID: "new-job", successCount: 0, defaults: defaults) == nil)
+        #expect(StorybookAllowanceReceiptStore.take(userID: "user-a", currentUserID: "user-a", profileID: profile, jobID: "new-job", successCount: 4, defaults: defaults) == .paid(4))
+        StorybookAllowanceReceiptStore.register(userID: "user-a", profileID: profile, jobID: "new-job", tutorialBonus: false, defaults: defaults)
+        let restartedDefaults = try #require(UserDefaults(suiteName: suite))
+        #expect(StorybookAllowanceReceiptStore.take(userID: "user-a", currentUserID: "user-a", profileID: profile, jobID: "new-job", successCount: 4, defaults: restartedDefaults) == nil)
+    }
+
+    @MainActor @Test func allowanceReceiptIsAccountProfileScopedAndCleanedOnDeletion() throws {
+        let suite = "allowance-receipt-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let profile = UUID()
+        StorybookAllowanceReceiptStore.register(userID: "user-a", profileID: profile, jobID: "job", tutorialBonus: false, defaults: defaults)
+        StorybookAllowanceReceiptStore.setEntitlementKind(userID: "user-a", jobID: "job", kind: "paid", defaults: defaults)
+        #expect(StorybookAllowanceReceiptStore.take(userID: "user-a", currentUserID: "user-b", profileID: profile, jobID: "job", successCount: 2, defaults: defaults) == nil)
+        #expect(StorybookAllowanceReceiptStore.take(userID: "user-b", currentUserID: "user-b", profileID: profile, jobID: "job", successCount: 2, defaults: defaults) == nil)
+        #expect(StorybookAllowanceReceiptStore.take(userID: "user-a", currentUserID: "user-a", profileID: UUID(), jobID: "job", successCount: 2, defaults: defaults) == nil)
+        #expect(StorybookAllowanceReceiptStore.take(userID: "user-a", currentUserID: "user-a", profileID: profile, jobID: "job", successCount: 2, defaults: defaults) == .paid(2))
+        let key = StorybookAllowanceReceiptStore.key(userID: "user-a", jobID: "job")
+        #expect(AccountLocalDataPolicy.shouldRemoveUserDefaultsKey(key, firebaseUserID: "user-a"))
+        #expect(!AccountLocalDataPolicy.shouldRemoveUserDefaultsKey(key, firebaseUserID: "user-b"))
+    }
+
+    @MainActor @Test func allowanceReceiptUsesServerKindAndPreservesTutorialBonus() throws {
+        let suite = "allowance-receipt-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let profile = UUID()
+        for (job, kind, bonus, expected) in [
+            ("bonus", "freePreview", true, StorybookAllowanceReceiptStore.Charge.tutorialBonus),
+            ("free", "freePreview", false, .freePreview(1)),
+            ("paid", "paid", true, .paid(1)),
+            ("developer", "developer", false, .paid(1))
+        ] {
+            StorybookAllowanceReceiptStore.register(userID: "user", profileID: profile, jobID: job, tutorialBonus: bonus, defaults: defaults)
+            StorybookAllowanceReceiptStore.setEntitlementKind(userID: "user", jobID: job, kind: kind, defaults: defaults)
+            #expect(StorybookAllowanceReceiptStore.take(userID: "user", currentUserID: "user", profileID: profile, jobID: job, successCount: 1, defaults: defaults) == expected)
+        }
+    }
+    @MainActor @Test func paidAllowanceReceiptWaitsForRevenueCatReadinessThenAppliesOnce() throws {
+        let suite = "allowance-receipt-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let profile = UUID()
+        StorybookAllowanceReceiptStore.register(userID: "user", profileID: profile, jobID: "job", tutorialBonus: false, defaults: defaults)
+        StorybookAllowanceReceiptStore.setEntitlementKind(userID: "user", jobID: "job", kind: "paid", defaults: defaults)
+        for _ in 0..<2 {
+            #expect(StorybookAllowanceReceiptStore.take(userID: "user", currentUserID: "user", profileID: profile, jobID: "job", successCount: 3, paidAccountingReady: false, defaults: defaults) == nil)
+        }
+        let restoredDefaults = try #require(UserDefaults(suiteName: suite))
+        #expect(StorybookAllowanceReceiptStore.take(userID: "user", currentUserID: "user", profileID: profile, jobID: "job", successCount: 3, paidAccountingReady: true, defaults: restoredDefaults) == .paid(3))
+        #expect(StorybookAllowanceReceiptStore.take(userID: "user", currentUserID: "user", profileID: profile, jobID: "job", successCount: 3, paidAccountingReady: true, defaults: restoredDefaults) == nil)
+    }
+
 }

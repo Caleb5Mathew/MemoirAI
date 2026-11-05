@@ -236,7 +236,9 @@ struct MemoirAIApp: App {
                     .padding(32)
                 case .ready:
                     #if DEBUG
-                    if ProcessInfo.processInfo.arguments.contains("-UITestMemoirName") {
+                    if ProcessInfo.processInfo.arguments.contains("-UITestTwoProfiles") {
+                        ProfileNavigationUITestHarness()
+                    } else if ProcessInfo.processInfo.arguments.contains("-UITestMemoirName") {
                         StorybookNameUITestHarness()
                     } else if let chapter = normalJourneyUITestChapter {
                         GeometryReader { container in

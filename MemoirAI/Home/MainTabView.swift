@@ -18,12 +18,51 @@ struct MainTabView: View {
     @State private var pendingAccessRequestCount = 0
     @State private var showAccessRequests = false
     @State private var accountLinkError: String?
+    @State private var showProfileRecoveryAccount = false
+    @State private var isRetryingProfiles = false
 
     private var showBookBackupNudge: Bool {
         suggestBookBackup && authService.isAnonymous && !bookBackupBannerDismissed
     }
 
     var body: some View {
+        Group {
+            if profileVM.hasReadyProfile {
+                mainContent
+            } else {
+                VStack(spacing: 18) {
+                    if profileVM.isLoadingProfiles || isRetryingProfiles { ProgressView() }
+                    Text(profileVM.isLoadingProfiles ? "Loading your profiles" : "Your profiles aren’t ready")
+                        .font(LinenTheme.heading(25))
+                    Text(profileVM.profileLoadError ?? "Your stories will appear when your profiles finish loading.")
+                        .font(LinenTheme.body(15))
+                        .foregroundStyle(LinenTheme.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Try again") {
+                        Task { @MainActor in
+                            isRetryingProfiles = true
+                            defer { isRetryingProfiles = false }
+                            guard await authService.prepareAuthenticatedSessionForLaunch(),
+                                  let userID = authService.user?.uid else { return }
+                            await profileVM.activateUser(userID)
+                        }
+                    }
+                    .disabled(profileVM.isLoadingProfiles || isRetryingProfiles)
+                    .accessibilityIdentifier("retryProfileLoading")
+                    Button("Account & backup") { showProfileRecoveryAccount = true }
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(LinenTheme.paper)
+                .accessibilityIdentifier("profileRecoveryScreen")
+                .sheet(isPresented: $showProfileRecoveryAccount) {
+                    NavigationStack { AccountBackupView() }
+                }
+            }
+        }
+    }
+
+    private var mainContent: some View {
         ZStack {
             // Soft background base
             LinenTheme.paper
@@ -43,12 +82,24 @@ struct MainTabView: View {
                     }
                     .accessibilityLabel("Switch profiles")
                     Button { showProfileHub = true } label: {
-                        Image(systemName: "person")
-                            .frame(width: 38, height: 38)
-                            .background(LinenTheme.surface, in: Circle())
-                            .frame(width: 44, height: 44)
+                        Group {
+                            if let image = profileVM.selectedProfile.uiImage {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .accessibilityIdentifier("homeProfilePhoto")
+                            } else {
+                                Image(systemName: "person")
+                                    .accessibilityIdentifier("homeProfilePlaceholder")
+                            }
+                        }
+                        .frame(width: 38, height: 38)
+                        .background(LinenTheme.surface, in: Circle())
+                        .clipShape(Circle())
+                        .frame(width: 44, height: 44)
                     }
                     .accessibilityLabel("Your profile")
+                    .accessibilityValue(profileVM.selectedProfile.name)
                 }
                 .foregroundStyle(LinenTheme.ink)
                 .padding(.horizontal, 24)
@@ -57,11 +108,16 @@ struct MainTabView: View {
                 .background(LinenTheme.paper)
                 .overlay(alignment: .bottom) { Rectangle().fill(LinenTheme.line).frame(height: 1) }
                 TabView(selection: $selectedTab) {
-                    HomepageView {
-                        guard path.isEmpty else { return }
+                    HomepageView(openStorybook: {
                         StorybookSeenTracker.shared.noteUserNavigationIntent()
-                        path.append(StorybookRootRoute.openBook)
-                    }
+                        path = NavigationPath([StorybookRootRoute.openBook])
+                    }, openMemoir: {
+                        StorybookSeenTracker.shared.noteUserNavigationIntent()
+                        path = NavigationPath([HomeNavigationRoute.memoir])
+                    }, openRecorder: {
+                        StorybookSeenTracker.shared.noteUserNavigationIntent()
+                        path = NavigationPath([HomeNavigationRoute.recordStory])
+                    })
                         .environmentObject(profileVM)
                         .tabItem {
                             Image(systemName: "house.fill")
@@ -91,6 +147,8 @@ struct MainTabView: View {
                     ProductAnalytics.shared.track("Tab Viewed", ["tab": newTab == 1 ? "memories" : "home"])
                 }
                 .onChange(of: profileVM.selectedProfile.id) { _, newID in
+                    StorybookSeenTracker.shared.noteUserNavigationIntent()
+                    path = NavigationPath()
                     tutorialCoordinator.registerActiveProfile(newID)
                     tutorialCoordinator.refreshAvailability(profileID: newID)
                     tutorialCoordinator.reloadBonusState(profileID: newID)

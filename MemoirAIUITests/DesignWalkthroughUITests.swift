@@ -64,18 +64,83 @@ final class DesignWalkthroughUITests: XCTestCase {
         XCTAssertTrue(home.waitForExistence(timeout: 10))
         home.tap()
         let book = app.buttons["tutorialYourBook"]
-        for _ in 0..<4 {
+        for iteration in 0..<4 {
             XCTAssertTrue(book.waitForExistence(timeout: 5))
             if !book.isHittable { app.swipeUp() }
             book.doubleTap()
             let back = app.buttons["Back"]
-            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            let opened = back.waitForExistence(timeout: 5)
+            snap(app, name: "book-reopen-\(iteration)")
+            XCTAssertTrue(opened, app.debugDescription)
             XCTAssertTrue(app.buttons["createStorybookButton"].waitForExistence(timeout: 5))
             XCTAssertFalse(app.staticTexts["Opening your book…"].exists)
             back.tap()
             XCTAssertTrue(book.waitForExistence(timeout: 5), app.debugDescription)
             XCTAssertTrue(book.isHittable)
         }
+    }
+
+    @MainActor
+    func testProfileSelectionSurvivesColdLaunchAndBookRemainsReachable() throws {
+        let app = XCUIApplication()
+        let arguments = ["-UITest", "-UITestTwoProfiles", "-UITestSeedStorybook", "-UITestResetMemoirMode", "-linen-preview"]
+        app.launchArguments = arguments + ["-UITestResetProfiles"]
+        app.launch()
+        let profile = app.buttons["Your profile"]
+        XCTAssertTrue(app.buttons["linenHomeTab"].waitForExistence(timeout: 10))
+        app.buttons["linenHomeTab"].tap()
+        XCTAssertTrue(profile.waitForExistence(timeout: 10))
+        XCTAssertEqual(profile.value as? String, "Profile One")
+        app.buttons["Switch profiles"].tap()
+        let second = app.buttons["Switch to Profile Two"]
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        second.tap()
+        XCTAssertTrue(profile.waitForExistence(timeout: 5))
+        XCTAssertEqual(profile.value as? String, "Profile Two")
+        let book = app.buttons["tutorialYourBook"]
+        if !book.isHittable { app.swipeUp() }
+        book.tap()
+        XCTAssertTrue(app.buttons["storybookEditCurrentPage"].waitForExistence(timeout: 8))
+        app.buttons["Back"].tap()
+        app.terminate()
+        app.launchArguments = arguments
+        app.launch()
+        XCTAssertTrue(profile.waitForExistence(timeout: 10))
+        XCTAssertEqual(profile.value as? String, "Profile Two", "Cold launch must restore the selected profile ID")
+        if !book.isHittable { app.swipeUp() }
+        book.tap()
+        XCTAssertTrue(app.buttons["storybookEditCurrentPage"].waitForExistence(timeout: 8))
+    }
+
+    @MainActor
+    func testBookOpensAfterReturningFromChapterJourney() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITest", "-UITestTwoProfiles", "-UITestResetProfiles", "-UITestResetMemoirMode", "-linen-preview"]
+        app.launch()
+        let home = app.buttons["linenHomeTab"]
+        XCTAssertTrue(home.waitForExistence(timeout: 10))
+        home.tap()
+        let memoir = app.buttons["tutorialContinueYourMemoir"]
+        XCTAssertTrue(memoir.waitForExistence(timeout: 10))
+        memoir.tap()
+        selectDefaultMemoirIfNeeded(in: app)
+        let chapter = app.buttons["currentChapterCard"]
+        XCTAssertTrue(chapter.waitForExistence(timeout: 5))
+        chapter.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.25)).tap()
+        let chapterBack = app.buttons["chapterJourneyBack"]
+        XCTAssertTrue(chapterBack.waitForExistence(timeout: 5))
+        chapterBack.tap()
+        XCTAssertTrue(app.staticTexts["memoirPickerTitle"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        let book = app.buttons["tutorialYourBook"]
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        if !book.isHittable { app.swipeUp() }
+        book.tap()
+        XCTAssertTrue(app.buttons["createStorybookButton"].waitForExistence(timeout: 8))
+        app.buttons["Back"].tap()
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        book.tap()
+        XCTAssertTrue(app.buttons["createStorybookButton"].waitForExistence(timeout: 8))
     }
 
     @MainActor

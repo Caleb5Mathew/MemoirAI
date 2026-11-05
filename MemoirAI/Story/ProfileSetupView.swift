@@ -117,7 +117,6 @@ struct ProfileSetupView: View {
     @EnvironmentObject var subscriptionManager: RCSubscriptionManager
     
     // Gender remains a profile preference. Ethnicity is intentionally scoped to one generation.
-    @AppStorage("memoirGender") private var savedGender: String = ""
     
     // Dismiss
     @Environment(\.dismiss) private var dismiss
@@ -257,9 +256,6 @@ struct ProfileSetupView: View {
                         .tint(LinenTheme.accent)
                         .onChange(of: selectedGender) { _ in
                             updateGenderBinding()
-                            // Auto-save when user changes selection
-                            savedGender = gender
-                            // Sync back to profile
                             syncGenderToProfile(gender)
                         }
                         
@@ -270,9 +266,6 @@ struct ProfileSetupView: View {
                                 .transition(.opacity.animation(.easeIn))
                                 .onChange(of: customGender) { _ in
                                     updateGenderBinding()
-                                    // Auto-save custom gender
-                                    savedGender = gender
-                                    // Sync back to profile
                                     syncGenderToProfile(gender)
                                 }
                         }
@@ -351,15 +344,8 @@ struct ProfileSetupView: View {
             // run's global AppStorage value or silently reusing profile data.
             race = StorybookProfileSetupPolicy.initialEthnicity()
 
-            // Populate gender from profile (takes priority) - MUST happen before setInitialGenderState
-            if let profileGender = profile.gender, !profileGender.isEmpty {
-                if gender.isEmpty {
-                    gender = profileGender
-                }
-            } else if gender.isEmpty && !savedGender.isEmpty {
-                gender = savedGender
-            }
-            
+            gender = profile.gender ?? ""
+
             // Populate name from profile if available and binding is empty
             if name.isEmpty && !profile.name.isEmpty {
                 name = profile.name

@@ -1,11 +1,20 @@
 import SwiftUI
 import CoreData
 
+enum MemoryLibraryScopePolicy {
+    static func matches(entryProfileID: UUID?, entryUserID: String?, selectedProfileID: UUID, currentUserID: String?) -> Bool {
+        guard let currentUserID, !currentUserID.isEmpty else { return false }
+        return entryProfileID == selectedProfileID && entryUserID == currentUserID
+    }
+}
+
 struct RecentMemoriesView: View {
     @Environment(\.managedObjectContext) private var context
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var profileVM: ProfileViewModel
     @StateObject private var permissionManager = PermissionManager.shared
+    @ObservedObject private var authentication = AuthenticationService.shared
+    @State private var transcriptionNow = Date()
     
     // Optional binding for tab selection - only set when used in MainTabView
     var selectedTab: Binding<Int>? = nil
@@ -29,7 +38,11 @@ struct RecentMemoriesView: View {
     private let textSecondary = LinenTheme.secondary
 
     private var candidateEntries: [MemoryEntry] {
-        enhancementMode ? entries.filter(isEnhanceCandidate(_:)) : entries
+        let scoped = entries.filter {
+            MemoryLibraryScopePolicy.matches(entryProfileID: $0.profileID, entryUserID: $0.firebaseUserId,
+                selectedProfileID: profileVM.selectedProfile.id, currentUserID: authentication.user?.uid)
+        }
+        return enhancementMode ? scoped.filter(isEnhanceCandidate(_:)) : scoped
     }
 
     private var availableMemoirModes: [MemoirMode] {
@@ -128,7 +141,8 @@ struct RecentMemoriesView: View {
                                             textPrimary: textPrimary,
                                             textSecondary: textSecondary
                                         ),
-                                        selectedMemoryID: $selectedMemoryID
+                                        selectedMemoryID: $selectedMemoryID,
+                                        transcriptionNow: transcriptionNow
                                     )
                                     .contextMenu {
                                         Button(role: .destructive, action: {
@@ -149,7 +163,7 @@ struct RecentMemoriesView: View {
                 .adaptiveContentWidth(AdaptiveLayoutPolicy.readableMaxWidth)
                 .navigationBarHidden(true)
                 .navigationDestination(isPresented: $showCreateMemory) {
-                    MemoirView()
+                    RecordMemoryView()
                         .environmentObject(TutorialCoordinator.shared)
                 }
                 .navigationDestination(item: $selectedMemoryID) { memoryID in
@@ -183,10 +197,27 @@ struct RecentMemoriesView: View {
                 }
                 .onChange(of: profileVM.selectedProfile.id) { newID in
                     print("🔄 Switched profile (ID: \(newID.uuidString.prefix(8))…)")
+                    entries = []
+                    selectedMemoryID = nil
+                    pendingDeleteMemoryID = nil
+                    showCreateMemory = false
                     selectedMemoirMode = enhancementMode ? initialMemoirMode : nil
                     fetchEntries(for: newID)
                     // Check permissions again when switching profiles
                     checkPermissionsAndTranscribe()
+                }
+                .onChange(of: authentication.user?.uid) { _ in
+                    entries = []
+                    selectedMemoryID = nil
+                    pendingDeleteMemoryID = nil
+                    showCreateMemory = false
+                    fetchEntries(for: profileVM.selectedProfile.id)
+                }
+                .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now in
+                    transcriptionNow = now
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .memoriesHydratedFromFirestore)) { _ in
+                    fetchEntries(for: profileVM.selectedProfile.id)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .memorySaved)) { _ in
                     // Refresh entries when a memory is saved/updated
@@ -370,6 +401,7 @@ struct RecentMemoriesView: View {
     }
 
     private func fetchEntries(for profileID: UUID) {
+        entries = []
         let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
         request.predicate = MemoryUserScope.profilePredicate(profileID: profileID)
         request.sortDescriptors = [NSSortDescriptor(keyPath: \MemoryEntry.createdAt, ascending: false)]
@@ -525,6 +557,7 @@ struct MemoryCard: View {
     @ObservedObject var entry: MemoryEntry
     let colors: CardColors
     @Binding var selectedMemoryID: UUID?
+    var transcriptionNow: Date = Date()
     @EnvironmentObject private var profileVM: ProfileViewModel
     @StateObject private var transcriptionManager = BatchTranscriptionManager.shared
     @State private var showCharacterDetails = false
@@ -573,13 +606,16 @@ struct MemoryCard: View {
     /// True while this specific memory's audio is actively being transcribed
     /// (either by the record flow that created it or a batch retry).
     private var isTranscribingNow: Bool {
-        if entry.transcriptionStatus == "queued" || entry.transcriptionStatus == "processing" {
-            return true
-        }
-        guard entry.hasAudio, let id = entry.id else { return false }
-        return transcriptionManager.isInFlight(id)
+        TranscriptionPresentationPolicy.isActive(status: entry.transcriptionStatus,
+            updatedAt: entry.transcriptionUpdatedAt,
+            isInFlight: entry.id.map(transcriptionManager.isInFlight) == true, now: transcriptionNow)
     }
-    
+
+    private var canRetryTranscription: Bool {
+        TranscriptionPresentationPolicy.canRetry(status: entry.transcriptionStatus,
+            updatedAt: entry.transcriptionUpdatedAt, audioURL: entry.audioFileURL, now: transcriptionNow)
+    }
+
     // Check if memory has character details
     private var hasCharacterDetails: Bool {
         entry.parsedCharacterDetails?.characters.isEmpty == false
@@ -770,13 +806,13 @@ struct MemoryCard: View {
                             Text("Transcribing…")
                                 .font(LinenTheme.body(15, weight: .medium))
                                 .foregroundColor(colors.textSecondary)
-                        } else if entry.transcriptionStatus == "failed" || entry.transcriptionStatus == "needsRerecording" {
+                        } else if canRetryTranscription || entry.transcriptionStatus == "failed" || entry.transcriptionStatus == "needsRerecording" {
                             Image(systemName: "exclamationmark.circle.fill")
                                 .font(LinenTheme.body(18))
                                 .foregroundColor(colors.terracotta.opacity(0.8))
                             Text(entry.transcriptionStatus == "needsRerecording" ?
                                  "This audio needs to be recorded again." :
-                                 "Transcript failed. Open this memory to retry.")
+                                 "Transcript needs attention. Open this memory to retry.")
                                 .font(LinenTheme.body(14, weight: .medium))
                                 .foregroundColor(colors.textSecondary)
                         } else if entry.transcriptionStatus == nil,
@@ -791,7 +827,7 @@ struct MemoryCard: View {
                             Image(systemName: "waveform.circle.fill")
                                 .font(LinenTheme.body(18))
                                 .foregroundColor(colors.terracotta.opacity(0.7))
-                            Text("Audio saved. Transcript coming soon, we'll retry automatically.")
+                            Text("Audio saved. Waiting to transcribe.")
                                 .font(LinenTheme.body(14, weight: .medium))
                                 .foregroundColor(colors.textSecondary)
                         } else {

@@ -105,6 +105,15 @@ enum RecordingOrphanCleanup {
     }
 }
 
+enum MemoryEntryFetchRequest {
+    static func make() -> NSFetchRequest<MemoryEntry> {
+        // Entity-name requests resolve against the context, even with multiple loaded models.
+        let request = NSFetchRequest<MemoryEntry>(entityName: "MemoryEntry")
+        request.sortDescriptors = []
+        return request
+    }
+}
+
 struct PersistenceController {
     // MARK: - Single shared instance
     static let shared = PersistenceController()

@@ -285,10 +285,10 @@ func normalChapterPromptTextsIncludingLegacy(for chapter: Chapter) -> [String] {
 }
 
 /// How many prompt nodes are satisfied for this chapter (current or legacy prompt text per index). Used for hub + homepage progress.
-func filledPromptSlotsForChapter(entries: [MemoryEntry], chapter: Chapter, childNames: [String] = []) -> Int {
-    let entriesForChapter = entries.filter { chapterTitleMatches($0.chapter, chapter.title) }
+func filledPromptSlotsForChapter(entries: [MemoryEntry], chapter: Chapter, childNames: [String] = [], memoirMode: MemoirMode = currentMemoirMode()) -> Int {
+    let entriesForChapter = entries.filter { !$0.isDeleted && chapterTitleMatches($0.chapter, chapter.title, memoirMode: memoirMode) }
     let legacySameNumber = allChaptersLegacyKnownPrompts.first { $0.number == chapter.number }
-    let useLegacyIndexMatch = currentMemoirMode() == .normal
+    let useLegacyIndexMatch = memoirMode == .normal
         && allChapters.contains(where: { $0.number == chapter.number && $0.title == chapter.title })
         && legacySameNumber != nil
     let recordedPromptTexts = Set(entriesForChapter.compactMap(\.prompt))

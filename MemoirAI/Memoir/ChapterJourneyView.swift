@@ -63,10 +63,8 @@ struct ChapterJourneyView: View {
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
 
-    @FetchRequest(
-        entity: MemoryEntry.entity(),
-        sortDescriptors: []
-    ) var allEntries: FetchedResults<MemoryEntry>
+    @FetchRequest(fetchRequest: MemoryEntryFetchRequest.make())
+    var allEntries: FetchedResults<MemoryEntry>
 
     @State private var selectedPrompt: MemoryPrompt?
     @State private var selectedPerChildPrompt: MemoryPrompt?

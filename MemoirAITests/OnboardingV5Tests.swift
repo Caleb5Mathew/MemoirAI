@@ -474,6 +474,14 @@ extension OnboardingV5Tests {
         }
     }
 
+    func testTranscriptionAccountChangeRequiresReconnect() {
+        let error = CloudTranscriptionError.accountChanged
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.recovery(for: error), .reconnect)
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: error), "account_changed")
+        XCTAssertEqual(OnboardingPreviewErrorPolicy.stage(for: error), "preflight")
+        XCTAssertFalse(OnboardingPreviewErrorPolicy.isTransient(error))
+    }
+
     func testPreviewStageDistinguishesPreflightFromGeneration() {
         XCTAssertEqual(OnboardingPreviewErrorPolicy.recovery(for: CloudTranscriptionError.notAuthenticated), .reconnect)
         XCTAssertEqual(OnboardingPreviewErrorPolicy.reason(for: CloudTranscriptionError.notAuthenticated), "authentication")

@@ -40,6 +40,14 @@ enum ProfileStorageScope {
         "selectedProfileIndex_\(userID)"
     }
 
+    static func selectedIDKey(userID: String) -> String {
+        "selectedProfileID_\(userID)"
+    }
+
+    static func cloudSelectedIDKey(userID: String) -> String {
+        "memoir_selectedProfileID_\(userID)"
+    }
+
     static func cloudSelectedIndexKey(userID: String) -> String {
         "memoir_selectedProfileIndex_\(userID)"
     }
@@ -97,58 +105,118 @@ enum ProfilePhotoStorageScope {
     }
 }
 
+enum ProfileSelectionPreference: Equatable {
+    case profile(UUID)
+    case legacyIndex(Int)
+
+    static func restored(localID: String?, localIndex: Int?, cloudID: String?, cloudIndex: Int?) -> Self? {
+        if let localID, let id = UUID(uuidString: localID) { return .profile(id) }
+        if let localIndex, localIndex >= 0 { return .legacyIndex(localIndex) }
+        if let cloudID, let id = UUID(uuidString: cloudID) { return .profile(id) }
+        if let cloudIndex, cloudIndex >= 0 { return .legacyIndex(cloudIndex) }
+        return nil
+    }
+
+    func index(in profiles: [Profile]) -> Int? {
+        switch self {
+        case .profile(let id): return profiles.firstIndex { $0.id == id }
+        case .legacyIndex(let index): return profiles.indices.contains(index) ? index : nil
+        }
+    }
+}
+
 @MainActor
 class ProfileViewModel: ObservableObject {
     @Published var profiles: [Profile] = []
+    @Published private(set) var isLoadingProfiles = false
+    @Published private(set) var profileLoadError: String?
     @Published var selectedProfileIndex: Int = 0 {
         didSet {
+            guard !isRestoringSelection, profiles.indices.contains(selectedProfileIndex) else { return }
+            selectionPreference = .profile(profiles[selectedProfileIndex].id)
             saveSelectedProfileIndex()
         }
     }
 
     private var activeUserID: String?
+    private var isRestoringSelection = false
+    private var selectionPreference: ProfileSelectionPreference?
+    private let placeholderProfile = Profile(name: "Grandparent", photoData: nil)
+    private let selectionDefaults: UserDefaults
+    private let selectionCloudStore: NSUbiquitousKeyValueStore?
+    private let profilesDirectory: URL?
 
-    init() {
-        profiles = [Profile(name: "Grandparent", photoData: nil)]
+    init(selectionDefaults: UserDefaults = .standard,
+         selectionCloudStore: NSUbiquitousKeyValueStore? = .default,
+         profilesDirectory: URL? = nil) {
+        self.selectionDefaults = selectionDefaults
+        self.selectionCloudStore = selectionCloudStore
+        self.profilesDirectory = profilesDirectory
+        profiles = [placeholderProfile]
+    }
+
+    /// Restores local state without publishing temporary selection resets to persistence.
+    func beginUserActivation(_ userID: String) {
+        isRestoringSelection = true
+        activeUserID = userID
+        isLoadingProfiles = true
+        profileLoadError = nil
+        selectionPreference = nil
+        profiles = []
+        selectedProfileIndex = 0
+        loadProfiles(userID: userID)
+        isRestoringSelection = false
     }
 
     func activateUser(_ userID: String) async {
         guard let normalizedUserID = MemoryOwnershipPolicy.normalizedUserID(userID) else { return }
-        guard activeUserID != normalizedUserID else { return }
-
-        activeUserID = normalizedUserID
-        profiles = []
-        selectedProfileIndex = 0
-        loadProfiles(userID: normalizedUserID)
-        await hydrateProfilesFromFirestore(userID: normalizedUserID)
-
+        guard activeUserID != normalizedUserID || (!isLoadingProfiles && (profiles.isEmpty || profileLoadError != nil)) else { return }
+        beginUserActivation(normalizedUserID)
+        let recovered = await hydrateProfilesFromFirestore(userID: normalizedUserID)
         guard activeUserID == normalizedUserID else { return }
-
-        if profiles.isEmpty {
-            profiles = [Profile(name: "Grandparent", photoData: nil)]
+        guard recovered || !profiles.isEmpty else {
+            isLoadingProfiles = false
+            profileLoadError = "Your profiles couldn’t be loaded. Check your connection and try again."
+            return
         }
-        selectedProfileIndex = min(selectedProfileIndex, max(0, profiles.count - 1))
+        if profiles.isEmpty { profiles = [Profile(name: "Grandparent", photoData: nil)] }
+        finishProfileSelectionRecovery(recovered: recovered)
         saveProfiles()
         await replayPendingProfileMutations(for: normalizedUserID)
+        guard activeUserID == normalizedUserID else { return }
+        Task { await FirestoreSyncService.shared.retryPendingSyncsForCurrentUser() }
+    }
 
-        Task {
-            await FirestoreSyncService.shared.retryPendingSyncsForCurrentUser()
+    func finishProfileSelectionRecovery(recovered: Bool) {
+        restoreSelectedProfileIndex()
+        isLoadingProfiles = false
+        if !recovered, let preference = selectionPreference, preference.index(in: profiles) == nil {
+            profileLoadError = "Some profiles couldn’t be loaded. Check your connection and try again."
+            return
         }
+        profileLoadError = nil
+        saveSelectedProfileIndex()
     }
 
     var selectedProfile: Profile {
-        if profiles.isEmpty {
-            let defaultProfile = Profile(name: "Grandparent", photoData: nil)
-            profiles.append(defaultProfile)
-            selectedProfileIndex = 0
-            saveProfiles()
+        guard profiles.indices.contains(selectedProfileIndex) else {
+            return profiles.first ?? placeholderProfile
         }
-
-        if !profiles.indices.contains(selectedProfileIndex) {
-            selectedProfileIndex = 0
-        }
-
         return profiles[selectedProfileIndex]
+    }
+
+    var hasReadyProfile: Bool {
+        guard !profiles.isEmpty, activeUserID != nil else { return false }
+        if isLoadingProfiles, case .profile(let expectedID) = selectionPreference {
+            return profiles.contains { $0.id == expectedID }
+        }
+        return true
+    }
+
+    private func restoreSelectedProfileIndex() {
+        isRestoringSelection = true
+        selectedProfileIndex = selectionPreference?.index(in: profiles) ?? 0
+        isRestoringSelection = false
     }
 
     var canCreateNewProfile: Bool {
@@ -291,7 +359,10 @@ class ProfileViewModel: ObservableObject {
         )
 
         activeUserID = nil
-        profiles = [Profile(name: "Grandparent", photoData: nil)]
+        selectionPreference = nil
+        isLoadingProfiles = false
+        profileLoadError = nil
+        profiles = [placeholderProfile]
         selectedProfileIndex = 0
     }
 
@@ -426,7 +497,7 @@ class ProfileViewModel: ObservableObject {
     }
 
     private func getDocumentsDirectory() -> URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        profilesDirectory ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
     }
 
@@ -438,7 +509,11 @@ class ProfileViewModel: ObservableObject {
         guard let userID = activeUserID else { return }
         let url = profilesURL(userID: userID)
         if let data = try? JSONEncoder().encode(profiles) {
-            try? data.write(to: url)
+            do { try data.write(to: url, options: .atomic) }
+            catch {
+                profileLoadError = "Your profile changes could not be saved on this device. Please try again."
+                return
+            }
 
             let cloudStore = NSUbiquitousKeyValueStore.default
             guard !AccountCloudDataPolicy.isDeletionBarrierActive(
@@ -516,9 +591,8 @@ class ProfileViewModel: ObservableObject {
             where AccountCloudDataPolicy.shouldRemoveProfileKey(key, userID: userID) {
                 cloudStore.removeObject(forKey: key)
             }
-            UserDefaults.standard.removeObject(
-                forKey: ProfileStorageScope.selectedIndexKey(userID: userID)
-            )
+            selectionDefaults.removeObject(forKey: ProfileStorageScope.selectedIndexKey(userID: userID))
+            selectionDefaults.removeObject(forKey: ProfileStorageScope.selectedIDKey(userID: userID))
             cloudStore.synchronize()
         }
         var loadedProfiles: [Profile] = []
@@ -548,47 +622,33 @@ class ProfileViewModel: ObservableObject {
         
         self.profiles = loadedProfiles
 
-        // Try local first, then iCloud backup
-        let localIndexKey = ProfileStorageScope.selectedIndexKey(userID: userID)
-        var savedIndex = UserDefaults.standard.integer(forKey: localIndexKey)
-        
-        // If local is 0 (default) and we have profiles, try iCloud backup
-        if savedIndex == 0 && !profiles.isEmpty {
-            NSUbiquitousKeyValueStore.default.synchronize()
-            let cloudIndex = NSUbiquitousKeyValueStore.default.longLong(
-                forKey: ProfileStorageScope.cloudSelectedIndexKey(userID: userID)
-            )
-            if cloudIndex > 0 {
-                savedIndex = Int(cloudIndex)
-                // Restore to local storage
-                UserDefaults.standard.set(savedIndex, forKey: localIndexKey)
-            }
+        selectionPreference = ProfileSelectionPreference.restored(
+            localID: selectionDefaults.string(forKey: ProfileStorageScope.selectedIDKey(userID: userID)),
+            localIndex: (selectionDefaults.object(forKey: ProfileStorageScope.selectedIndexKey(userID: userID)) as? NSNumber)?.intValue,
+            cloudID: selectionCloudStore?.string(forKey: ProfileStorageScope.cloudSelectedIDKey(userID: userID)),
+            cloudIndex: (selectionCloudStore?.object(forKey: ProfileStorageScope.cloudSelectedIndexKey(userID: userID)) as? NSNumber)?.intValue
+        )
+        if case .legacyIndex(_)? = selectionPreference,
+           let index = selectionPreference?.index(in: profiles) {
+            selectionPreference = .profile(profiles[index].id)
         }
-        
-        selectedProfileIndex = min(savedIndex, max(0, profiles.count - 1))
+        restoreSelectedProfileIndex()
     }
 
     private func saveSelectedProfileIndex() {
-        guard let userID = activeUserID else { return }
-        UserDefaults.standard.set(
-            selectedProfileIndex,
-            forKey: ProfileStorageScope.selectedIndexKey(userID: userID)
-        )
-
-        let cloudStore = NSUbiquitousKeyValueStore.default
-        guard !AccountCloudDataPolicy.isDeletionBarrierActive(
-            userID: userID,
-            cloudStore: cloudStore
-        ) else { return }
-        
-        // Backup to iCloud for persistence across app deletion/reinstall
-        cloudStore.set(
-            selectedProfileIndex,
-            forKey: ProfileStorageScope.cloudSelectedIndexKey(userID: userID)
-        )
+        guard !isRestoringSelection, let userID = activeUserID,
+              profiles.indices.contains(selectedProfileIndex) else { return }
+        selectionPreference = .profile(profiles[selectedProfileIndex].id)
+        let selectedID = profiles[selectedProfileIndex].id.uuidString
+        selectionDefaults.set(selectedID, forKey: ProfileStorageScope.selectedIDKey(userID: userID))
+        selectionDefaults.set(selectedProfileIndex, forKey: ProfileStorageScope.selectedIndexKey(userID: userID))
+        guard let cloudStore = selectionCloudStore,
+              !AccountCloudDataPolicy.isDeletionBarrierActive(userID: userID, cloudStore: cloudStore) else { return }
+        cloudStore.set(selectedID, forKey: ProfileStorageScope.cloudSelectedIDKey(userID: userID))
+        cloudStore.set(selectedProfileIndex, forKey: ProfileStorageScope.cloudSelectedIndexKey(userID: userID))
         cloudStore.synchronize()
     }
-    
+
     // MARK: - CloudKit Sync Methods
     
     private func syncProfileToCloudKit(_ profile: Profile) {
@@ -829,14 +889,20 @@ class ProfileViewModel: ObservableObject {
         return byID.values.sorted { $0.createdAt < $1.createdAt }
     }
 
-    private func hydrateProfilesFromFirestore(userID: String) async {
+    @discardableResult
+    func applyHydratedProfiles(_ recovered: [Profile], deletedIDs: Set<UUID>, userID: String) -> Bool {
+        guard activeUserID == userID else { return false }
+        profiles = Self.mergedProfiles(local: profiles, remote: recovered, deletedIDs: deletedIDs)
+        restoreSelectedProfileIndex()
+        return true
+    }
+
+    private func hydrateProfilesFromFirestore(userID: String) async -> Bool {
         do {
             let userRef = Firestore.firestore().collection("users").document(userID)
-            let selectedProfileID = profiles.indices.contains(selectedProfileIndex)
-                ? profiles[selectedProfileIndex].id
-                : nil
             let snapshot = try await userRef.collection("profiles").getDocuments()
             let tombstoneSnapshot = try await userRef.collection("profileTombstones").getDocuments()
+            guard activeUserID == userID else { return false }
             var deletedIDs = deletedProfileIDs(userID: userID)
             deletedIDs.formUnion(tombstoneSnapshot.documents.compactMap { UUID(uuidString: $0.documentID) })
             saveDeletedProfileIDs(deletedIDs, userID: userID)
@@ -890,17 +956,13 @@ class ProfileViewModel: ObservableObject {
                 }
             }
 
-            guard activeUserID == userID else { return }
-            profiles = Self.mergedProfiles(local: profiles, remote: recovered, deletedIDs: deletedIDs)
-            if let selectedProfileID,
-               let selectedIndex = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
-                selectedProfileIndex = selectedIndex
-            } else {
-                selectedProfileIndex = 0
-            }
+            guard activeUserID == userID else { return false }
+            guard applyHydratedProfiles(recovered, deletedIDs: deletedIDs, userID: userID) else { return false }
             await restoreMissingProfilePhotos(userID: userID)
+            return activeUserID == userID
         } catch {
             print("❌ Could not restore profiles from Firebase: \(error.localizedDescription)")
+            return false
         }
     }
 

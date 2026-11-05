@@ -173,7 +173,7 @@ enum StorybookCloudPageRebuildPolicy {
     /// In-progress snapshots exist to update progress. Rebuilding pages before the
     /// worker reaches `aiComplete` repeatedly downloads the same illustrations.
     static func shouldDeferPageRebuild(status: String) -> Bool {
-        ["queued", "ranking", "running"].contains(status)
+        ["queued", "ranking", "running", "running_continue"].contains(status)
     }
 }
 
@@ -218,7 +218,7 @@ enum StorybookProfileSetupPolicy {
 }
 
 enum StorybookGenerationBatchPolicy {
-    static let maximumPagesPerBook = 9
+    static let maximumPagesPerBook = 40
 
     static func maximumSelectablePages(remainingAllowance: Int) -> Int {
         max(1, min(maximumPagesPerBook, remainingAllowance))
@@ -402,5 +402,51 @@ enum StorybookGeneratedMemoryTitlePolicy {
             }
         }
         return "Memory"
+    }
+}
+
+/// Local display counters are charged once for newly submitted cloud jobs only.
+@MainActor
+enum StorybookAllowanceReceiptStore {
+    enum Charge: Equatable { case paid(Int), freePreview(Int), tutorialBonus }
+
+    static func key(userID: String, jobID: String) -> String {
+        "memoirai.storybookAllowance.\(userID).\(jobID)"
+    }
+
+    static func register(userID: String, profileID: UUID, jobID: String, tutorialBonus: Bool, defaults: UserDefaults = .standard) {
+        guard !userID.isEmpty, !jobID.isEmpty else { return }
+        let receiptKey = key(userID: userID, jobID: jobID)
+        guard defaults.object(forKey: receiptKey) == nil else { return }
+        defaults.set(["profileID": profileID.uuidString, "tutorialBonus": tutorialBonus,
+                      "consumed": false] as [String: Any], forKey: receiptKey)
+    }
+
+    static func setEntitlementKind(userID: String, jobID: String, kind: String, defaults: UserDefaults = .standard) {
+        guard ["paid", "developer", "freePreview"].contains(kind) else { return }
+        let receiptKey = key(userID: userID, jobID: jobID)
+        guard var receipt = defaults.dictionary(forKey: receiptKey), receipt["consumed"] as? Bool != true else { return }
+        receipt["entitlementKind"] = kind
+        defaults.set(receipt, forKey: receiptKey)
+    }
+
+    static func take(userID: String, currentUserID: String?, profileID: UUID, jobID: String, successCount: Int, paidAccountingReady: Bool = true, defaults: UserDefaults = .standard) -> Charge? {
+        guard !userID.isEmpty, userID == currentUserID, successCount > 0 else { return nil }
+        let receiptKey = key(userID: userID, jobID: jobID)
+        guard var receipt = defaults.dictionary(forKey: receiptKey),
+              receipt["profileID"] as? String == profileID.uuidString,
+              receipt["consumed"] as? Bool != true,
+              let kind = receipt["entitlementKind"] as? String else { return nil }
+        let charge: Charge
+        switch kind {
+        case "paid", "developer":
+            guard paidAccountingReady else { return nil }
+            charge = .paid(successCount)
+        case "freePreview": charge = receipt["tutorialBonus"] as? Bool == true ? .tutorialBonus : .freePreview(successCount)
+        default: return nil
+        }
+        receipt["consumed"] = true
+        defaults.set(receipt, forKey: receiptKey)
+        return charge
     }
 }

@@ -14,10 +14,8 @@ struct PerChildRecordingView: View {
     @EnvironmentObject var profileVM: ProfileViewModel
     @EnvironmentObject var tutorialCoordinator: TutorialCoordinator
 
-    @FetchRequest(
-        entity: MemoryEntry.entity(),
-        sortDescriptors: []
-    ) private var allEntries: FetchedResults<MemoryEntry>
+    @FetchRequest(fetchRequest: MemoryEntryFetchRequest.make())
+    private var allEntries: FetchedResults<MemoryEntry>
 
     @State private var currentIndex: Int = 0
     @State private var expandedPrompts: [MemoryPrompt]

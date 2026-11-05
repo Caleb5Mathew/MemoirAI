@@ -7,6 +7,7 @@
 
 
 import SwiftUI
+import FirebaseAuth
 
 // MARK: - Filter and Sort Options
 enum BookSortOrder: String, CaseIterable, Identifiable {
@@ -53,6 +54,11 @@ struct StorybookGalleryView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var allBooks: [BookVersionRecord] = []
+    @State private var loadScope: ProfileContentScope?
+
+    private var libraryScopeKey: String {
+        "\(Auth.auth().currentUser?.uid ?? "signed-out")/\(profileVM.selectedProfile.id.uuidString)"
+    }
     @State private var legacyBooksById: [String: PersistableStorybook] = [:]
     @State private var legacyCoverByBookId: [String: UIImage] = [:]
     @State private var selectedBook: BookVersionRecord?
@@ -166,12 +172,14 @@ struct StorybookGalleryView: View {
                                     isDeleting: isDeletingBook,
                                     onTap: {
                                         print("🧭 Gallery[\(debugSessionID)] card tapped: id=\(book.bookVersionId), source=\(book.source), pages=\(book.pageCount), style=\(book.artStyle)")
+                                        guard let requestedScope = loadScope, isCurrentLoad(requestedScope) else { return }
                                         if let callback = onBookSelected {
                                             let legacy = legacyBooksById[book.bookVersionId]
                                             print("🧭 Gallery[\(debugSessionID)] forwarding selection to StoryPage callback; legacyMatched=\(legacy != nil)")
                                             isOpeningSelection = true
                                             Task { @MainActor in
                                                 await Task.yield()
+                                                guard isCurrentLoad(requestedScope) else { return }
                                                 callback(book, legacy)
                                             }
                                         } else {
@@ -202,19 +210,16 @@ struct StorybookGalleryView: View {
         .analyticsScreen("book_library")
         .animation(.easeInOut(duration: 0.2), value: isOpeningSelection)
         .navigationBarHidden(true)
-        .onAppear {
-            print("🧭 Gallery[\(debugSessionID)] onAppear; profile=\(profileVM.selectedProfile.id.uuidString.prefix(8))…")
-            Task {
-                await loadBooks()
-            }
-        }
+        .task(id: libraryScopeKey) { await loadBooks() }
         .onDisappear {
-            print("🧭 Gallery[\(debugSessionID)] onDisappear")
+            loadScope = nil
             isOpeningSelection = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .bookCoverBackfillComplete)) { note in
             guard let bookVersionId = note.userInfo?["bookVersionId"] as? String,
-                  let updated = note.userInfo?["record"] as? BookVersionRecord else { return }
+                  let updated = note.userInfo?["record"] as? BookVersionRecord,
+                  let requestedScope = loadScope, isCurrentLoad(requestedScope),
+                  UUID(uuidString: updated.profileId) == requestedScope.profileID else { return }
             if let idx = allBooks.firstIndex(where: { $0.bookVersionId == bookVersionId }) {
                 allBooks[idx] = updated
             }
@@ -228,13 +233,16 @@ struct StorybookGalleryView: View {
         )) {
             Button("Cancel", role: .cancel) { bookPendingDelete = nil }
             Button("Delete", role: .destructive) {
-                guard let b = bookPendingDelete else { return }
+                guard let b = bookPendingDelete, let requestedScope = loadScope,
+                      isCurrentLoad(requestedScope) else { return }
                 let createdAt = b.createdAt
                 let profileID = profileVM.selectedProfile.id
                 bookPendingDelete = nil
                 isDeletingBook = true
                 Task { @MainActor in
+                    guard isCurrentLoad(requestedScope) else { return }
                     let r = await FirestoreSyncService.shared.deleteBookVersion(bookId: b.bookVersionId)
+                    guard isCurrentLoad(requestedScope) else { return }
                     isDeletingBook = false
                     switch r {
                     case .deleted:
@@ -453,96 +461,75 @@ struct StorybookGalleryView: View {
 
     @MainActor
     private func loadBooks() async {
+        let profileID = profileVM.selectedProfile.id
+        guard let userID = Auth.auth().currentUser?.uid else {
+            loadScope = nil
+            allBooks = []
+            legacyBooksById = [:]
+            legacyCoverByBookId = [:]
+            isLoadingBooks = false
+            bookLoadError = "Reconnect to your account to load your books."
+            return
+        }
+        let requestedScope = ProfileContentScope(userID: userID, profileID: profileID)
+        loadScope = requestedScope
         isLoadingBooks = true
         bookLoadError = nil
-        let profileID = profileVM.selectedProfile.id
+        allBooks = []
+        legacyBooksById = [:]
+        legacyCoverByBookId = [:]
+        selectedBook = nil
+        bookPendingDelete = nil
+        isDeletingBook = false
+        isOpeningSelection = false
+        defer {
+            if loadScope == requestedScope { isLoadingBooks = false }
+        }
         var cloudBooks: [BookVersionRecord] = []
         do {
             cloudBooks = try await FirestoreSyncService.shared.fetchBookVersions(profileID: profileID)
         } catch {
+            guard isCurrentLoad(requestedScope) else { return }
             bookLoadError = "Check your connection and try again. Your saved books have not been removed."
-            print("❌ Gallery: cloud library fetch failed: \(error.localizedDescription)")
         }
+        guard isCurrentLoad(requestedScope) else { return }
         if !cloudBooks.isEmpty, !FirestoreSyncService.shared.isDuplicateBookCleanupDone(profileID: profileID) {
-            let pruned = await FirestoreSyncService.shared.runOneTimeDuplicateBookVersionCleanup(
-                profileID: profileID,
-                initialBooks: cloudBooks
+            cloudBooks = await FirestoreSyncService.shared.runOneTimeDuplicateBookVersionCleanup(
+                profileID: profileID, initialBooks: cloudBooks
             )
-            if pruned.count != cloudBooks.count {
-                print("🧹 Gallery: duplicate book cleanup pruned \(cloudBooks.count - pruned.count) doc(s) for profile=\(profileID.uuidString.prefix(8))…")
-            }
-            cloudBooks = pruned
+            guard isCurrentLoad(requestedScope) else { return }
             FirestoreSyncService.shared.markDuplicateBookCleanupDone(profileID: profileID)
         }
-        print("🧭 Gallery[\(debugSessionID)] loadBooks profile=\(profileID.uuidString.prefix(8))…, cloudCount=\(cloudBooks.count)")
-        
-        // Always load local PersistableStorybooks for imageData fallback (file-backed + legacy migration)
         let localBooks = await Task.detached(priority: .utility) {
-            let localHistory = StorybookLocalStore.readHistoryDataArray(profileID: profileID)
-            let decoder = JSONDecoder()
-            return localHistory.compactMap {
-                try? decoder.decode(PersistableStorybook.self, from: $0)
-            }
+            var data = [StorybookLocalStore.readPendingBookData(profileID: profileID),
+                        StorybookLocalStore.readCurrentBookData(profileID: profileID)].compactMap { $0 }
+            data += StorybookLocalStore.readHistoryDataArray(profileID: profileID)
+            return data.compactMap { try? JSONDecoder().decode(PersistableStorybook.self, from: $0) }
         }.value
-        var localByTimestamp: [Int: PersistableStorybook] = [:]
-        for book in localBooks {
-            localByTimestamp[Int(book.createdAt.timeIntervalSince1970)] = book
+        guard isCurrentLoad(requestedScope) else { return }
+        let merged = BookLibraryMergePolicy.merged(
+            cloud: cloudBooks, local: localBooks, profileID: profileID, userID: userID,
+            trustedLegacyOwner: UserDefaults.standard.bool(forKey: "firebase_migration_complete_\(userID)")
+        )
+        allBooks = merged.map(\.record)
+        for entry in merged {
+            guard let local = entry.local else { continue }
+            legacyBooksById[entry.record.bookVersionId] = local
+            if let cover = legacyCoverImage(from: local) { legacyCoverByBookId[entry.record.bookVersionId] = cover }
         }
-        
-        if !cloudBooks.isEmpty {
-            allBooks = cloudBooks
-            for bid in StorybookCloudApplyPolicy.bookVersionIdsNeedingCoverBackfillHealing(cloudBooks) {
-                Task.detached(priority: .utility) {
-                    await FirestoreSyncService.shared.ensureCoverDesignExistsIfMissing(bookVersionId: bid)
-                }
+        for id in StorybookCloudApplyPolicy.bookVersionIdsNeedingCoverBackfillHealing(cloudBooks) {
+            Task { @MainActor in
+                guard isCurrentLoad(requestedScope) else { return }
+                await FirestoreSyncService.shared.ensureCoverDesignExistsIfMissing(bookVersionId: id)
             }
-            // Match cloud books to local PersistableStorybooks by timestamp
-            var legacyMap: [String: PersistableStorybook] = [:]
-            var coverMap: [String: UIImage] = [:]
-            for book in cloudBooks {
-                let ts = Int(book.createdAt.timeIntervalSince1970)
-                if let local = localByTimestamp[ts] {
-                    legacyMap[book.bookVersionId] = local
-                    if let cover = legacyCoverImage(from: local) {
-                        coverMap[book.bookVersionId] = cover
-                    }
-                }
-            }
-            legacyBooksById = legacyMap
-            legacyCoverByBookId = coverMap
-            print("🧭 Gallery[\(debugSessionID)] using cloud books; legacyMatches=\(legacyMap.count), coverFallbacks=\(coverMap.count)")
-            isLoadingBooks = false
-            return
         }
-        
-        // Local-only fallback (no cloud books)
-        guard !localBooks.isEmpty else {
-            allBooks = []
-            legacyBooksById = [:]
-            legacyCoverByBookId = [:]
-            print("🧭 Gallery[\(debugSessionID)] no cloud or local books found")
-            isLoadingBooks = false
-            return
-        }
-        
-        var legacyMap: [String: PersistableStorybook] = [:]
-        var coverMap: [String: UIImage] = [:]
-        allBooks = localBooks.map { legacy in
-            let bookVersionId = "\(legacy.profileID.uuidString)_\(Int(legacy.createdAt.timeIntervalSince1970))_local"
-            legacyMap[bookVersionId] = legacy
-            if let cover = legacyCoverImage(from: legacy) {
-                coverMap[bookVersionId] = cover
-            }
-            return BookVersionRecordFactory.fromPersistable(
-                legacy,
-                bookVersionId: bookVersionId,
-                source: .localMigration
-            )
-        }
-        legacyBooksById = legacyMap
-        legacyCoverByBookId = coverMap
-        print("🧭 Gallery[\(debugSessionID)] using local-only fallback books=\(allBooks.count)")
-        isLoadingBooks = false
+    }
+
+    private func isCurrentLoad(_ requestedScope: ProfileContentScope) -> Bool {
+        !Task.isCancelled && requestedScope.isCurrent(
+            userID: Auth.auth().currentUser?.uid, profileID: profileVM.selectedProfile.id,
+            requestID: loadScope?.requestID
+        )
     }
 
     private func legacyCoverImage(from legacyBook: PersistableStorybook) -> UIImage? {

@@ -26,7 +26,7 @@ enum AnalyticsPrivacyPolicy {
         "purchase_origin": ["purchase", "restore"],
         "subscription_plan": ["yearly", "monthly"],
         "paywall_source": ["onboarding", "settings", "story_generation", "profile_limit", "memoir"],
-        "failure_stage": ["auth", "recording", "preflight", "generation", "preparation", "purchase", "restore", "activation", "account_changed", "audio_file", "local_save", "playback", "share", "cloud_job", "finalization", "kickoff", "identity", "customer_info", "offerings", "packages", "trial_eligibility", "timeout", "image_download"],
+        "failure_stage": ["transcription", "auth", "recording", "preflight", "generation", "preparation", "purchase", "restore", "activation", "account_changed", "audio_file", "local_save", "playback", "share", "cloud_job", "finalization", "kickoff", "identity", "customer_info", "offerings", "packages", "trial_eligibility", "timeout", "image_download"],
         "onboarding_outcome": ["preview_unavailable", "offer_unavailable", "offer_presented", "entitled"],
         "permission_outcome": ["microphone_denied", "speech_denied", "granted"],
         "consent_outcome": ["accepted", "declined"],

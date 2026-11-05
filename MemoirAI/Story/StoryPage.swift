@@ -7,6 +7,16 @@ import RevenueCatUI
 import CoreData
 import FirebaseAuth
 
+struct StorybookReaderSnapshot {
+    let pages: [StoryPageViewModel.PageItem]
+    let slots: [StorybookReaderSlot]
+
+    init(pages: [StoryPageViewModel.PageItem], hasExteriorCover: Bool) {
+        self.pages = pages
+        slots = StorybookReaderSlotPolicy.slots(interiorPageCount: pages.count, hasExteriorCover: hasExteriorCover)
+    }
+}
+
 // MARK: - Storybook headshot
 /// The user's home-page profile photo is the default generation headshot; the
 /// setup sheet still lets them replace it per run.
@@ -210,7 +220,6 @@ struct StoryPage: View {
     @State private var showPaywall = false
     
     // NEW: Tooltip state for subscription status
-    @State private var showSubscriptionTooltip = false
     
     // Incomplete memories banner
     @State private var incompleteCount: Int = 0
@@ -429,9 +438,14 @@ struct StoryPage: View {
                 }
                 .padding(.top, 8)
             } else {
-                Button("Try Creating Again") {
-                    regenerateStorybook()
+                Button(vm.canRetryFinalization ? "Retry finishing book" : "Try Creating Again") {
+                    if vm.canRetryFinalization {
+                        Task { await vm.retryFinalization() }
+                    } else {
+                        regenerateStorybook()
+                    }
                 }
+                .accessibilityIdentifier("retryStorybookAction")
                 .font(.headline)
                 .foregroundColor(localColors.terracotta)
                 .padding(.horizontal, 20)
@@ -481,12 +495,9 @@ struct StoryPage: View {
         contentHeight: CGFloat,
         printSpec: BookPrintSpec
     ) -> some View {
-        let slots = StorybookReaderSlotPolicy.slots(
-            interiorPageCount: vm.pageItems.count,
-            hasExteriorCover: vm.hasPrintCoverPDF
-        )
+        let snapshot = StorybookReaderSnapshot(pages: vm.pageItems, hasExteriorCover: vm.hasPrintCoverPDF)
         TabView(selection: $currentPageIndex) {
-            ForEach(Array(slots.enumerated()), id: \.offset) { readerIndex, slot in
+            ForEach(Array(snapshot.slots.enumerated()), id: \.offset) { readerIndex, slot in
                 let renderScale = min(
                     contentWidth / max(printSpec.widthPt, 1),
                     contentHeight / max(printSpec.heightPt, 1)
@@ -502,12 +513,15 @@ struct StoryPage: View {
                         .onTapGesture { openEditor(for: slot) }
                     case .interiorPage(let pageIndex):
                         pageView(
-                            for: vm.pageItems[pageIndex],
+                            for: snapshot.pages[pageIndex],
                             at: pageIndex,
                             frameWidth: printSpec.widthPt,
                             frameHeight: printSpec.heightPt
                         )
-                        .onTapGesture { openEditor(for: slot) }
+                        .onTapGesture {
+                            guard vm.pageID(at: pageIndex) == snapshot.pages[pageIndex].id else { return }
+                            openEditor(for: slot)
+                        }
                     }
                 }
                 .frame(width: printSpec.widthPt, height: printSpec.heightPt)
@@ -568,6 +582,7 @@ struct StoryPage: View {
     }
 
     private func handleImageTap(at idx: Int) {
+        guard vm.pageItems.indices.contains(idx) else { return }
         if case .illustration = vm.pageItems[idx] {
             // Check if this image is being edited
             if vm.isEditingImage(at: idx) {
@@ -882,51 +897,52 @@ struct StoryPage: View {
         let generationProfile = profileVM.selectedProfile
         let currentProfileID = generationProfile.id
         let finalPageCount = pagesExpected // Pass the adjusted page count
-        let wasSubscribed = isSubscribed // Capture subscription state before async
         let useTutorialBonus = pendingTutorialBonusGeneration
+        let generationUserID = Auth.auth().currentUser?.uid
+        let generationEthnicity = userRace
         
         Task { @MainActor in
+            guard profileVM.hasReadyProfile,
+                  profileVM.selectedProfile.id == currentProfileID,
+                  let generationUserID,
+                  Auth.auth().currentUser?.uid == generationUserID else { return }
+            vm.activateProfileSettings(profile: generationProfile, userID: generationUserID)
+            let expectedRun = vm.generationRunID + 1
             vm.syncFaceDescriptionFromProfile(generationProfile)
             await vm.generateStorybook(
                 forProfileID: currentProfileID,
                 profileName: generationProfile.name,
                 overridePageCount: finalPageCount,
-                profileEthnicity: userRace
+                profileEthnicity: generationEthnicity,
+                tutorialBonus: useTutorialBonus
             )
 
-            // Cloud generation: `generateStorybook` returns immediately after
-            // kicking off the Firestore job — actual completion happens later
-            // via the cloud listener.  Wait until the VM has finished
-            // finalizing (or hit an error) before deciding whether to consume
-            // the user's free-preview / tutorial / subscription allowance.
-            for await stillLoading in vm.$isLoading.values {
-                if !stillLoading { break }
-            }
-
-            if vm.errorMessage == nil && vm.storybookGeneratedIllustrationCount > 0 {
-                let actualImagesGenerated = vm.storybookGeneratedIllustrationCount
-                if actualImagesGenerated > 0 {
-                    if wasSubscribed {
-                        // Subscribed users: deduct from monthly allowance
-                        subscriptionManager.consume(pages: actualImagesGenerated)
-                        print("StoryPage: Consumed \(actualImagesGenerated) images from subscription.")
-                    } else if useTutorialBonus {
-                        tutorialCoordinator.consumeTutorialBonus(profileID: currentProfileID)
-                        print("StoryPage: Consumed tutorial bonus image (free preview was exhausted).")
-                    } else {
-                        // Free users: increment free preview counter (stored in iCloud + UserDefaults)
-                        FreePreviewConfig.incrementFreeImagesUsed(by: actualImagesGenerated)
-                        print("StoryPage: Consumed \(actualImagesGenerated) free preview image(s). Remaining: \(FreePreviewConfig.freeImagesRemaining)")
-                    }
-                    if tutorialCoordinator.isTutorialActive {
-                        tutorialCoordinator.completeTutorial(profileID: currentProfileID)
-                    }
-                }
-            } else {
-                print("StoryPage: Cloud generation finished without illustrations. Error: \(vm.errorMessage ?? "N/A").")
-                // Note: We don't consume free preview images on failure
-            }
+            guard vm.generationRunID == expectedRun,
+                  profileVM.selectedProfile.id == currentProfileID,
+                  Auth.auth().currentUser?.uid == generationUserID else { return }
             self.pendingTutorialBonusGeneration = false
+        }
+    }
+
+    private func applyCompletedGenerationAllowance() {
+        guard let userID = Auth.auth().currentUser?.uid,
+              let jobID = vm.successfullyFinalizedCloudJobID,
+              let charge = StorybookAllowanceReceiptStore.take(
+                userID: userID,
+                currentUserID: Auth.auth().currentUser?.uid,
+                profileID: profileVM.selectedProfile.id,
+                jobID: jobID,
+                successCount: vm.storybookGeneratedIllustrationCount,
+                paidAccountingReady: subscriptionManager.isIdentityReady(for: userID)
+                    && (subscriptionManager.activeTier != nil || subscriptionManager.isDeveloperUnlockedSession)
+              ) else { return }
+        switch charge {
+        case .paid(let count): subscriptionManager.consume(pages: count)
+        case .freePreview(let count): FreePreviewConfig.incrementFreeImagesUsed(by: count)
+        case .tutorialBonus: tutorialCoordinator.consumeTutorialBonus(profileID: profileVM.selectedProfile.id)
+        }
+        if tutorialCoordinator.isTutorialActive {
+            tutorialCoordinator.completeTutorial(profileID: profileVM.selectedProfile.id)
         }
     }
 
@@ -935,6 +951,21 @@ struct StoryPage: View {
         
         return mainContent
             .analyticsScreen("book")
+            .onChange(of: vm.successfullyFinalizedCloudJobID, initial: true) { _, _ in
+                applyCompletedGenerationAllowance()
+            }
+            .onChange(of: vm.storybookGeneratedIllustrationCount) { _, _ in
+                applyCompletedGenerationAllowance()
+            }
+            .onChange(of: subscriptionManager.identifiedFirebaseUserID) { _, _ in
+                applyCompletedGenerationAllowance()
+            }
+            .onChange(of: subscriptionManager.activeTier) { _, _ in
+                applyCompletedGenerationAllowance()
+            }
+            .onChange(of: subscriptionManager.isDeveloperUnlockedSession) { _, _ in
+                applyCompletedGenerationAllowance()
+            }
             .navigationBarHidden(true)
             .onAppear {
                 tutorialCoordinator.setVisibleScreen(.storyPage)
@@ -974,7 +1005,6 @@ struct StoryPage: View {
             regenerateStorybook: regenerateStorybook,
             updateIncompleteCount: updateIncompleteCount,
             hasRequestedGeneration: $hasRequestedGeneration,
-            showSubscriptionTooltip: $showSubscriptionTooltip,
             actualPreviewWidth: $actualPreviewWidth,
             actualPreviewHeight: $actualPreviewHeight,
             showCoverEditor: $showCoverEditor,
@@ -1137,10 +1167,6 @@ struct StoryPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if !usesCompactChrome, subscriptionManager.hasActiveSubscription {
-                makeSubscriptionButton()
-                    .padding(.leading, 44)
-            }
         }
         .padding(.horizontal, 24)
         .padding(.top, usesCompactChrome ? 6 : 10)
@@ -1158,21 +1184,6 @@ struct StoryPage: View {
                 .clipShape(Circle())
         }
         .accessibilityLabel("Back")
-    }
-    
-    @ViewBuilder
-    private func makeSubscriptionButton() -> some View {
-        Button(action: {
-            showSubscriptionTooltip = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                showSubscriptionTooltip = false
-            }
-        }) {
-            Text(subscriptionManager.isDeveloperUnlockedSession ? "\(subscriptionManager.remainingAllowance)/2,000 developer images" : "\(subscriptionManager.remainingAllowance)/100 images")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(subscriptionManager.remainingAllowance <= 5 ? .red : .gray)
-        }
-        .buttonStyle(PlainButtonStyle())
     }
     
     @ViewBuilder
@@ -1947,7 +1958,8 @@ extension StoryPage {
     @ViewBuilder
     private func pageView(for item: StoryPageViewModel.PageItem, at index: Int, frameWidth: CGFloat, frameHeight: CGFloat) -> some View {
         let isKidsBook = vm.currentArtStyle == .kidsBook
-        if let freeformPage = vm.freeformPageView(
+        if vm.pageID(at: index) == item.id,
+           let freeformPage = vm.freeformPageView(
             at: index,
             frameWidth: frameWidth,
             frameHeight: frameHeight
@@ -2828,7 +2840,6 @@ extension View {
         regenerateStorybook: @escaping () -> Void,
         updateIncompleteCount: @escaping () -> Void,
         hasRequestedGeneration: Binding<Bool>,
-        showSubscriptionTooltip: Binding<Bool>,
         actualPreviewWidth: Binding<CGFloat>,
         actualPreviewHeight: Binding<CGFloat>,
         showCoverEditor: Binding<Bool>,
@@ -2873,15 +2884,16 @@ extension View {
             vm: vm,
             subscriptionManager: subscriptionManager,
             headshotImage: headshotImage,
+            grandparentName: grandparentName,
+            userRace: userRace,
+            userGender: userGender,
             hasRequestedGeneration: hasRequestedGeneration,
             updateIncompleteCount: updateIncompleteCount,
             storybookScreenEntry: storybookScreenEntry,
             isOpeningBook: isOpeningBook
         )
         
-        withLifecycle.addOverlays(
-            showSubscriptionTooltip: showSubscriptionTooltip
-        )
+        withLifecycle
     }
     
     @ViewBuilder
@@ -2938,7 +2950,7 @@ extension View {
                 print("🧭 StoryPage showGallery changed: \(oldValue) -> \(newValue)")
             }
             .sheet(isPresented: showSettings) {
-                SettingsView()
+                SettingsView(context: .bookGeneration)
                     .environmentObject(profileVM)
                     .environmentObject(subscriptionManager)
             }
@@ -3036,6 +3048,9 @@ extension View {
         vm: StoryPageViewModel,
         subscriptionManager: RCSubscriptionManager,
         headshotImage: Binding<UIImage?>,
+        grandparentName: Binding<String>,
+        userRace: Binding<String>,
+        userGender: Binding<String>,
         hasRequestedGeneration: Binding<Bool>,
         updateIncompleteCount: @escaping () -> Void,
         storybookScreenEntry: StorybookScreenEntry,
@@ -3052,11 +3067,24 @@ extension View {
             .background(StorybookAppearanceObserver {
                 print("[StorybookEntry] Navigation finished; starting book restoration")
                 vm.restoreSettingsFromCloud()
+                let requestedProfile = profileVM.selectedProfile
+                let requestedUserID = Auth.auth().currentUser?.uid
+                if let requestedUserID {
+                    vm.activateProfileSettings(profile: requestedProfile, userID: requestedUserID)
+                }
+                grandparentName.wrappedValue = requestedProfile.name
+                userRace.wrappedValue = requestedProfile.ethnicity ?? ""
+                userGender.wrappedValue = requestedProfile.gender ?? ""
                 let routedJobID = storybookScreenEntry.resumesPendingGeneration
                     ? StorybookSeenTracker.shared.consumePendingRouteForAttachment()
                     : nil
                 Task { @MainActor in
-                    defer { isOpeningBook.wrappedValue = false }
+                    defer {
+                        if profileVM.selectedProfile.id == requestedProfile.id,
+                           Auth.auth().currentUser?.uid == requestedUserID {
+                            isOpeningBook.wrappedValue = false
+                        }
+                    }
                     #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("-UITestSeedStorybook") {
                         vm.seedStorybookForUITesting(
@@ -3067,22 +3095,28 @@ extension View {
                         return
                     }
                     #endif
+                    guard profileVM.hasReadyProfile,
+                          profileVM.selectedProfile.id == requestedProfile.id,
+                          Auth.auth().currentUser?.uid == requestedUserID else { return }
                     if storybookScreenEntry.resumesPendingGeneration {
                         let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
-                            profileID: profileVM.selectedProfile.id,
-                            profileName: profileVM.selectedProfile.name,
-                            profileEthnicity: profileVM.selectedProfile.ethnicity,
+                            profileID: requestedProfile.id,
+                            profileName: requestedProfile.name,
+                            profileEthnicity: requestedProfile.ethnicity,
                             routedJobID: routedJobID
                         )
+                        guard profileVM.hasReadyProfile,
+                              profileVM.selectedProfile.id == requestedProfile.id,
+                              Auth.auth().currentUser?.uid == requestedUserID else { return }
                         if resuming {
                             hasRequestedGeneration.wrappedValue = true
                             return
                         }
                     }
                     vm.loadStorybookForProfile(
-                        profileVM.selectedProfile.id,
-                        name: profileVM.selectedProfile.name,
-                        profileEthnicity: profileVM.selectedProfile.ethnicity
+                        requestedProfile.id,
+                        name: requestedProfile.name,
+                        profileEthnicity: requestedProfile.ethnicity
                     )
                     hasRequestedGeneration.wrappedValue = vm.hasGeneratedStorybook
                 }
@@ -3130,31 +3164,41 @@ extension View {
                 }
             }
             .onChange(of: profileVM.selectedProfile.id) { _, newProfileID in
-                print("🧭 StoryPage profile changed to \(newProfileID.uuidString.prefix(8))…; reloading storybook")
+                let requestedProfile = profileVM.selectedProfile
+                let requestedUserID = Auth.auth().currentUser?.uid
+                if let requestedUserID {
+                    vm.activateProfileSettings(profile: requestedProfile, userID: requestedUserID)
+                }
+                grandparentName.wrappedValue = requestedProfile.name
+                userRace.wrappedValue = requestedProfile.ethnicity ?? ""
+                userGender.wrappedValue = requestedProfile.gender ?? ""
+                hasRequestedGeneration.wrappedValue = false
                 Task { @MainActor in
+                    guard profileVM.hasReadyProfile,
+                          profileVM.selectedProfile.id == newProfileID,
+                          Auth.auth().currentUser?.uid == requestedUserID else { return }
                     let resuming = await vm.resumeInProgressGenerationIfMarkerExists(
-                        profileID: profileVM.selectedProfile.id,
-                        profileName: profileVM.selectedProfile.name,
-                        profileEthnicity: profileVM.selectedProfile.ethnicity
+                        profileID: newProfileID,
+                        profileName: requestedProfile.name,
+                        profileEthnicity: requestedProfile.ethnicity
                     )
+                    guard profileVM.hasReadyProfile,
+                          profileVM.selectedProfile.id == newProfileID,
+                          Auth.auth().currentUser?.uid == requestedUserID else { return }
                     if resuming {
                         hasRequestedGeneration.wrappedValue = true
                     } else {
                         vm.loadStorybookForProfile(
                             newProfileID,
-                            name: profileVM.selectedProfile.name,
-                            profileEthnicity: profileVM.selectedProfile.ethnicity
+                            name: requestedProfile.name,
+                            profileEthnicity: requestedProfile.ethnicity
                         )
                         hasRequestedGeneration.wrappedValue = vm.hasGeneratedStorybook
                     }
-                    if let image = StorybookHeadshotOverride.resolvedHeadshot(profilePhotoData: profileVM.selectedProfile.photoData) {
-                        headshotImage.wrappedValue = image
-                        vm.subjectPhoto = image
-                    } else {
-                        headshotImage.wrappedValue = nil
-                        vm.subjectPhoto = nil
-                    }
-                    vm.syncFaceDescriptionFromProfile(profileVM.selectedProfile)
+                    let image = StorybookHeadshotOverride.resolvedHeadshot(profilePhotoData: requestedProfile.photoData)
+                    headshotImage.wrappedValue = image
+                    vm.subjectPhoto = image
+                    vm.syncFaceDescriptionFromProfile(requestedProfile)
                     updateIncompleteCount()
                 }
             }
@@ -3167,46 +3211,4 @@ extension View {
             }
     }
     
-    @ViewBuilder
-    private func addOverlays(
-        showSubscriptionTooltip: Binding<Bool>
-    ) -> some View {
-        self
-            .overlay(
-                Group {
-                    if showSubscriptionTooltip.wrappedValue {
-                        makeSubscriptionTooltip()
-                    }
-                }
-            )
-    }
-    
-    @ViewBuilder
-    private func makeSubscriptionTooltip() -> some View {
-        VStack {
-            HStack {
-                Spacer()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Image Generation Limit")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                    
-                    Text("Each subscription includes 100 images per calendar month. This counter shows how many you have remaining.")
-                        .font(.system(size: 12))
-                        .foregroundColor(.white.opacity(0.9))
-                        .multilineTextAlignment(.leading)
-                }
-                .padding(12)
-                .background(Color.black.opacity(0.85))
-                .cornerRadius(8)
-                .shadow(radius: 4)
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 80)
-            
-            Spacer()
-        }
-        .transition(.opacity.combined(with: .scale(scale: 0.95)))
-    }
 }

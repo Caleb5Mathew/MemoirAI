@@ -72,6 +72,14 @@ struct MemoirView: View {
             tutorialCoordinator.onMemoirViewAppeared(profileID: profileVM.selectedProfile.id)
             promptForChildNamesIfNeeded()
         }
+        .onChange(of: profileVM.selectedProfile.id) { _, _ in
+            entries = []
+            navigateToChapter = nil
+            showChildNamesSheet = false
+            fetchEntries()
+            promptForChildNamesIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .memorySaved)) { _ in fetchEntries() }
         .onChange(of: memoirModeRaw) { _, _ in
             promptForChildNamesIfNeeded()
         }
@@ -427,7 +435,10 @@ struct MemoirView: View {
         let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
         request.predicate = MemoryUserScope.profilePredicate(profileID: profileVM.selectedProfile.id)
         do { entries = try PersistenceController.shared.container.viewContext.fetch(request) }
-        catch { print("Fetch error:", error) }
+        catch {
+            entries = []
+            print("Fetch error:", error)
+        }
     }
 
     /// Chapter data for journey: image-based layout follows each artwork's trail; Relationships uses its own map layout.

@@ -1,6 +1,8 @@
 import SwiftUI
 import PDFKit
 import CryptoKit
+import ImageIO
+import ObjectiveC
 
 // MARK: - Shared load / cache (preview + prefetch before revealing storybook)
 
@@ -496,26 +498,20 @@ final class IllustrationImageDiskCache {
         return directory.appendingPathComponent(DiskImageCachePolicy.fileName(forKey: key), isDirectory: false)
     }
 
-    func image(forKey key: String) -> UIImage? {
+    func data(forKey key: String) -> Data? {
         guard let url = fileURL(forKey: key),
-              let data = try? Data(contentsOf: url),
-              let img = UIImage(data: data) else { return nil }
+              let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
         try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
-        return img
+        return data
     }
 
-    func store(image: UIImage, forKey key: String) {
+    func store(data: Data, forKey key: String) {
         guard let url = fileURL(forKey: key) else { return }
         let cacheDirectory = directory
         queue.async {
-            guard let data = image.jpegData(compressionQuality: 0.9) else { return }
             try? data.write(to: url, options: .atomic)
             if let directory = cacheDirectory {
-                DiskImageCachePolicy.prune(
-                    directory: directory,
-                    maximumBytes: 300 * 1024 * 1024,
-                    maximumAge: 30 * 24 * 60 * 60
-                )
+                DiskImageCachePolicy.prune(directory: directory, maximumBytes: 300 * 1024 * 1024, maximumAge: 30 * 24 * 60 * 60)
             }
         }
     }
@@ -556,5 +552,64 @@ private extension UIImage {
         guard cropRect.width >= 1, cropRect.height >= 1,
               let cut = cg.cropping(to: cropRect) else { return nil }
         return UIImage(cgImage: cut, scale: normalized.scale, orientation: .up)
+    }
+}
+
+// Reader thumbnails retain their original encoded source independently of page/profile state.
+@MainActor
+enum StorybookReaderImage {
+    static let maximumPixelDimension = 1280
+    private static var sourceKey: UInt8 = 0
+
+    private final class Source: NSObject {
+        let fileURL: URL?
+        let data: Data
+
+        init(data: Data, directory: URL) {
+            let url = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension("image")
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try data.write(to: url, options: .atomic)
+                self.data = try Data(contentsOf: url, options: .mappedIfSafe)
+                self.fileURL = url
+            } catch {
+                try? FileManager.default.removeItem(at: url)
+                // Disk pressure must not turn a reader thumbnail into the print source.
+                self.data = data
+                self.fileURL = nil
+            }
+        }
+
+        deinit {
+            if let fileURL { try? FileManager.default.removeItem(at: fileURL) }
+        }
+    }
+
+    static func make(data: Data, directory: URL = FileManager.default.temporaryDirectory.appendingPathComponent("memoir-reader-sources", isDirectory: true)) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maximumPixelDimension,
+                kCGImageSourceShouldCacheImmediately: true
+              ] as CFDictionary) else { return nil }
+        let backing = Source(data: data, directory: directory)
+        let image = UIImage(cgImage: thumbnail)
+        objc_setAssociatedObject(image, &sourceKey, backing, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return image
+    }
+
+    static func originalData(for image: UIImage) -> Data? {
+        if let source = objc_getAssociatedObject(image, &sourceKey) as? Source { return source.data }
+        return image.jpegData(compressionQuality: 0.9)
+    }
+
+    static func originalImage(for image: UIImage, decode: (Data) -> UIImage? = { UIImage(data: $0) }) -> UIImage? {
+        guard let source = objc_getAssociatedObject(image, &sourceKey) as? Source else { return image }
+        return decode(source.data)
+    }
+
+    static func backingURL(for image: UIImage) -> URL? {
+        (objc_getAssociatedObject(image, &sourceKey) as? Source)?.fileURL
     }
 }

@@ -6,12 +6,18 @@ enum CloudTranscriptionError: LocalizedError {
     case notAuthenticated
     case invalidResponse
     case alreadyProcessing
+    case accountChanged
+    case memoryUnavailable
+    case failure(TranscriptionIssue)
 
     var errorDescription: String? {
         switch self {
         case .notAuthenticated: return "You must be signed in to transcribe a recording."
         case .invalidResponse: return "The transcription service returned an invalid response."
         case .alreadyProcessing: return "This recording is already being transcribed."
+        case .accountChanged: return "Your account changed. Open the memory again to retry."
+        case .memoryUnavailable: return "This memory is no longer available in the selected profile."
+        case .failure(let issue): return issue.message
         }
     }
 }
@@ -59,7 +65,7 @@ enum MemoryTranscriptionSyncPolicy {
 }
 
 enum TranscriptionRetryPolicy {
-    static let processingTimeout: TimeInterval = 5 * 60
+    static let processingTimeout: TimeInterval = 6 * 60
 
     static func shouldRequest(
         status: String?,
@@ -159,6 +165,142 @@ enum CloudTranscriptionDisclosure {
     }
 }
 
+
+enum TranscriptionIssue: String, CaseIterable {
+    case authentication, permissionDenied, uploadNotReady, rateLimited, dailyLimit
+    case network, timeout, processing, rerecord, accountChanged, cancelled, unknown
+
+    var message: String {
+        switch self {
+        case .authentication: return "Sign in again to transcribe this recording. Your audio is saved."
+        case .permissionDenied: return "Memoir could not access this recording. Sign in again, then retry."
+        case .uploadNotReady: return "The recording has not finished uploading. Check your connection and retry."
+        case .rateLimited: return "The transcription service is busy. Wait a minute, then retry."
+        case .dailyLimit: return "Today's transcription capacity has been reached. Your audio is saved; try again tomorrow."
+        case .network: return "The transcript could not finish because the connection was interrupted. Check your connection and retry."
+        case .timeout: return "Transcription timed out. Your audio is saved; retry to finish it."
+        case .processing: return "This recording is already being transcribed."
+        case .rerecord: return "This recording could not be read. Record it again or write the story instead."
+        case .accountChanged: return "Your account changed. Open the memory again to retry."
+        case .cancelled: return "Transcription was interrupted. Your audio is saved; retry to finish it."
+        case .unknown: return "The transcript could not be created. Your audio is saved; retry or write the story instead."
+        }
+    }
+
+    var analyticsReason: String {
+        switch self {
+        case .authentication: return "authentication"
+        case .permissionDenied: return "permission_denied"
+        case .uploadNotReady, .rerecord: return "precondition"
+        case .rateLimited: return "rate_limited"
+        case .dailyLimit: return "quota_used"
+        case .network: return "network"
+        case .timeout: return "timeout"
+        case .processing: return "request_conflict"
+        case .accountChanged: return "account_changed"
+        case .cancelled: return "cancelled"
+        case .unknown: return "unknown"
+        }
+    }
+
+    static func classify(_ error: Error) -> Self {
+        if error is CancellationError { return .cancelled }
+        if let error = error as? CloudTranscriptionError {
+            switch error {
+            case .notAuthenticated: return .authentication
+            case .alreadyProcessing: return .processing
+            case .accountChanged: return .accountChanged
+            case .memoryUnavailable: return .permissionDenied
+            case .failure(let issue): return issue
+            case .invalidResponse: return .unknown
+            }
+        }
+        let error = error as NSError
+        if error.domain == NSURLErrorDomain {
+            if error.code == NSURLErrorCancelled { return .cancelled }
+            return error.code == NSURLErrorTimedOut ? .timeout : .network
+        }
+        let message = error.localizedDescription.lowercased()
+        if error.domain == FunctionsErrorDomain {
+            switch FunctionsErrorCode(rawValue: error.code) {
+            case .unauthenticated: return .authentication
+            case .permissionDenied: return .permissionDenied
+            case .resourceExhausted: return message.contains("today") || message.contains("tomorrow") ? .dailyLimit : .rateLimited
+            case .deadlineExceeded: return .timeout
+            case .unavailable: return .network
+            case .notFound: return .uploadNotReady
+            case .aborted: return .accountChanged
+            case .failedPrecondition:
+                return TranscriptionFailurePolicy.status(for: message) == "needsRerecording" ? .rerecord : .uploadNotReady
+            default: break
+            }
+        }
+        return TranscriptionFailurePolicy.status(for: message) == "needsRerecording" ? .rerecord : .unknown
+    }
+}
+
+enum TranscriptionPresentationPolicy {
+    static func isActive(status: String?, updatedAt: Date?, isInFlight: Bool = false, now: Date = Date()) -> Bool {
+        if isInFlight { return true }
+        guard status == "processing", let updatedAt else { return false }
+        return now.timeIntervalSince(updatedAt) < TranscriptionRetryPolicy.processingTimeout
+    }
+
+    static func canRetry(status: String?, updatedAt: Date?, audioURL: String?, now: Date = Date()) -> Bool {
+        guard URL(string: audioURL ?? "")?.pathExtension.lowercased() == "m4a" else { return false }
+        switch status {
+        case "failed", nil: return true
+        case "queued": return updatedAt.map { now.timeIntervalSince($0) >= 30 } ?? true
+        case "processing": return !isActive(status: status, updatedAt: updatedAt, now: now)
+        default: return false
+        }
+    }
+}
+
+enum TranscriptionFailureStore {
+    static func key(memoryID: UUID, userID: String) -> String {
+        "memoirai.transcription.failure.\(userID).\(memoryID.uuidString.lowercased())"
+    }
+
+    static func record(_ issue: TranscriptionIssue, memoryID: UUID, userID: String, now: Date = Date(), defaults: UserDefaults = .standard) {
+        let delay: TimeInterval
+        switch issue {
+        case .dailyLimit:
+            let nextUTCDay = floor(now.timeIntervalSince1970 / 86_400 + 1) * 86_400
+            delay = nextUTCDay - now.timeIntervalSince1970
+        case .rateLimited: delay = 60
+        case .authentication, .permissionDenied, .rerecord: delay = 300
+        default: delay = 30
+        }
+        defaults.set(["reason": issue.rawValue, "retryAt": now.addingTimeInterval(delay).timeIntervalSince1970], forKey: key(memoryID: memoryID, userID: userID))
+    }
+
+    static func issue(memoryID: UUID?, userID: String?, defaults: UserDefaults = .standard) -> TranscriptionIssue? {
+        guard let memoryID, let userID,
+              let raw = defaults.dictionary(forKey: key(memoryID: memoryID, userID: userID))?["reason"] as? String else { return nil }
+        return TranscriptionIssue(rawValue: raw)
+    }
+
+    static func canAutomaticallyRetry(memoryID: UUID, userID: String, now: Date = Date(), defaults: UserDefaults = .standard) -> Bool {
+        guard let timestamp = defaults.dictionary(forKey: key(memoryID: memoryID, userID: userID))?["retryAt"] as? Double else { return true }
+        return now.timeIntervalSince1970 >= timestamp
+    }
+
+    static func clear(memoryID: UUID, userID: String, defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: key(memoryID: memoryID, userID: userID))
+    }
+}
+
+enum MemoryCloudAudioPolicy {
+    static func isM4A(uploadURL: URL?, existingAudioURL: String?, remoteStoragePath: String?) -> Bool {
+        if let uploadURL { return uploadURL.pathExtension.lowercased() == "m4a" }
+        if let remoteStoragePath, !remoteStoragePath.isEmpty {
+            return (remoteStoragePath as NSString).pathExtension.lowercased() == "m4a"
+        }
+        return URL(string: existingAudioURL ?? "")?.pathExtension.lowercased() == "m4a"
+    }
+}
+
 actor CloudTranscriptionService {
     static let shared = CloudTranscriptionService()
     private var activeMemoryIDs = Set<UUID>()
@@ -174,15 +316,22 @@ actor CloudTranscriptionService {
     }
 
     func transcribe(memoryID: UUID, glossary: [String], language: String = "en") async throws -> String {
-        guard Auth.auth().currentUser != nil else { throw CloudTranscriptionError.notAuthenticated }
+        guard let expectedUserID = Auth.auth().currentUser?.uid else { throw CloudTranscriptionError.notAuthenticated }
         guard activeMemoryIDs.insert(memoryID).inserted else {
             throw CloudTranscriptionError.alreadyProcessing
         }
         defer { activeMemoryIDs.remove(memoryID) }
-        let expectedAudioFileURL = await MainActor.run {
-            PersistenceController.shared.entry(id: memoryID)?.audioFileURL
+        let expectedAudioFileURL = try await MainActor.run {
+            guard let entry = PersistenceController.shared.entry(id: memoryID),
+                  entry.firebaseUserId == expectedUserID else { throw CloudTranscriptionError.memoryUnavailable }
+            return entry.audioFileURL
         }
-        await updateLocalState(memoryID: memoryID, status: "processing")
+        let startedAt = Date()
+        await MainActor.run {
+            ProductAnalytics.shared.track("Memory Transcription Started")
+        }
+        await updateLocalState(memoryID: memoryID, status: "processing", expectedUserID: expectedUserID)
+        guard Auth.auth().currentUser?.uid == expectedUserID else { throw CloudTranscriptionError.accountChanged }
         let callable = Functions.functions().httpsCallable("transcribeMemoryAudio")
         // Allow the 300-second server deadline plus callable transport overhead.
         callable.timeoutInterval = 330
@@ -211,19 +360,39 @@ actor CloudTranscriptionService {
                 rawText: rawText,
                 memoryID: memoryID,
                 language: language,
-                expectedAudioFileURL: expectedAudioFileURL
+                expectedAudioFileURL: expectedAudioFileURL,
+                expectedUserID: expectedUserID
             )
+            await MainActor.run {
+                TranscriptionFailureStore.clear(memoryID: memoryID, userID: expectedUserID)
+                ProductAnalytics.shared.track("Memory Transcription Completed", ["duration_ms": max(0, Int(Date().timeIntervalSince(startedAt) * 1000))])
+            }
             return text
         } catch {
             if case CloudTranscriptionError.alreadyProcessing = error {
                 throw error
             }
+            let issue = TranscriptionIssue.classify(error)
             await updateLocalState(
                 memoryID: memoryID,
-                status: TranscriptionFailurePolicy.status(for: error.localizedDescription),
-                expectedAudioFileURL: expectedAudioFileURL
+                status: issue == .rerecord ? "needsRerecording" : "failed",
+                expectedAudioFileURL: expectedAudioFileURL,
+                expectedUserID: expectedUserID
             )
-            throw error
+            await MainActor.run {
+                guard Auth.auth().currentUser?.uid == expectedUserID,
+                      let entry = PersistenceController.shared.entry(id: memoryID),
+                      entry.firebaseUserId == expectedUserID,
+                      entry.audioFileURL == expectedAudioFileURL else { return }
+                TranscriptionFailureStore.record(issue, memoryID: memoryID, userID: expectedUserID)
+                ProductAnalytics.shared.track("Memory Transcription Failed", ["failure_stage": "transcription", "failure_reason": issue.analyticsReason, "duration_ms": max(0, Int(Date().timeIntervalSince(startedAt) * 1000))])
+            }
+            switch issue {
+            case .authentication: throw CloudTranscriptionError.notAuthenticated
+            case .accountChanged: throw CloudTranscriptionError.accountChanged
+            case .cancelled: throw CancellationError()
+            default: throw CloudTranscriptionError.failure(issue)
+            }
         }
     }
 
@@ -246,11 +415,13 @@ actor CloudTranscriptionService {
         rawText: String,
         memoryID: UUID,
         language: String,
-        expectedAudioFileURL: String?
+        expectedAudioFileURL: String?,
+        expectedUserID: String
     ) async throws {
         try await MainActor.run {
-            guard let entry = PersistenceController.shared.entry(id: memoryID) else { return }
-            guard entry.audioFileURL == expectedAudioFileURL else { return }
+            guard Auth.auth().currentUser?.uid == expectedUserID else { throw CloudTranscriptionError.accountChanged }
+            guard let entry = PersistenceController.shared.entry(id: memoryID), entry.firebaseUserId == expectedUserID else { throw CloudTranscriptionError.memoryUnavailable }
+            guard entry.audioFileURL == expectedAudioFileURL else { throw CloudTranscriptionError.accountChanged }
             entry.transcriptionRawText = rawText
             entry.transcriptionStatus = "completed"
             entry.transcriptionLanguage = language
@@ -269,10 +440,12 @@ actor CloudTranscriptionService {
     private func updateLocalState(
         memoryID: UUID,
         status: String,
-        expectedAudioFileURL: String? = nil
+        expectedAudioFileURL: String? = nil,
+        expectedUserID: String
     ) async {
         await MainActor.run {
-            guard let entry = PersistenceController.shared.entry(id: memoryID) else { return }
+            guard Auth.auth().currentUser?.uid == expectedUserID,
+                  let entry = PersistenceController.shared.entry(id: memoryID), entry.firebaseUserId == expectedUserID else { return }
             if let expectedAudioFileURL, entry.audioFileURL != expectedAudioFileURL { return }
             entry.transcriptionStatus = status
             entry.transcriptionUpdatedAt = Date()

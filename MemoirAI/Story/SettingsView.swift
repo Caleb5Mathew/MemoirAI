@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreData
 import RevenueCat
 import RevenueCatUI
 import FirebaseAuth
@@ -59,7 +60,21 @@ enum StyleReferencePreset: String, CaseIterable, Identifiable {
     }
 }
 
+enum SettingsContext: Equatable {
+    case account
+    case bookGeneration
+
+    var showsPrintOrders: Bool { self == .account }
+}
+
 struct SettingsView: View {
+    var context: SettingsContext = .account
+    var onGenerationAvailabilityChanged: ((Bool) -> Void)? = nil
+    @Environment(\.managedObjectContext) private var managedObjectContext
+    @State private var availableStoryCount: Int?
+    @State private var storyCountError: String?
+    @State private var showAccountOptions = false
+    @State private var showHelpOptions = false
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var subscriptionManager: RCSubscriptionManager
@@ -129,18 +144,47 @@ struct SettingsView: View {
     
     // For free users, limit to what they have remaining (minimum 1 to prevent slider crash)
     private var maxSelectablePages: Int {
-        if isSubscribed {
-            return StorybookGenerationBatchPolicy.maximumSelectablePages(
-                remainingAllowance: subscriptionManager.remainingAllowance
-            )
-        } else {
-            // Minimum 1 to prevent slider range crash (1...0 is invalid)
-            return StorybookGenerationBatchPolicy.maximumSelectablePages(
-                remainingAllowance: FreePreviewConfig.freeImagesRemaining
-            )
+        let allowanceCap = StorybookGenerationBatchPolicy.maximumSelectablePages(
+            remainingAllowance: actualRemainingImages
+        )
+        guard let availableStoryCount, availableStoryCount > 0 else { return allowanceCap }
+        return min(allowanceCap, availableStoryCount)
+    }
+
+    private var generationAvailable: Bool {
+        profileVM.hasReadyProfile && (availableStoryCount ?? 0) > 0
+    }
+
+    private func refreshAvailableStories() async {
+        let profileID = profileVM.selectedProfile.id
+        let userID = Auth.auth().currentUser?.uid
+        availableStoryCount = nil
+        storyCountError = nil
+        onGenerationAvailabilityChanged?(false)
+        guard profileVM.hasReadyProfile, let userID else { return }
+        do {
+            let request: NSFetchRequest<MemoryEntry> = MemoryEntry.fetchRequest()
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(format: "profileID == %@", profileID as CVarArg),
+                NSPredicate(format: "firebaseUserId == %@", userID)
+            ])
+            let count = try await managedObjectContext.perform {
+                try managedObjectContext.fetch(request).filter {
+                    !$0.isDeleted && StorybookMemoryEligibilityPolicy.matches($0)
+                }.count
+            }
+            guard !Task.isCancelled, profileVM.selectedProfile.id == profileID,
+                  Auth.auth().currentUser?.uid == userID else { return }
+            availableStoryCount = count
+            clampPageCountIfNeeded()
+            onGenerationAvailabilityChanged?(generationAvailable)
+        } catch {
+            guard !Task.isCancelled, profileVM.selectedProfile.id == profileID,
+                  Auth.auth().currentUser?.uid == userID else { return }
+            storyCountError = "Your stories could not be loaded. Close settings and try again."
         }
     }
-    
+
     // Actual remaining images (works for both subscribed and free users)
     private var actualRemainingImages: Int {
         isSubscribed ? subscriptionManager.remainingAllowance : FreePreviewConfig.freeImagesRemaining
@@ -201,11 +245,21 @@ struct SettingsView: View {
                         // Characters Section
                         memoryEnhancementSection
                         
-                        // Account Section
-                        accountSection
+                        DisclosureGroup("Account", isExpanded: $showAccountOptions) {
+                            accountSection.padding(.top, 12)
+                        }
+                        .font(LinenTheme.body(16, weight: .semibold))
+                        .padding(18)
+                        .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 16))
+                        .accessibilityIdentifier("settingsAccountOptions")
 
-                        // Support Section
-                        supportSection
+                        DisclosureGroup("Help & privacy", isExpanded: $showHelpOptions) {
+                            supportSection.padding(.top, 12)
+                        }
+                        .font(LinenTheme.body(16, weight: .semibold))
+                        .padding(18)
+                        .background(LinenTheme.surface, in: RoundedRectangle(cornerRadius: 16))
+                        .accessibilityIdentifier("settingsHelpOptions")
 
                         if canAccessDevDashboard {
                             devDashboardSection
@@ -259,7 +313,17 @@ struct SettingsView: View {
                 showDevSheet = true
             }
             #endif
-            loadOrderBadge()
+            if context.showsPrintOrders { loadOrderBadge() }
+        }
+        .task(id: profileVM.selectedProfile.id) { await refreshAvailableStories() }
+        .onReceive(NotificationCenter.default.publisher(for: .memoriesHydratedFromFirestore)) { _ in
+            Task { await refreshAvailableStories() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .memorySaved)) { _ in
+            Task { await refreshAvailableStories() }
+        }
+        .onChange(of: generationAvailable) { _, available in
+            onGenerationAvailabilityChanged?(available)
         }
         .onDisappear {
             orderBadgeListener?.remove()
@@ -504,7 +568,7 @@ struct SettingsView: View {
     // MARK: - Page Count Section
     private var pageCountSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Book length")
+            Text("Stories in this book")
                 .font(LinenTheme.body(16, weight: .semibold))
                 .foregroundColor(darkText)
             
@@ -529,10 +593,19 @@ struct SettingsView: View {
             }
             .opacity(canGenerate ? 1.0 : 0.5)
 
-            Text("Up to \(StorybookGenerationBatchPolicy.maximumPagesPerBook) pages")
+            Text("Up to \(maxSelectablePages) stories")
                 .font(.system(size: 12))
                 .foregroundColor(.gray)
             
+            if let storyCountError {
+                Text(storyCountError).font(.caption).foregroundStyle(.secondary)
+            } else if availableStoryCount == nil {
+                ProgressView("Loading your stories…").font(.caption)
+            } else if availableStoryCount == 0 {
+                Text("Save a story before creating your book.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             // Warning if exceeding allowance (subscribed users)
             if isSubscribed && pageCountSetting > subscriptionManager.remainingAllowance {
                 HStack(spacing: 6) {
@@ -711,11 +784,6 @@ struct SettingsView: View {
     // MARK: - Account Section
     private var accountSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Account")
-                .font(LinenTheme.body(16, weight: .semibold))
-                .foregroundColor(darkText)
-                .padding(.bottom, 12)
-            
             if let user = authService.user {
                 HStack(spacing: 12) {
                     Circle()
@@ -754,10 +822,11 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("settingsAccountBackup")
 
-                Divider()
-
-                printOrdersLibraryRow
-                    .frame(minHeight: 52)
+                if context.showsPrintOrders {
+                    Divider()
+                    printOrdersLibraryRow
+                        .frame(minHeight: 52)
+                }
 
                 if !AuthenticationService.shared.isGuestUser(user) {
                     Divider()
@@ -1047,13 +1116,16 @@ struct ArtStyleButton: View {
 // MARK: - Settings View With Generate Button
 struct SettingsViewWithGenerate: View {
     let onGenerate: () -> Void
+    @State private var generationAvailable = false
     
     @EnvironmentObject var subscriptionManager: RCSubscriptionManager
     @EnvironmentObject var profileVM: ProfileViewModel
     
     var body: some View {
         ZStack {
-            SettingsView()
+            SettingsView(context: .bookGeneration, onGenerationAvailabilityChanged: {
+                generationAvailable = $0
+            })
                 .environmentObject(subscriptionManager)
                 .environmentObject(profileVM)
             
@@ -1069,6 +1141,8 @@ struct SettingsViewWithGenerate: View {
                         .background(LinenTheme.accent)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
+                .disabled(!generationAvailable)
+                .opacity(generationAvailable ? 1 : 0.5)
                 .accessibilityIdentifier("saveAndGenerateButton")
                 .padding(.horizontal, 24)
                 .padding(.bottom, 40)

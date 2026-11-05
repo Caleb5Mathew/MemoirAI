@@ -14,6 +14,32 @@ import FirebaseFunctions
 import FirebaseStorage
 import UIKit
 
+enum ProfileCloudRowsPolicy {
+    static func profileID(in data: [String: Any]) -> String? {
+        for key in ["profileId", "profileID"] {
+            if let value = data[key] as? String, let id = UUID(uuidString: value) { return id.uuidString }
+        }
+        return nil
+    }
+
+    static func normalizedRows(
+        _ rows: [(documentID: String, data: [String: Any])],
+        profileID: UUID
+    ) -> [(documentID: String, data: [String: Any])] {
+        var byID: [String: [String: Any]] = [:]
+        for row in rows where Self.profileID(in: row.data) == profileID.uuidString {
+            var data = row.data
+            data["profileId"] = profileID.uuidString
+            byID[row.documentID] = data
+        }
+        return byID.map { (documentID: $0.key, data: $0.value) }.sorted {
+            let lhs = ($0.data["createdAt"] as? Timestamp)?.dateValue() ?? .distantPast
+            let rhs = ($1.data["createdAt"] as? Timestamp)?.dateValue() ?? .distantPast
+            return lhs == rhs ? $0.documentID < $1.documentID : lhs > rhs
+        }
+    }
+}
+
 enum PendingStorybookMatchPolicy {
     static func matches(
         _ book: PersistableStorybook,
@@ -676,32 +702,41 @@ final class FirestoreSyncService {
         return msg.contains("index") || msg.contains("requires an index")
     }
 
-    /// Fallback: no composite index — fetch recent bookVersions ordered by createdAt only, filter profileId in memory.
-    private func fetchLatestBookVersionClientFilter(profileID: UUID, userId: String) async -> BookVersionRecord? {
-        let ref = db.collection("users").document(userId).collection("bookVersions")
-        do {
-            let snapshot = try await ref.order(by: "createdAt", descending: true).limit(to: 80).getDocuments()
-            let wanted = profileID.uuidString
-            for doc in snapshot.documents {
-                guard let record = BookVersionRecord.fromFirestoreData(doc.data()),
-                      record.profileId == wanted else { continue }
-                return record
+    /// Profile equality queries use automatic indexes; pagination never truncates a quieter profile behind other profiles.
+    private func fetchProfileDocuments(collection: String, profileID: UUID, userId: String) async throws -> [(documentID: String, data: [String: Any])] {
+        let ref = db.collection("users").document(userId).collection(collection)
+        let variants = [profileID.uuidString, profileID.uuidString.lowercased()]
+        var rows: [(documentID: String, data: [String: Any])] = []
+        for field in ["profileId", "profileID"] {
+            var cursor: DocumentSnapshot?
+            while true {
+                guard Auth.auth().currentUser?.uid == userId else { throw CancellationError() }
+                var query: Query = ref.whereField(field, in: variants).limit(to: 100)
+                if let cursor { query = query.start(afterDocument: cursor) }
+                let snapshot = try await query.getDocuments()
+                guard Auth.auth().currentUser?.uid == userId else { throw CancellationError() }
+                rows.append(contentsOf: snapshot.documents.map { ($0.documentID, $0.data()) })
+                guard snapshot.documents.count == 100, let last = snapshot.documents.last else { break }
+                cursor = last
             }
-            return nil
+        }
+        return ProfileCloudRowsPolicy.normalizedRows(rows, profileID: profileID)
+    }
+
+    private func fetchLatestBookVersionClientFilter(profileID: UUID, userId: String) async -> BookVersionRecord? {
+        do {
+            return try await fetchBookVersionsClientFilter(profileID: profileID, userId: userId).first
         } catch {
-            print("❌ fetchLatestBookVersionClientFilter failed: \(error.localizedDescription)")
+            print("Book library could not load its latest version: \(error.localizedDescription)")
             return nil
         }
     }
 
     private func fetchBookVersionsClientFilter(profileID: UUID, userId: String) async throws -> [BookVersionRecord] {
-        let ref = db.collection("users").document(userId).collection("bookVersions")
-        let snapshot = try await ref.order(by: "createdAt", descending: true).limit(to: 80).getDocuments()
-        let wanted = profileID.uuidString
-        return snapshot.documents.compactMap { BookVersionRecord.fromFirestoreData($0.data()) }
-            .filter { $0.profileId == wanted }
+        let rows = try await fetchProfileDocuments(collection: "bookVersions", profileID: profileID, userId: userId)
+        return rows.compactMap { BookVersionRecord.fromFirestoreData($0.data) }
     }
-    
+
     // MARK: - Pending memory sync (resume interrupted uploads)
 
     private static let pendingMemorySyncStorageKey = "memoirai_pending_memory_syncs"
@@ -986,6 +1021,7 @@ final class FirestoreSyncService {
                     audioFileExtension: URL(string: entry.audioFileURL ?? "")?.pathExtension,
                     updatedAt: entry.transcriptionUpdatedAt
                 ), let id = entry.id {
+                    guard TranscriptionFailureStore.canAutomaticallyRetry(memoryID: id, userID: currentUserId) else { continue }
                     do {
                         _ = try await CloudTranscriptionService.shared.transcribe(memoryID: id, glossary: record.glossary)
                         clearPendingMemorySync(memoryId: record.memoryId)
@@ -1103,7 +1139,11 @@ final class FirestoreSyncService {
                 .flatMap { $0.isFileURL && FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
             let uploadAudioURL = localAudioURL ?? ((audioData?.isEmpty == false) ? entry.playbackURL : nil)
             let fileExtension = uploadAudioURL?.pathExtension.lowercased() == "m4a" ? "m4a" : "caf"
-            let isM4A = fileExtension == "m4a"
+            let isM4A = MemoryCloudAudioPolicy.isM4A(
+                uploadURL: uploadAudioURL,
+                existingAudioURL: audioFileURL,
+                remoteStoragePath: remoteData["audioStoragePath"] as? String
+            )
             var audioChanged = false
 
             if let uploadAudioURL {
@@ -1186,6 +1226,7 @@ final class FirestoreSyncService {
             }
             try await memoryRef.setData(memoryData, merge: true)
             if audioChanged && isM4A {
+                TranscriptionFailureStore.clear(memoryID: memoryId, userID: userId)
                 try? await StorageService.shared.deleteFile(
                     at: "users/\(userId)/audio/\(memoryId.uuidString).caf"
                 )
@@ -1194,11 +1235,46 @@ final class FirestoreSyncService {
             return true
 
         } catch {
-            print("❌ Failed to sync memory to Firebase: \(error)")
+            if Auth.auth().currentUser?.uid == userId {
+                let issue = TranscriptionIssue.classify(error)
+                TranscriptionFailureStore.record(issue, memoryID: memoryId, userID: userId)
+                ProductAnalytics.shared.track("Memory Transcription Retry Failed", ["failure_stage": "preflight", "failure_reason": issue.analyticsReason])
+            }
+            print("Memory upload failed: \(error.localizedDescription)")
             return false
         }
     }
-    
+
+    @MainActor
+    func retryMemoryTranscription(_ entry: MemoryEntry, profile: Profile) async throws {
+        guard let userID = Auth.auth().currentUser?.uid,
+              let memoryID = entry.id,
+              MemoryOwnershipPolicy.belongsToUser(entryOwnerID: entry.firebaseUserId, currentUserID: userID),
+              entry.profileID == profile.id else { throw CloudTranscriptionError.memoryUnavailable }
+        registerPendingMemorySyncForProfile(memoryId: memoryID.uuidString, profile: profile, firebaseUserId: userID)
+        entry.transcriptionStatus = "queued"
+        entry.transcriptionUpdatedAt = Date()
+        try entry.managedObjectContext?.save()
+        NotificationCenter.default.post(name: .memorySaved, object: nil)
+        guard await syncMemory(entry, profileName: profile.name) else {
+            guard Auth.auth().currentUser?.uid == userID, !entry.isDeleted else { throw CloudTranscriptionError.accountChanged }
+            entry.transcriptionStatus = "failed"
+            try entry.managedObjectContext?.save()
+            let issue = TranscriptionFailureStore.issue(memoryID: memoryID, userID: userID) ?? .uploadNotReady
+            throw CloudTranscriptionError.failure(issue)
+        }
+        guard Auth.auth().currentUser?.uid == userID else { throw CloudTranscriptionError.accountChanged }
+        do {
+            _ = try await CloudTranscriptionService.shared.transcribe(memoryID: memoryID, profile: profile)
+            clearPendingMemorySync(memoryId: memoryID.uuidString)
+        } catch {
+            if TranscriptionIssue.classify(error) == .rerecord {
+                clearPendingMemorySync(memoryId: memoryID.uuidString)
+            }
+            throw error
+        }
+    }
+
     // MARK: - Book Sync
 
     /// Cover generation inputs for print cover (kids + portrait when Gemini is available).
@@ -1620,8 +1696,12 @@ final class FirestoreSyncService {
                 }
 
                 let renderedImage: UIImage
-                if let renderedPageProvider,
-                   let streamedImage = await renderedPageProvider(index) {
+                if let renderedPageProvider {
+                    guard let streamedImage = await renderedPageProvider(index) else {
+                        throw NSError(domain: "MemoirAI.BookRender", code: 1, userInfo: [
+                            NSLocalizedDescriptionKey: "Page \(index + 1) could not be rendered from its original image. Your book has not been published. Please reopen it and try again."
+                        ])
+                    }
                     renderedImage = streamedImage
                 } else {
                     renderedImage = {
@@ -1911,14 +1991,14 @@ final class FirestoreSyncService {
                 userInfo: [NSLocalizedDescriptionKey: "Sign in to load your book library."]
             )
         }
-        // Avoid composite-index requirement by using createdAt ordering only and profile client filter.
+        // Read only this profile, including the legacy field spelling.
         return try await fetchBookVersionsClientFilter(profileID: profileID, userId: userId)
     }
     
     /// Fetch latest canonical book version for a profile.
     func fetchLatestBookVersion(profileID: UUID) async -> BookVersionRecord? {
         guard let userId = Auth.auth().currentUser?.uid else { return nil }
-        // Avoid composite-index requirement by using createdAt ordering only and profile client filter.
+        // Read only this profile, including the legacy field spelling.
         return await fetchLatestBookVersionClientFilter(profileID: profileID, userId: userId)
     }
     
@@ -2612,12 +2692,24 @@ final class FirestoreSyncService {
                 // yielding during hydration and racing account deletion/session changes.
                 entry.audioFileURL = url.absoluteString
             }
+            if !BookTranscriptionPreflightPolicy.hasUsableText(entry.text),
+               TranscriptionRetryPolicy.shouldRequest(status: entry.transcriptionStatus,
+                    audioFileExtension: URL(string: entry.audioFileURL ?? "")?.pathExtension,
+                    updatedAt: entry.transcriptionUpdatedAt),
+               let profileID = entry.profileID {
+                registerPendingMemorySync(memoryId: memoryUUID.uuidString, profileId: profileID.uuidString,
+                    firebaseUserId: userId, glossary: [])
+            }
         }
 
         do {
             try context.save()
             print("✅ Firestore memory hydrate saved to Core Data")
             NotificationCenter.default.post(name: .memoriesHydratedFromFirestore, object: nil)
+            Task { @MainActor in
+                guard Auth.auth().currentUser?.uid == userId else { return }
+                await self.retryPendingSyncsForCurrentUser()
+            }
         } catch {
             print("❌ Firestore hydrate: Core Data save failed — \(error.localizedDescription)")
         }
@@ -3001,6 +3093,7 @@ extension FirestoreSyncService {
                     audioFileExtension: URL(string: currentEntry.audioFileURL ?? "")?.pathExtension,
                     updatedAt: currentEntry.transcriptionUpdatedAt
                 ), let id = currentEntry.id {
+                    guard TranscriptionFailureStore.canAutomaticallyRetry(memoryID: id, userID: intendedUserID) else { return }
                     do {
                         _ = try await CloudTranscriptionService.shared.transcribe(memoryID: id, profile: profile)
                         clearPendingMemorySync(memoryId: memoryId)
@@ -3241,11 +3334,7 @@ extension FirestoreSyncService {
     /// Latest storybook cloud job for this profile that still needs app attention (including `aiComplete` awaiting finalize).
     func fetchLatestActiveStorybookJob(profileId: UUID) async throws -> ActiveStorybookCloudJob? {
         guard let uid = Auth.auth().currentUser?.uid else { return nil }
-        let snap = try await db.collection("users").document(uid).collection("storybookJobs")
-            .order(by: "createdAt", descending: true)
-            .limit(to: 25)
-            .getDocuments()
-        let rows = snap.documents.map { ($0.documentID, $0.data()) }
+        let rows = try await fetchProfileDocuments(collection: "storybookJobs", profileID: profileId, userId: uid)
         return Self.pickActiveStorybookCloudJob(profileId: profileId, rowsNewestFirst: rows)
     }
 
@@ -3253,18 +3342,15 @@ extension FirestoreSyncService {
     /// otherwise the newest recently-completed job (caller decides whether it was already seen).
     func fetchLatestRoutableStorybookJob(profileId: UUID) async throws -> ActiveStorybookCloudJob? {
         guard let uid = Auth.auth().currentUser?.uid else { return nil }
-        let snap = try await db.collection("users").document(uid).collection("storybookJobs")
-            .order(by: "createdAt", descending: true)
-            .limit(to: 25)
-            .getDocuments()
-        let rows = snap.documents.map { ($0.documentID, $0.data()) }
+        let rows = try await fetchProfileDocuments(collection: "storybookJobs", profileID: profileId, userId: uid)
         if let active = Self.pickActiveStorybookCloudJob(profileId: profileId, rowsNewestFirst: rows) {
             return active
         }
         return Self.pickLatestCompletedStorybookCloudJob(profileId: profileId, rowsNewestFirst: rows)
     }
 
-    func writeStorybookCloudJob(jobId: String, data: [String: Any]) async throws {
+    func writeStorybookCloudJob(jobId: String, data: [String: Any], expectedUserID: String? = nil) async throws {
+        if let expectedUserID, Auth.auth().currentUser?.uid != expectedUserID { throw CancellationError() }
         guard Auth.auth().currentUser != nil else {
             throw NSError(domain: "FirestoreSyncService", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])
         }

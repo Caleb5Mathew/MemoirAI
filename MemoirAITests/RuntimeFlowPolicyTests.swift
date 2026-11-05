@@ -394,7 +394,7 @@ struct RuntimeFlowPolicyTests {
     @Test func legacyGenerationCountsAreClampedAtTheServerContract() {
         #expect(StorybookGenerationBatchPolicy.clampedTargetPageCount(0) == 1)
         #expect(StorybookGenerationBatchPolicy.clampedTargetPageCount(3) == 3)
-        #expect(StorybookGenerationBatchPolicy.clampedTargetPageCount(100) == 9)
+        #expect(StorybookGenerationBatchPolicy.clampedTargetPageCount(100) == 40)
     }
 
     @Test func editedStorybooksAlwaysReceiveUniqueRevisionIdentifiers() {

@@ -4,6 +4,11 @@
 import SwiftUI
 import CoreData
 
+enum HomeNavigationRoute: Hashable {
+    case memoir
+    case recordStory
+}
+
 enum HomeGreeting {
     static func text(for profileName: String) -> String {
         let name = profileName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -19,6 +24,14 @@ enum HomeGreeting {
 }
 
 enum MemoirProgressPolicy {
+    static func percentage(entries: [MemoryEntry], chapters: [Chapter], childNames: [String], memoirMode: MemoirMode) -> Int {
+        let savedEntries = entries.filter { !$0.isDeleted }
+        let completed = chapters.reduce(0) {
+            $0 + filledPromptSlotsForChapter(entries: savedEntries, chapter: $1, childNames: childNames, memoirMode: memoirMode)
+        }
+        return percentage(completed: completed, total: chapters.reduce(0) { $0 + $1.prompts.count })
+    }
+
     static func percentage(completed: Int, total: Int) -> Int {
         guard total > 0 else { return 0 }
         let value = Int((Double(max(0, completed)) / Double(total)) * 100)
@@ -79,6 +92,8 @@ struct HomepageView: View {
     @Environment(\.managedObjectContext) private var context
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let openStorybook: () -> Void
+    let openMemoir: () -> Void
+    let openRecorder: () -> Void
 
     // MARK: – State
     @State private var selectedTab = 0
@@ -90,27 +105,17 @@ struct HomepageView: View {
 
     @State private var showMemoirPicker = false
     @State private var pendingNavigateToMemoir = false
-    @State private var navigateToMemoir = false
-    @State private var showRecorder = false
     @AppStorage("hasChosenMemoirMode") private var hasChosenMemoirMode = false
 
     // MARK: – Computed Properties
 
-    /// Total memories completed (across all chapters)
-    private var completedMemoriesCount: Int {
-        entries.filter { entry in
-            guard let prompt = entry.prompt else { return false }
-            return activeChapters.contains { chapter in
-                chapterTitleMatches(entry.chapter, chapter.title)
-                    && normalChapterPromptTextsIncludingLegacy(for: chapter).contains(prompt)
-            }
-        }.count
-    }
-    
-    /// Completion percentage (0-100)
     private var completionPercentage: Int {
-        let totalMemories = activeChapters.reduce(0) { $0 + $1.prompts.count }
-        return MemoirProgressPolicy.percentage(completed: completedMemoriesCount, total: totalMemories)
+        MemoirProgressPolicy.percentage(
+            entries: entries,
+            chapters: activeChapters,
+            childNames: profileVM.selectedProfile.childNames,
+            memoirMode: currentMemoirMode()
+        )
     }
 
     // MARK: – Body
@@ -143,7 +148,7 @@ struct HomepageView: View {
                     }
 
                     Button {
-                        showRecorder = true
+                        openRecorder()
                     } label: {
                         Label("Record a story", systemImage: "mic.fill")
                             .font(LinenTheme.body(16, weight: .semibold))
@@ -155,7 +160,7 @@ struct HomepageView: View {
                     .accessibilityIdentifier("homeRecordStory")
 
                     Button {
-                        if hasChosenMemoirMode { navigateToMemoir = true }
+                        if hasChosenMemoirMode { openMemoir() }
                         else { showMemoirPicker = true }
                     } label: {
                         HStack(spacing: 16) {
@@ -282,19 +287,9 @@ struct HomepageView: View {
             .onReceive(NotificationCenter.default.publisher(for: .memorySaved)) { _ in
                 fetchEntries()
             }
-            .navigationDestination(isPresented: $showRecorder) {
-                RecordMemoryView()
-                    .environmentObject(profileVM)
-                    .environmentObject(tutorialCoordinator)
-            }
-            .navigationDestination(isPresented: $navigateToMemoir) {
-                MemoirView()
-                    .environmentObject(profileVM)
-                    .environmentObject(tutorialCoordinator)
-            }
             .fullScreenCover(isPresented: $showMemoirPicker, onDismiss: {
                 if pendingNavigateToMemoir {
-                    navigateToMemoir = true
+                    openMemoir()
                     pendingNavigateToMemoir = false
                 }
             }) {
@@ -426,7 +421,7 @@ struct HomepageView: View {
 
 struct HomepageView_Previews: PreviewProvider {
     static var previews: some View {
-        HomepageView(openStorybook: {})
+        HomepageView(openStorybook: {}, openMemoir: {}, openRecorder: {})
             .environmentObject(ProfileViewModel())
             .environmentObject(TutorialCoordinator.shared)
     }

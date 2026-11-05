@@ -256,6 +256,7 @@ enum OnboardingPreviewErrorPolicy {
 
     static func recovery(for error: Error) -> OnboardingPreviewRecovery {
         if case CloudTranscriptionError.notAuthenticated = error { return .reconnect }
+        if case CloudTranscriptionError.accountChanged = error { return .reconnect }
         if case OnboardingPreviewServiceError.accountChanged = error { return .reconnect }
         if error is CancellationError || (error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled {
             return .cancelled
@@ -286,6 +287,7 @@ enum OnboardingPreviewErrorPolicy {
 
     static func reason(for error: Error) -> String {
         if case CloudTranscriptionError.notAuthenticated = error { return "authentication" }
+        if case CloudTranscriptionError.accountChanged = error { return "account_changed" }
         if recovery(for: error) == .cancelled { return "cancelled" }
         if case OnboardingPreviewServiceError.accountChanged = error { return "account_changed" }
         let ns = error as NSError
