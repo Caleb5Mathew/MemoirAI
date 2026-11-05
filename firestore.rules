@@ -344,7 +344,9 @@ service cloud.firestore {
         allow create: if isOwner(userId)
           && request.resource.data.get("admissionVersion", 0) != 1;
         allow update: if isOwner(userId)
-          && (canFinalizeStorybookJob() || resource.data.get("admissionVersion", 0) != 1);
+          && (canFinalizeStorybookJob()
+            || (resource.data.get("admissionVersion", 0) != 1
+              && request.resource.data.get("admissionVersion", 0) != 1));
         allow delete: if isOwner(userId)
           && resource.data.get("admissionVersion", 0) != 1;
       }

@@ -58,3 +58,10 @@ test("selects narrator edit before refined and raw transcripts", () => {
     transcriptionRaw: "Raw copy"
   }), "");
 });
+
+
+test("explicit selection includes chapterless stories and normalizes identifier case", () => {
+  const memories = [{ id: "ABC", chapter: "" }, { id: "def" }, { id: "other", chapter: "Family" }];
+  assert.deepEqual(chapterMemories(memories, ["abc", "DEF"]).map(memory => memory.id), ["ABC", "def"]);
+  assert.deepEqual(chapterMemories(memories).map(memory => memory.id), ["other"]);
+});

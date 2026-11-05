@@ -19,6 +19,10 @@ const {
   validateSubjectPhotoForWorker
 } = require("./storybookAdmission");
 
+const callableRegistration = require("fs").readFileSync(require("path").join(__dirname, "index.js"), "utf8")
+  .split("exports.createStorybookJob = onCall(")[1].split('Object.assign(exports, require("./storybookWorker"))')[0];
+assert(!callableRegistration.includes("isDeveloper:"), "This release must preserve the deployed subscription verification path.");
+
 const profileId = "11111111-1111-4111-8111-111111111111";
 const memoryId = "22222222-2222-4222-8222-222222222222";
 const base = {
@@ -122,7 +126,10 @@ assert.ok(activeRevenueCatEntitlement({ subscriber: {
   subscriptions: { "com.Buildr.MemoirAI.ProMonthly": { expires_date: "2026-08-27T12:01:00Z" } }
 } }, now));
 assert.strictEqual(FREE_PAGE_LIMIT, 4);
-assert.strictEqual(MAX_PAGES_PER_JOB, 9);
+assert.strictEqual(MAX_PAGES_PER_JOB, 40);
+assert.deepStrictEqual(storybookReservationCharges({ status: "failed", reservedPageCount: 2,
+  memoryResults: { a: { illustrationStoragePath: "a.png" } }, progress: { completedMemoryCount: 1 }
+}), { userPages: 1, globalPages: 1 });
 assert.deepStrictEqual(
   paidStorybookUsagePeriod(new Date("2026-08-31T23:59:59Z")),
   {
@@ -208,6 +215,47 @@ const serverTimestamp = () => "SERVER_TIMESTAMP";
 const timestampFromDate = (date) => ({ toDate: () => date });
 
 (async () => {
+  const untrustedDb = new FakeFirestore();
+  const untrustedRef = untrustedDb.collection("users").doc("attacker").collection("storybookJobs").doc("forged");
+  untrustedDb.rows.set(untrustedRef.path, { status: "failed", reservationState: "reserved", serverFailureSource: "worker",
+    reservedPageCount: 40, usageDocumentId: "paid_test", globalUsageDocumentId: "day_test" });
+  untrustedDb.rows.set("users/attacker/aiUsage/paid_test", { reservedPages: 50 });
+  assert.deepStrictEqual(await settleStorybookReservation({ db: untrustedDb, jobRef: untrustedRef,
+    userId: "attacker", serverTimestamp }), { status: "not-admitted" });
+  assert.strictEqual(untrustedDb.rows.get("users/attacker/aiUsage/paid_test").reservedPages, 50);
+  // Failed books cannot consume customer allowance for illustrations they cannot use.
+  for (const status of ["failed", "dismissedFailed", "aiComplete"]) {
+    const refundDb = new FakeFirestore();
+    const ref = refundDb.collection("users").doc("refund-user").collection("storybookJobs").doc("partial");
+    const usagePath = "users/refund-user/aiUsage/paid_test";
+    const globalPath = "globalAIUsage/day_test";
+    refundDb.rows.set(ref.path, { status, admissionVersion: 1, requestHash: "d".repeat(64), serverFailureSource: status === "aiComplete" ? null : "worker",
+      reservationState: "reserved", reservedPageCount: 40,
+      usageDocumentId: "paid_test", globalUsageDocumentId: "day_test",
+      memoryResults: { a: { illustrationStoragePath: "a.png" }, b: { illustrationStoragePath: "b.png" } },
+      memoryFailures: { c: { stage: "image" } }, progress: { completedMemoryCount: 3 } });
+    refundDb.rows.set(usagePath, { reservedPages: 47 });
+    refundDb.rows.set(globalPath, { reservedPages: 52 });
+    const expectedCharge = status === "aiComplete" ? 2 : 0;
+    assert.deepStrictEqual(await settleStorybookReservation({db: refundDb, jobRef: ref, userId: "refund-user", serverTimestamp}),
+      { status: "settled", userPages: expectedCharge, globalPages: 3 });
+    assert.strictEqual(refundDb.rows.get(usagePath).reservedPages, 7 + expectedCharge);
+    assert.strictEqual(refundDb.rows.get(globalPath).reservedPages, 15);
+    assert.strictEqual((await settleStorybookReservation({db: refundDb, jobRef: ref, userId: "refund-user", serverTimestamp})).status, "already-settled");
+    assert.strictEqual(refundDb.rows.get(usagePath).reservedPages, 7 + expectedCharge);
+    if (status === "aiComplete") {
+      refundDb.rows.set(ref.path, { ...refundDb.rows.get(ref.path), status: "failed" });
+      assert.strictEqual((await settleStorybookReservation({db: refundDb, jobRef: ref, userId: "refund-user", serverTimestamp})).status, "already-settled");
+      assert.strictEqual(refundDb.rows.get(usagePath).reservedPages, 9, "client-written failure cannot refund usable illustrations");
+      refundDb.rows.set(ref.path, { ...refundDb.rows.get(ref.path), serverFailureSource: "worker" });
+      assert.deepStrictEqual(await settleStorybookReservation({db: refundDb, jobRef: ref, userId: "refund-user", serverTimestamp}),
+        { status: "refunded", userPages: 0, globalPages: 3 });
+      assert.strictEqual(refundDb.rows.get(usagePath).reservedPages, 7);
+      assert.strictEqual(refundDb.rows.get(globalPath).reservedPages, 15);
+      assert.strictEqual((await settleStorybookReservation({db: refundDb, jobRef: ref, userId: "refund-user", serverTimestamp})).status, "already-settled");
+      assert.strictEqual(refundDb.rows.get(usagePath).reservedPages, 7);
+    }
+  }
   // Exhausting the free preview must not block a newly purchased subscription,
   // including TestFlight receipts without an entitlement association.
   for (const purchaseSource of ["Basic", "subscriptionFallback"]) {
@@ -394,6 +442,7 @@ const timestampFromDate = (date) => ({ toDate: () => date });
   legacyDb.rows.set(legacyRef.path, {
     ...base,
     bookVersionId: "legacy-job",
+    serverFailureSource: "worker",
     subjectPhotoStoragePath: "",
     clientVersion: 0,
     status: "queued"
@@ -411,6 +460,7 @@ const timestampFromDate = (date) => ({ toDate: () => date });
   assert.strictEqual(legacyDb.rows.get(legacyRef.path).admissionVersion, 1);
   assert.strictEqual(legacyDb.rows.get(legacyRef.path).clientVersion, 2);
   assert.strictEqual(legacyDb.rows.get(legacyRef.path).reservationState, "reserved");
+  assert.strictEqual(legacyDb.rows.get(legacyRef.path).serverFailureSource, null, "legacy client cannot forge server refund provenance");
   assert.ok(isAdmittedStorybookJob(legacyDb.rows.get(legacyRef.path)));
 
   const legacyRevenueCatId = "33333333-3333-4333-8333-333333333333";

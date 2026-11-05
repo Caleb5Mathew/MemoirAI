@@ -7,7 +7,7 @@ const STORYBOOK_SUBSCRIPTION_PRODUCTS = [
 ];
 const PAID_PAGE_LIMIT = 100;
 const DEVELOPER_PAGE_LIMIT = 2000;
-const MAX_PAGES_PER_JOB = 9;
+const MAX_PAGES_PER_JOB = 40;
 const MAX_MEMORY_CANDIDATES_PER_JOB = 200;
 // The app offers three preview images plus one one-time tutorial image. The
 // server caps the combined lifetime allowance so a modified client cannot
@@ -15,6 +15,7 @@ const MAX_MEMORY_CANDIDATES_PER_JOB = 200;
 const FREE_PAGE_LIMIT = 4;
 const GLOBAL_DAILY_PAGE_LIMIT = 500;
 const ACTIVE_LEASE_MS = 20 * 60 * 1000;
+const QUEUED_DELIVERY_GRACE_MS = 45 * 60 * 1000;
 const WORKER_HEARTBEAT_STALE_MS = 2 * 60 * 1000;
 const MAX_WORKER_ATTEMPTS = 3;
 const STORYBOOK_ADMISSION_VERSION = 1;
@@ -131,11 +132,15 @@ async function claimStorybookWorkerJob({
     if (deletion.exists) {
       transaction.delete(activeRef);
       transaction.update(jobRef, {
-        status: "failed",
+        status: "failed", serverFailureSource: "worker",
         error: "Account deletion is in progress.",
         updatedAt: serverTimestamp()
       });
       return { action: "account_deleting", data };
+    }
+    const terminalStatuses = ["aiComplete", "complete", "failed", "dismissedFailed"];
+    if (terminalStatuses.includes(data.status)) {
+      return { action: "skip", status: data.status, data };
     }
     const activeData = active.data() || {};
     const hasMatchingServerLease = active.exists &&
@@ -144,19 +149,15 @@ async function claimStorybookWorkerJob({
       activeData.requestHash === data.requestHash;
     if (!isAdmittedStorybookJob(data) || !hasMatchingServerLease) {
       transaction.update(jobRef, {
-        status: "failed",
+        status: "failed", serverFailureSource: "worker",
         error: "Storybook job was not admitted by the server.",
         updatedAt: serverTimestamp()
       });
       return { action: "rejected", data };
     }
-    const terminalStatuses = ["aiComplete", "complete", "failed", "dismissedFailed"];
-    if (terminalStatuses.includes(data.status)) {
-      return { action: "skip", status: data.status, data };
-    }
 
     const attemptCount = Math.max(0, Number(data.workerAttemptCount || 0));
-    if (data.status !== "queued") {
+    if (!["queued", "running_continue"].includes(data.status)) {
       const heartbeat = data.lastHeartbeatAt?.toDate?.();
       const heartbeatIsFresh = heartbeat instanceof Date &&
         now.getTime() - heartbeat.getTime() < WORKER_HEARTBEAT_STALE_MS;
@@ -165,7 +166,7 @@ async function claimStorybookWorkerJob({
       }
       if (attemptCount >= MAX_WORKER_ATTEMPTS) {
         transaction.update(jobRef, {
-          status: "failed",
+          status: "failed", serverFailureSource: "worker",
           error: "Cloud generation was interrupted repeatedly. Please try again.",
           updatedAt: serverTimestamp()
         });
@@ -211,6 +212,38 @@ function validateSubjectPhotoForWorker({ userId, profileId, storagePath, metadat
   const generation = String(metadata?.generation || "").trim();
   if (!generation) throw new Error("missing subject photo generation");
   return { expectedPath, size, generation };
+}
+
+function isStorybookLeaseProtected(activeData, jobData, now = new Date()) {
+  if (["aiComplete", "complete", "failed", "dismissedFailed"].includes(jobData?.status)) return false;
+  const leaseExpiry = activeData?.leaseExpiresAt?.toDate?.();
+  if (leaseExpiry instanceof Date && leaseExpiry > now) return true;
+  if (!jobData) return false;
+  const heartbeat = jobData.lastHeartbeatAt?.toDate?.() || jobData.createdAt?.toDate?.();
+  if (!(heartbeat instanceof Date)) return false;
+  const age = now.getTime() - heartbeat.getTime();
+  const maximumAge = ["queued", "running_continue"].includes(jobData.status)
+    ? QUEUED_DELIVERY_GRACE_MS : WORKER_HEARTBEAT_STALE_MS;
+  return age >= 0 && age < maximumAge;
+}
+
+async function hasProtectedStorybookLease({ transaction, db, active, userId, jobId, now }) {
+  const activeData = active.data() || {};
+  if (!active.exists || !activeData.jobId || activeData.jobId === jobId) return false;
+  const priorRef = db.collection("users").doc(userId).collection("storybookJobs").doc(activeData.jobId);
+  const prior = await transaction.get(priorRef);
+  return isStorybookLeaseProtected(activeData, prior.data(), now);
+}
+
+async function renewStorybookActiveLease({ db, userId, jobId, serverTimestamp, timestampFromDate, now = new Date() }) {
+  const ref = db.collection("users").doc(userId).collection("aiUsage").doc("storybook_active");
+  return db.runTransaction(async transaction => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists || snapshot.data()?.jobId !== jobId) return false;
+    transaction.update(ref, { leaseExpiresAt: timestampFromDate(new Date(now.getTime() + ACTIVE_LEASE_MS)),
+      updatedAt: serverTimestamp() });
+    return true;
+  });
 }
 
 async function releaseStorybookActiveLease({ db, userId, jobId }) {
@@ -272,9 +305,13 @@ function storybookReservationCharges(data) {
   const successfulPages = countSuccessfulStorybookPages(data);
   const failedPages = Object.keys(data?.memoryFailures || {}).length;
   const completedPages = Math.max(0, Number(data?.progress?.completedMemoryCount || 0));
+  const attemptedPages = Array.isArray(data?.imageAttemptedMemoryIds)
+    ? new Set(data.imageAttemptedMemoryIds.filter(id => typeof id === "string" && id)).size
+    : Math.max(successfulPages + failedPages, completedPages);
   return {
-    userPages: Math.min(reservedPages, successfulPages),
-    globalPages: Math.min(reservedPages, Math.max(successfulPages + failedPages, completedPages))
+    userPages: data?.serverFailureSource === "worker" && ["failed", "dismissedFailed"].includes(data?.status)
+      ? 0 : Math.min(reservedPages, successfulPages),
+    globalPages: Math.min(reservedPages, Math.max(successfulPages, attemptedPages))
   };
 }
 
@@ -283,7 +320,12 @@ async function settleStorybookReservation({ db, jobRef, userId, serverTimestamp 
     const jobSnapshot = await transaction.get(jobRef);
     if (!jobSnapshot.exists) return { status: "missing" };
     const data = jobSnapshot.data() || {};
-    if (data.reservationState !== "reserved") return { status: "already-settled" };
+    if (!isAdmittedStorybookJob(data)) return { status: "not-admitted" };
+    const previouslyCharged = Math.max(0, Number(data.settledUserPages || 0));
+    const refundSettledFailure = data.reservationState === "settled" &&
+      data.serverFailureSource === "worker" &&
+      ["failed", "dismissedFailed"].includes(data.status) && previouslyCharged > 0;
+    if (data.reservationState !== "reserved" && !refundSettledFailure) return { status: "already-settled" };
     if (!["aiComplete", "complete", "failed", "dismissedFailed"].includes(data.status)) {
       return { status: "not-terminal" };
     }
@@ -300,6 +342,19 @@ async function settleStorybookReservation({ db, jobRef, userId, serverTimestamp 
       transaction.get(usageRef),
       transaction.get(globalRef)
     ]);
+    if (refundSettledFailure) {
+      transaction.set(usageRef, {
+        reservedPages: Math.max(0, Number(usageSnapshot.data()?.reservedPages || 0) - previouslyCharged),
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      transaction.update(jobRef, {
+        settledUserPages: 0,
+        refundedUserPages: previouslyCharged,
+        userPagesRefundedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      return { status: "refunded", userPages: 0, globalPages: Math.max(0, Number(data.settledGlobalPages || 0)) };
+    }
     const reservedPages = Math.max(0, Number(data.reservedPageCount || 0));
     const charges = storybookReservationCharges(data);
     const userReservedPages = Math.max(0, Number(usageSnapshot.data()?.reservedPages || 0));
@@ -413,9 +468,7 @@ async function admitLegacyStorybookJob({
       throw new Error("Legacy storybook job changed during admission.");
     }
 
-    const activeData = active.data() || {};
-    const leaseExpiresAt = activeData.leaseExpiresAt?.toDate?.();
-    if (active.exists && activeData.jobId !== jobId && leaseExpiresAt && leaseExpiresAt > now) {
+    if (await hasProtectedStorybookLease({ transaction, db, active, userId, jobId, now })) {
       const error = new Error("Another storybook is already being generated.");
       error.permanent = true;
       throw error;
@@ -452,6 +505,7 @@ async function admitLegacyStorybookJob({
     });
     transaction.update(jobRef, {
       ...payload,
+      serverFailureSource: null,
       admissionVersion: STORYBOOK_ADMISSION_VERSION,
       entitlementKind: isPaid ? "paid" : "freePreview",
       reservationState: "reserved",
@@ -560,9 +614,7 @@ function createStorybookJobHandler({
         throw new HttpsError("already-exists", "A different job already uses this identifier.");
       }
 
-      const activeData = active.data() || {};
-      const leaseExpiresAt = activeData.leaseExpiresAt?.toDate?.();
-      if (active.exists && activeData.jobId !== jobId && leaseExpiresAt && leaseExpiresAt > now) {
+      if (await hasProtectedStorybookLease({ transaction, db, active, userId, jobId, now })) {
         throw new HttpsError("resource-exhausted", "Another storybook is already being generated.");
       }
 
@@ -601,6 +653,7 @@ function createStorybookJobHandler({
       });
       transaction.create(jobRef, {
         ...payload,
+        serverFailureSource: null,
         admissionVersion: STORYBOOK_ADMISSION_VERSION,
         entitlementKind: hasDeveloperAccess ? "developer" : (isPaid ? "paid" : "freePreview"),
         reservationState: "reserved",
@@ -645,6 +698,9 @@ module.exports = {
   fetchLegacyRevenueCatEntitlement,
   isAdmittedStorybookJob,
   paidStorybookUsagePeriod,
+  isStorybookLeaseProtected,
+  hasProtectedStorybookLease,
+  renewStorybookActiveLease,
   releaseStorybookActiveLease,
   settleStorybookReservation,
   storybookReservationCharges,

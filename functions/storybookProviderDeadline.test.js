@@ -49,3 +49,6 @@ assert.match(
 );
 
 console.log("storybook provider deadline tests passed");
+
+assert.strictEqual(require("./storybookAI").GEMINI_IMAGE_MODEL, "gemini-3-pro-image-preview",
+  "This reliability release must preserve the verified deployed image model.");

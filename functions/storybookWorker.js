@@ -18,11 +18,13 @@ const {
   claimStorybookWorkerJob,
   isAdmittedStorybookJob,
   releaseStorybookActiveLease,
+  renewStorybookActiveLease,
   settleStorybookReservation,
   validateSubjectPhotoPathForWorker,
   validateSubjectPhotoForWorker
 } = require("./storybookAdmission");
 const { assertAccountNotDeleting } = require("./accountStateGuards");
+const { planStorybookBatch, continuationDecision, shouldContinueStorybookEvent } = require("./storybookContinuation");
 const { chapterMemories, preferredMemoryTranscript } = require("./storybookMemorySelection");
 const {
   privacySafeLogDetails,
@@ -120,7 +122,6 @@ async function withRetries(fn, {
       deadlineMs: deadlineAtMs,
       minimumExecutionMs
     })) {
-      if (lastErr) throw lastErr;
       const deadlineError = new Error("Worker deadline does not allow another provider attempt.");
       deadlineError.code = "worker-deadline";
       throw deadlineError;
@@ -131,7 +132,13 @@ async function withRetries(fn, {
       lastErr = e;
       const msg = String(e?.message || e);
       const retryable = isRetryableProviderError(e);
-      if (!retryable || i === attempts - 1) throw e;
+      if (!retryable) throw e;
+      if (!canStartProviderAttempt({ nowMs: Date.now(), deadlineMs: deadlineAtMs, minimumExecutionMs })) {
+        const deadlineError = new Error("Worker deadline interrupted a retryable provider request.");
+        deadlineError.code = "worker-deadline";
+        throw deadlineError;
+      }
+      if (i === attempts - 1) throw e;
       // Honour the server's own retry-after suggestion first, then fall back to
       // exponential backoff.  Add ±20% jitter to spread thundering-herd retries.
       const serverMs = parseRetryAfterMs(msg);
@@ -142,7 +149,11 @@ async function withRetries(fn, {
         nowMs: Date.now(),
         deadlineMs: deadlineAtMs
       });
-      if (boundedDelay == null) throw e;
+      if (boundedDelay == null) {
+        const deadlineError = new Error("Worker deadline does not allow another retry.");
+        deadlineError.code = "worker-deadline";
+        throw deadlineError;
+      }
       await sleep(boundedDelay);
       delay = Math.min(delay * 2, isImageCall ? 60000 : 8000);
     }
@@ -173,18 +184,7 @@ async function releaseActiveStorybookLease(userId, jobId) {
   }
 }
 
-exports.processStorybookJob = onDocumentCreated(
-  {
-    document: "users/{userId}/storybookJobs/{jobId}",
-    secrets: [openaiSecret, geminiSecret],
-    timeoutSeconds: 540,
-    memory: "2GiB",
-    region: "us-central1",
-    concurrency: 1,
-    maxInstances: 1,
-    retry: true
-  },
-  async (event) => {
+async function processStorybookEvent(event) {
     const { userId, jobId } = event.params;
     const snap = event.data;
     if (!snap) {
@@ -243,7 +243,7 @@ exports.processStorybookJob = onDocumentCreated(
         if (!error?.permanent) throw error;
         const safeFailure = sanitizeStorybookFailure(error);
         await ref.update({
-          status: "failed",
+          status: "failed", serverFailureSource: "worker",
           error: safeFailure.message,
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
@@ -292,14 +292,28 @@ exports.processStorybookJob = onDocumentCreated(
     data = workerClaim.data;
 
     let releaseLeaseWhenDone = true;
+    let heartbeatWrite = Promise.resolve();
+    const heartbeatTimer = setInterval(() => {
+      heartbeatWrite = heartbeatWrite.then(async () => {
+        await ref.update({ lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp() });
+        await renewStorybookActiveLease({ db: firestore(), userId, jobId,
+          serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+          timestampFromDate: date => admin.firestore.Timestamp.fromDate(date) });
+      }).catch(error => logJob("storybook.heartbeatFailed", { code: String(error?.code || "unknown") }));
+    }, 30_000);
+    heartbeatTimer.unref?.();
     try {
       await assertAccountNotDeleting(firestore(), userId);
+      if (data.status === "running_continue" && data.emptyBatchCount > 0) {
+        await sleep(Math.min(30_000, 5_000 * (2 ** (data.emptyBatchCount - 1))));
+        await assertAccountNotDeleting(firestore(), userId);
+      }
       const openaiApiKey = String(openaiSecret.value() || "").trim();
       const geminiApiKey = String(geminiSecret.value() || "").trim();
       if (!openaiApiKey || !geminiApiKey) {
         logJob("storybook.missingSecrets", { hasOpenAI: !!openaiApiKey, hasGemini: !!geminiApiKey });
         await ref.update({
-          status: "failed",
+          status: "failed", serverFailureSource: "worker",
           error: "Missing OPENAI_API_KEY or GEMINI_API_KEY secrets",
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
@@ -316,7 +330,7 @@ exports.processStorybookJob = onDocumentCreated(
           requiredMin: STORYBOOK_WORKER_MIN_CLIENT_VERSION
         });
         await ref.update({
-          status: "failed",
+          status: "failed", serverFailureSource: "worker",
           error:
             "This storybook job was created with an older app version than this server supports. Please update MemoirAI from the App Store (or reinstall the latest build) and start a new generation.",
           "progress.currentStatus": "Please update the app and retry.",
@@ -364,8 +378,9 @@ exports.processStorybookJob = onDocumentCreated(
         .limit(200)
         .get();
       const memoriesCollection = firestore().collection("users").doc(userId).collection("memories");
-      const pinnedSnapshots = pinnedIds.length > 0
-        ? await firestore().getAll(...pinnedIds.map((id) => memoriesCollection.doc(id)))
+      const fetchIds = Array.from(new Set([...pinnedIds, ...(data.orderedMemoryIds || [])]));
+      const pinnedSnapshots = fetchIds.length > 0
+        ? await firestore().getAll(...fetchIds.map((id) => memoriesCollection.doc(id)))
         : [];
       const candidateDocuments = new Map(memSnap.docs.map((document) => [document.id, document]));
       for (const document of pinnedSnapshots) {
@@ -387,7 +402,7 @@ exports.processStorybookJob = onDocumentCreated(
           };
         })
         .filter((m) => m.profileID.toLowerCase() === profileIdNorm);
-      const memories = chapterMemories(profileMemories, pinnedIds);
+      const memories = chapterMemories(profileMemories, data.orderedMemoryIds?.length ? data.orderedMemoryIds : pinnedIds);
 
       logJob("storybook.fetchedMemories", {
         candidateCount: candidateDocuments.size,
@@ -406,7 +421,7 @@ exports.processStorybookJob = onDocumentCreated(
 
       if (memories.length === 0) {
         await ref.update({
-          status: "failed",
+          status: "failed", serverFailureSource: "worker",
           error: "No synced chapter memories match this profile yet. Complete a chapter memory, then try again.",
           "progress.currentStatus": "No chapter memories for this profile.",
           lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -417,6 +432,10 @@ exports.processStorybookJob = onDocumentCreated(
 
       const memById = new Map(memories.map((m) => [String(m.id || "").toLowerCase(), m]));
 
+      let ordered;
+      if (Array.isArray(data.orderedMemoryIds) && data.orderedMemoryIds.length) {
+        ordered = data.orderedMemoryIds.map(id => memById.get(id.toLowerCase()) || { id, transcription: "" });
+      } else {
       let ranked;
       if (pinnedIds.length > 0) {
         const pinnedOrdered = [];
@@ -482,10 +501,12 @@ exports.processStorybookJob = onDocumentCreated(
       const ages = ageSettlements.map((result) =>
         result.status === "fulfilled" ? result.value : 999
       );
-      const ordered = ranked
+      ordered = ranked
         .map((m, i) => ({ m, age: ages[i] ?? 999 }))
         .sort((a, b) => a.age - b.age)
         .map((x) => x.m);
+
+      }
 
       const orderedMemoryIds = ordered.map((m) => m.id);
       logJob("storybook.orderedMemories", {
@@ -495,16 +516,20 @@ exports.processStorybookJob = onDocumentCreated(
       const castCanon = ai.buildCastCanon(ordered, job);
       logJob("storybook.castCanon", { count: (castCanon.rows || []).length });
 
+      const batchPlan = planStorybookBatch(orderedMemoryIds, data.memoryResults, data.memoryFailures);
       await ref.update({
         status: "running",
         orderedMemoryIds,
         runningStartedAt: admin.firestore.FieldValue.serverTimestamp(),
         progress: {
           totalMemories: ordered.length,
-          completedMemoryCount: 0,
+          completedMemoryCount: batchPlan.completedCount,
           currentStatus: "Generating illustrations…"
         },
-        skippedMemoryIds: [],
+        skippedMemoryIds: data.skippedMemoryIds || [],
+        imageAttemptedMemoryIds: data.imageAttemptedMemoryIds || Array.from(new Set([
+          ...Object.keys(data.memoryResults || {}), ...Object.keys(data.memoryFailures || {})
+        ])),
         lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
@@ -553,13 +578,9 @@ exports.processStorybookJob = onDocumentCreated(
         Math.min(parseInt(process.env.STORYBOOK_MAX_PARALLEL || "12", 10) || 12, 24)
       );
       const limit = pLimit(maxParallel);
-      // Two concurrent starts stay within the image model's 20 RPM quota even
-      // at the fast end of observed provider latency.
-      const imageParallel = Math.max(
-        1,
-        Math.min(parseInt(process.env.STORYBOOK_IMAGE_PARALLEL || "2", 10) || 2, 2)
-      );
-      const imageLimit = pLimit(imageParallel);
+      // Created and continuation triggers have separate instances. One image
+      // request per invocation preserves the previous combined concurrency of two.
+      const imageLimit = pLimit(1);
 
       const phaseLog = (mid, stage, extra) => {
         // Structured one-line JSON logs make Cloud Logging filtering trivial:
@@ -747,8 +768,11 @@ exports.processStorybookJob = onDocumentCreated(
           // the longer backoff + more retries tuned for 429 RESOURCE_EXHAUSTED.
           const imageBuf = await imageLimit(() =>
             withRetries(
-              () =>
-                ai.generateIllustrationBufferGuarded(
+              async () => {
+                await enqueueWrite(() => ref.update({
+                  imageAttemptedMemoryIds: admin.firestore.FieldValue.arrayUnion(entry.id)
+                }));
+                return ai.generateIllustrationBufferGuarded(
                   geminiApiKey,
                   assembled,
                   geminiSize,
@@ -760,7 +784,8 @@ exports.processStorybookJob = onDocumentCreated(
                     identityReferenceBuffer: attachHeadshot ? headshotBuf : null,
                     expectedNarratorAge: ai.explicitAge(raw)
                   }
-                ),
+                );
+              },
               {
                 isImageCall: true,
                 deadlineAtMs: workerDeadlineAtMs,
@@ -842,6 +867,7 @@ exports.processStorybookJob = onDocumentCreated(
           return { id: entry.id, ok: true };
         } catch (e) {
           if (e?.accountDeletionRequested) throw e;
+          if (e?.code === "worker-deadline") return { id: entry.id, deferred: true };
           const failure = sanitizeStorybookFailure(
             e,
             stage,
@@ -871,7 +897,7 @@ exports.processStorybookJob = onDocumentCreated(
       };
 
       const memorySettlements = await Promise.allSettled(
-        ordered.map((entry) => limit(() => processOne(entry)))
+        ordered.filter(entry => batchPlan.batchIds.includes(entry.id)).map((entry) => limit(() => processOne(entry)))
       );
       const deletionRejection = memorySettlements.find(
         (result) => result.status === "rejected" && result.reason?.accountDeletionRequested
@@ -888,6 +914,57 @@ exports.processStorybookJob = onDocumentCreated(
       const successCount = Object.values(finalResults).filter(
         (r) => r && r.illustrationStoragePath
       ).length;
+
+      const remaining = planStorybookBatch(orderedMemoryIds, finalResults, finalFailures);
+      const decision = continuationDecision({
+        remainingCount: remaining.pending.length,
+        previousCompleted: batchPlan.completedCount,
+        completedCount: remaining.completedCount,
+        emptyBatchCount: data.emptyBatchCount || 0,
+        continuationCount: data.continuationCount || 0,
+        totalCount: orderedMemoryIds.length
+      });
+      if (decision.action === "continue") {
+        // Finish this invocation's heartbeat before handing the same reservation to the next batch.
+        clearInterval(heartbeatTimer);
+        await heartbeatWrite;
+        await renewStorybookActiveLease({ db: firestore(), userId, jobId,
+          serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+          timestampFromDate: date => admin.firestore.Timestamp.fromDate(date) });
+        await ref.update({
+          status: "running_continue",
+          workerAttemptCount: 0,
+          emptyBatchCount: decision.emptyBatchCount,
+          continuationCount: decision.continuationCount,
+          "progress.completedMemoryCount": remaining.completedCount,
+          "progress.currentStatus": "Continuing your illustrations…",
+          lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        releaseLeaseWhenDone = false;
+        return;
+      }
+      if (decision.action === "fail") {
+        if (successCount === 0) {
+          await ref.update({ status: "failed", serverFailureSource: "worker", error: decision.message,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+          return;
+        }
+        const partialUpdate = {
+          "progress.completedMemoryCount": orderedMemoryIds.length,
+          "progress.currentStatus": "Finishing the illustrations that are ready…",
+          skippedMemoryIds: Array.from(new Set([...(finalData.skippedMemoryIds || []), ...remaining.pending])),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+        for (const memoryId of remaining.pending) {
+          const failure = { stage: "continuation", code: "continuation-exhausted",
+            message: "This illustration could not finish after several attempts. Your saved story is unchanged.",
+            at: admin.firestore.Timestamp.now() };
+          finalFailures[memoryId] = failure;
+          partialUpdate[`memoryFailures.${memoryId}`] = failure;
+        }
+        await ref.update(partialUpdate);
+      }
 
       if (successCount === 0) {
         // Build a real summary from the captured per-memory diagnostics
@@ -920,7 +997,7 @@ exports.processStorybookJob = onDocumentCreated(
           })
         );
         await ref.update({
-          status: "failed",
+          status: "failed", serverFailureSource: "worker",
           error: summary,
           "progress.currentStatus": "Image generation failed for every memory.",
           lastHeartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1002,29 +1079,24 @@ exports.processStorybookJob = onDocumentCreated(
       throw e;
     }
     } finally {
+      clearInterval(heartbeatTimer);
+      await heartbeatWrite;
       if (releaseLeaseWhenDone) {
         await releaseActiveStorybookLease(userId, jobId);
       }
     }
-  }
-);
+}
 
-exports.continueStorybookJob = onDocumentUpdated(
-  {
-    document: "users/{userId}/storybookJobs/{jobId}",
-    secrets: [openaiSecret, geminiSecret],
-    timeoutSeconds: 60,
-    memory: "512MiB",
-    region: "us-central1"
-  },
-  async (event) => {
-    const after = event.data.after.data();
-    if (!after || after.status !== "running_continue") return;
-    console.log("[storybookWorker] continueStorybookJob: running_continue (v1 no-op)", {
-      jobIdHash: safeLogIdentifier(event.params.jobId)
-    });
-  }
-);
+const workerOptions = {
+  document: "users/{userId}/storybookJobs/{jobId}",
+  secrets: [openaiSecret, geminiSecret], timeoutSeconds: 540,
+  memory: "2GiB", region: "us-central1", concurrency: 1, maxInstances: 1, retry: true
+};
+exports.processStorybookJob = onDocumentCreated(workerOptions, processStorybookEvent);
+exports.continueStorybookJob = onDocumentUpdated(workerOptions, async event => {
+  if (!shouldContinueStorybookEvent(event.data?.before?.data(), event.data?.after?.data())) return;
+  await processStorybookEvent({ ...event, data: event.data.after });
+});
 
 // Kept separate from the generation worker so it can be deployed alongside
 // admission while the previous production worker drains older client jobs.

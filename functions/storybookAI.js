@@ -13,7 +13,7 @@ const {
   canStartProviderAttempt
 } = require("./retryDeadlinePolicy");
 
-const GEMINI_IMAGE_MODEL = "gemini-3-pro-image";
+const GEMINI_IMAGE_MODEL = "gemini-3-pro-image-preview";
 const GEMINI_TEXT_MODEL = "gemini-2.5-flash";
 const OPENAI_TEXT_MODEL = "gpt-5-mini";
 const GEMINI_MAX_SERIALIZED_REQUEST_BYTES = 19 * 1024 * 1024;
